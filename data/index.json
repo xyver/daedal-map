@@ -26,13 +26,14 @@
       "15",
       "16",
       "17",
-      "global_earthquakes",
-      "global_fire_atlas",
-      "global_floods",
-      "global_tornadoes",
-      "ibtracs_storms",
-      "noaa_global_tsunamis",
-      "smithsonian_volcanoes"
+      "earthquakes",
+      "floods",
+      "hurricanes",
+      "landslides",
+      "tornadoes",
+      "tsunamis",
+      "volcanoes",
+      "wildfires"
     ]
   },
   "_geometry_bank": {

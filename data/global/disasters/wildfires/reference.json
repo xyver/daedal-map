@@ -1,0 +1,37 @@
+{
+  "source": {
+    "source_id": "wildfires",
+    "source_name": "Global Fire Atlas",
+    "source_url": "https://www.globalfiredata.org/",
+    "license": "Public Domain",
+    "category": "hazard",
+    "description": "Global Fire Atlas derived from MODIS/VIIRS satellite active fire detections. Tracks individual fire events worldwide with daily progression, burned area, and duration data.",
+    "topic_tags": ["disasters", "wildfires", "fire", "hazard"],
+    "keywords": ["wildfire", "fire", "burned area", "MODIS", "VIIRS", "satellite", "Global Fire Atlas"]
+  },
+  "datasets": {
+    "by_year_enriched/fires_YYYY_enriched.parquet": "Primary fire event records with location, burned area, duration, and land cover",
+    "fire_progression_YYYY.parquet": "Daily progression data for animations - linked to events via event_id"
+  },
+  "metrics": {
+    "area_km2": "Burned area in square kilometers",
+    "burned_acres": "Burned area in acres",
+    "duration_days": "Duration of fire event in days",
+    "day_num": "Day number within fire event progression",
+    "perimeter": "Fire perimeter geometry (WKT)",
+    "land_cover": "Dominant land cover type at fire location"
+  },
+  "geographic_context": {
+    "coverage": "Global - all continents with fire activity",
+    "focus": "Satellite-detected fire events from MODIS/VIIRS sensors",
+    "temporal": "2002-present",
+    "admin_levels": ["Point locations with burned area perimeters"]
+  },
+  "data_quality_notes": [
+    "Small fires may not be detected by satellite sensors",
+    "Fire perimeters derived from active fire detections, not ground surveys",
+    "Daily progression shows fire spread over time",
+    "Some fires may be split into multiple events if separated by gaps",
+    "2024 data may be incomplete (partial year)"
+  ]
+}

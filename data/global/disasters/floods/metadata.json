@@ -1,66 +1,327 @@
 {
-  "source_id": "global_floods",
-  "source_name": "Global Flood Database + Dartmouth Flood Observatory",
-  "source_url": "https://global-flood-database.cloudtostreet.ai/",
-  "license": "Academic/Research use",
-  "description": "Global flood events 2015-2019 with satellite-derived flood extents from the Dartmouth Flood Observatory. Includes flood perimeters, duration, severity, and impact data.",
+  "source_id": "floods",
+  "source_name": "Dartmouth Flood Observatory",
+  "source_url": "https://floodobservatory.colorado.edu/",
+  "license": "Public Domain",
+  "description": "Global Active Archive of Large Flood Events from the Dartmouth Flood Observatory (DFO). Contains major flood events worldwide with extent, duration, and impact data.",
   "category": "hazard",
   "data_type": "events",
+  "event_type": "flood",
   "topic_tags": [
-    "flood",
+    "disasters",
+    "floods",
     "hydrology",
-    "water"
+    "hazard"
   ],
   "keywords": [
     "flood",
     "inundation",
+    "DFO",
+    "Dartmouth",
+    "displaced",
     "river",
-    "rainfall",
-    "overflow",
-    "DFO"
+    "coastal"
   ],
-  "geographic_level": "global",
-  "geographic_coverage": {
-    "type": "global",
-    "description": "Worldwide flood events"
+  "last_updated": "2026-01-28",
+  "geographic_level": null,
+  "spatial_coverage": {
+    "countries": [
+      "AFG",
+      "AGO",
+      "ALB",
+      "ARG",
+      "ASM",
+      "AUS",
+      "AUT",
+      "BDI",
+      "BEN",
+      "BFA",
+      "BGD",
+      "BGR",
+      "BHS",
+      "BMU",
+      "BOL",
+      "BRA",
+      "CAN",
+      "CHE",
+      "CHL",
+      "CHN",
+      "CIV",
+      "CMR",
+      "COD",
+      "COL",
+      "COM",
+      "CRI",
+      "CUB",
+      "CZE",
+      "DEU",
+      "DJI",
+      "DOM",
+      "DZA",
+      "ECU",
+      "EGY",
+      "ESP",
+      "ETH",
+      "FIN",
+      "FJI",
+      "FRA",
+      "GAB",
+      "GBR",
+      "GEO",
+      "GHA",
+      "GRC",
+      "GTM",
+      "GUM",
+      "GUY",
+      "HND",
+      "HRV",
+      "HTI",
+      "HUN",
+      "IDN",
+      "IND",
+      "IRL",
+      "IRN",
+      "ISL",
+      "ISR",
+      "ITA",
+      "JAM",
+      "JOR",
+      "JPN",
+      "KAZ",
+      "KEN",
+      "KHM",
+      "KOR",
+      "LBR",
+      "LKA",
+      "MAR",
+      "MDA",
+      "MDG",
+      "MDV",
+      "MEX",
+      "MHL",
+      "MKD",
+      "MLT",
+      "MMR",
+      "MNG",
+      "MOZ",
+      "MRT",
+      "MUS",
+      "MWI",
+      "MYS",
+      "NAM",
+      "NCL",
+      "NER",
+      "NGA",
+      "NIC",
+      "NOR",
+      "NPL",
+      "NZL",
+      "OMN",
+      "PAK",
+      "PAN",
+      "PER",
+      "PHL",
+      "PNG",
+      "POL",
+      "PRI",
+      "PRK",
+      "PRT",
+      "PSE",
+      "PYF",
+      "ROU",
+      "RUS",
+      "RWA",
+      "SAU",
+      "SDN",
+      "SEN",
+      "SLB",
+      "SLE",
+      "SLV",
+      "SOM",
+      "SSD",
+      "SVK",
+      "SWE",
+      "SYC",
+      "SYR",
+      "THA",
+      "TJK",
+      "TLS",
+      "TTO",
+      "TUN",
+      "TUR",
+      "TWN",
+      "TZA",
+      "UGA",
+      "UKR",
+      "UNK",
+      "URY",
+      "USA",
+      "VEN",
+      "VNM",
+      "VUT",
+      "YEM",
+      "Z06",
+      "ZAF",
+      "ZMB",
+      "ZWE"
+    ],
+    "country_count": 138,
+    "water_bodies": [],
+    "bounding_box": {
+      "min_lat": -52.963,
+      "max_lat": 68.06,
+      "min_lon": -172.7075,
+      "max_lon": 179.5341
+    },
+    "type": "global"
   },
   "temporal_coverage": {
-    "start": 2015,
-    "end": 2019,
+    "start": "1985-01-01T00:00:00",
+    "end": "2019-11-15T00:00:00",
     "granularity": "timestamp",
     "field": "timestamp"
   },
   "event_stats": {
-    "total_events": 610
+    "total_events": 4825,
+    "unique_event_ids": 4824,
+    "unique_loc_ids": 4824,
+    "total_deaths": 673813
   },
-  "row_count": 610,
-  "file_size_mb": 0.3,
+  "row_count": 4825,
+  "file_size_mb": 2.59,
+  "update_schedule": "unknown",
   "metrics": {
     "area_km2": {
-      "name": "Flood Area",
-      "unit": "km2"
+      "name": "Area Km2",
+      "unit": "unknown",
+      "aggregation": "sum",
+      "stats": {
+        "min": 11.9565,
+        "max": 4814280.5,
+        "median": 33971.7031,
+        "mean": 106045.4766
+      },
+      "non_null_count": 4825,
+      "density": 1.0
     },
     "duration_days": {
-      "name": "Duration",
-      "unit": "days"
+      "name": "Duration Days",
+      "unit": "unknown",
+      "aggregation": "sum",
+      "stats": {
+        "min": 0.0,
+        "max": 418.0,
+        "median": 5.0,
+        "mean": 10.1034
+      },
+      "non_null_count": 4825,
+      "density": 1.0
     },
     "severity": {
       "name": "Severity",
-      "unit": "scale",
-      "values": [
-        1,
-        2
-      ]
+      "unit": "unknown",
+      "aggregation": "sum",
+      "stats": {
+        "min": 1.0,
+        "max": 2.0,
+        "median": 1.0,
+        "mean": 1.1581
+      },
+      "non_null_count": 4825,
+      "density": 1.0
     },
     "deaths": {
       "name": "Deaths",
-      "unit": "count"
+      "unit": "unknown",
+      "aggregation": "sum",
+      "stats": {
+        "min": 0.0,
+        "max": 160000.0,
+        "median": 5.0,
+        "mean": 139.6504
+      },
+      "non_null_count": 4825,
+      "density": 1.0
     },
     "displaced": {
-      "name": "People Displaced",
-      "unit": "count"
+      "name": "Displaced",
+      "unit": "unknown",
+      "aggregation": "sum",
+      "stats": {
+        "min": 0.0,
+        "max": 40000000.0,
+        "median": 1200.0,
+        "mean": 135415.5503
+      },
+      "non_null_count": 4825,
+      "density": 1.0
+    },
+    "dfo_id": {
+      "name": "Dfo Id",
+      "unit": "unknown",
+      "aggregation": "sum",
+      "stats": {
+        "min": 1.0,
+        "max": 4827.0,
+        "median": 2414.0,
+        "mean": 2413.794
+      },
+      "non_null_count": 4825,
+      "density": 1.0
+    },
+    "has_geometry": {
+      "name": "Has Geometry",
+      "unit": "unknown",
+      "aggregation": "sum",
+      "stats": {
+        "min": 1.0,
+        "max": 1.0,
+        "median": 1.0,
+        "mean": 1.0
+      },
+      "non_null_count": 4825,
+      "density": 1.0
+    },
+    "has_progression": {
+      "name": "Has Progression",
+      "unit": "unknown",
+      "aggregation": "sum",
+      "stats": {
+        "min": 0.0,
+        "max": 0.0,
+        "median": 0.0,
+        "mean": 0.0
+      },
+      "non_null_count": 4825,
+      "density": 1.0
+    },
+    "sibling_level": {
+      "name": "Sibling Level",
+      "unit": "unknown",
+      "aggregation": "sum",
+      "stats": {
+        "min": 0.0,
+        "max": 3.0,
+        "median": 1.0,
+        "mean": 0.788
+      },
+      "non_null_count": 4825,
+      "density": 1.0
+    },
+    "loc_confidence": {
+      "name": "Loc Confidence",
+      "unit": "unknown",
+      "aggregation": "sum",
+      "stats": {
+        "min": 0.7,
+        "max": 0.95,
+        "median": 0.9,
+        "mean": 0.901
+      },
+      "non_null_count": 4825,
+      "density": 1.0
     }
   },
-  "llm_summary": "610 flood events worldwide, 2015-2019. Includes flood extent, duration, severity, deaths, and displacement data. Source data ends in 2019.",
-  "metric_count": 5
+  "metric_count": 10,
+  "llm_summary": "4,825 flood in 138 countries from 1985-01-01T00:00:00 to 2019-11-15T00:00:00."
 }

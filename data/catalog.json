@@ -1,7 +1,7 @@
 {
   "catalog_version": "1.0",
-  "last_updated": "2026-01-28",
-  "total_sources": 24,
+  "last_updated": "2026-01-29",
+  "total_sources": 25,
   "sources": [
     {
       "source_id": "01",
@@ -4213,331 +4213,806 @@
       }
     },
     {
-      "source_id": "global_earthquakes",
-      "source_name": "Global Earthquakes (USGS + NOAA Significant)",
+      "source_id": "earthquakes",
+      "source_name": "NOAA Significant Earthquakes + USGS",
       "category": "hazard",
       "scope": "global",
       "topic_tags": [
-        "earthquake",
+        "disasters",
+        "earthquakes",
         "seismic",
-        "geology"
+        "hazard"
       ],
       "keywords": [
         "earthquake",
         "seismic",
         "magnitude",
-        "fault",
-        "tremor",
-        "aftershock"
+        "aftershock",
+        "tsunami",
+        "USGS",
+        "NOAA",
+        "NGDC"
       ],
-      "geographic_level": "global",
-      "geographic_coverage": {
-        "type": "global",
-        "countries": null,
-        "common_count": null,
-        "common_missing": [],
-        "uncommonly_included": [],
-        "region_coverage": {}
-      },
-      "coverage_description": "0/200 common (missing 0)",
+      "geographic_level": null,
+      "geographic_coverage": {},
+      "coverage_description": "Unknown coverage",
       "temporal_coverage": {
-        "start": 2015,
-        "end": 2025,
+        "start": "1521-08-16T02:07:37",
+        "end": "2026-01-24T21:38:55.274000",
         "granularity": "timestamp",
         "field": "timestamp"
       },
       "metrics": {
         "magnitude": {
           "name": "Magnitude",
-          "unit": "magnitude",
+          "unit": "Richter/Mw",
           "years": null,
           "countries": null,
-          "density": null
+          "density": 0.999
         },
         "depth_km": {
           "name": "Depth",
           "unit": "km",
           "years": null,
           "countries": null,
-          "density": null
+          "density": 0.997
+        },
+        "felt_radius_km": {
+          "name": "Felt Radius",
+          "unit": "km",
+          "years": null,
+          "countries": null,
+          "density": 0.999
+        },
+        "damage_radius_km": {
+          "name": "Damage Radius",
+          "unit": "km",
+          "years": null,
+          "countries": null,
+          "density": 0.999
         },
         "deaths": {
           "name": "Deaths",
           "unit": "count",
           "years": null,
           "countries": null,
-          "density": null
+          "density": 0.002
+        },
+        "injuries": {
+          "name": "Injuries",
+          "unit": "count",
+          "years": null,
+          "countries": null,
+          "density": 0.001
+        },
+        "damage_millions": {
+          "name": "Damage",
+          "unit": "million USD",
+          "years": null,
+          "countries": null,
+          "density": 0.001
+        },
+        "houses_destroyed": {
+          "name": "Houses Destroyed",
+          "unit": "unknown",
+          "years": null,
+          "countries": null,
+          "density": 0.001
+        },
+        "intensity": {
+          "name": "Intensity",
+          "unit": "MMI",
+          "years": null,
+          "countries": null,
+          "density": 0.003
+        },
+        "aftershock_count": {
+          "name": "Aftershock Count",
+          "unit": "unknown",
+          "years": null,
+          "countries": null,
+          "density": 0.997
         }
       },
-      "llm_summary": "19,132 earthquake events magnitude 5.0+ worldwide, 2015-2025. Includes depth, felt radius, and impact data where available.",
-      "path": "global/disasters/earthquakes"
+      "llm_summary": "1,056,559 earthquake in 38 countries from 1521-08-16T02:07:37 to 2026-01-24T21:38:55.274000.",
+      "path": "global/disasters/earthquakes",
+      "reference": {
+        "source": {
+          "source_id": "earthquakes",
+          "source_name": "NOAA Significant Earthquakes + USGS",
+          "source_url": "https://www.ngdc.noaa.gov/hazel/view/hazards/earthquake/search",
+          "license": "Public Domain",
+          "category": "hazard",
+          "description": "Global earthquake events combining NOAA NGDC Significant Earthquakes database (historical events with damage/casualties) and USGS real-time earthquake data. Includes magnitude, depth, impact data, and aftershock relationships.",
+          "topic_tags": [
+            "disasters",
+            "earthquakes",
+            "seismic",
+            "hazard"
+          ],
+          "keywords": [
+            "earthquake",
+            "seismic",
+            "magnitude",
+            "aftershock",
+            "tsunami",
+            "USGS",
+            "NOAA",
+            "NGDC"
+          ]
+        },
+        "metrics": {
+          "magnitude": "Earthquake magnitude (Richter/Mw scale)",
+          "depth_km": "Depth of earthquake hypocenter in kilometers",
+          "felt_radius_km": "Estimated radius where earthquake was felt",
+          "damage_radius_km": "Estimated radius of structural damage",
+          "deaths": "Number of deaths attributed to the earthquake",
+          "injuries": "Number of injuries attributed to the earthquake",
+          "damage_millions": "Estimated damage in millions of USD",
+          "houses_destroyed": "Number of houses destroyed",
+          "intensity": "Modified Mercalli Intensity (MMI) scale",
+          "aftershock_count": "Number of recorded aftershocks"
+        }
+      }
     },
     {
-      "source_id": "global_floods",
-      "source_name": "Global Flood Database + Dartmouth Flood Observatory",
+      "source_id": "floods",
+      "source_name": "Dartmouth Flood Observatory",
       "category": "hazard",
       "scope": "global",
       "topic_tags": [
-        "flood",
+        "disasters",
+        "floods",
         "hydrology",
-        "water"
+        "hazard"
       ],
       "keywords": [
         "flood",
         "inundation",
+        "DFO",
+        "Dartmouth",
+        "displaced",
         "river",
-        "rainfall",
-        "overflow",
-        "DFO"
+        "coastal"
       ],
-      "geographic_level": "global",
-      "geographic_coverage": {
-        "type": "global",
-        "countries": null,
-        "common_count": null,
-        "common_missing": [],
-        "uncommonly_included": [],
-        "region_coverage": {}
-      },
-      "coverage_description": "0/200 common (missing 0)",
+      "geographic_level": null,
+      "geographic_coverage": {},
+      "coverage_description": "Unknown coverage",
       "temporal_coverage": {
-        "start": 2015,
-        "end": 2019,
+        "start": "1985-01-01T00:00:00",
+        "end": "2019-11-15T00:00:00",
         "granularity": "timestamp",
         "field": "timestamp"
       },
       "metrics": {
         "area_km2": {
-          "name": "Flood Area",
-          "unit": "km2",
+          "name": "Area Km2",
+          "unit": "unknown",
           "years": null,
           "countries": null,
-          "density": null
+          "density": 1.0
         },
         "duration_days": {
-          "name": "Duration",
-          "unit": "days",
+          "name": "Duration Days",
+          "unit": "unknown",
           "years": null,
           "countries": null,
-          "density": null
+          "density": 1.0
         },
         "severity": {
           "name": "Severity",
-          "unit": "scale",
+          "unit": "unknown",
           "years": null,
           "countries": null,
-          "density": null
+          "density": 1.0
         },
         "deaths": {
           "name": "Deaths",
-          "unit": "count",
+          "unit": "unknown",
           "years": null,
           "countries": null,
-          "density": null
+          "density": 1.0
         },
         "displaced": {
-          "name": "People Displaced",
-          "unit": "count",
+          "name": "Displaced",
+          "unit": "unknown",
           "years": null,
           "countries": null,
-          "density": null
+          "density": 1.0
+        },
+        "dfo_id": {
+          "name": "Dfo Id",
+          "unit": "unknown",
+          "years": null,
+          "countries": null,
+          "density": 1.0
+        },
+        "has_geometry": {
+          "name": "Has Geometry",
+          "unit": "unknown",
+          "years": null,
+          "countries": null,
+          "density": 1.0
+        },
+        "has_progression": {
+          "name": "Has Progression",
+          "unit": "unknown",
+          "years": null,
+          "countries": null,
+          "density": 1.0
+        },
+        "sibling_level": {
+          "name": "Sibling Level",
+          "unit": "unknown",
+          "years": null,
+          "countries": null,
+          "density": 1.0
+        },
+        "loc_confidence": {
+          "name": "Loc Confidence",
+          "unit": "unknown",
+          "years": null,
+          "countries": null,
+          "density": 1.0
         }
       },
-      "llm_summary": "610 flood events worldwide, 2015-2019. Includes flood extent, duration, severity, deaths, and displacement data. Source data ends in 2019.",
-      "path": "global/disasters/floods"
+      "llm_summary": "4,825 flood in 138 countries from 1985-01-01T00:00:00 to 2019-11-15T00:00:00.",
+      "path": "global/disasters/floods",
+      "reference": {
+        "source": {
+          "source_id": "floods",
+          "source_name": "Dartmouth Flood Observatory",
+          "source_url": "https://floodobservatory.colorado.edu/",
+          "license": "Public Domain",
+          "category": "hazard",
+          "description": "Global Active Archive of Large Flood Events from the Dartmouth Flood Observatory (DFO). Contains major flood events worldwide with extent, duration, and impact data.",
+          "topic_tags": [
+            "disasters",
+            "floods",
+            "hydrology",
+            "hazard"
+          ],
+          "keywords": [
+            "flood",
+            "inundation",
+            "DFO",
+            "Dartmouth",
+            "displaced",
+            "river",
+            "coastal"
+          ]
+        },
+        "metrics": {
+          "area_km2": "Flood extent area in square kilometers",
+          "duration_days": "Duration of flood event in days",
+          "severity": "Severity classification (1=large, 2=very large)",
+          "deaths": "Number of deaths attributed to the flood",
+          "displaced": "Number of people displaced by the flood",
+          "damage_usd": "Estimated damage in USD"
+        }
+      }
     },
     {
-      "source_id": "ibtracs_storms",
-      "source_name": "IBTrACS - International Best Track Archive",
+      "source_id": "hurricanes",
+      "source_name": "IBTrACS",
       "category": "hazard",
       "scope": "global",
       "topic_tags": [
-        "hurricane",
-        "typhoon",
-        "cyclone",
-        "tropical_storm"
+        "disasters",
+        "hurricanes",
+        "tropical cyclones",
+        "hazard"
       ],
       "keywords": [
         "hurricane",
         "typhoon",
         "cyclone",
         "tropical storm",
-        "wind",
+        "IBTrACS",
+        "wind speed",
         "storm surge"
       ],
-      "geographic_level": "global",
-      "geographic_coverage": {
-        "type": "global",
-        "countries": null,
-        "common_count": null,
-        "common_missing": [],
-        "uncommonly_included": [],
-        "region_coverage": {}
-      },
-      "coverage_description": "0/200 common (missing 0)",
+      "geographic_level": null,
+      "geographic_coverage": {},
+      "coverage_description": "Unknown coverage",
       "temporal_coverage": {
-        "start": 2015,
-        "end": 2025,
+        "start": "1842-10-25T03:00:00",
+        "end": "2026-01-08T00:00:00",
         "granularity": "timestamp",
         "field": "timestamp"
       },
       "metrics": {
         "wind_kt": {
-          "name": "Wind Speed",
-          "unit": "knots",
+          "name": "Wind Kt",
+          "unit": "unknown",
           "years": null,
           "countries": null,
-          "density": null
+          "density": 0.628
         },
         "pressure_mb": {
-          "name": "Pressure",
-          "unit": "millibars",
+          "name": "Pressure Mb",
+          "unit": "unknown",
           "years": null,
           "countries": null,
-          "density": null
+          "density": 0.493
+        },
+        "r34_ne": {
+          "name": "R34 Ne",
+          "unit": "unknown",
+          "years": null,
+          "countries": null,
+          "density": 0.099
+        },
+        "r34_se": {
+          "name": "R34 Se",
+          "unit": "unknown",
+          "years": null,
+          "countries": null,
+          "density": 0.097
+        },
+        "r34_sw": {
+          "name": "R34 Sw",
+          "unit": "unknown",
+          "years": null,
+          "countries": null,
+          "density": 0.091
+        },
+        "r34_nw": {
+          "name": "R34 Nw",
+          "unit": "unknown",
+          "years": null,
+          "countries": null,
+          "density": 0.096
+        },
+        "r50_ne": {
+          "name": "R50 Ne",
+          "unit": "unknown",
+          "years": null,
+          "countries": null,
+          "density": 0.051
+        },
+        "r50_se": {
+          "name": "R50 Se",
+          "unit": "unknown",
+          "years": null,
+          "countries": null,
+          "density": 0.05
+        },
+        "r50_sw": {
+          "name": "R50 Sw",
+          "unit": "unknown",
+          "years": null,
+          "countries": null,
+          "density": 0.046
+        },
+        "r50_nw": {
+          "name": "R50 Nw",
+          "unit": "unknown",
+          "years": null,
+          "countries": null,
+          "density": 0.049
+        },
+        "r64_ne": {
+          "name": "R64 Ne",
+          "unit": "unknown",
+          "years": null,
+          "countries": null,
+          "density": 0.032
+        },
+        "r64_se": {
+          "name": "R64 Se",
+          "unit": "unknown",
+          "years": null,
+          "countries": null,
+          "density": 0.031
+        },
+        "r64_sw": {
+          "name": "R64 Sw",
+          "unit": "unknown",
+          "years": null,
+          "countries": null,
+          "density": 0.03
+        },
+        "r64_nw": {
+          "name": "R64 Nw",
+          "unit": "unknown",
+          "years": null,
+          "countries": null,
+          "density": 0.031
         }
       },
-      "llm_summary": "1,177 tropical storms/hurricanes/typhoons worldwide, 2015-2025. Includes track positions with wind speed, pressure, and wind radii data.",
-      "path": "global/disasters/hurricanes"
+      "llm_summary": "722,507 hurricane in 12 countries from 1842-10-25T03:00:00 to 2026-01-08T00:00:00.",
+      "path": "global/disasters/hurricanes",
+      "reference": {
+        "source": {
+          "source_id": "hurricanes",
+          "source_name": "IBTrACS",
+          "source_url": "https://www.ncei.noaa.gov/products/international-best-track-archive",
+          "license": "Public Domain",
+          "category": "hazard",
+          "description": "International Best Track Archive for Climate Stewardship (IBTrACS) - the most complete global dataset of tropical cyclones. Includes hurricanes, typhoons, and cyclones from all ocean basins with track positions, intensity, and wind radii data.",
+          "topic_tags": [
+            "disasters",
+            "hurricanes",
+            "tropical cyclones",
+            "hazard"
+          ],
+          "keywords": [
+            "hurricane",
+            "typhoon",
+            "cyclone",
+            "tropical storm",
+            "IBTrACS",
+            "wind speed",
+            "storm surge"
+          ]
+        },
+        "metrics": {
+          "wind_kt": "Maximum sustained wind speed in knots",
+          "pressure_mb": "Central pressure in millibars",
+          "category": "Saffir-Simpson category (1-5) or equivalent",
+          "r34_ne": "Radius of 34kt winds in NE quadrant (nautical miles)",
+          "r34_se": "Radius of 34kt winds in SE quadrant",
+          "r34_sw": "Radius of 34kt winds in SW quadrant",
+          "r34_nw": "Radius of 34kt winds in NW quadrant",
+          "r50_ne": "Radius of 50kt winds in NE quadrant",
+          "r50_se": "Radius of 50kt winds in SE quadrant",
+          "r50_sw": "Radius of 50kt winds in SW quadrant",
+          "r50_nw": "Radius of 50kt winds in NW quadrant",
+          "r64_ne": "Radius of 64kt winds in NE quadrant",
+          "r64_se": "Radius of 64kt winds in SE quadrant",
+          "r64_sw": "Radius of 64kt winds in SW quadrant",
+          "r64_nw": "Radius of 64kt winds in NW quadrant"
+        }
+      }
     },
     {
-      "source_id": "global_tornadoes",
-      "source_name": "Global Tornadoes (NOAA + Canada)",
+      "source_id": "landslides",
+      "source_name": "NASA Global Landslide Catalog",
       "category": "hazard",
       "scope": "global",
       "topic_tags": [
-        "tornado",
-        "severe_weather",
-        "natural_hazard"
+        "disasters",
+        "landslides",
+        "geohazard",
+        "hazard"
+      ],
+      "keywords": [
+        "landslide",
+        "mudslide",
+        "debris flow",
+        "slope failure",
+        "NASA",
+        "GLC"
+      ],
+      "geographic_level": null,
+      "geographic_coverage": {},
+      "coverage_description": "Unknown coverage",
+      "temporal_coverage": {
+        "start": "1760-01-01T00:00:00",
+        "end": "2104-06-24T00:00:00",
+        "granularity": "timestamp",
+        "field": "timestamp"
+      },
+      "metrics": {
+        "deaths": {
+          "name": "Deaths",
+          "unit": "unknown",
+          "years": null,
+          "countries": null,
+          "density": 0.378
+        },
+        "injuries": {
+          "name": "Injuries",
+          "unit": "unknown",
+          "years": null,
+          "countries": null,
+          "density": 0.228
+        },
+        "missing": {
+          "name": "Missing",
+          "unit": "unknown",
+          "years": null,
+          "countries": null,
+          "density": 0.01
+        },
+        "affected": {
+          "name": "Affected",
+          "unit": "unknown",
+          "years": null,
+          "countries": null,
+          "density": 0.197
+        },
+        "houses_destroyed": {
+          "name": "Houses Destroyed",
+          "unit": "unknown",
+          "years": null,
+          "countries": null,
+          "density": 0.15
+        },
+        "damage_usd": {
+          "name": "Damage Usd",
+          "unit": "unknown",
+          "years": null,
+          "countries": null,
+          "density": 0.061
+        }
+      },
+      "llm_summary": "45,483 landslide in 87 countries from 1760-01-01T00:00:00 to 2104-06-24T00:00:00.",
+      "path": "global/disasters/landslides",
+      "reference": {
+        "source": {
+          "source_id": "landslides",
+          "source_name": "NASA Global Landslide Catalog",
+          "source_url": "https://gpm.nasa.gov/landslides/",
+          "license": "Public Domain (NASA)",
+          "category": "hazard",
+          "description": "NASA Global Landslide Catalog (GLC) containing landslide events reported worldwide. Includes rainfall-triggered landslides, debris flows, and mudslides with casualty and damage information.",
+          "topic_tags": [
+            "disasters",
+            "landslides",
+            "geohazard",
+            "hazard"
+          ],
+          "keywords": [
+            "landslide",
+            "mudslide",
+            "debris flow",
+            "slope failure",
+            "NASA",
+            "GLC"
+          ]
+        },
+        "metrics": {
+          "deaths": "Number of deaths attributed to the landslide",
+          "injuries": "Number of injuries attributed to the landslide",
+          "missing": "Number of missing persons",
+          "affected": "Number of people affected",
+          "houses_destroyed": "Number of houses destroyed",
+          "damage_usd": "Estimated damage in USD"
+        }
+      }
+    },
+    {
+      "source_id": "tornadoes",
+      "source_name": "NOAA Storm Prediction Center",
+      "category": "hazard",
+      "scope": "global",
+      "topic_tags": [
+        "disasters",
+        "tornadoes",
+        "severe weather",
+        "hazard"
       ],
       "keywords": [
         "tornado",
         "twister",
-        "EF scale",
-        "Fujita",
         "severe weather",
-        "wind"
+        "NOAA",
+        "SPC",
+        "EF scale",
+        "Fujita"
       ],
-      "geographic_level": "regional",
+      "geographic_level": "unknown",
       "geographic_coverage": {
-        "type": "regional",
-        "countries": [
-          "USA",
-          "CAN"
-        ],
+        "type": "unknown",
+        "countries": 0,
         "common_count": null,
         "common_missing": [],
         "uncommonly_included": [],
         "region_coverage": {}
       },
-      "coverage_description": "['USA', 'CAN'] countries",
+      "coverage_description": "0 countries",
       "temporal_coverage": {
-        "start": 2015,
+        "start": 1950,
         "end": 2025,
-        "granularity": "timestamp",
-        "field": "timestamp"
+        "granularity": "yearly",
+        "field": "year"
       },
       "metrics": {
-        "tornado_scale": {
-          "name": "EF/F Rating",
-          "unit": "scale",
-          "years": null,
+        "tornado_count": {
+          "name": "Tornado Count",
+          "unit": "unknown",
+          "years": [
+            1950,
+            2025
+          ],
           "countries": null,
-          "density": null
+          "density": 1.0
         },
-        "tornado_length_mi": {
-          "name": "Track Length",
-          "unit": "miles",
-          "years": null,
+        "total_track_miles": {
+          "name": "Total Track Miles",
+          "unit": "unknown",
+          "years": [
+            1950,
+            2025
+          ],
           "countries": null,
-          "density": null
+          "density": 1.0
         },
-        "tornado_width_yd": {
-          "name": "Path Width",
-          "unit": "yards",
-          "years": null,
+        "deaths": {
+          "name": "Deaths",
+          "unit": "unknown",
+          "years": [
+            1950,
+            2025
+          ],
           "countries": null,
-          "density": null
+          "density": 1.0
         },
-        "deaths_direct": {
-          "name": "Direct Deaths",
-          "unit": "count",
-          "years": null,
+        "injuries": {
+          "name": "Injuries",
+          "unit": "unknown",
+          "years": [
+            1950,
+            2025
+          ],
           "countries": null,
-          "density": null
+          "density": 1.0
+        },
+        "damage_usd": {
+          "name": "Damage Usd",
+          "unit": "unknown",
+          "years": [
+            1950,
+            2025
+          ],
+          "countries": null,
+          "density": 1.0
         }
       },
-      "llm_summary": "17,338 tornado events in USA and Canada, 2015-2025. Includes EF-scale ratings, track endpoints, path width, and damage data.",
-      "path": "global/disasters/tornadoes"
+      "llm_summary": "1950-2025. Tornado Count, Total Track Miles, Deaths, Injuries, Damage Usd.",
+      "path": "global/disasters/tornadoes",
+      "reference": {
+        "source": {
+          "source_id": "tornadoes",
+          "source_name": "NOAA Storm Prediction Center",
+          "source_url": "https://www.spc.noaa.gov/wcm/",
+          "license": "Public Domain",
+          "category": "hazard",
+          "description": "NOAA Storm Prediction Center (SPC) tornado database containing detailed tornado event records for the United States. Includes track paths, intensity ratings, casualties, and damage estimates.",
+          "topic_tags": [
+            "disasters",
+            "tornadoes",
+            "severe weather",
+            "hazard"
+          ],
+          "keywords": [
+            "tornado",
+            "twister",
+            "severe weather",
+            "NOAA",
+            "SPC",
+            "EF scale",
+            "Fujita"
+          ]
+        },
+        "metrics": {
+          "tornado_scale": "Enhanced Fujita (EF) or Fujita (F) scale rating",
+          "tornado_length_mi": "Tornado path length in miles",
+          "tornado_width_yd": "Maximum tornado width in yards",
+          "deaths_direct": "Deaths directly caused by the tornado",
+          "deaths_indirect": "Deaths indirectly caused by the tornado",
+          "injuries_direct": "Injuries directly caused by the tornado",
+          "injuries_indirect": "Injuries indirectly caused by the tornado",
+          "damage_property": "Estimated property damage",
+          "damage_crops": "Estimated crop damage"
+        }
+      }
     },
     {
-      "source_id": "noaa_global_tsunamis",
-      "source_name": "NOAA NCEI Global Historical Tsunami Database",
+      "source_id": "tsunamis",
+      "source_name": "NOAA NGDC Tsunami Database",
       "category": "hazard",
       "scope": "global",
       "topic_tags": [
-        "tsunami",
-        "natural_hazard",
-        "ocean"
+        "disasters",
+        "tsunamis",
+        "coastal",
+        "hazard"
       ],
       "keywords": [
         "tsunami",
         "tidal wave",
+        "runup",
+        "inundation",
         "earthquake",
-        "coastal",
-        "wave height"
+        "NOAA",
+        "NGDC"
       ],
-      "geographic_level": "global",
-      "geographic_coverage": {
-        "type": "global",
-        "countries": null,
-        "common_count": null,
-        "common_missing": [],
-        "uncommonly_included": [],
-        "region_coverage": {}
-      },
-      "coverage_description": "0/200 common (missing 0)",
+      "geographic_level": null,
+      "geographic_coverage": {},
+      "coverage_description": "Unknown coverage",
       "temporal_coverage": {
-        "start": 2015,
-        "end": 2025,
+        "start": "0001-01-01T00:00:00",
+        "end": "2025-12-12T00:00:00",
         "granularity": "timestamp",
         "field": "timestamp"
       },
       "metrics": {
-        "eq_magnitude": {
-          "name": "Earthquake Magnitude",
-          "unit": "magnitude",
+        "dist_from_source_km": {
+          "name": "Dist From Source Km",
+          "unit": "unknown",
           "years": null,
           "countries": null,
-          "density": null
+          "density": 0.988
         },
-        "max_water_height_m": {
-          "name": "Max Water Height",
-          "unit": "meters",
+        "deaths": {
+          "name": "Deaths",
+          "unit": "unknown",
           "years": null,
           "countries": null,
-          "density": null
+          "density": 0.021
         },
-        "intensity": {
-          "name": "Tsunami Intensity",
-          "unit": "scale",
+        "deaths_order": {
+          "name": "Deaths Order",
+          "unit": "unknown",
           "years": null,
           "countries": null,
-          "density": null
+          "density": 0.028
+        },
+        "damage_order": {
+          "name": "Damage Order",
+          "unit": "unknown",
+          "years": null,
+          "countries": null,
+          "density": 0.074
         }
       },
-      "llm_summary": "193 tsunami events worldwide, 2015-2025. Includes triggering earthquake magnitude, water height, and intensity data.",
-      "path": "global/disasters/tsunamis"
+      "llm_summary": "33,623 tsunami in 12 countries from 0001-01-01T00:00:00 to 2025-12-12T00:00:00.",
+      "path": "global/disasters/tsunamis",
+      "reference": {
+        "source": {
+          "source_id": "tsunamis",
+          "source_name": "NOAA NGDC Tsunami Database",
+          "source_url": "https://www.ngdc.noaa.gov/hazard/tsu_db.shtml",
+          "license": "Public Domain",
+          "category": "hazard",
+          "description": "NOAA National Geophysical Data Center (NGDC) Global Historical Tsunami Database. Contains tsunami source events and runup observations worldwide from ancient times to present.",
+          "topic_tags": [
+            "disasters",
+            "tsunamis",
+            "coastal",
+            "hazard"
+          ],
+          "keywords": [
+            "tsunami",
+            "tidal wave",
+            "runup",
+            "inundation",
+            "earthquake",
+            "NOAA",
+            "NGDC"
+          ]
+        },
+        "metrics": {
+          "cause_code": "Numeric code for tsunami cause",
+          "cause": "Cause of tsunami (earthquake, volcanic, landslide, etc.)",
+          "eq_magnitude": "Magnitude of triggering earthquake (if applicable)",
+          "max_water_height_m": "Maximum observed water height in meters",
+          "intensity": "Tsunami intensity on Soloviev scale",
+          "runup_count": "Number of runup observations for this event",
+          "deaths": "Number of deaths attributed to the tsunami",
+          "deaths_order": "Order of magnitude of deaths (1-4)",
+          "damage_millions": "Estimated damage in millions of USD",
+          "damage_order": "Order of magnitude of damage (1-4)",
+          "water_height_m": "Observed water height at runup location (meters)",
+          "horizontal_inundation_m": "Horizontal distance of water penetration (meters)",
+          "dist_from_source_km": "Distance from tsunami source (km)",
+          "arrival_travel_time_min": "Travel time from source (minutes)"
+        }
+      }
     },
     {
-      "source_id": "smithsonian_volcanoes",
-      "source_name": "Smithsonian Global Volcanism Program + NOAA Significant Eruptions",
+      "source_id": "volcanoes",
+      "source_name": "Smithsonian Global Volcanism Program",
       "category": "hazard",
       "scope": "global",
       "topic_tags": [
-        "volcano",
-        "eruption",
-        "geology"
+        "disasters",
+        "volcanoes",
+        "eruptions",
+        "hazard"
       ],
       "keywords": [
         "volcano",
@@ -4545,101 +5020,355 @@
         "VEI",
         "lava",
         "ash",
-        "magma"
+        "Smithsonian",
+        "GVP"
       ],
-      "geographic_level": "global",
+      "geographic_level": "admin_0",
       "geographic_coverage": {
         "type": "global",
         "countries": null,
-        "common_count": null,
-        "common_missing": [],
-        "uncommonly_included": [],
+        "common_count": 53,
+        "common_missing": [
+          "AFG",
+          "AGO",
+          "ALB",
+          "AND",
+          "ARE",
+          "ARM",
+          "ATG",
+          "AUT",
+          "AZE",
+          "BDI",
+          "BEL",
+          "BEN",
+          "BFA",
+          "BGD",
+          "BGR",
+          "BHR",
+          "BHS",
+          "BIH",
+          "BLR",
+          "BLZ",
+          "BOL",
+          "BRA",
+          "BRB",
+          "BRN",
+          "BTN",
+          "BWA",
+          "CAF",
+          "CHE",
+          "CIV",
+          "COG",
+          "COK",
+          "CUB",
+          "CYP",
+          "CZE",
+          "DEU",
+          "DNK",
+          "DOM",
+          "DZA",
+          "EGY",
+          "EST",
+          "FIN",
+          "FJI",
+          "FSM",
+          "GAB",
+          "GEO",
+          "GHA",
+          "GIN",
+          "GMB",
+          "GNB",
+          "GUY",
+          "HKG",
+          "HND",
+          "HRV",
+          "HTI",
+          "HUN",
+          "IRL",
+          "IRN",
+          "IRQ",
+          "ISR",
+          "JAM",
+          "JOR",
+          "KAZ",
+          "KGZ",
+          "KHM",
+          "KIR",
+          "KOR",
+          "KWT",
+          "LAO",
+          "LBN",
+          "LBR",
+          "LBY",
+          "LCA",
+          "LIE",
+          "LKA",
+          "LSO",
+          "LTU",
+          "LUX",
+          "LVA",
+          "MAC",
+          "MAR",
+          "MCO",
+          "MDA",
+          "MDG",
+          "MDV",
+          "MHL",
+          "MKD",
+          "MLI",
+          "MLT",
+          "MMR",
+          "MNE",
+          "MNG",
+          "MOZ",
+          "MRT",
+          "MUS",
+          "MWI",
+          "MYS",
+          "NAM",
+          "NER",
+          "NGA",
+          "NIU",
+          "NLD",
+          "NPL",
+          "NRU",
+          "OMN",
+          "PAK",
+          "PAN",
+          "PLW",
+          "POL",
+          "PRK",
+          "PRY",
+          "PSE",
+          "QAT",
+          "ROU",
+          "RWA",
+          "SDN",
+          "SEN",
+          "SGP",
+          "SLE",
+          "SMR",
+          "SOM",
+          "SRB",
+          "SSD",
+          "STP",
+          "SUR",
+          "SVK",
+          "SVN",
+          "SWE",
+          "SWZ",
+          "SYC",
+          "SYR",
+          "TCD",
+          "TGO",
+          "THA",
+          "TJK",
+          "TKM",
+          "TLS",
+          "TTO",
+          "TUN",
+          "TUV",
+          "UGA",
+          "UKR",
+          "URY",
+          "UZB",
+          "VAT",
+          "VEN",
+          "ZMB",
+          "ZWE"
+        ],
+        "uncommonly_included": [
+          "ATA"
+        ],
         "region_coverage": {}
       },
-      "coverage_description": "0/200 common (missing 0)",
+      "coverage_description": "53/200 common",
       "temporal_coverage": {
-        "start": 2015,
+        "start": 1800,
         "end": 2025,
         "granularity": "yearly",
         "field": "year"
       },
       "metrics": {
-        "max_vei": {
-          "name": "Max VEI",
-          "unit": "scale",
-          "years": null,
-          "countries": null,
-          "density": null
-        },
         "eruption_count": {
-          "name": "Eruption Count",
-          "unit": "count",
-          "years": null,
-          "countries": null,
-          "density": null
+          "name": "Number of eruptions (in aggregates)",
+          "unit": null,
+          "years": [
+            1800,
+            2025
+          ],
+          "countries": 57,
+          "density": 1.0
         },
-        "deaths": {
-          "name": "Deaths",
-          "unit": "count",
-          "years": null,
-          "countries": null,
-          "density": null
+        "volcano_count": {
+          "name": "Number of active volcanoes (in aggregates)",
+          "unit": null,
+          "years": [
+            1800,
+            2025
+          ],
+          "countries": 57,
+          "density": 1.0
+        },
+        "max_vei": {
+          "name": "Maximum VEI for the period",
+          "unit": null,
+          "years": [
+            1800,
+            2025
+          ],
+          "countries": 54,
+          "density": 0.951
+        },
+        "avg_vei": {
+          "name": "Average VEI for the period",
+          "unit": null,
+          "years": [
+            1800,
+            2025
+          ],
+          "countries": 54,
+          "density": 0.951
         }
       },
-      "llm_summary": "383 volcanic eruption events worldwide, 2015-2025. Includes VEI ratings, eruption agents, and impact data from NOAA significant eruptions.",
-      "path": "global/disasters/volcanoes"
+      "llm_summary": "1800-2025. Number of eruptions (in aggregates), Number of active volcanoes (in aggregates), Maximum VEI for the period, Average VEI for the period.",
+      "path": "global/disasters/volcanoes",
+      "reference": {
+        "source": {
+          "source_id": "volcanoes",
+          "source_name": "Smithsonian Global Volcanism Program",
+          "source_url": "https://volcano.si.edu/",
+          "license": "Public Domain",
+          "category": "hazard",
+          "description": "Smithsonian Institution Global Volcanism Program (GVP) database of volcanic eruptions worldwide. Contains detailed eruption records with VEI ratings, duration, and impact data.",
+          "topic_tags": [
+            "disasters",
+            "volcanoes",
+            "eruptions",
+            "hazard"
+          ],
+          "keywords": [
+            "volcano",
+            "eruption",
+            "VEI",
+            "lava",
+            "ash",
+            "Smithsonian",
+            "GVP"
+          ]
+        },
+        "metrics": {
+          "VEI": "Volcanic Explosivity Index (0-8 scale)",
+          "duration_days": "Duration of eruption in days",
+          "is_ongoing": "Whether eruption is currently ongoing",
+          "felt_radius_km": "Estimated radius where eruption effects were felt",
+          "damage_radius_km": "Estimated radius of structural damage",
+          "deaths": "Number of deaths attributed to the eruption",
+          "injuries": "Number of injuries attributed to the eruption",
+          "missing": "Number of missing persons",
+          "houses_destroyed": "Number of houses destroyed",
+          "damage_usd": "Estimated damage in USD",
+          "eruption_count": "Number of eruptions (in aggregates)",
+          "volcano_count": "Number of active volcanoes (in aggregates)",
+          "max_vei": "Maximum VEI for the period",
+          "avg_vei": "Average VEI for the period"
+        }
+      }
     },
     {
-      "source_id": "global_fire_atlas",
+      "source_id": "wildfires",
       "source_name": "Global Fire Atlas",
       "category": "hazard",
       "scope": "global",
       "topic_tags": [
-        "wildfire",
+        "disasters",
+        "wildfires",
         "fire",
-        "natural_hazard"
+        "hazard"
       ],
       "keywords": [
         "wildfire",
         "fire",
         "burned area",
         "MODIS",
-        "fire perimeter"
+        "VIIRS",
+        "satellite",
+        "Global Fire Atlas"
       ],
-      "geographic_level": "global",
-      "geographic_coverage": {
-        "type": "global",
-        "countries": null,
-        "common_count": null,
-        "common_missing": [],
-        "uncommonly_included": [],
-        "region_coverage": {}
-      },
-      "coverage_description": "0/200 common (missing 0)",
+      "geographic_level": null,
+      "geographic_coverage": {},
+      "coverage_description": "Unknown coverage",
       "temporal_coverage": {
-        "start": 2014,
-        "end": 2024,
-        "granularity": "timestamp",
-        "field": "timestamp"
+        "start": null,
+        "end": null,
+        "granularity": "unknown",
+        "field": null
       },
       "metrics": {
+        "day_num": {
+          "name": "Day Num",
+          "unit": "unknown",
+          "years": null,
+          "countries": null,
+          "density": 1.0
+        },
         "area_km2": {
           "name": "Burned Area",
           "unit": "km2",
           "years": null,
           "countries": null,
-          "density": null
+          "density": 1.0
         },
-        "duration_days": {
-          "name": "Fire Duration",
-          "unit": "days",
+        "sibling_level": {
+          "name": "Sibling Level",
+          "unit": "unknown",
           "years": null,
           "countries": null,
-          "density": null
+          "density": 1.0
+        },
+        "loc_confidence": {
+          "name": "Loc Confidence",
+          "unit": "unknown",
+          "years": null,
+          "countries": null,
+          "density": 1.0
         }
       },
-      "llm_summary": "11,235 wildfire events 200+ km2 worldwide (excluding USA/Canada), 2014-2024. Derived from MODIS burned area product.",
-      "path": "global/disasters/wildfires"
+      "llm_summary": "49,788 wildfire in 95 countries.",
+      "path": "global/disasters/wildfires",
+      "reference": {
+        "source": {
+          "source_id": "wildfires",
+          "source_name": "Global Fire Atlas",
+          "source_url": "https://www.globalfiredata.org/",
+          "license": "Public Domain",
+          "category": "hazard",
+          "description": "Global Fire Atlas derived from MODIS/VIIRS satellite active fire detections. Tracks individual fire events worldwide with daily progression, burned area, and duration data.",
+          "topic_tags": [
+            "disasters",
+            "wildfires",
+            "fire",
+            "hazard"
+          ],
+          "keywords": [
+            "wildfire",
+            "fire",
+            "burned area",
+            "MODIS",
+            "VIIRS",
+            "satellite",
+            "Global Fire Atlas"
+          ]
+        },
+        "metrics": {
+          "area_km2": "Burned area in square kilometers",
+          "burned_acres": "Burned area in acres",
+          "duration_days": "Duration of fire event in days",
+          "day_num": "Day number within fire event progression",
+          "perimeter": "Fire perimeter geometry (WKT)",
+          "land_cover": "Dominant land cover type at fire location"
+        }
+      }
     }
   ]
 }

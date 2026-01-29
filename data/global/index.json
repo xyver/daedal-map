@@ -2,676 +2,431 @@
   "_description": "Index of global datasets",
   "_last_updated": "2026-01",
   "datasets": {
-    "global_earthquakes": {
-      "source_name": "Global Earthquakes (USGS + NOAA Significant)",
-      "category": "hazard",
-      "files": {
-        "events": "earthquakes/events.parquet"
-      },
-      "geographic_level": "global",
-      "has_coordinates": true,
-      "temporal_coverage": {
-        "start": 2015,
-        "end": 2025
-      },
-      "record_counts": {
-        "aggregates": 19132
-      }
-    },
-    "global_floods": {
-      "source_name": "Global Flood Database + Dartmouth Flood Observatory",
-      "category": "hazard",
-      "files": {
-        "events": "floods/events.parquet"
-      },
-      "geographic_level": "global",
-      "has_coordinates": true,
-      "temporal_coverage": {
-        "start": 2015,
-        "end": 2019
-      },
-      "record_counts": {
-        "aggregates": 610
-      }
-    },
-    "ibtracs_storms": {
-      "source_name": "IBTrACS - International Best Track Archive",
-      "category": "hazard",
-      "files": {
-        "aggregates": "hurricanes/storms.parquet"
-      },
-      "geographic_level": "global",
-      "has_coordinates": true,
-      "temporal_coverage": {
-        "start": 2015,
-        "end": 2025
-      },
-      "record_counts": {
-        "aggregates": 1177
-      }
-    },
-    "global_tornadoes": {
-      "source_name": "Global Tornadoes (NOAA + Canada)",
-      "category": "hazard",
-      "files": {
-        "aggregates": "tornadoes/aggregates.parquet",
-        "events": "tornadoes/events.parquet"
-      },
-      "geographic_level": "regional",
-      "has_coordinates": true,
-      "temporal_coverage": {
-        "start": 2015,
-        "end": 2025
-      },
-      "record_counts": {
-        "aggregates": 17338
-      }
-    },
-    "noaa_global_tsunamis": {
-      "source_name": "NOAA NCEI Global Historical Tsunami Database",
-      "category": "hazard",
-      "files": {
-        "events": "tsunamis/events.parquet",
-        "aggregates": "tsunamis/runups.parquet"
-      },
-      "geographic_level": "global",
-      "has_coordinates": true,
-      "temporal_coverage": {
-        "start": 2015,
-        "end": 2025
-      },
-      "record_counts": {
-        "aggregates": 193
-      }
-    },
-    "smithsonian_volcanoes": {
-      "source_name": "Smithsonian Global Volcanism Program + NOAA Significant Eruptions",
-      "category": "hazard",
-      "files": {
-        "events": "volcanoes/events.parquet",
-        "aggregates": "volcanoes/GLOBAL.parquet"
-      },
-      "geographic_level": "global",
-      "has_coordinates": true,
-      "temporal_coverage": {
-        "start": 2015,
-        "end": 2025
-      },
-      "record_counts": {
-        "aggregates": 383
-      }
-    },
-    "global_fire_atlas": {
-      "source_name": "Global Fire Atlas",
-      "category": "hazard",
-      "files": {
-        "aggregates": "wildfires/fire_progression_2024.parquet"
-      },
-      "geographic_level": "global",
-      "has_coordinates": true,
-      "temporal_coverage": {
-        "start": 2014,
-        "end": 2024
-      },
-      "record_counts": {
-        "aggregates": 11235
-      }
-    },
-    "un_sdg_01": {
-      "source_name": "UN SDG Goal 1",
-      "category": "development",
-      "files": {
-        "aggregates": "01/all_countries.parquet"
-      },
-      "geographic_level": "admin_0",
-      "has_coordinates": false,
-      "temporal_coverage": {
-        "start": 1963,
-        "end": 2024
-      },
-      "record_counts": {
-        "aggregates": 5997
-      }
-    },
-    "un_sdg_02": {
-      "source_name": "UN SDG Goal 2",
-      "category": "development",
-      "files": {
-        "aggregates": "02/all_countries.parquet"
-      },
-      "geographic_level": "admin_0",
-      "has_coordinates": false,
-      "temporal_coverage": {
-        "start": 1995,
-        "end": 2025
-      },
-      "record_counts": {
-        "aggregates": 5520
-      }
-    },
-    "un_sdg_03": {
-      "source_name": "UN SDG Goal 3",
-      "category": "development",
-      "files": {
-        "aggregates": "03/all_countries.parquet"
-      },
-      "geographic_level": "admin_0",
-      "has_coordinates": false,
-      "temporal_coverage": {
-        "start": 1985,
-        "end": 2024
-      },
-      "record_counts": {
-        "aggregates": 5114
-      }
-    },
-    "un_sdg_04": {
-      "source_name": "UN SDG Goal 4",
-      "category": "development",
-      "files": {
-        "aggregates": "04/all_countries.parquet"
-      },
-      "geographic_level": "admin_0",
-      "has_coordinates": false,
-      "temporal_coverage": {
-        "start": 2000,
-        "end": 2024
-      },
-      "record_counts": {
-        "aggregates": 4304
-      }
-    },
-    "un_sdg_05": {
-      "source_name": "UN SDG Goal 5",
-      "category": "development",
-      "files": {
-        "aggregates": "05/all_countries.parquet"
-      },
-      "geographic_level": "admin_0",
-      "has_coordinates": false,
-      "temporal_coverage": {
-        "start": 2009,
-        "end": 2025
-      },
-      "record_counts": {
-        "aggregates": 1597
-      }
-    },
-    "un_sdg_06": {
-      "source_name": "UN SDG Goal 6",
-      "category": "development",
-      "files": {
-        "aggregates": "06/all_countries.parquet"
-      },
-      "geographic_level": "admin_0",
-      "has_coordinates": false,
-      "temporal_coverage": {
-        "start": 2000,
-        "end": 2025
-      },
-      "record_counts": {
-        "aggregates": 5624
-      }
-    },
-    "un_sdg_07": {
-      "source_name": "UN SDG Goal 7",
-      "category": "development",
-      "files": {
-        "aggregates": "07/all_countries.parquet"
-      },
-      "geographic_level": "admin_0",
-      "has_coordinates": false,
-      "temporal_coverage": {
-        "start": 2000,
-        "end": 2023
-      },
-      "record_counts": {
-        "aggregates": 5230
-      }
-    },
-    "un_sdg_08": {
-      "source_name": "UN SDG Goal 8",
-      "category": "development",
-      "files": {
-        "aggregates": "08/all_countries.parquet"
-      },
-      "geographic_level": "admin_0",
-      "has_coordinates": false,
-      "temporal_coverage": {
-        "start": 2000,
-        "end": 2024
-      },
-      "record_counts": {
-        "aggregates": 5333
-      }
-    },
-    "un_sdg_09": {
-      "source_name": "UN SDG Goal 9",
-      "category": "development",
-      "files": {
-        "aggregates": "09/all_countries.parquet"
-      },
-      "geographic_level": "admin_0",
-      "has_coordinates": false,
-      "temporal_coverage": {
-        "start": 2000,
-        "end": 2025
-      },
-      "record_counts": {
-        "aggregates": 5217
-      }
-    },
-    "un_sdg_10": {
-      "source_name": "UN SDG Goal 10",
-      "category": "development",
-      "files": {
-        "aggregates": "10/all_countries.parquet"
-      },
-      "geographic_level": "admin_0",
-      "has_coordinates": false,
-      "temporal_coverage": {
-        "start": 1963,
-        "end": 2024
-      },
-      "record_counts": {
-        "aggregates": 5927
-      }
-    },
-    "un_sdg_11": {
-      "source_name": "UN SDG Goal 11",
-      "category": "development",
-      "files": {
-        "aggregates": "11/all_countries.parquet"
-      },
-      "geographic_level": "admin_0",
-      "has_coordinates": false,
-      "temporal_coverage": {
-        "start": 2000,
-        "end": 2025
-      },
-      "record_counts": {
-        "aggregates": 3681
-      }
-    },
-    "un_sdg_12": {
-      "source_name": "UN SDG Goal 12",
-      "category": "development",
-      "files": {
-        "aggregates": "12/all_countries.parquet"
-      },
-      "geographic_level": "admin_0",
-      "has_coordinates": false,
-      "temporal_coverage": {
-        "start": 2000,
-        "end": 2025
-      },
-      "record_counts": {
-        "aggregates": 5452
-      }
-    },
-    "un_sdg_13": {
-      "source_name": "UN SDG Goal 13",
-      "category": "development",
-      "files": {
-        "aggregates": "13/all_countries.parquet"
-      },
-      "geographic_level": "admin_0",
-      "has_coordinates": false,
-      "temporal_coverage": {
-        "start": 2000,
-        "end": 2024
-      },
-      "record_counts": {
-        "aggregates": 3481
-      }
-    },
-    "un_sdg_14": {
-      "source_name": "UN SDG Goal 14",
-      "category": "development",
-      "files": {
-        "aggregates": "14/all_countries.parquet"
-      },
-      "geographic_level": "admin_0",
-      "has_coordinates": false,
-      "temporal_coverage": {
-        "start": 1996,
-        "end": 2025
-      },
-      "record_counts": {
-        "aggregates": 4572
-      }
-    },
-    "un_sdg_15": {
-      "source_name": "UN SDG Goal 15",
-      "category": "development",
-      "files": {
-        "aggregates": "15/all_countries.parquet"
-      },
-      "geographic_level": "admin_0",
-      "has_coordinates": false,
-      "temporal_coverage": {
-        "start": 1993,
-        "end": 2024
-      },
-      "record_counts": {
-        "aggregates": 7104
-      }
-    },
-    "un_sdg_16": {
-      "source_name": "UN SDG Goal 16",
-      "category": "development",
-      "files": {
-        "aggregates": "16/all_countries.parquet"
-      },
-      "geographic_level": "admin_0",
-      "has_coordinates": false,
-      "temporal_coverage": {
-        "start": 1990,
-        "end": 2025
-      },
-      "record_counts": {
-        "aggregates": 5815
-      }
-    },
-    "un_sdg_17": {
-      "source_name": "UN SDG Goal 17",
-      "category": "development",
-      "files": {
-        "aggregates": "17/all_countries.parquet"
-      },
-      "geographic_level": "admin_0",
-      "has_coordinates": false,
-      "temporal_coverage": {
-        "start": 1990,
-        "end": 2025
-      },
-      "record_counts": {
-        "aggregates": 7179
-      }
-    },
     "01": {
       "source_name": "UN SDG Goal 1: No Poverty",
       "category": "development",
-      "files": {
-        "aggregates": "01/all_countries.parquet"
-      },
+      "path": "un_sdg/01",
+      "files": [
+        "un_sdg/01/all_countries.parquet"
+      ],
+      "file_count": 1,
       "geographic_level": "admin_0",
       "has_coordinates": false,
       "temporal_coverage": {
         "start": 1963,
         "end": 2024
       },
-      "record_counts": {
-        "aggregates": 5908
-      }
+      "row_count": 5908
     },
     "02": {
       "source_name": "UN SDG Goal 2: Zero Hunger",
       "category": "development",
-      "files": {
-        "aggregates": "02/all_countries.parquet"
-      },
+      "path": "un_sdg/02",
+      "files": [
+        "un_sdg/02/all_countries.parquet"
+      ],
+      "file_count": 1,
       "geographic_level": "admin_0",
       "has_coordinates": false,
       "temporal_coverage": {
         "start": 1995,
         "end": 2025
       },
-      "record_counts": {
-        "aggregates": 5390
-      }
+      "row_count": 5390
     },
     "03": {
       "source_name": "UN SDG Goal 3: Good Health and Well-being",
       "category": "development",
-      "files": {
-        "aggregates": "03/all_countries.parquet"
-      },
+      "path": "un_sdg/03",
+      "files": [
+        "un_sdg/03/all_countries.parquet"
+      ],
+      "file_count": 1,
       "geographic_level": "admin_0",
       "has_coordinates": false,
       "temporal_coverage": {
         "start": 1985,
         "end": 2024
       },
-      "record_counts": {
-        "aggregates": 5113
-      }
+      "row_count": 5113
     },
     "04": {
       "source_name": "UN SDG Goal 4: Quality Education",
       "category": "development",
-      "files": {
-        "aggregates": "04/all_countries.parquet"
-      },
+      "path": "un_sdg/04",
+      "files": [
+        "un_sdg/04/all_countries.parquet"
+      ],
+      "file_count": 1,
       "geographic_level": "admin_0",
       "has_coordinates": false,
       "temporal_coverage": {
         "start": 2000,
         "end": 2024
       },
-      "record_counts": {
-        "aggregates": 4298
-      }
+      "row_count": 4298
     },
     "05": {
       "source_name": "UN SDG Goal 5: Gender Equality",
       "category": "development",
-      "files": {
-        "aggregates": "05/all_countries.parquet"
-      },
+      "path": "un_sdg/05",
+      "files": [
+        "un_sdg/05/all_countries.parquet"
+      ],
+      "file_count": 1,
       "geographic_level": "admin_0",
       "has_coordinates": false,
       "temporal_coverage": {
         "start": 2009,
         "end": 2025
       },
-      "record_counts": {
-        "aggregates": 1596
-      }
+      "row_count": 1596
     },
     "06": {
       "source_name": "UN SDG Goal 6: Clean Water and Sanitation",
       "category": "development",
-      "files": {
-        "aggregates": "06/all_countries.parquet"
-      },
+      "path": "un_sdg/06",
+      "files": [
+        "un_sdg/06/all_countries.parquet"
+      ],
+      "file_count": 1,
       "geographic_level": "admin_0",
       "has_coordinates": false,
       "temporal_coverage": {
         "start": 2000,
         "end": 2025
       },
-      "record_counts": {
-        "aggregates": 5591
-      }
+      "row_count": 5591
     },
     "07": {
       "source_name": "UN SDG Goal 7: Affordable and Clean Energy",
       "category": "development",
-      "files": {
-        "aggregates": "07/all_countries.parquet"
-      },
+      "path": "un_sdg/07",
+      "files": [
+        "un_sdg/07/all_countries.parquet"
+      ],
+      "file_count": 1,
       "geographic_level": "admin_0",
       "has_coordinates": false,
       "temporal_coverage": {
         "start": 2000,
         "end": 2023
       },
-      "record_counts": {
-        "aggregates": 5230
-      }
+      "row_count": 5230
     },
     "08": {
       "source_name": "UN SDG Goal 8: Decent Work and Economic Growth",
       "category": "development",
-      "files": {
-        "aggregates": "08/all_countries.parquet"
-      },
+      "path": "un_sdg/08",
+      "files": [
+        "un_sdg/08/all_countries.parquet"
+      ],
+      "file_count": 1,
       "geographic_level": "admin_0",
       "has_coordinates": false,
       "temporal_coverage": {
         "start": 2000,
         "end": 2024
       },
-      "record_counts": {
-        "aggregates": 5333
-      }
+      "row_count": 5333
     },
     "09": {
       "source_name": "UN SDG Goal 9: Industry, Innovation and Infrastructure",
       "category": "development",
-      "files": {
-        "aggregates": "09/all_countries.parquet"
-      },
+      "path": "un_sdg/09",
+      "files": [
+        "un_sdg/09/all_countries.parquet"
+      ],
+      "file_count": 1,
       "geographic_level": "admin_0",
       "has_coordinates": false,
       "temporal_coverage": {
         "start": 2000,
         "end": 2025
       },
-      "record_counts": {
-        "aggregates": 5193
-      }
+      "row_count": 5193
     },
     "10": {
       "source_name": "UN SDG Goal 10: Reduced Inequalities",
       "category": "development",
-      "files": {
-        "aggregates": "10/all_countries.parquet"
-      },
+      "path": "un_sdg/10",
+      "files": [
+        "un_sdg/10/all_countries.parquet"
+      ],
+      "file_count": 1,
       "geographic_level": "admin_0",
       "has_coordinates": false,
       "temporal_coverage": {
         "start": 1963,
         "end": 2024
       },
-      "record_counts": {
-        "aggregates": 5927
-      }
+      "row_count": 5927
     },
     "11": {
       "source_name": "UN SDG Goal 11: Sustainable Cities and Communities",
       "category": "development",
-      "files": {
-        "aggregates": "11/all_countries.parquet"
-      },
+      "path": "un_sdg/11",
+      "files": [
+        "un_sdg/11/all_countries.parquet"
+      ],
+      "file_count": 1,
       "geographic_level": "admin_0",
       "has_coordinates": false,
       "temporal_coverage": {
         "start": 2000,
         "end": 2025
       },
-      "record_counts": {
-        "aggregates": 3677
-      }
+      "row_count": 3677
     },
     "12": {
       "source_name": "UN SDG Goal 12: Responsible Consumption and Production",
       "category": "development",
-      "files": {
-        "aggregates": "12/all_countries.parquet"
-      },
+      "path": "un_sdg/12",
+      "files": [
+        "un_sdg/12/all_countries.parquet"
+      ],
+      "file_count": 1,
       "geographic_level": "admin_0",
       "has_coordinates": false,
       "temporal_coverage": {
         "start": 2000,
         "end": 2025
       },
-      "record_counts": {
-        "aggregates": 5452
-      }
+      "row_count": 5452
     },
     "13": {
       "source_name": "UN SDG Goal 13: Climate Action",
       "category": "development",
-      "files": {
-        "aggregates": "13/all_countries.parquet"
-      },
+      "path": "un_sdg/13",
+      "files": [
+        "un_sdg/13/all_countries.parquet"
+      ],
+      "file_count": 1,
       "geographic_level": "admin_0",
       "has_coordinates": false,
       "temporal_coverage": {
         "start": 2000,
         "end": 2024
       },
-      "record_counts": {
-        "aggregates": 2930
-      }
+      "row_count": 2930
     },
     "14": {
       "source_name": "UN SDG Goal 14: Life Below Water",
       "category": "development",
-      "files": {
-        "aggregates": "14/all_countries.parquet"
-      },
+      "path": "un_sdg/14",
+      "files": [
+        "un_sdg/14/all_countries.parquet"
+      ],
+      "file_count": 1,
       "geographic_level": "admin_0",
       "has_coordinates": false,
       "temporal_coverage": {
         "start": 1996,
         "end": 2025
       },
-      "record_counts": {
-        "aggregates": 4394
-      }
+      "row_count": 4394
     },
     "15": {
       "source_name": "UN SDG Goal 15: Life on Land",
       "category": "development",
-      "files": {
-        "aggregates": "15/all_countries.parquet"
-      },
+      "path": "un_sdg/15",
+      "files": [
+        "un_sdg/15/all_countries.parquet"
+      ],
+      "file_count": 1,
       "geographic_level": "admin_0",
       "has_coordinates": false,
       "temporal_coverage": {
         "start": 1993,
         "end": 2024
       },
-      "record_counts": {
-        "aggregates": 7104
-      }
+      "row_count": 7104
     },
     "16": {
       "source_name": "UN SDG Goal 16: Peace, Justice and Strong Institutions",
       "category": "development",
-      "files": {
-        "aggregates": "16/all_countries.parquet"
-      },
+      "path": "un_sdg/16",
+      "files": [
+        "un_sdg/16/all_countries.parquet"
+      ],
+      "file_count": 1,
       "geographic_level": "admin_0",
       "has_coordinates": false,
       "temporal_coverage": {
         "start": 1990,
         "end": 2025
       },
-      "record_counts": {
-        "aggregates": 5807
-      }
+      "row_count": 5807
     },
     "17": {
       "source_name": "UN SDG Goal 17: Partnerships for the Goals",
       "category": "development",
-      "files": {
-        "aggregates": "17/all_countries.parquet"
-      },
+      "path": "un_sdg/17",
+      "files": [
+        "un_sdg/17/all_countries.parquet"
+      ],
+      "file_count": 1,
       "geographic_level": "admin_0",
       "has_coordinates": false,
       "temporal_coverage": {
         "start": 1990,
         "end": 2025
       },
-      "record_counts": {
-        "aggregates": 7174
-      }
+      "row_count": 7174
+    },
+    "earthquakes": {
+      "source_name": "NOAA Significant Earthquakes + USGS",
+      "category": "hazard",
+      "path": "disasters/earthquakes",
+      "files": [
+        "disasters/earthquakes/events.parquet"
+      ],
+      "file_count": 1,
+      "geographic_level": null,
+      "has_coordinates": true,
+      "temporal_coverage": {
+        "start": "1521-08-16T02:07:37",
+        "end": "2026-01-24T21:38:55.274000"
+      },
+      "row_count": 1056559
+    },
+    "floods": {
+      "source_name": "Dartmouth Flood Observatory",
+      "category": "hazard",
+      "path": "disasters/floods",
+      "files": [
+        "disasters/floods/events.parquet"
+      ],
+      "file_count": 1,
+      "geographic_level": null,
+      "has_coordinates": true,
+      "temporal_coverage": {
+        "start": "1985-01-01T00:00:00",
+        "end": "2019-11-15T00:00:00"
+      },
+      "row_count": 4825
+    },
+    "hurricanes": {
+      "source_name": "IBTrACS",
+      "category": "hazard",
+      "path": "disasters/hurricanes",
+      "files": [
+        "disasters/hurricanes/positions.parquet",
+        "disasters/hurricanes/storms.parquet"
+      ],
+      "file_count": 2,
+      "geographic_level": null,
+      "has_coordinates": true,
+      "temporal_coverage": {
+        "start": "1842-10-25T03:00:00",
+        "end": "2026-01-08T00:00:00"
+      },
+      "row_count": 722507
+    },
+    "landslides": {
+      "source_name": "NASA Global Landslide Catalog",
+      "category": "hazard",
+      "path": "disasters/landslides",
+      "files": [
+        "disasters/landslides/events.parquet"
+      ],
+      "file_count": 1,
+      "geographic_level": null,
+      "has_coordinates": true,
+      "temporal_coverage": {
+        "start": "1760-01-01T00:00:00",
+        "end": "2104-06-24T00:00:00"
+      },
+      "row_count": 45483
+    },
+    "tornadoes": {
+      "source_name": "NOAA Storm Prediction Center",
+      "category": "hazard",
+      "path": "disasters/tornadoes",
+      "files": [
+        "disasters/tornadoes/aggregates.parquet",
+        "disasters/tornadoes/events.parquet"
+      ],
+      "file_count": 2,
+      "geographic_level": "unknown",
+      "has_coordinates": false,
+      "temporal_coverage": {
+        "start": 1950,
+        "end": 2025
+      },
+      "row_count": 116
+    },
+    "tsunamis": {
+      "source_name": "NOAA NGDC Tsunami Database",
+      "category": "hazard",
+      "path": "disasters/tsunamis",
+      "files": [
+        "disasters/tsunamis/events.parquet",
+        "disasters/tsunamis/runups.parquet"
+      ],
+      "file_count": 2,
+      "geographic_level": null,
+      "has_coordinates": true,
+      "temporal_coverage": {
+        "start": "0001-01-01T00:00:00",
+        "end": "2025-12-12T00:00:00"
+      },
+      "row_count": 33623
+    },
+    "volcanoes": {
+      "source_name": "Smithsonian Global Volcanism Program",
+      "category": "hazard",
+      "path": "disasters/volcanoes",
+      "files": [
+        "disasters/volcanoes/GLOBAL.parquet",
+        "disasters/volcanoes/events.parquet"
+      ],
+      "file_count": 2,
+      "geographic_level": "admin_0",
+      "has_coordinates": false,
+      "temporal_coverage": {
+        "start": 1800,
+        "end": 2025
+      },
+      "row_count": 2881
+    },
+    "wildfires": {
+      "source_name": "Global Fire Atlas",
+      "category": "hazard",
+      "path": "disasters/wildfires",
+      "files": [
+        "disasters/wildfires/by_year_enriched/fires_2014_enriched.parquet",
+        "disasters/wildfires/by_year_enriched/fires_2015_enriched.parquet",
+        "disasters/wildfires/by_year_enriched/fires_2016_enriched.parquet",
+        "disasters/wildfires/by_year_enriched/fires_2017_enriched.parquet",
+        "disasters/wildfires/by_year_enriched/fires_2018_enriched.parquet",
+        "disasters/wildfires/by_year_enriched/fires_2019_enriched.parquet",
+        "disasters/wildfires/by_year_enriched/fires_2020_enriched.parquet",
+        "disasters/wildfires/by_year_enriched/fires_2021_enriched.parquet",
+        "disasters/wildfires/by_year_enriched/fires_2022_enriched.parquet",
+        "disasters/wildfires/by_year_enriched/fires_2023_enriched.parquet",
+        "disasters/wildfires/by_year_enriched/fires_2024_enriched.parquet",
+        "disasters/wildfires/fire_progression_2015.parquet",
+        "disasters/wildfires/fire_progression_2016.parquet",
+        "disasters/wildfires/fire_progression_2017.parquet",
+        "disasters/wildfires/fire_progression_2018.parquet",
+        "disasters/wildfires/fire_progression_2019.parquet",
+        "disasters/wildfires/fire_progression_2020.parquet",
+        "disasters/wildfires/fire_progression_2021.parquet",
+        "disasters/wildfires/fire_progression_2022.parquet",
+        "disasters/wildfires/fire_progression_2023.parquet",
+        "disasters/wildfires/fire_progression_2024.parquet"
+      ],
+      "file_count": 21,
+      "geographic_level": null,
+      "has_coordinates": true,
+      "subfolders": [
+        "by_year_enriched"
+      ],
+      "row_count": 6127
     }
   },
   "categories": {
-    "hazard": [
-      "global_earthquakes",
-      "global_fire_atlas",
-      "global_floods",
-      "global_tornadoes",
-      "ibtracs_storms",
-      "noaa_global_tsunamis",
-      "smithsonian_volcanoes"
-    ],
     "development": [
       "01",
       "02",
@@ -689,24 +444,17 @@
       "14",
       "15",
       "16",
-      "17",
-      "un_sdg_01",
-      "un_sdg_02",
-      "un_sdg_03",
-      "un_sdg_04",
-      "un_sdg_05",
-      "un_sdg_06",
-      "un_sdg_07",
-      "un_sdg_08",
-      "un_sdg_09",
-      "un_sdg_10",
-      "un_sdg_11",
-      "un_sdg_12",
-      "un_sdg_13",
-      "un_sdg_14",
-      "un_sdg_15",
-      "un_sdg_16",
-      "un_sdg_17"
+      "17"
+    ],
+    "hazard": [
+      "earthquakes",
+      "floods",
+      "hurricanes",
+      "landslides",
+      "tornadoes",
+      "tsunamis",
+      "volcanoes",
+      "wildfires"
     ]
   }
 }

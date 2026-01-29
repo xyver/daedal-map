@@ -1,15 +1,15 @@
 {
-  "source_id": "smithsonian_volcanoes",
-  "source_name": "Smithsonian Global Volcanism Program + NOAA Significant Eruptions",
+  "source_id": "volcanoes",
+  "source_name": "Smithsonian Global Volcanism Program",
   "source_url": "https://volcano.si.edu/",
   "license": "Public Domain",
-  "description": "Global volcanic eruptions 2015-2025 from the Smithsonian GVP catalog merged with NOAA Significant Eruptions. Includes VEI ratings, eruption agents, and impact data.",
+  "description": "Smithsonian Institution Global Volcanism Program (GVP) database of volcanic eruptions worldwide. Contains detailed eruption records with VEI ratings, duration, and impact data.",
   "category": "hazard",
-  "data_type": "events",
   "topic_tags": [
-    "volcano",
-    "eruption",
-    "geology"
+    "disasters",
+    "volcanoes",
+    "eruptions",
+    "hazard"
   ],
   "keywords": [
     "volcano",
@@ -17,39 +17,392 @@
     "VEI",
     "lava",
     "ash",
-    "magma"
+    "Smithsonian",
+    "GVP"
   ],
-  "geographic_level": "global",
+  "last_updated": "2026-01-28",
+  "geographic_level": "admin_0",
   "geographic_coverage": {
     "type": "global",
-    "description": "Worldwide volcanic regions"
+    "admin_levels": [
+      0
+    ],
+    "common_count": 53,
+    "common_missing": [
+      "AFG",
+      "AGO",
+      "ALB",
+      "AND",
+      "ARE",
+      "ARM",
+      "ATG",
+      "AUT",
+      "AZE",
+      "BDI",
+      "BEL",
+      "BEN",
+      "BFA",
+      "BGD",
+      "BGR",
+      "BHR",
+      "BHS",
+      "BIH",
+      "BLR",
+      "BLZ",
+      "BOL",
+      "BRA",
+      "BRB",
+      "BRN",
+      "BTN",
+      "BWA",
+      "CAF",
+      "CHE",
+      "CIV",
+      "COG",
+      "COK",
+      "CUB",
+      "CYP",
+      "CZE",
+      "DEU",
+      "DNK",
+      "DOM",
+      "DZA",
+      "EGY",
+      "EST",
+      "FIN",
+      "FJI",
+      "FSM",
+      "GAB",
+      "GEO",
+      "GHA",
+      "GIN",
+      "GMB",
+      "GNB",
+      "GUY",
+      "HKG",
+      "HND",
+      "HRV",
+      "HTI",
+      "HUN",
+      "IRL",
+      "IRN",
+      "IRQ",
+      "ISR",
+      "JAM",
+      "JOR",
+      "KAZ",
+      "KGZ",
+      "KHM",
+      "KIR",
+      "KOR",
+      "KWT",
+      "LAO",
+      "LBN",
+      "LBR",
+      "LBY",
+      "LCA",
+      "LIE",
+      "LKA",
+      "LSO",
+      "LTU",
+      "LUX",
+      "LVA",
+      "MAC",
+      "MAR",
+      "MCO",
+      "MDA",
+      "MDG",
+      "MDV",
+      "MHL",
+      "MKD",
+      "MLI",
+      "MLT",
+      "MMR",
+      "MNE",
+      "MNG",
+      "MOZ",
+      "MRT",
+      "MUS",
+      "MWI",
+      "MYS",
+      "NAM",
+      "NER",
+      "NGA",
+      "NIU",
+      "NLD",
+      "NPL",
+      "NRU",
+      "OMN",
+      "PAK",
+      "PAN",
+      "PLW",
+      "POL",
+      "PRK",
+      "PRY",
+      "PSE",
+      "QAT",
+      "ROU",
+      "RWA",
+      "SDN",
+      "SEN",
+      "SGP",
+      "SLE",
+      "SMR",
+      "SOM",
+      "SRB",
+      "SSD",
+      "STP",
+      "SUR",
+      "SVK",
+      "SVN",
+      "SWE",
+      "SWZ",
+      "SYC",
+      "SYR",
+      "TCD",
+      "TGO",
+      "THA",
+      "TJK",
+      "TKM",
+      "TLS",
+      "TTO",
+      "TUN",
+      "TUV",
+      "UGA",
+      "UKR",
+      "URY",
+      "UZB",
+      "VAT",
+      "VEN",
+      "ZMB",
+      "ZWE"
+    ],
+    "uncommonly_included": [
+      "ATA"
+    ]
   },
   "temporal_coverage": {
-    "start": 2015,
+    "start": 1800,
     "end": 2025,
+    "frequency": "annual",
     "granularity": "yearly",
     "field": "year"
   },
-  "event_stats": {
-    "total_events": 383
-  },
-  "row_count": 383,
+  "row_count": 2881,
   "file_size_mb": 0.01,
+  "data_completeness": 0.99,
+  "update_schedule": "unknown",
+  "expected_next_update": "unknown",
   "metrics": {
-    "max_vei": {
-      "name": "Max VEI",
-      "description": "Volcanic Explosivity Index (0-8)",
-      "unit": "scale"
-    },
     "eruption_count": {
-      "name": "Eruption Count",
-      "unit": "count"
+      "name": "Number of eruptions (in aggregates)",
+      "stats": {
+        "min": 1.0,
+        "max": 14.0,
+        "median": 1.0
+      },
+      "density": 1.0,
+      "years": [
+        1800,
+        2025
+      ],
+      "countries": 57,
+      "by_era": {
+        "2000+": {
+          "density": 1.0,
+          "countries": 39,
+          "stats": {
+            "min": 1.0,
+            "max": 13.0,
+            "median": 2.0
+          }
+        },
+        "1950-1999": {
+          "density": 1.0,
+          "countries": 46,
+          "stats": {
+            "min": 1.0,
+            "max": 14.0,
+            "median": 1.0
+          }
+        },
+        "1900-1949": {
+          "density": 1.0,
+          "countries": 45,
+          "stats": {
+            "min": 1.0,
+            "max": 12.0,
+            "median": 1.0
+          }
+        },
+        "pre-1900": {
+          "density": 1.0,
+          "countries": 51,
+          "stats": {
+            "min": 1.0,
+            "max": 12.0,
+            "median": 1.0
+          }
+        }
+      }
     },
-    "deaths": {
-      "name": "Deaths",
-      "unit": "count"
+    "volcano_count": {
+      "name": "Number of active volcanoes (in aggregates)",
+      "stats": {
+        "min": 1.0,
+        "max": 14.0,
+        "median": 1.0
+      },
+      "density": 1.0,
+      "years": [
+        1800,
+        2025
+      ],
+      "countries": 57,
+      "by_era": {
+        "2000+": {
+          "density": 1.0,
+          "countries": 39,
+          "stats": {
+            "min": 1.0,
+            "max": 11.0,
+            "median": 1.0
+          }
+        },
+        "1950-1999": {
+          "density": 1.0,
+          "countries": 46,
+          "stats": {
+            "min": 1.0,
+            "max": 14.0,
+            "median": 1.0
+          }
+        },
+        "1900-1949": {
+          "density": 1.0,
+          "countries": 45,
+          "stats": {
+            "min": 1.0,
+            "max": 11.0,
+            "median": 1.0
+          }
+        },
+        "pre-1900": {
+          "density": 1.0,
+          "countries": 51,
+          "stats": {
+            "min": 1.0,
+            "max": 12.0,
+            "median": 1.0
+          }
+        }
+      }
+    },
+    "max_vei": {
+      "name": "Maximum VEI for the period",
+      "stats": {
+        "min": 0.0,
+        "max": 7.0,
+        "median": 2.0
+      },
+      "density": 0.951,
+      "years": [
+        1800,
+        2025
+      ],
+      "countries": 54,
+      "by_era": {
+        "2000+": {
+          "density": 0.96,
+          "countries": 39,
+          "stats": {
+            "min": 0.0,
+            "max": 5.0,
+            "median": 2.0
+          }
+        },
+        "1950-1999": {
+          "density": 0.982,
+          "countries": 46,
+          "stats": {
+            "min": 0.0,
+            "max": 6.0,
+            "median": 2.0
+          }
+        },
+        "1900-1949": {
+          "density": 0.948,
+          "countries": 40,
+          "stats": {
+            "min": 0.0,
+            "max": 6.0,
+            "median": 2.0
+          }
+        },
+        "pre-1900": {
+          "density": 0.923,
+          "countries": 47,
+          "stats": {
+            "min": 0.0,
+            "max": 7.0,
+            "median": 2.0
+          }
+        }
+      }
+    },
+    "avg_vei": {
+      "name": "Average VEI for the period",
+      "stats": {
+        "min": 0.0,
+        "max": 6.0,
+        "median": 2.0
+      },
+      "density": 0.951,
+      "years": [
+        1800,
+        2025
+      ],
+      "countries": 54,
+      "by_era": {
+        "2000+": {
+          "density": 0.96,
+          "countries": 39,
+          "stats": {
+            "min": 0.0,
+            "max": 5.0,
+            "median": 1.5
+          }
+        },
+        "1950-1999": {
+          "density": 0.982,
+          "countries": 46,
+          "stats": {
+            "min": 0.0,
+            "max": 5.0,
+            "median": 1.6
+          }
+        },
+        "1900-1949": {
+          "density": 0.948,
+          "countries": 40,
+          "stats": {
+            "min": 0.0,
+            "max": 6.0,
+            "median": 2.0
+          }
+        },
+        "pre-1900": {
+          "density": 0.923,
+          "countries": 47,
+          "stats": {
+            "min": 0.0,
+            "max": 5.0,
+            "median": 2.0
+          }
+        }
+      }
     }
   },
-  "llm_summary": "383 volcanic eruption events worldwide, 2015-2025. Includes VEI ratings, eruption agents, and impact data from NOAA significant eruptions.",
-  "metric_count": 3
+  "metric_count": 4,
+  "llm_summary": "1800-2025. Number of eruptions (in aggregates), Number of active volcanoes (in aggregates), Maximum VEI for the period, Average VEI for the period."
 }

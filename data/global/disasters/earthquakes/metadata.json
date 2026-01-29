@@ -1,66 +1,237 @@
 {
-  "source_id": "global_earthquakes",
-  "source_name": "Global Earthquakes (USGS + NOAA Significant)",
-  "source_url": "https://earthquake.usgs.gov/",
-  "license": "Public Domain (U.S. Government)",
-  "description": "Global earthquake events magnitude 5.0+, filtered to 2015-2025. Sourced from USGS real-time catalog and NOAA Significant Earthquakes database.",
+  "source_id": "earthquakes",
+  "source_name": "NOAA Significant Earthquakes + USGS",
+  "source_url": "https://www.ngdc.noaa.gov/hazel/view/hazards/earthquake/search",
+  "license": "Public Domain",
+  "description": "Global earthquake events combining NOAA NGDC Significant Earthquakes database (historical events with damage/casualties) and USGS real-time earthquake data. Includes magnitude, depth, impact data, and aftershock relationships.",
   "category": "hazard",
   "data_type": "events",
+  "event_type": "earthquake",
   "topic_tags": [
-    "earthquake",
+    "disasters",
+    "earthquakes",
     "seismic",
-    "geology"
+    "hazard"
   ],
   "keywords": [
     "earthquake",
     "seismic",
     "magnitude",
-    "fault",
-    "tremor",
-    "aftershock"
+    "aftershock",
+    "tsunami",
+    "USGS",
+    "NOAA",
+    "NGDC"
   ],
-  "geographic_level": "global",
-  "geographic_coverage": {
-    "type": "global",
-    "description": "Worldwide, all seismically active regions"
+  "last_updated": "2026-01-28",
+  "geographic_level": null,
+  "spatial_coverage": {
+    "countries": [
+      "AFG",
+      "ARG",
+      "AUS",
+      "BRA",
+      "CAN",
+      "CHL",
+      "CHN",
+      "COL",
+      "ECU",
+      "GRC",
+      "IDN",
+      "IND",
+      "IRN",
+      "ITA",
+      "JPN",
+      "MEX",
+      "NZL",
+      "PAK",
+      "PER",
+      "PHL",
+      "PNG",
+      "RUS",
+      "TUR",
+      "UNK",
+      "USA",
+      "VEN",
+      "XOA",
+      "XOI",
+      "XON",
+      "XOO",
+      "XOP",
+      "XSA",
+      "XSB",
+      "XSC",
+      "XSG",
+      "XSL",
+      "XSR",
+      "XST"
+    ],
+    "country_count": 38,
+    "water_bodies": [],
+    "bounding_box": {
+      "min_lat": -84.422,
+      "max_lat": 87.386,
+      "min_lon": -179.9997,
+      "max_lon": 180.0
+    },
+    "type": "regional"
   },
   "temporal_coverage": {
-    "start": 2015,
-    "end": 2025,
+    "start": "1521-08-16T02:07:37",
+    "end": "2026-01-24T21:38:55.274000",
     "granularity": "timestamp",
     "field": "timestamp"
   },
   "event_stats": {
-    "total_events": 19132
+    "total_events": 1056559,
+    "unique_event_ids": 1056559,
+    "unique_loc_ids": 1055868,
+    "magnitude_distribution": {
+      "M3-4": 243712,
+      "M4-5": 432756,
+      "M5-6": 91695,
+      "M6-7": 13222,
+      "M7+": 2081
+    },
+    "total_deaths": 7436418,
+    "total_injuries": 2051858,
+    "total_damage_millions": 682604
   },
-  "row_count": 19132,
-  "file_size_mb": 1.2,
+  "row_count": 1056559,
+  "file_size_mb": 49.42,
+  "update_schedule": "unknown",
   "metrics": {
     "magnitude": {
       "name": "Magnitude",
-      "unit": "magnitude",
+      "unit": "Richter/Mw",
+      "aggregation": "max",
       "stats": {
-        "min": 5.0,
-        "max": 9.1,
-        "median": 5.2,
-        "mean": 5.4
-      }
+        "min": 0.7,
+        "max": 9.5,
+        "median": 4.0,
+        "mean": 3.8469
+      },
+      "non_null_count": 1055058,
+      "density": 0.999
     },
     "depth_km": {
       "name": "Depth",
       "unit": "km",
+      "aggregation": "avg",
       "stats": {
-        "min": 0,
-        "max": 700,
-        "median": 20,
-        "mean": 55
-      }
+        "min": -4.0,
+        "max": 735.8,
+        "median": 19.8,
+        "mean": 53.2631
+      },
+      "non_null_count": 1053333,
+      "density": 0.997
+    },
+    "felt_radius_km": {
+      "name": "Felt Radius",
+      "unit": "km",
+      "aggregation": "max",
+      "stats": {
+        "min": 1.0,
+        "max": 25118.8643,
+        "median": 24.1,
+        "mean": 40.4299
+      },
+      "non_null_count": 1055058,
+      "density": 0.999
+    },
+    "damage_radius_km": {
+      "name": "Damage Radius",
+      "unit": "km",
+      "aggregation": "max",
+      "stats": {
+        "min": 0.0,
+        "max": 436.5158,
+        "median": 0.0,
+        "mean": 0.9804
+      },
+      "non_null_count": 1055031,
+      "density": 0.999
     },
     "deaths": {
       "name": "Deaths",
-      "unit": "count"
+      "unit": "count",
+      "aggregation": "sum",
+      "stats": {
+        "min": 1.0,
+        "max": 830000.0,
+        "median": 22.0,
+        "mean": 3733.1416
+      },
+      "non_null_count": 1992,
+      "density": 0.002
+    },
+    "injuries": {
+      "name": "Injuries",
+      "unit": "count",
+      "aggregation": "sum",
+      "stats": {
+        "min": 1.0,
+        "max": 374171.0,
+        "median": 40.0,
+        "mean": 1561.5358
+      },
+      "non_null_count": 1314,
+      "density": 0.001
+    },
+    "damage_millions": {
+      "name": "Damage",
+      "unit": "million USD",
+      "aggregation": "sum",
+      "stats": {
+        "min": 0.013,
+        "max": 100000.0,
+        "median": 30.0,
+        "mean": 1183.023
+      },
+      "non_null_count": 577,
+      "density": 0.001
+    },
+    "houses_destroyed": {
+      "name": "Houses Destroyed",
+      "unit": "unknown",
+      "aggregation": "sum",
+      "stats": {
+        "min": 1.0,
+        "max": 5360000.0,
+        "median": 503.0,
+        "mean": 16587.1548
+      },
+      "non_null_count": 840,
+      "density": 0.001
+    },
+    "intensity": {
+      "name": "Intensity",
+      "unit": "MMI",
+      "aggregation": "max",
+      "stats": {
+        "min": 2.0,
+        "max": 12.0,
+        "median": 8.0,
+        "mean": 8.1395
+      },
+      "non_null_count": 2947,
+      "density": 0.003
+    },
+    "aftershock_count": {
+      "name": "Aftershock Count",
+      "unit": "unknown",
+      "aggregation": "sum",
+      "stats": {
+        "min": 0.0,
+        "max": 70097.0,
+        "median": 0.0,
+        "mean": 0.5285
+      },
+      "non_null_count": 1053285,
+      "density": 0.997
     }
   },
-  "llm_summary": "19,132 earthquake events magnitude 5.0+ worldwide, 2015-2025. Includes depth, felt radius, and impact data where available.",
-  "metric_count": 3
+  "metric_count": 10,
+  "llm_summary": "1,056,559 earthquake in 38 countries from 1521-08-16T02:07:37 to 2026-01-24T21:38:55.274000."
 }

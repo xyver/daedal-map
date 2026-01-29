@@ -3738,8 +3738,7 @@ export const OverlayController = {
   /**
    * Handle TimeSlider year change - update all active overlays.
    * LEGACY: Year-based filtering (used when useLifecycleFiltering is false)
-   * Renders from cache only - does NOT auto-fetch missing years.
-   * Additional data must be requested via the chat/order system.
+   * Auto-fetches data for the year if not already cached.
    * @param {number} year - New year
    */
   onTimeChange(year) {
@@ -3748,7 +3747,7 @@ export const OverlayController = {
     for (const overlayId of activeOverlays) {
       if (overlayId === 'demographics') continue;
 
-      // Handle weather grid overlays (still auto-fetch for now)
+      // Handle weather grid overlays
       const overlayConfig = OverlaySelector?.getOverlayConfig(overlayId);
       if (overlayConfig?.model === 'weather-grid') {
         this.reloadWeatherGridForYear(overlayId, overlayConfig, year);
@@ -3758,8 +3757,35 @@ export const OverlayController = {
       const endpoint = OVERLAY_ENDPOINTS[overlayId];
       if (!endpoint || !endpoint.yearField) continue;
 
-      // Render from cache only - no auto-fetching
-      if (dataCache[overlayId] && displayedYear[overlayId] !== year) {
+      // Auto-fetch data for the year if not cached, then render
+      this.loadAndRenderYear(overlayId, year);
+    }
+  },
+
+  /**
+   * Load data for a specific year if not cached, then render.
+   * @param {string} overlayId - Overlay ID
+   * @param {number} year - Year to load
+   */
+  async loadAndRenderYear(overlayId, year) {
+    // Check if this year's data is already cached
+    const yearStart = new Date(year, 0, 1).getTime();
+    const yearEnd = new Date(year, 11, 31, 23, 59, 59).getTime();
+
+    // Check if range is already loaded
+    const ranges = loadedRanges[overlayId] || [];
+    const alreadyLoaded = ranges.some(r => r.start <= yearStart && r.end >= yearEnd && !r.loading);
+
+    if (!alreadyLoaded) {
+      console.log(`OverlayController: Auto-fetching ${overlayId} for year ${year}`);
+      await loadRangeData(overlayId, yearStart, yearEnd);
+    }
+
+    // Render the data for this year
+    if (dataCache[overlayId]) {
+      if (useLifecycleFiltering && TimeSlider?.currentTime) {
+        this.renderFilteredData(overlayId, TimeSlider.currentTime, { useTimestamp: true });
+      } else {
         this.renderFilteredData(overlayId, year);
       }
     }
@@ -3809,8 +3835,7 @@ export const OverlayController = {
    * Handle TimeSlider timestamp change - update all active overlays with lifecycle filtering.
    * NEW: Timestamp-based filtering (used when useLifecycleFiltering is true)
    * Also handles hurricane rolling animation (progressive track drawing during active period).
-   * Renders from cache only - does NOT auto-fetch missing data.
-   * Additional data must be requested via the chat/order system.
+   * Auto-fetches data for the year if not already cached.
    * @param {number} timestamp - Current timestamp in milliseconds
    */
   onTimeChangeTimestamp(timestamp) {
@@ -3820,7 +3845,7 @@ export const OverlayController = {
     for (const overlayId of activeOverlays) {
       if (overlayId === 'demographics') continue;
 
-      // Handle weather grid overlays (still auto-fetch for now)
+      // Handle weather grid overlays
       const overlayConfig = OverlaySelector?.getOverlayConfig(overlayId);
       if (overlayConfig?.model === 'weather-grid') {
         if (WeatherGridModel.hasInstance(overlayId)) {
@@ -3837,8 +3862,17 @@ export const OverlayController = {
       const endpoint = OVERLAY_ENDPOINTS[overlayId];
       if (!endpoint) continue;
 
-      // Render from cache only - no auto-fetching
-      if (dataCache[overlayId]) {
+      // Check if year's data is cached, auto-fetch if not
+      const yearStart = new Date(year, 0, 1).getTime();
+      const yearEnd = new Date(year, 11, 31, 23, 59, 59).getTime();
+      const ranges = loadedRanges[overlayId] || [];
+      const yearLoaded = ranges.some(r => r.start <= yearStart && r.end >= yearEnd && !r.loading);
+
+      if (!yearLoaded) {
+        // Auto-fetch data for this year, then render
+        this.loadYearAndRender(overlayId, year, timestamp);
+      } else if (dataCache[overlayId]) {
+        // Render from cache
         this.renderFilteredData(overlayId, timestamp, { useTimestamp: true });
 
         if (overlayId === 'hurricanes') {

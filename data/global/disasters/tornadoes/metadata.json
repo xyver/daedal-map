@@ -1,70 +1,217 @@
 {
-  "source_id": "global_tornadoes",
-  "source_name": "Global Tornadoes (NOAA + Canada)",
-  "source_url": "https://www.ncdc.noaa.gov/stormevents/",
-  "license": "Public Domain (U.S. Government)",
-  "description": "Tornado events in USA (NOAA Storm Events) and Canada (CNTD/NTP), filtered to 2015-2025. Includes track paths, width, EF-scale ratings, and damage estimates.",
+  "source_id": "tornadoes",
+  "source_name": "NOAA Storm Prediction Center",
+  "source_url": "https://www.spc.noaa.gov/wcm/",
+  "license": "Public Domain",
+  "description": "NOAA Storm Prediction Center (SPC) tornado database containing detailed tornado event records for the United States. Includes track paths, intensity ratings, casualties, and damage estimates.",
   "category": "hazard",
-  "data_type": "events",
   "topic_tags": [
-    "tornado",
-    "severe_weather",
-    "natural_hazard"
+    "disasters",
+    "tornadoes",
+    "severe weather",
+    "hazard"
   ],
   "keywords": [
     "tornado",
     "twister",
-    "EF scale",
-    "Fujita",
     "severe weather",
-    "wind"
+    "NOAA",
+    "SPC",
+    "EF scale",
+    "Fujita"
   ],
-  "geographic_level": "regional",
+  "last_updated": "2026-01-28",
+  "geographic_level": "unknown",
   "geographic_coverage": {
-    "type": "regional",
-    "countries": [
-      "USA",
-      "CAN"
-    ],
-    "description": "United States and Canada"
+    "type": "unknown",
+    "countries": 0,
+    "regions": [],
+    "admin_levels": []
   },
   "temporal_coverage": {
-    "start": 2015,
+    "start": 1950,
     "end": 2025,
-    "granularity": "timestamp",
-    "field": "timestamp"
+    "frequency": "annual",
+    "granularity": "yearly",
+    "field": "year"
   },
-  "event_stats": {
-    "total_events": 17338
-  },
-  "row_count": 17338,
-  "file_size_mb": 0.8,
+  "row_count": 116,
+  "file_size_mb": 0.01,
+  "data_completeness": 1.0,
+  "update_schedule": "unknown",
+  "expected_next_update": "unknown",
   "metrics": {
-    "tornado_scale": {
-      "name": "EF/F Rating",
-      "unit": "scale",
-      "values": [
-        "EF0",
-        "EF1",
-        "EF2",
-        "EF3",
-        "EF4",
-        "EF5"
-      ]
+    "tornado_count": {
+      "name": "Tornado Count",
+      "unit": "unknown",
+      "aggregation": "sum",
+      "keywords": [],
+      "stats": {
+        "min": 1.0,
+        "max": 2137.0,
+        "median": 707.5
+      },
+      "density": 1.0,
+      "years": [
+        1950,
+        2025
+      ],
+      "by_era": {
+        "2000+": {
+          "density": 1.0,
+          "stats": {
+            "min": 1.0,
+            "max": 2137.0,
+            "median": 1061.0
+          }
+        },
+        "1950-1999": {
+          "density": 1.0,
+          "stats": {
+            "min": 36.0,
+            "max": 1529.0,
+            "median": 661.5
+          }
+        }
+      }
     },
-    "tornado_length_mi": {
-      "name": "Track Length",
-      "unit": "miles"
+    "total_track_miles": {
+      "name": "Total Track Miles",
+      "unit": "unknown",
+      "aggregation": "sum",
+      "keywords": [],
+      "stats": {
+        "min": 0.5,
+        "max": 8338.0996,
+        "median": 2371.4502
+      },
+      "density": 1.0,
+      "years": [
+        1950,
+        2025
+      ],
+      "by_era": {
+        "2000+": {
+          "density": 1.0,
+          "stats": {
+            "min": 0.5,
+            "max": 8338.0996,
+            "median": 2915.0
+          }
+        },
+        "1950-1999": {
+          "density": 1.0,
+          "stats": {
+            "min": 6.7,
+            "max": 5664.8999,
+            "median": 2297.25
+          }
+        }
+      }
     },
-    "tornado_width_yd": {
-      "name": "Path Width",
-      "unit": "yards"
+    "deaths": {
+      "name": "Deaths",
+      "unit": "unknown",
+      "aggregation": "sum",
+      "keywords": [],
+      "stats": {
+        "min": 0.0,
+        "max": 553.0,
+        "median": 35.5
+      },
+      "density": 1.0,
+      "years": [
+        1950,
+        2025
+      ],
+      "by_era": {
+        "2000+": {
+          "density": 1.0,
+          "stats": {
+            "min": 0.0,
+            "max": 553.0,
+            "median": 22.0
+          }
+        },
+        "1950-1999": {
+          "density": 1.0,
+          "stats": {
+            "min": 0.0,
+            "max": 519.0,
+            "median": 39.0
+          }
+        }
+      }
     },
-    "deaths_direct": {
-      "name": "Direct Deaths",
-      "unit": "count"
+    "injuries": {
+      "name": "Injuries",
+      "unit": "unknown",
+      "aggregation": "sum",
+      "keywords": [],
+      "stats": {
+        "min": 0.0,
+        "max": 6824.0,
+        "median": 645.0
+      },
+      "density": 1.0,
+      "years": [
+        1950,
+        2025
+      ],
+      "by_era": {
+        "2000+": {
+          "density": 1.0,
+          "stats": {
+            "min": 0.0,
+            "max": 5483.0,
+            "median": 319.5
+          }
+        },
+        "1950-1999": {
+          "density": 1.0,
+          "stats": {
+            "min": 0.0,
+            "max": 6824.0,
+            "median": 784.5
+          }
+        }
+      }
+    },
+    "damage_usd": {
+      "name": "Damage Usd",
+      "unit": "unknown",
+      "aggregation": "sum",
+      "keywords": [],
+      "stats": {
+        "min": 0.0,
+        "max": 9184650700.0,
+        "median": 217234400.0
+      },
+      "density": 1.0,
+      "years": [
+        1950,
+        2025
+      ],
+      "by_era": {
+        "2000+": {
+          "density": 1.0,
+          "stats": {
+            "min": 0.0,
+            "max": 9184650700.0,
+            "median": 367848300.0
+          }
+        },
+        "1950-1999": {
+          "density": 1.0,
+          "stats": {
+            "min": 0.0,
+            "max": 2152814350.0,
+            "median": 190754640.0
+          }
+        }
+      }
     }
   },
-  "llm_summary": "17,338 tornado events in USA and Canada, 2015-2025. Includes EF-scale ratings, track endpoints, path width, and damage data.",
-  "metric_count": 4
+  "metric_count": 5,
+  "llm_summary": "1950-2025. Tornado Count, Total Track Miles, Deaths, Injuries, Damage Usd."
 }

@@ -17,6 +17,7 @@ from dotenv import load_dotenv
 from .data_loading import load_catalog, load_source_metadata, get_source_path
 from .preprocessor import build_tier3_context, build_tier4_context
 from .constants import CHAT_HISTORY_LLM_LIMIT
+from .llm_tools import format_tools_for_provider, execute_tool, format_tool_result_for_llm
 
 load_dotenv()
 
@@ -236,6 +237,15 @@ def build_system_prompt(catalog: dict, conversions: dict) -> str:
 
 FORMATTING: Never use emojis or special unicode characters in responses. Use plain text only with standard punctuation. Use bullet points (- or *) for lists.
 
+DATA HIERARCHY (what you know vs. what you can fetch):
+- CATALOG (below): Summary of all sources with names and year ranges - you always have this
+- METADATA: Detailed metrics, statistics, coverage - use get_source_details or list_source_metrics tool
+- REFERENCE: Background, methodology, context - use get_source_reference tool
+
+When user asks about metrics for a SPECIFIC source, use the list_source_metrics tool to get accurate info.
+When user asks about MULTIPLE sources generally (e.g., "what SDG data"), offer to show details for specific ones.
+Example: "I have 17 SDG goals available. Which would you like to explore, or should I pick a few to highlight?"
+
 DATA SOURCES:
 {sources_text}
 IMPORTANT: Country-specific sources can ONLY be used for that country.
@@ -249,7 +259,8 @@ WHEN USER ASKS "what data for [country]" or "what do you have":
 3. Be CONCISE - use human-readable names, group related sources
 
 WHEN USER ASKS about a specific source ("what's in X?" or "show me metrics"):
-- List the available metrics using ONLY the human-readable names (never show column names like unemployment_rate)
+- Use the list_source_metrics tool to get the actual metrics
+- List the available metrics using ONLY the human-readable names (never show column names)
 - If there are 10 or fewer metrics, list them all
 - If there are more than 10, say "There are X metrics available, here are the key ones:" and show 5-8
 - Mention the year range available
@@ -375,7 +386,7 @@ def interpret_request(user_query: str, chat_history: list = None, hints: dict = 
 
     messages.append({"role": "user", "content": user_query})
 
-    # Single LLM call using Claude
+    # LLM call with tool support
     client = Anthropic()
 
     # Extract system prompt from messages (Anthropic handles it separately)
@@ -387,15 +398,71 @@ def interpret_request(user_query: str, chat_history: list = None, hints: dict = 
         else:
             chat_messages.append(msg)
 
-    response = client.messages.create(
-        model="claude-haiku-4-5",
-        system=system_content.strip(),
-        messages=chat_messages,
-        temperature=0.3,
-        max_tokens=500
-    )
+    # Get tools in Anthropic format
+    tools = format_tools_for_provider("anthropic")
 
-    content = response.content[0].text.strip()
+    # Tool use loop - allow up to 3 tool calls per request
+    max_tool_iterations = 3
+    for iteration in range(max_tool_iterations + 1):
+        response = client.messages.create(
+            model="claude-haiku-4-5",
+            system=system_content.strip(),
+            messages=chat_messages,
+            tools=tools,
+            temperature=0.3,
+            max_tokens=500
+        )
+
+        # Check if LLM wants to use a tool
+        if response.stop_reason == "tool_use":
+            # Find tool use block(s) in response
+            tool_results = []
+            assistant_content = []
+
+            for block in response.content:
+                if block.type == "tool_use":
+                    # Execute the tool
+                    tool_name = block.name
+                    tool_input = block.input
+                    result = execute_tool(tool_name, tool_input)
+
+                    # Format result for context
+                    formatted_result = format_tool_result_for_llm(result)
+
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": block.id,
+                        "content": formatted_result
+                    })
+                    assistant_content.append(block)
+                elif block.type == "text":
+                    assistant_content.append(block)
+
+            # Add assistant message with tool calls
+            chat_messages.append({
+                "role": "assistant",
+                "content": assistant_content
+            })
+
+            # Add tool results
+            chat_messages.append({
+                "role": "user",
+                "content": tool_results
+            })
+
+            # Continue loop for next LLM response
+            continue
+
+        # No tool use - we have the final response
+        break
+
+    # Extract final text response
+    content = ""
+    for block in response.content:
+        if hasattr(block, 'text'):
+            content += block.text
+
+    content = content.strip()
 
     # Parse response
     return parse_llm_response(content, hints=hints)

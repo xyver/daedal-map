@@ -1,53 +1,123 @@
 {
-  "source_id": "noaa_global_tsunamis",
-  "source_name": "NOAA NCEI Global Historical Tsunami Database",
-  "source_url": "https://www.ncei.noaa.gov/products/natural-hazards/tsunamis-earthquakes-volcanoes/tsunamis",
-  "license": "Public Domain (U.S. Government)",
-  "description": "Tsunami source events 2015-2025 from NOAA NCEI. Includes earthquake/volcano/landslide triggered tsunamis with water height and runup observations.",
+  "source_id": "tsunamis",
+  "source_name": "NOAA NGDC Tsunami Database",
+  "source_url": "https://www.ngdc.noaa.gov/hazard/tsu_db.shtml",
+  "license": "Public Domain",
+  "description": "NOAA National Geophysical Data Center (NGDC) Global Historical Tsunami Database. Contains tsunami source events and runup observations worldwide from ancient times to present.",
   "category": "hazard",
   "data_type": "events",
+  "event_type": "tsunami",
   "topic_tags": [
-    "tsunami",
-    "natural_hazard",
-    "ocean"
+    "disasters",
+    "tsunamis",
+    "coastal",
+    "hazard"
   ],
   "keywords": [
     "tsunami",
     "tidal wave",
+    "runup",
+    "inundation",
     "earthquake",
-    "coastal",
-    "wave height"
+    "NOAA",
+    "NGDC"
   ],
-  "geographic_level": "global",
-  "geographic_coverage": {
-    "type": "global",
-    "description": "All coastal regions worldwide"
+  "last_updated": "2026-01-28",
+  "geographic_level": null,
+  "spatial_coverage": {
+    "countries": [
+      "XOA",
+      "XOI",
+      "XON",
+      "XOO",
+      "XOP",
+      "XSA",
+      "XSB",
+      "XSC",
+      "XSG",
+      "XSL",
+      "XSR",
+      "XST"
+    ],
+    "country_count": 12,
+    "water_bodies": [],
+    "bounding_box": {
+      "min_lat": -77.85,
+      "max_lat": 72.85,
+      "min_lon": -179.95,
+      "max_lon": 179.9377
+    },
+    "type": "regional"
   },
   "temporal_coverage": {
-    "start": 2015,
-    "end": 2025,
+    "start": "0001-01-01T00:00:00",
+    "end": "2025-12-12T00:00:00",
     "granularity": "timestamp",
     "field": "timestamp"
   },
   "event_stats": {
-    "total_events": 193
+    "total_events": 33623,
+    "unique_event_ids": 2336,
+    "unique_loc_ids": 12,
+    "total_deaths": 283837
   },
-  "row_count": 193,
-  "file_size_mb": 0.02,
+  "row_count": 33623,
+  "file_size_mb": 1.09,
+  "update_schedule": "unknown",
   "metrics": {
-    "eq_magnitude": {
-      "name": "Earthquake Magnitude",
-      "unit": "magnitude"
+    "dist_from_source_km": {
+      "name": "Dist From Source Km",
+      "unit": "unknown",
+      "aggregation": "sum",
+      "stats": {
+        "min": 0.0,
+        "max": 19338.3246,
+        "median": 248.4758,
+        "mean": 2416.9689
+      },
+      "non_null_count": 33208,
+      "density": 0.988
     },
-    "max_water_height_m": {
-      "name": "Max Water Height",
-      "unit": "meters"
+    "deaths": {
+      "name": "Deaths",
+      "unit": "unknown",
+      "aggregation": "sum",
+      "stats": {
+        "min": 0.0,
+        "max": 36000.0,
+        "median": 13.0,
+        "mean": 394.7663
+      },
+      "non_null_count": 719,
+      "density": 0.021
     },
-    "intensity": {
-      "name": "Tsunami Intensity",
-      "unit": "scale"
+    "deaths_order": {
+      "name": "Deaths Order",
+      "unit": "unknown",
+      "aggregation": "sum",
+      "stats": {
+        "min": 1.0,
+        "max": 4.0,
+        "median": 1.0,
+        "mean": 1.7552
+      },
+      "non_null_count": 956,
+      "density": 0.028
+    },
+    "damage_order": {
+      "name": "Damage Order",
+      "unit": "unknown",
+      "aggregation": "sum",
+      "stats": {
+        "min": 0.0,
+        "max": 4.0,
+        "median": 1.0,
+        "mean": 1.3671
+      },
+      "non_null_count": 2498,
+      "density": 0.074
     }
   },
-  "llm_summary": "193 tsunami events worldwide, 2015-2025. Includes triggering earthquake magnitude, water height, and intensity data.",
-  "metric_count": 3
+  "metric_count": 4,
+  "llm_summary": "33,623 tsunami in 12 countries from 0001-01-01T00:00:00 to 2025-12-12T00:00:00."
 }
