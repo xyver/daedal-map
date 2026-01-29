@@ -850,6 +850,7 @@ async function loadRangeData(overlayId, startMs, endMs, signal = null) {
   const startDate = new Date(startMs).toISOString().split('T')[0];
   const endDate = new Date(endMs).toISOString().split('T')[0];
   console.log(`OverlayController: Fetching ${overlayId} for ${startDate} to ${endDate}`);
+  console.log(`OverlayController: URL = ${url}`);
 
   try {
     const fetchOptions = signal ? { signal } : {};
@@ -899,6 +900,7 @@ async function loadRangeData(overlayId, startMs, endMs, signal = null) {
     for (let y = startYear; y <= endYear; y++) {
       loadedYears[overlayId].add(y);
     }
+    console.log(`OverlayController: Marked ${overlayId} years ${startYear}-${endYear} as loaded. Total cached: ${dataCache[overlayId]?.features?.length || 0} features`);
 
     // Update year range cache for TimeSlider
     if (!yearRangeCache[overlayId]) {
@@ -3768,16 +3770,13 @@ export const OverlayController = {
    * @param {number} year - Year to load
    */
   async loadAndRenderYear(overlayId, year) {
-    // Check if this year's data is already cached
-    const yearStart = new Date(year, 0, 1).getTime();
-    const yearEnd = new Date(year, 11, 31, 23, 59, 59).getTime();
+    // Use loadedYears set for simpler year tracking
+    const yearAlreadyLoaded = loadedYears[overlayId]?.has(year);
 
-    // Check if range is already loaded
-    const ranges = loadedRanges[overlayId] || [];
-    const alreadyLoaded = ranges.some(r => r.start <= yearStart && r.end >= yearEnd && !r.loading);
-
-    if (!alreadyLoaded) {
-      console.log(`OverlayController: Auto-fetching ${overlayId} for year ${year}`);
+    if (!yearAlreadyLoaded) {
+      console.log(`OverlayController: AUTO-FETCHING ${overlayId} for year ${year} (legacy handler)`);
+      const yearStart = new Date(year, 0, 1).getTime();
+      const yearEnd = new Date(year, 11, 31, 23, 59, 59).getTime();
       await loadRangeData(overlayId, yearStart, yearEnd);
     }
 
@@ -3862,15 +3861,26 @@ export const OverlayController = {
       const endpoint = OVERLAY_ENDPOINTS[overlayId];
       if (!endpoint) continue;
 
-      // Check if year's data is cached, auto-fetch if not
-      const yearStart = new Date(year, 0, 1).getTime();
-      const yearEnd = new Date(year, 11, 31, 23, 59, 59).getTime();
-      const ranges = loadedRanges[overlayId] || [];
-      const yearLoaded = ranges.some(r => r.start <= yearStart && r.end >= yearEnd && !r.loading);
+      // Track last loaded year per overlay to avoid duplicate fetches
+      if (!this._lastLoadedYear) this._lastLoadedYear = {};
 
-      if (!yearLoaded) {
+      // Check if we need to load this year's data
+      const yearKey = `${overlayId}_${year}`;
+      const yearAlreadyLoaded = loadedYears[overlayId]?.has(year);
+      const currentlyLoading = this._loadingYears?.has(yearKey);
+
+      console.log(`OverlayController: ${overlayId} year=${year}, loaded=${yearAlreadyLoaded}, loading=${currentlyLoading}`);
+
+      if (!yearAlreadyLoaded && !currentlyLoading) {
+        // Track that we're loading this year
+        if (!this._loadingYears) this._loadingYears = new Set();
+        this._loadingYears.add(yearKey);
+
+        console.log(`OverlayController: AUTO-FETCHING ${overlayId} for year ${year}`);
         // Auto-fetch data for this year, then render
-        this.loadYearAndRender(overlayId, year, timestamp);
+        this.loadYearAndRender(overlayId, year, timestamp).finally(() => {
+          this._loadingYears?.delete(yearKey);
+        });
       } else if (dataCache[overlayId]) {
         // Render from cache
         this.renderFilteredData(overlayId, timestamp, { useTimestamp: true });
@@ -3892,6 +3902,8 @@ export const OverlayController = {
   async loadYearAndRender(overlayId, year, timestamp = null) {
     const endpoint = OVERLAY_ENDPOINTS[overlayId];
     if (!endpoint) return;
+
+    console.log(`OverlayController: Auto-fetching ${overlayId} for year ${year}`);
 
     // Load the year data (year boundaries)
     const yearStart = new Date(year, 0, 1).getTime();
