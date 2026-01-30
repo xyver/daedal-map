@@ -44,14 +44,6 @@ DERIVED_EXPANSIONS = {
     },
 }
 
-# Canonical sources for common metrics used in derivations
-CANONICAL_SOURCES = {
-    "population": "owid_co2",
-    "area_sq_km": "world_factbook_static",
-    "gdp": "owid_co2",
-}
-
-
 # =============================================================================
 # Validation
 # =============================================================================
@@ -104,18 +96,47 @@ def validate_item(item: dict, catalog: dict) -> dict:
         item["_valid"] = True
         return item
 
-    # Check metric exists
+    # Check metric exists (case-insensitive matching with auto-correction)
     metrics = metadata.get("metrics", {})
     if metric and metric not in metrics:
-        close_matches = [k for k in metrics.keys()
-                         if metric.lower() in k.lower() or k.lower() in metric.lower()]
-        if close_matches:
-            item["_valid"] = False
-            item["_error"] = f"Metric '{metric}' not found. Did you mean: {', '.join(close_matches[:3])}?"
+        # Try case-insensitive exact match on key first
+        metric_lower = metric.lower()
+        exact_match = None
+        for k in metrics.keys():
+            if k.lower() == metric_lower:
+                exact_match = k
+                break
+
+        # If no key match, try matching by display name
+        if not exact_match:
+            for k, v in metrics.items():
+                if isinstance(v, dict):
+                    name = v.get("name", "")
+                    if name.lower() == metric_lower:
+                        exact_match = k
+                        break
+
+        if exact_match:
+            # Auto-correct to the actual metric key
+            item["metric"] = exact_match
+            metric = exact_match
         else:
-            item["_valid"] = False
-            item["_error"] = f"Metric '{metric}' not found in {source_id}"
-        return item
+            # No exact match, suggest close matches (by key or name)
+            close_matches = []
+            for k, v in metrics.items():
+                name = v.get("name", "") if isinstance(v, dict) else ""
+                if metric_lower in k.lower() or k.lower() in metric_lower:
+                    close_matches.append(k)
+                elif name and (metric_lower in name.lower() or name.lower() in metric_lower):
+                    close_matches.append(k)
+            close_matches = list(dict.fromkeys(close_matches))  # Remove duplicates
+            if close_matches:
+                item["_valid"] = False
+                item["_error"] = f"Metric '{metric}' not found. Did you mean: {', '.join(close_matches[:3])}?"
+            else:
+                item["_valid"] = False
+                item["_error"] = f"Metric '{metric}' not found in {source_id}"
+            return item
 
     # Add metric label
     if metric:

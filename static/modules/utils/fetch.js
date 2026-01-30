@@ -11,6 +11,9 @@ const msgpack = window.MessagePack || {};
 // localStorage key for tracking API calls for session recovery
 const API_CALLS_KEY = 'countymap_api_calls';
 
+// localStorage key for tracking executed orders for session recovery
+const ORDERS_KEY = 'countymap_executed_orders';
+
 // API paths that should be tracked for recovery (data endpoints)
 const TRACKED_API_PATTERNS = [
   '/api/earthquakes/',
@@ -63,6 +66,54 @@ export function getApiCallsForRecovery() {
 export function clearApiCalls() {
   try {
     localStorage.removeItem(API_CALLS_KEY);
+  } catch (e) {
+    // Ignore
+  }
+}
+
+/**
+ * Log an executed order for session recovery.
+ * Stores only the order (request) data, not the response.
+ * @param {Object} order - The order that was executed
+ */
+export function logExecutedOrder(order) {
+  try {
+    const orders = JSON.parse(localStorage.getItem(ORDERS_KEY) || '[]');
+    // Store with timestamp and summary for display
+    const record = {
+      order: order,
+      summary: order.summary || 'Data order',
+      timestamp: Date.now()
+    };
+    orders.push(record);
+    // Keep only last 10 orders to avoid storage bloat
+    if (orders.length > 10) {
+      orders.shift();
+    }
+    localStorage.setItem(ORDERS_KEY, JSON.stringify(orders));
+  } catch (e) {
+    console.warn('Failed to log executed order:', e);
+  }
+}
+
+/**
+ * Get all logged executed orders for session recovery.
+ * @returns {Array} Array of {order, summary, timestamp} records
+ */
+export function getExecutedOrdersForRecovery() {
+  try {
+    return JSON.parse(localStorage.getItem(ORDERS_KEY) || '[]');
+  } catch (e) {
+    return [];
+  }
+}
+
+/**
+ * Clear logged executed orders (called by New Chat).
+ */
+export function clearExecutedOrders() {
+  try {
+    localStorage.removeItem(ORDERS_KEY);
   } catch (e) {
     // Ignore
   }

@@ -1211,15 +1211,25 @@ def detect_reference_lookup(query: str) -> Optional[dict]:
     sdg_match = re.search(r'sdg\s*(\d+)|goal\s*(\d+)|sustainable development goal\s*(\d+)', query_lower)
     if sdg_match:
         num = sdg_match.group(1) or sdg_match.group(2) or sdg_match.group(3)
-        num_padded = num.zfill(2)
-        ref_path = DATA_DIR / f"un_sdg_{num_padded}" / "reference.json"
-        if ref_path.exists():
-            return {
-                "type": "sdg",
-                "sdg_number": int(num),
-                "file": str(ref_path),
-                "content": load_reference_file(ref_path)
-            }
+        goal_num = int(num)
+        # Dynamically find SDG source path from catalog
+        goal_tag = f"goal{goal_num}"
+        catalog = load_catalog()
+        if catalog:
+            for source in catalog.get("sources", []):
+                topic_tags = source.get("topic_tags", [])
+                if goal_tag in topic_tags:
+                    source_path = get_source_path(source.get("source_id"))
+                    if source_path:
+                        ref_path = source_path / "reference.json"
+                        if ref_path.exists():
+                            return {
+                                "type": "sdg",
+                                "sdg_number": goal_num,
+                                "file": str(ref_path),
+                                "content": load_reference_file(ref_path)
+                            }
+                    break
 
     # Extract country from query for country-specific lookups
     # Returns dict with match tuple and disambiguation info
@@ -1404,24 +1414,42 @@ def detect_reference_lookup(query: str) -> Optional[dict]:
                         }
                     }
 
-    # Data source reference pattern - "what is owid?" or "tell me about who_health"
-    source_patterns = [
-        (r'\b(owid|owid_co2)\b', "owid_co2"),
-        (r'\b(who|who_health|world health)\b', "who_health"),
-        (r'\b(imf|imf_bop|balance of payments)\b', "imf_bop"),
-        (r'\b(census|us census)\b', "census_population"),
-        (r'\b(world factbook|cia factbook|factbook)\b', "world_factbook"),
-    ]
-    for pattern, source_id in source_patterns:
-        if re.search(pattern, query_lower):
-            ref_path = DATA_DIR / source_id / "reference.json"
-            if ref_path.exists():
-                return {
-                    "type": "data_source",
-                    "source_id": source_id,
-                    "file": str(ref_path),
-                    "content": load_reference_file(ref_path)
-                }
+    # Data source reference pattern - dynamically search catalog for matching sources
+    # Matches query against source_id, source_name, keywords, and topic_tags
+    catalog = load_catalog()
+    if catalog:
+        for source in catalog.get("sources", []):
+            source_id = source.get("source_id", "")
+            source_name = source.get("source_name", "").lower()
+            keywords = [k.lower() for k in source.get("keywords", [])]
+            topic_tags = [t.lower() for t in source.get("topic_tags", [])]
+
+            # Check if query mentions this source by id, name, or keywords
+            if source_id.lower() in query_lower or source_name in query_lower:
+                source_path = get_source_path(source_id)
+                if source_path:
+                    ref_path = source_path / "reference.json"
+                    if ref_path.exists():
+                        return {
+                            "type": "data_source",
+                            "source_id": source_id,
+                            "file": str(ref_path),
+                            "content": load_reference_file(ref_path)
+                        }
+
+            # Check keywords and topic_tags
+            for kw in keywords + topic_tags:
+                if kw and len(kw) > 2 and kw in query_lower:
+                    source_path = get_source_path(source_id)
+                    if source_path:
+                        ref_path = source_path / "reference.json"
+                        if ref_path.exists():
+                            return {
+                                "type": "data_source",
+                                "source_id": source_id,
+                                "file": str(ref_path),
+                                "content": load_reference_file(ref_path)
+                            }
 
     return None
 
@@ -1702,12 +1730,21 @@ def detect_source_from_query(query: str) -> Optional[dict]:
     if sdg_pattern:
         goal_num = int(sdg_pattern.group(1))
         if 1 <= goal_num <= 17:
-            sdg_source_id = f"un_sdg_{goal_num:02d}"
-            # Find this source in catalog
+            # Dynamically search catalog for matching SDG source by topic_tags or source_name
+            goal_tag = f"goal{goal_num}"
             for source in sources:
-                if source.get("source_id") == sdg_source_id:
+                topic_tags = source.get("topic_tags", [])
+                # Check if this source has the matching goal tag
+                if goal_tag in topic_tags:
                     return {
-                        "source_id": sdg_source_id,
+                        "source_id": source.get("source_id"),
+                        "source_name": source.get("source_name", f"UN SDG Goal {goal_num}")
+                    }
+                # Also check if source_name mentions the goal number
+                source_name = source.get("source_name", "").lower()
+                if f"goal {goal_num}:" in source_name or f"goal {goal_num} " in source_name:
+                    return {
+                        "source_id": source.get("source_id"),
                         "source_name": source.get("source_name", f"UN SDG Goal {goal_num}")
                     }
     source_matches = []

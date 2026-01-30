@@ -653,10 +653,14 @@ export const MapAdapter = {
       }
     }
 
-    // Also toggle choropleth legend
+    // Also toggle choropleth legend (use class, not inline style)
     const legend = document.getElementById('choroplethLegend');
     if (legend) {
-      legend.style.display = visible ? '' : 'none';
+      if (visible) {
+        legend.classList.add('visible');
+      } else {
+        legend.classList.remove('visible');
+      }
     }
 
     console.log(`MapAdapter: Choropleth layers ${visible ? 'shown' : 'hidden'}`);

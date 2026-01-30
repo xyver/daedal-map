@@ -47,6 +47,18 @@ def _load_catalog() -> dict:
     return _catalog_cache
 
 
+def _get_source_data_type(source_id: str) -> str:
+    """
+    Get data_type for a source from catalog.
+    Returns: 'events', 'metrics', 'gridded', or 'metrics' as default.
+    """
+    catalog = _load_catalog()
+    for src in catalog.get("sources", []):
+        if src.get("source_id") == source_id:
+            return src.get("data_type", "metrics")
+    return "metrics"  # Default to metrics if not found
+
+
 def _get_source_path(source_id: str) -> Path:
     """Get the full path to a source directory using catalog path field."""
     catalog = _load_catalog()
@@ -281,53 +293,6 @@ def find_metric_column(df: pd.DataFrame, metric: str) -> Optional[str]:
 # Derived Field Calculations
 # =============================================================================
 
-def lookup_canonical_value(metric: str, loc_id: str, year: int) -> Optional[float]:
-    """
-    Look up a metric value from its canonical source.
-
-    Used for denominator values in derived calculations (population, area, etc.)
-    """
-    canonical_sources = {
-        "population": "owid_co2",
-        "area_sq_km": "world_factbook_static",
-    }
-
-    source_id = canonical_sources.get(metric)
-    if not source_id:
-        return None
-
-    try:
-        df, _ = load_source_data(source_id)
-
-        # Filter by loc_id
-        if "loc_id" not in df.columns:
-            return None
-
-        df_loc = df[df["loc_id"] == loc_id]
-        if df_loc.empty:
-            return None
-
-        # Filter by year if the source has years
-        if "year" in df.columns and year:
-            df_year = df_loc[df_loc["year"] == year]
-            if df_year.empty:
-                # Try closest year
-                df_year = df_loc[df_loc["year"] <= year].tail(1)
-            if not df_year.empty:
-                df_loc = df_year
-
-        # Get the metric value
-        if metric in df_loc.columns:
-            val = df_loc[metric].iloc[0]
-            if pd.notna(val):
-                return float(val)
-
-    except Exception:
-        pass
-
-    return None
-
-
 def apply_derived_fields(boxes: dict, derived_specs: list, year: int = None) -> list:
     """
     Apply derived field calculations to filled boxes.
@@ -335,7 +300,7 @@ def apply_derived_fields(boxes: dict, derived_specs: list, year: int = None) -> 
     Args:
         boxes: Dict of loc_id -> {metric: value, ...}
         derived_specs: List of derived field specifications from postprocessor
-        year: Year to use for canonical lookups
+        year: Year for context (unused, kept for API compatibility)
 
     Returns:
         List of warning messages for missing data
@@ -370,11 +335,6 @@ def apply_derived_fields(boxes: dict, derived_specs: list, year: int = None) -> 
                         denom_val = metrics[key]
                         break
 
-            # If still not found, try canonical lookup
-            if denom_val is None:
-                box_year = metrics.get("year", year)
-                denom_val = lookup_canonical_value(denominator_name, loc_id, box_year)
-
             # Calculate derived value
             if denom_val is None:
                 warnings.append(f"{loc_id}: {denominator_name} unavailable")
@@ -394,47 +354,32 @@ def apply_derived_fields(boxes: dict, derived_specs: list, year: int = None) -> 
 # Event Mode Execution (for disaster/event data)
 # =============================================================================
 
-# Event type detection based on source_id patterns
-EVENT_TYPE_MAP = {
-    "usgs_earthquakes": "earthquake",
-    "canada_earthquakes": "earthquake",
-    "volcano": "volcano",
-    "smithsonian_volcanoes": "volcano",
-    "hurricanes": "hurricane",
-    "hurdat2": "hurricane",
-    "aus_cyclones": "hurricane",
-    "mtbs_wildfires": "wildfire",
-    "wildfires": "wildfire",
-    "tsunami": "tsunami",
-    "noaa_tsunamis": "tsunami",
-}
+# Default event limits (can be overridden by metadata.default_limit)
+DEFAULT_EVENT_LIMIT = 1000
+MAX_EVENT_LIMIT = 5000
 
-# Default limits per event type
-EVENT_LIMITS = {
-    "earthquake": {"default": 1000, "max": 5000},
-    "volcano": {"default": 500, "max": 2000},
-    "hurricane": {"default": 500, "max": 2000},
-    "wildfire": {"default": 500, "max": 2000},
-    "tsunami": {"default": 500, "max": 1000},
-    "default": {"default": 1000, "max": 5000},
-}
 
-# Significance columns for sorting (most important events first)
-SIGNIFICANCE_COLUMNS = {
-    "earthquake": "magnitude",
-    "volcano": "VEI",
-    "hurricane": "wind_kt",
-    "wildfire": "burned_acres",
-    "tsunami": "max_water_height_m",
-}
+def _get_source_from_catalog(source_id: str) -> dict:
+    """Get source info from catalog by source_id."""
+    catalog = _load_catalog()
+    if not catalog:
+        return {}
+    for source in catalog.get("sources", []):
+        if source.get("source_id") == source_id:
+            return source
+    return {}
 
 
 def _detect_event_type(source_id: str) -> str:
-    """Detect event type from source_id."""
-    for pattern, event_type in EVENT_TYPE_MAP.items():
-        if pattern in source_id.lower():
-            return event_type
-    return "unknown"
+    """Detect event type from catalog metadata."""
+    source = _get_source_from_catalog(source_id)
+    return source.get("event_type", "unknown")
+
+
+def _get_significance_column(source_id: str) -> str:
+    """Get significance column from catalog metadata."""
+    source = _get_source_from_catalog(source_id)
+    return source.get("significance_column")
 
 
 def _get_coordinate_columns(df: pd.DataFrame) -> tuple:
@@ -590,13 +535,12 @@ def execute_event_order(order: dict) -> dict:
 
     print(f"  After filters: {len(df)} events")
 
-    # Apply limit
-    limits = EVENT_LIMITS.get(event_type, EVENT_LIMITS["default"])
-    limit = min(requested_limit or limits["default"], limits["max"])
+    # Apply limit (use requested limit, capped at max)
+    limit = min(requested_limit or DEFAULT_EVENT_LIMIT, MAX_EVENT_LIMIT)
 
     if len(df) > limit:
-        # Sort by significance and take top N
-        sig_col = SIGNIFICANCE_COLUMNS.get(event_type)
+        # Sort by significance column from metadata and take top N
+        sig_col = _get_significance_column(source_id)
         if sig_col and sig_col in df.columns:
             df = df.nlargest(limit, sig_col)
         else:
@@ -658,6 +602,8 @@ def execute_event_order(order: dict) -> dict:
 
     return {
         "type": "events",
+        "data_type": "events",
+        "source_id": source_id,
         "event_type": event_type,
         "geojson": {
             "type": "FeatureCollection",
@@ -706,22 +652,27 @@ def execute_order(order: dict) -> dict:
             "count": 0
         }
 
-    # Check if any item uses event mode (explicit or auto-detected from metadata)
-    def is_event_source(item):
-        # Explicit mode
+    # Determine data_type for this order from first item's source
+    # (for tagging the response so frontend knows which pipeline to use)
+    primary_source_id = items[0].get("source_id") if items else None
+    order_data_type = _get_source_data_type(primary_source_id) if primary_source_id else "metrics"
+
+    # Check if this is an events order (explicit mode or data_type from catalog)
+    def is_event_item(item):
         if item.get("mode") == "events":
             return True
-        # Auto-detect: check if source has data_type="events" in metadata
         source_id = item.get("source_id")
-        if source_id:
-            metadata = load_source_metadata(source_id)
-            if metadata and metadata.get("data_type") == "events":
-                return True
-        return False
+        return _get_source_data_type(source_id) == "events" if source_id else False
 
-    event_mode = any(is_event_source(item) for item in items)
-    if event_mode:
-        return execute_event_order(order)
+    # If any item is events type, route entire order to event pipeline
+    # (mixed orders with events+metrics should be split by chat before sending)
+    if any(is_event_item(item) for item in items):
+        result = execute_event_order(order)
+        result["data_type"] = "events"
+        result["source_id"] = primary_source_id
+        return result
+
+    # Otherwise, continue with metrics pipeline below
 
     # Check if any item uses year range (multi-year mode)
     multi_year_mode = any(
@@ -1001,8 +952,13 @@ def execute_order(order: dict) -> dict:
     ]
 
     # Build response
+    # Determine primary source_id for this response
+    primary_source = list(sources_used.keys())[0] if sources_used else None
+
     response = {
-        "type": "success",
+        "type": "data",
+        "data_type": "metrics",
+        "source_id": primary_source,
         "geojson": {
             "type": "FeatureCollection",
             "features": features

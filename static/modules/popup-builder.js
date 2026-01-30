@@ -7,9 +7,11 @@ import { fetchMsgpack } from './utils/fetch.js';
 
 // Dependencies set via setDependencies to avoid circular imports
 let App = null;
+let ChoroplethManager = null;
 
 export function setDependencies(deps) {
   App = deps.App;
+  ChoroplethManager = deps.ChoroplethManager;
 }
 
 // ============================================================================
@@ -91,7 +93,9 @@ export const PopupBuilder = {
     'population_year', 'gdp_year', 'economy type', 'income_group',
     'UN Region', 'subregion', 'region_wb',
     // Year shown separately
-    'data_year'
+    'data_year',
+    // Internal timestamp fields (from time slider)
+    'Time', 'time', 'Data Time', 'data_time'
   ],
 
   /**
@@ -157,12 +161,25 @@ export const PopupBuilder = {
         }
       } else {
         // FLAT MODE: Show all fields (<=5 or single category)
-        for (const key of dataFields.slice(0, 10)) {
+        // If available_metrics provided, show all of them (with N/A for missing)
+        const metricsToShow = sourceData?.available_metrics || dataFields;
+        const activeMetric = ChoroplethManager?.metric;
+        for (const key of metricsToShow.slice(0, 10)) {
           const value = properties[key];
-          if (value == null || value === '') continue;
           const fieldName = this.cleanFieldName(key);
-          const formattedValue = this.formatValue(key, value);
-          lines.push(`${fieldName}: ${formattedValue}${yearSuffix}`);
+          const isActive = activeMetric && key === activeMetric;
+          if (value == null || value === '') {
+            // Show N/A for missing metrics
+            const style = isActive ? 'color: #999; font-weight: 600;' : 'color: #999;';
+            lines.push(`<span style="${style}">${fieldName}: N/A</span>`);
+          } else {
+            const formattedValue = this.formatValue(key, value);
+            if (isActive) {
+              lines.push(`<span style="font-weight: bold;">${fieldName}: ${formattedValue}${yearSuffix}</span>`);
+            } else {
+              lines.push(`${fieldName}: ${formattedValue}${yearSuffix}`);
+            }
+          }
         }
       }
 

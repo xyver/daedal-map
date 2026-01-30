@@ -4,7 +4,7 @@
  */
 
 import { CONFIG } from './config.js';
-import { postMsgpack, getApiCallsForRecovery, clearApiCalls } from './utils/fetch.js';
+import { postMsgpack, getApiCallsForRecovery, clearApiCalls, logExecutedOrder, getExecutedOrdersForRecovery, clearExecutedOrders } from './utils/fetch.js';
 
 // Reusable modules
 import {
@@ -65,22 +65,48 @@ const EVENT_TYPE_TO_OVERLAY = {
 
 /**
  * Route event-type order results to OverlayController for cache ingestion.
- * @param {Object} response - API response with type 'events'
+ * @param {Object} response - API response with data_type 'events'
  */
 function ingestEventsToOverlay(response) {
   if (!OverlayController?.ingestOrderResult) return;
   if (!response?.geojson?.features) return;
 
-  const overlayId = EVENT_TYPE_TO_OVERLAY[response.event_type];
-  if (!overlayId) return;
+  // Use source_id from response, fall back to event_type mapping for legacy support
+  const overlayId = response.source_id || EVENT_TYPE_TO_OVERLAY[response.event_type];
+  if (!overlayId) {
+    console.warn('ingestEventsToOverlay: No overlayId for response', response.source_id, response.event_type);
+    return;
+  }
 
   // Build range metadata from response if available
-  const rangeMeta = (response.year_range && response.year_range.length === 2)
-    ? { start: new Date(response.year_range[0], 0, 1).getTime(),
-        end: new Date(response.year_range[1], 11, 31).getTime() }
-    : null;
+  const rangeMeta = (response.time_range && response.time_range.min && response.time_range.max)
+    ? { start: response.time_range.min, end: response.time_range.max }
+    : (response.year_range && response.year_range.length === 2)
+      ? { start: new Date(response.year_range[0], 0, 1).getTime(),
+          end: new Date(response.year_range[1], 11, 31).getTime() }
+      : null;
 
   OverlayController.ingestOrderResult(overlayId, response.geojson, rangeMeta);
+}
+
+/**
+ * Route metrics order results to OverlayController for cache ingestion.
+ * @param {Object} response - API response with data_type 'metrics'
+ */
+function ingestMetricsToCache(response) {
+  if (!OverlayController?.ingestMetricData) return;
+  if (!response?.geojson?.features) return;
+
+  const sourceId = response.source_id;
+  if (!sourceId) {
+    console.warn('ingestMetricsToCache: No source_id in response');
+    return;
+  }
+
+  // Build year range metadata
+  const yearRange = response.year_range || null;
+
+  OverlayController.ingestMetricData(sourceId, response.geojson, response.year_data, yearRange);
 }
 
 // Module-level instances (created during init)
@@ -204,8 +230,9 @@ export const ChatManager = {
   /**
    * Execute a confirmed order - send to backend and display results.
    * @param {Object} order - The order to execute
+   * @param {Object} options - Options {skipLog: boolean, force: boolean} - skip logging, force re-fetch (bypass dedup)
    */
-  async executeOrder(order) {
+  async executeOrder(order, options = {}) {
     const apiUrl = (typeof API_BASE_URL !== 'undefined' && API_BASE_URL)
       ? `${API_BASE_URL}/chat`
       : '/chat';
@@ -214,7 +241,8 @@ export const ChatManager = {
 
     const data = await postMsgpack(apiUrl, {
       confirmed_order: order,
-      sessionId: this.sessionId
+      sessionId: this.sessionId,
+      force: options.force || false  // Bypass dedup for recovery
     });
 
     console.log('Received response:', {
@@ -228,18 +256,33 @@ export const ChatManager = {
     if (data.type === 'already_loaded') {
       this.addMessage(data.message || 'This data is already loaded on your map.', 'assistant');
       if (orderPanel.switchTab) orderPanel.switchTab('loaded');
-    } else if (data.type === 'data' && data.geojson) {
-      const message = data.data_note || `Loaded ${data.count || data.geojson.features?.length || 0} locations`;
-      this.addMessage(message, 'assistant');
-      App?.displayData(data);
-    } else if (data.type === 'events' && data.geojson) {
-      const message = data.summary || `Showing ${data.count} ${data.event_type} events`;
-      this.addMessage(message, 'assistant');
-      ingestEventsToOverlay(data);
-      App?.displayData(data);
     } else if (data.type === 'error') {
       this.addMessage(data.message || 'Failed to load data.', 'assistant');
       throw new Error(data.message || 'Order execution failed');
+    } else if (data.geojson) {
+      // Route by data_type for cache ingestion
+      const dataType = data.data_type || (data.type === 'events' ? 'events' : 'metrics');
+
+      if (dataType === 'events') {
+        const message = data.summary || `Showing ${data.count} ${data.event_type || 'event'} events`;
+        this.addMessage(message, 'assistant');
+        ingestEventsToOverlay(data);
+      } else if (dataType === 'metrics') {
+        const message = data.data_note || `Loaded ${data.count || data.geojson.features?.length || 0} locations`;
+        this.addMessage(message, 'assistant');
+        ingestMetricsToCache(data);
+      } else {
+        // Fallback for unknown data_type
+        const message = data.summary || data.data_note || `Loaded ${data.count || 0} items`;
+        this.addMessage(message, 'assistant');
+      }
+
+      // Log order for session recovery (skip during recovery to avoid duplicates)
+      if (!options.skipLog) {
+        logExecutedOrder(order);
+      }
+
+      App?.displayData(data);
     }
   },
 
@@ -290,10 +333,11 @@ export const ChatManager = {
       }
     }
 
-    // Check for API calls to recover (map data)
+    // Check for API calls and executed orders to recover (map data)
     const apiCalls = getApiCallsForRecovery();
-    if (apiCalls.length > 0) {
-      this.showRecoveryPrompt(apiCalls.length);
+    const executedOrders = getExecutedOrdersForRecovery();
+    if (apiCalls.length > 0 || executedOrders.length > 0) {
+      this.showRecoveryPrompt(apiCalls.length, executedOrders.length);
     }
   },
 
@@ -326,6 +370,7 @@ export const ChatManager = {
     if (window.TimeSlider?.clearSliderSettings) window.TimeSlider.clearSliderSettings();
     if (window.App?.clearMapViewSettings) window.App.clearMapViewSettings();
     clearApiCalls();
+    clearExecutedOrders();
 
     // Reset session
     this.sessionId = resetSessionId();
@@ -346,20 +391,29 @@ export const ChatManager = {
 
   /**
    * Show recovery prompt for map data.
-   * @param {number} callCount - Number of API calls to recover
+   * @param {number} overlayCount - Number of overlay API calls to recover
+   * @param {number} orderCount - Number of executed orders to recover
    */
-  showRecoveryPrompt(callCount) {
+  showRecoveryPrompt(overlayCount, orderCount = 0) {
     const { messages } = this.elements;
     if (!messages) return;
 
-    const dataSummary = `${callCount} data request${callCount === 1 ? '' : 's'}`;
+    // Build summary of what can be recovered
+    const parts = [];
+    if (orderCount > 0) {
+      parts.push(`${orderCount} data order${orderCount === 1 ? '' : 's'}`);
+    }
+    if (overlayCount > 0) {
+      parts.push(`${overlayCount} overlay request${overlayCount === 1 ? '' : 's'}`);
+    }
+    const dataSummary = parts.join(' and ');
 
     const div = document.createElement('div');
     div.className = 'chat-message assistant recovery-prompt';
     div.innerHTML = `
       <strong>Welcome Back</strong><br><br>
       Your previous session: <b>${dataSummary}</b><br><br>
-      Type <b>"recover"</b> to reload your map data, or click <b>New Chat</b> above to start fresh.
+      Click <b>Recover Data</b> to reload your map data, or <b>New Chat</b> above to start fresh.
       <div class="recovery-buttons" style="margin-top: 12px;">
         <button class="recovery-btn recover" data-action="recover">Recover Data</button>
       </div>
@@ -384,75 +438,99 @@ export const ChatManager = {
 
     if (choice === 'recover') {
       const apiCalls = getApiCallsForRecovery();
-      if (apiCalls.length === 0) {
+      const executedOrders = getExecutedOrdersForRecovery();
+
+      if (apiCalls.length === 0 && executedOrders.length === 0) {
         this.addMessage('No data to recover.', 'assistant');
         return;
       }
 
-      // Parse URLs to extract overlay IDs and years
-      const overlayYears = new Map();
-      for (const url of apiCalls) {
-        const yearMatch = url.match(/[?&]year=(\d+)/);
-        if (!yearMatch) continue;
-        const year = parseInt(yearMatch[1], 10);
+      let totalRecovered = 0;
+      let totalFailed = 0;
 
-        let overlayId = null;
-        if (url.includes('/api/earthquakes/')) overlayId = 'earthquakes';
-        else if (url.includes('/api/storms/')) overlayId = 'hurricanes';
-        else if (url.includes('/api/volcanoes/')) overlayId = 'volcanoes';
-        else if (url.includes('/api/wildfires/')) overlayId = 'wildfires';
-        else if (url.includes('/api/tornadoes/')) overlayId = 'tornadoes';
-        else if (url.includes('/api/tsunamis/')) overlayId = 'tsunamis';
-        else if (url.includes('/api/floods/')) overlayId = 'floods';
+      // 1. Recover executed orders (metrics data)
+      if (executedOrders.length > 0) {
+        this.addMessage(`Recovering ${executedOrders.length} data order${executedOrders.length === 1 ? '' : 's'}...`, 'assistant');
 
-        if (overlayId) {
-          if (!overlayYears.has(overlayId)) overlayYears.set(overlayId, new Set());
-          overlayYears.get(overlayId).add(year);
+        for (const record of executedOrders) {
+          try {
+            // Re-execute the order with skipLog and force to bypass dedup
+            await this.executeOrder(record.order, { skipLog: true, force: true });
+            totalRecovered++;
+          } catch (e) {
+            console.warn('[Session] Failed to recover order:', record.summary, e.message);
+            totalFailed++;
+          }
         }
       }
 
-      let totalLoads = 0;
-      for (const years of overlayYears.values()) totalLoads += years.size;
+      // 2. Recover overlay API calls (disaster data)
+      if (apiCalls.length > 0) {
+        // Parse URLs to extract overlay IDs and years
+        const overlayYears = new Map();
+        for (const url of apiCalls) {
+          const yearMatch = url.match(/[?&]year=(\d+)/);
+          if (!yearMatch) continue;
+          const year = parseInt(yearMatch[1], 10);
 
-      if (totalLoads === 0) {
-        this.addMessage('No recoverable data found.', 'assistant');
-        return;
-      }
+          let overlayId = null;
+          if (url.includes('/api/earthquakes/')) overlayId = 'earthquakes';
+          else if (url.includes('/api/storms/')) overlayId = 'hurricanes';
+          else if (url.includes('/api/volcanoes/')) overlayId = 'volcanoes';
+          else if (url.includes('/api/wildfires/')) overlayId = 'wildfires';
+          else if (url.includes('/api/tornadoes/')) overlayId = 'tornadoes';
+          else if (url.includes('/api/tsunamis/')) overlayId = 'tsunamis';
+          else if (url.includes('/api/floods/')) overlayId = 'floods';
 
-      this.addMessage(`Recovering ${totalLoads} data set${totalLoads === 1 ? '' : 's'}...`, 'assistant');
-
-      try {
-        const loadPromises = [];
-        for (const [overlayId, years] of overlayYears) {
-          for (const year of years) {
-            if (OverlayController?.loadYearAndRender) {
-              loadPromises.push(
-                OverlayController.loadYearAndRender(overlayId, year).catch(e => {
-                  console.warn('[Session] Failed to load:', overlayId, year, e.message);
-                  return null;
-                })
-              );
-            }
+          if (overlayId) {
+            if (!overlayYears.has(overlayId)) overlayYears.set(overlayId, new Set());
+            overlayYears.get(overlayId).add(year);
           }
         }
 
-        const results = await Promise.all(loadPromises);
-        const successCount = results.filter(r => r !== null).length;
+        let overlayLoads = 0;
+        for (const years of overlayYears.values()) overlayLoads += years.size;
 
-        if (window.OverlayController?.recalculateTimeRange) {
-          window.OverlayController.recalculateTimeRange();
-        }
-        if (window.TimeSlider?.refreshDisplay) {
-          window.TimeSlider.refreshDisplay();
-        }
+        if (overlayLoads > 0) {
+          this.addMessage(`Recovering ${overlayLoads} overlay data set${overlayLoads === 1 ? '' : 's'}...`, 'assistant');
 
-        this.addMessage(
-          `Recovered ${successCount} of ${totalLoads} data set${totalLoads === 1 ? '' : 's'}.`,
-          'assistant'
-        );
-      } catch (e) {
-        this.addMessage('Recovery failed: ' + e.message, 'assistant');
-        console.error('[Session] Recovery failed:', e);
+          try {
+            const loadPromises = [];
+            for (const [overlayId, years] of overlayYears) {
+              for (const year of years) {
+                if (OverlayController?.loadYearAndRender) {
+                  loadPromises.push(
+                    OverlayController.loadYearAndRender(overlayId, year).catch(e => {
+                      console.warn('[Session] Failed to load:', overlayId, year, e.message);
+                      return null;
+                    })
+                  );
+                }
+              }
+            }
+
+            const results = await Promise.all(loadPromises);
+            totalRecovered += results.filter(r => r !== null).length;
+            totalFailed += results.filter(r => r === null).length;
+
+            if (window.OverlayController?.recalculateTimeRange) {
+              window.OverlayController.recalculateTimeRange();
+            }
+            if (window.TimeSlider?.refreshDisplay) {
+              window.TimeSlider.refreshDisplay();
+            }
+          } catch (e) {
+            console.error('[Session] Overlay recovery failed:', e);
+            totalFailed++;
+          }
+        }
+      }
+
+      // Final summary
+      if (totalFailed === 0) {
+        this.addMessage(`Recovery complete. Restored ${totalRecovered} data set${totalRecovered === 1 ? '' : 's'}.`, 'assistant');
+      } else {
+        this.addMessage(`Recovery complete. Restored ${totalRecovered}, failed ${totalFailed}.`, 'assistant');
       }
     } else {
       await this.clearSession();

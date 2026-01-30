@@ -30,6 +30,30 @@ export const ChoroplethManager = {
   legendMax: null,
 
   /**
+   * Convert timestamp to year (for looking up data keyed by year)
+   */
+  timestampToYear(ts) {
+    if (Math.abs(ts) < 50000) return ts;  // Already a year
+    return new Date(ts).getUTCFullYear();
+  },
+
+  /**
+   * Check if metric name indicates a percentage value.
+   * Used to force 0-100 scale for percentage metrics.
+   */
+  isPercentageMetric(metric) {
+    if (!metric) return false;
+    const lower = metric.toLowerCase();
+    // Match common percentage indicators
+    return lower.includes('percent') ||
+           lower.includes('proportion') ||
+           lower.includes('share') ||
+           lower.includes('rate') ||
+           lower.endsWith('_pct') ||
+           lower.endsWith('_percent');
+  },
+
+  /**
    * Initialize choropleth with data range
    */
   init(metric, yearData, availableYears) {
@@ -42,10 +66,18 @@ export const ChoroplethManager = {
     this.legendMin = document.getElementById('legendMin');
     this.legendMax = document.getElementById('legendMax');
 
+    // Detect if yearData keys are years or timestamps
+    // Check first key to determine format
+    const dataKeys = Object.keys(yearData);
+    const firstKey = dataKeys.length > 0 ? dataKeys[0] : null;
+    const dataUsesYears = firstKey && Math.abs(Number(firstKey)) < 50000;
+
     // Calculate global min/max across ALL years for consistent scaling
     let allValues = [];
-    for (const year of availableYears) {
-      const yearValues = yearData[year] || {};
+    for (const time of availableYears) {
+      // Convert timestamp to year if data uses year keys
+      const key = dataUsesYears ? this.timestampToYear(time) : time;
+      const yearValues = yearData[key] || {};
       for (const locId in yearValues) {
         const val = yearValues[locId][metric];
         if (val != null && !isNaN(val)) {
@@ -62,6 +94,13 @@ export const ChoroplethManager = {
       this.maxValue = 100;
     }
 
+    // PERCENTAGE SCALE OVERRIDE: Force 0-100 scale for percentage metrics
+    // Comment out the next 3 lines to use dynamic min/max for percentages instead
+    if (this.isPercentageMetric(metric)) {
+      this.minValue = 0;
+      this.maxValue = 100;
+    }
+
     // Create color scale function (for legend only)
     this.colorScale = this.createScale(this.minValue, this.maxValue);
 
@@ -69,7 +108,12 @@ export const ChoroplethManager = {
     this.createLegend(metric);
 
     // Show legend
-    this.legend.classList.add('visible');
+    if (this.legend) {
+      this.legend.classList.add('visible');
+      console.log('ChoroplethManager.init: Legend shown, metric:', metric, 'range:', this.minValue, '-', this.maxValue);
+    } else {
+      console.warn('ChoroplethManager.init: Legend element not found!');
+    }
   },
 
   /**
@@ -170,15 +214,39 @@ export const ChoroplethManager = {
     const validValues = values.filter(v => v != null && !isNaN(v));
     if (validValues.length === 0) return;
 
+    // Ensure DOM elements are cached
+    if (!this.legend) {
+      this.legend = document.getElementById('choroplethLegend');
+      this.legendTitle = document.getElementById('legendTitle');
+      this.legendGradient = document.getElementById('legendGradient');
+      this.legendMin = document.getElementById('legendMin');
+      this.legendMax = document.getElementById('legendMax');
+    }
+
     this.minValue = Math.min(...validValues);
     this.maxValue = Math.max(...validValues);
+    this.metric = metric || this.metric;
 
     // Update color scale function
     this.colorScale = this.createScale(this.minValue, this.maxValue);
 
-    // Update legend with new range
-    this.legendMin.textContent = this.formatValue(this.minValue);
-    this.legendMax.textContent = this.formatValue(this.maxValue);
+    // Update legend with new range and title
+    if (this.legendTitle && this.metric) {
+      const displayName = this.metric.length > 25 ? this.metric.substring(0, 22) + '...' : this.metric;
+      this.legendTitle.textContent = displayName;
+    }
+    if (this.legendGradient) {
+      this.legendGradient.style.background =
+        'linear-gradient(to right, rgb(48,18,59), rgb(70,131,193), rgb(86,199,165), rgb(190,220,60), rgb(249,140,42), rgb(217,33,32))';
+    }
+    if (this.legendMin) this.legendMin.textContent = this.formatValue(this.minValue);
+    if (this.legendMax) this.legendMax.textContent = this.formatValue(this.maxValue);
+
+    // Show legend
+    if (this.legend) {
+      this.legend.classList.add('visible');
+      console.log('ChoroplethManager: Legend shown');
+    }
 
     // Update map paint property with new scale
     if (MapAdapter?.map?.getLayer(CONFIG.layers.fill)) {

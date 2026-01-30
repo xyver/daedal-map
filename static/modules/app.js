@@ -30,6 +30,76 @@ export const App = {
   debugMode: false,  // Toggle with 'D' key - shows hierarchy depth colors
 
   /**
+   * Merge new multi-year data into existing data (same source).
+   * Combines geojson features, year_data, and expands year_range.
+   */
+  mergeMultiYearData(existing, incoming) {
+    if (!existing || !incoming) return incoming;
+
+    // Merge GeoJSON features (by loc_id to avoid duplicates)
+    const existingLocIds = new Set(
+      existing.geojson?.features?.map(f => f.properties?.loc_id || f.id) || []
+    );
+    const newFeatures = incoming.geojson?.features?.filter(
+      f => !existingLocIds.has(f.properties?.loc_id || f.id)
+    ) || [];
+    const mergedFeatures = [
+      ...(existing.geojson?.features || []),
+      ...newFeatures
+    ];
+
+    // Merge year_data: {year: {loc_id: {metric: value}}}
+    const mergedYearData = { ...(existing.year_data || {}) };
+    for (const [year, locData] of Object.entries(incoming.year_data || {})) {
+      if (!mergedYearData[year]) {
+        mergedYearData[year] = {};
+      }
+      for (const [locId, metrics] of Object.entries(locData)) {
+        if (!mergedYearData[year][locId]) {
+          mergedYearData[year][locId] = {};
+        }
+        Object.assign(mergedYearData[year][locId], metrics);
+      }
+    }
+
+    // Expand year_range
+    const mergedYearRange = {
+      min: Math.min(existing.year_range?.min || Infinity, incoming.year_range?.min || Infinity),
+      max: Math.max(existing.year_range?.max || -Infinity, incoming.year_range?.max || -Infinity),
+      available_years: [
+        ...new Set([
+          ...(existing.year_range?.available_years || []),
+          ...(incoming.year_range?.available_years || [])
+        ])
+      ].sort((a, b) => a - b)
+    };
+
+    // Merge available_metrics
+    const mergedMetrics = [
+      ...new Set([
+        ...(existing.available_metrics || []),
+        ...(incoming.available_metrics || [])
+      ])
+    ];
+
+    // Merge metric_year_ranges
+    const mergedMetricYearRanges = {
+      ...(existing.metric_year_ranges || {}),
+      ...(incoming.metric_year_ranges || {})
+    };
+
+    return {
+      ...incoming,
+      geojson: { type: 'FeatureCollection', features: mergedFeatures },
+      year_data: mergedYearData,
+      year_range: mergedYearRange,
+      available_metrics: mergedMetrics,
+      metric_year_ranges: mergedMetricYearRanges,
+      count: mergedFeatures.length
+    };
+  },
+
+  /**
    * Initialize the application
    */
   async init() {
@@ -39,7 +109,7 @@ export const App = {
     setViewportDeps({ MapAdapter, NavigationManager, App, TimeSlider });
     setMapDeps({ ViewportLoader, NavigationManager, App, PopupBuilder, OverlayController });
     setNavDeps({ MapAdapter, ViewportLoader, App });
-    setPopupDeps({ App });
+    setPopupDeps({ App, ChoroplethManager });
     setChatDeps({ MapAdapter, App, SelectionManager, OverlayController, OverlaySelector });
     setTimeDeps({ MapAdapter, ChoroplethManager });
     setChoroDeps({ MapAdapter });
@@ -62,7 +132,7 @@ export const App = {
     // before overlays are enabled
     TimeSlider.initSlider();
 
-    OverlaySelector.init();
+    await OverlaySelector.init();
     OverlayController.init();
 
     // Initialize map
@@ -391,6 +461,18 @@ export const App = {
    * Display data from chat query
    */
   displayData(data) {
+    // Check if we should merge with existing data (same source, multi-year)
+    const shouldMerge = this.currentData &&
+      this.currentData.multi_year &&
+      data.multi_year &&
+      this.currentData.source_id === data.source_id;
+
+    if (shouldMerge) {
+      console.log(`Merging data: existing ${this.currentData.count} + new ${data.count} features`);
+      data = this.mergeMultiYearData(this.currentData, data);
+      console.log(`After merge: ${data.count} total features`);
+    }
+
     this.currentData = data;
 
     // Suspend viewport loading when displaying order data

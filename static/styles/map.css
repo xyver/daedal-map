@@ -892,37 +892,48 @@ body {
 
 #choroplethLegend {
   position: absolute;
-  bottom: 50px;
-  right: 10px;
-  z-index: 1000;
-  background: rgba(26,26,46,0.95);
-  padding: 10px 12px;
-  border-radius: 6px;
+  bottom: -2px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1500;
+  background: rgba(26,26,46,0.9);
+  padding: 6px 20px;
+  border-radius: 4px;
   box-shadow: 0 2px 6px rgba(0,0,0,0.4);
   display: none;
-  min-width: 120px;
+  min-width: 250px;
+  border: 1px solid rgba(255,255,255,0.1);
 }
 
 #choroplethLegend.visible {
-  display: block;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
 }
 
 .legend-title {
-  font-size: 11px;
-  font-weight: 600;
-  color: #d0d0d0;
-  margin-bottom: 6px;
+  font-size: 10px;
+  font-weight: 500;
+  color: #aaa;
+  margin-bottom: 4px;
+  text-align: center;
+  max-width: 250px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .legend-gradient {
-  height: 12px;
+  height: 10px;
+  width: 100%;
   border-radius: 2px;
-  margin-bottom: 4px;
+  margin-bottom: 2px;
 }
 
 .legend-labels {
   display: flex;
   justify-content: space-between;
+  width: 100%;
   font-size: 10px;
   color: #888;
 }

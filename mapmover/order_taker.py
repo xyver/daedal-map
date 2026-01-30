@@ -146,9 +146,10 @@ def build_system_prompt(catalog: dict, conversions: dict) -> str:
         """Format sources, grouping related ones together."""
         lines = []
 
-        # Separate UN SDGs and World Factbook for grouping
-        sdg_sources = [s for s in sources if s.get('source_id') and s['source_id'].startswith('un_sdg_')]
-        factbook_sources = [s for s in sources if s.get('source_id') and 'world_factbook' in s['source_id']]
+        # Separate SDGs and Factbook for grouping - detect by topic_tags, not hardcoded source_id
+        sdg_sources = [s for s in sources if any(tag.startswith('goal') for tag in s.get('topic_tags', []))]
+        factbook_sources = [s for s in sources if 'factbook' in s.get('category', '').lower() or
+                           any('factbook' in tag.lower() for tag in s.get('topic_tags', []))]
         other_sources = [s for s in sources if s.get('source_id') and s not in sdg_sources and s not in factbook_sources]
 
         # Add individual sources with human-readable names AND source_id
@@ -159,19 +160,26 @@ def build_system_prompt(catalog: dict, conversions: dict) -> str:
             # Show both name and source_id so LLM knows exact ID to use
             lines.append(f"- {name} [source_id: {sid}]: {temp.get('start', '?')}-{temp.get('end', '?')}")
 
-        # List UN SDGs individually with human-readable goal titles
+        # List SDG sources individually with human-readable goal titles
         if sdg_sources:
-            # Sort by source_id to show in order (un_sdg_01, un_sdg_02, etc.)
-            sdg_sources_sorted = sorted(sdg_sources, key=lambda s: s.get('source_id', ''))
+            # Sort by goal number extracted from topic_tags
+            def get_goal_num(src):
+                for tag in src.get('topic_tags', []):
+                    if tag.startswith('goal'):
+                        try:
+                            return int(tag[4:])
+                        except ValueError:
+                            pass
+                return 999
+            sdg_sources_sorted = sorted(sdg_sources, key=get_goal_num)
+
             for src in sdg_sources_sorted:
                 sid = src.get('source_id', '')
                 temp = src.get("temporal_coverage", {})
                 year_range = f"{temp.get('start', '?')}-{temp.get('end', '?')}"
 
-                # Get goal title - try catalog first, then fall back to file loading
+                # Get goal title from catalog reference data or source_name
                 goal_title = None
-
-                # Option 1: Check catalog's reference data (if catalog was rebuilt)
                 reference = src.get("reference", {})
                 if reference.get("goal"):
                     goal_info = reference["goal"]
@@ -180,30 +188,9 @@ def build_system_prompt(catalog: dict, conversions: dict) -> str:
                     if goal_num and goal_name:
                         goal_title = f"SDG {goal_num}: {goal_name}"
 
-                # Option 2: Load reference.json directly (fallback for older catalogs)
+                # Fallback to source_name
                 if not goal_title:
-                    try:
-                        source_path = get_source_path(sid)
-                        if source_path:
-                            ref_path = source_path / "reference.json"
-                            if ref_path.exists():
-                                with open(ref_path, encoding='utf-8') as f:
-                                    ref_data = json.load(f)
-                                goal_info = ref_data.get("goal", {})
-                                goal_num = goal_info.get("number", "")
-                                goal_name = goal_info.get("name", "")
-                                if goal_num and goal_name:
-                                    goal_title = f"SDG {goal_num}: {goal_name}"
-                    except Exception:
-                        pass
-
-                # Option 3: Fall back to generic name
-                if not goal_title:
-                    try:
-                        goal_num = int(sid.split('_')[-1])
-                        goal_title = f"SDG {goal_num}"
-                    except:
-                        goal_title = src.get("source_name", sid)
+                    goal_title = src.get("source_name", sid)
 
                 lines.append(f"- {goal_title} [source_id: {sid}]: {year_range}")
 
@@ -379,9 +366,13 @@ def interpret_request(user_query: str, chat_history: list = None, hints: dict = 
 
     if chat_history:
         for msg in chat_history[-CHAT_HISTORY_LLM_LIMIT:]:
+            content = msg.get("content", "")
+            # Skip messages with empty content (API rejects them)
+            if not content or not content.strip():
+                continue
             messages.append({
                 "role": msg.get("role", "user"),
-                "content": msg.get("content", "")
+                "content": content
             })
 
     messages.append({"role": "user", "content": user_query})
@@ -496,15 +487,44 @@ def validate_order_item(item: dict) -> dict:
         item["_valid"] = True
         return item
     if metric and metric not in metrics:
-        # Try to find close match
-        close_matches = [k for k in metrics.keys() if metric.lower() in k.lower() or k.lower() in metric.lower()]
-        if close_matches:
-            item["_valid"] = False
-            item["_error"] = f"Column '{metric}' not found. Did you mean: {', '.join(close_matches[:3])}?"
+        # Try case-insensitive exact match on key first
+        metric_lower = metric.lower()
+        exact_match = None
+        for k in metrics.keys():
+            if k.lower() == metric_lower:
+                exact_match = k
+                break
+
+        # If no key match, try matching by display name (handles LLM outputs like "Proportion of urban population...")
+        if not exact_match:
+            for k, v in metrics.items():
+                if isinstance(v, dict):
+                    name = v.get("name", "")
+                    if name and name.lower() == metric_lower:
+                        exact_match = k
+                        break
+
+        if exact_match:
+            # Auto-correct to the actual metric key
+            item["metric"] = exact_match
+            metric = exact_match
         else:
-            item["_valid"] = False
-            item["_error"] = f"Column '{metric}' not found in {source_id}"
-        return item
+            # No exact match - suggest close matches by key or display name
+            close_matches = []
+            for k, v in metrics.items():
+                name = v.get("name", "") if isinstance(v, dict) else ""
+                if metric_lower in k.lower() or k.lower() in metric_lower:
+                    close_matches.append(k)
+                elif name and (metric_lower in name.lower() or name.lower() in metric_lower):
+                    close_matches.append(k)
+            close_matches = list(dict.fromkeys(close_matches))  # Remove duplicates
+            if close_matches:
+                item["_valid"] = False
+                item["_error"] = f"Column '{metric}' not found. Did you mean: {', '.join(close_matches[:3])}?"
+            else:
+                item["_valid"] = False
+                item["_error"] = f"Column '{metric}' not found in {source_id}"
+            return item
 
     # Check year is in range
     temp = metadata.get("temporal_coverage", {})

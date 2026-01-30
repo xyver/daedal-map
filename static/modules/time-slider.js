@@ -1417,9 +1417,14 @@ export const TimeSlider = {
     // Build GeoJSON for this time and update source data (fast, no layer recreation)
     // The interpolate expression automatically re-evaluates when source data changes
     // Only do this if we have choropleth data loaded
+    // OPTIMIZATION: Only update map when data key (year) actually changes
     if (this.baseGeojson && this.timeDataFilled) {
-      const geojson = this.buildTimeGeojson(time);
-      MapAdapter?.updateSourceData(geojson);
+      const dataKey = this.getDataLookupKey(time);
+      if (dataKey !== this._lastDataKey) {
+        this._lastDataKey = dataKey;
+        const geojson = this.buildTimeGeojson(time);
+        MapAdapter?.updateSourceData(geojson);
+      }
     }
 
     // Notify all listeners of time change
@@ -2246,6 +2251,7 @@ export const TimeSlider = {
     this.useTimestamps = false;
     this.stepMs = null;
     this.currentAdminLevel = null;  // Reset admin level filter
+    this._lastDataKey = null;  // Reset data key tracking for animation optimization
 
     // Clear unified speed control state (Phase 7)
     this.stepsPerFrame = 97;  // Reset to default (~1yr/sec)

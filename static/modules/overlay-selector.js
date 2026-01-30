@@ -2,264 +2,150 @@
  * Overlay Selector - UI component for toggling data overlays.
  * Displays in top right, below zoom level and breadcrumbs.
  * Supports hierarchical categories with group toggle.
+ *
+ * Categories are loaded dynamically from /api/catalog/overlays.
  */
 
 import { CONFIG } from './config.js';
+import { fetchMsgpack } from './utils/fetch.js';
 
 // localStorage key for persisting overlay selections
 const STORAGE_KEY = 'countymap_activeOverlays';
 
-// Category configuration with nested overlays
-const CATEGORIES = [
-  {
-    id: 'demographics',
-    label: 'Demographics',
-    icon: 'D',
-    isCategory: false,  // Standalone overlay, not a category
-    overlay: {
-      id: 'demographics',
-      label: 'Demographics',
-      description: 'Population, density, economic data',
-      default: false,
-      locked: false,
-      model: 'choropleth',
-      hasYearFilter: false
+// Model mapping based on data_type
+const DATA_TYPE_TO_MODEL = {
+  'events': 'point-radius',
+  'metrics': 'choropleth',
+  'gridded': 'weather-grid',
+  'geometry': 'polygon'
+};
+
+// Icon mapping for overlay types
+const OVERLAY_ICONS = {
+  'demographics': 'D',
+  'disasters': '!',
+  'climate': 'C',
+  'earthquakes': 'E',
+  'volcanoes': 'V',
+  'hurricanes': 'H',
+  'tornadoes': 'R',
+  'tsunamis': 'T',
+  'wildfires': 'W',
+  'floods': 'F',
+  'cyclones': 'C',
+  'landslides': 'L',
+  'drought': 'D',
+  'risk': 'R',
+  'storms': 'S',
+  'fema': 'F',
+  'desinventar': 'I',
+  'reliefweb': 'R',
+  'event_areas': 'A'
+};
+
+// Special model overrides (some overlays need specific models)
+const MODEL_OVERRIDES = {
+  'hurricanes': 'track',
+  'drought': 'polygon'
+};
+
+// Categories built dynamically from catalog
+let CATEGORIES = [];
+let OVERLAYS = [];
+
+/**
+ * Build CATEGORIES from overlay_tree fetched from API.
+ * @param {Object} overlayTree - The overlay_tree from catalog
+ */
+function buildCategoriesFromTree(overlayTree) {
+  const categories = [];
+
+  for (const [categoryId, categoryData] of Object.entries(overlayTree)) {
+    const icon = OVERLAY_ICONS[categoryId] || categoryId[0].toUpperCase();
+
+    // Check if this is a category with children or a standalone overlay
+    if (categoryData.children) {
+      // Category with sub-overlays (like disasters)
+      const overlays = [];
+
+      for (const [overlayId, overlayData] of Object.entries(categoryData.children)) {
+        // Get data_type from first source
+        const firstSource = overlayData.sources?.[0];
+        const dataType = firstSource?.data_type || 'events';
+        const model = MODEL_OVERRIDES[overlayId] || DATA_TYPE_TO_MODEL[dataType] || 'point-radius';
+
+        overlays.push({
+          id: overlayId,
+          label: overlayData.label || overlayId.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()),
+          description: `${overlayData.sources?.length || 0} source(s)`,
+          default: false,
+          locked: false,
+          model: model,
+          icon: OVERLAY_ICONS[overlayId] || overlayId[0].toUpperCase(),
+          hasYearFilter: dataType === 'events',
+          sources: overlayData.sources || []
+        });
+      }
+
+      categories.push({
+        id: categoryId,
+        label: categoryData.label || categoryId.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()),
+        icon: icon,
+        isCategory: true,
+        expanded: categoryId === 'disasters',  // Disasters expanded by default
+        overlays: overlays
+      });
+    } else if (categoryData.sources) {
+      // Standalone overlay (like demographics)
+      const firstSource = categoryData.sources?.[0];
+      const dataType = firstSource?.data_type || 'metrics';
+      const model = DATA_TYPE_TO_MODEL[dataType] || 'choropleth';
+
+      categories.push({
+        id: categoryId,
+        label: categoryData.label || categoryId.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()),
+        icon: icon,
+        isCategory: false,
+        overlay: {
+          id: categoryId,
+          label: categoryData.label || categoryId.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()),
+          description: `${categoryData.sources?.length || 0} source(s)`,
+          default: false,
+          locked: false,
+          model: model,
+          hasYearFilter: dataType === 'events',
+          sources: categoryData.sources || []
+        }
+      });
     }
-  },
-  {
-    id: 'disasters',
-    label: 'Disasters',
-    icon: '!',
-    isCategory: true,
-    expanded: true,  // Default expanded
-    overlays: [
-      {
-        id: 'earthquakes',
-        label: 'Earthquakes',
-        description: 'USGS seismic events',
-        default: false,
-        locked: false,
-        model: 'point-radius',
-        icon: 'E',
-        hasYearFilter: true
-      },
-      {
-        id: 'volcanoes',
-        label: 'Volcanoes',
-        description: 'Volcanic eruptions',
-        default: false,
-        locked: false,
-        model: 'point-radius',
-        icon: 'V',
-        hasYearFilter: true
-      },
-      {
-        id: 'hurricanes',
-        label: 'Hurricanes',
-        description: 'Storm tracks and positions',
-        default: false,
-        locked: false,
-        model: 'track',
-        icon: 'H',
-        hasYearFilter: true
-      },
-      {
-        id: 'tornadoes',
-        label: 'Tornadoes',
-        description: 'USA tornadoes 1950-present (NOAA)',
-        default: false,
-        locked: false,
-        model: 'point-radius',
-        icon: 'R',  // R for Rotation/twisteR
-        hasYearFilter: true
-      },
-      {
-        id: 'tsunamis',
-        label: 'Tsunamis',
-        description: 'Tsunami events and coastal runups',
-        default: false,
-        locked: false,
-        model: 'point-radius',
-        icon: 'T',
-        hasYearFilter: true
-      },
-      {
-        id: 'wildfires',
-        label: 'Wildfires',
-        description: 'Global fires >= 100km2 (2003-2024)',
-        default: false,
-        locked: false,
-        model: 'point-radius',
-        icon: 'W',
-        hasYearFilter: true
-      },
-      {
-        id: 'floods',
-        label: 'Floods',
-        description: 'Global floods (1985-2019)',
-        default: false,
-        locked: false,
-        model: 'point-radius',
-        icon: 'F',
-        hasYearFilter: true
-      },
-      // DISABLED: Drought and Landslides - uncomment to re-enable
-      // {
-      //   id: 'drought',
-      //   label: 'Drought',
-      //   description: 'Canada drought monitoring (2019-2025)',
-      //   default: false,
-      //   locked: false,
-      //   model: 'polygon',
-      //   icon: 'D',
-      //   hasYearFilter: true
-      // },
-      // {
-      //   id: 'landslides',
-      //   label: 'Landslides',
-      //   description: 'Global landslides (deaths >= 1)',
-      //   default: false,
-      //   locked: false,
-      //   model: 'point-radius',
-      //   icon: 'L',
-      //   hasYearFilter: true
-      // }
-    ]
-  },
-  {
+  }
+
+  // Add climate overlays (hardcoded for now since they're weather variables, not in catalog)
+  categories.push({
     id: 'climate',
     label: 'Climate',
     icon: 'C',
     isCategory: true,
     expanded: false,
     overlays: [
-      {
-        id: 'temperature',
-        label: 'Temperature',
-        description: 'Global temperature (1940-present)',
-        default: false,
-        locked: false,
-        model: 'weather-grid',
-        icon: '*',
-        hasYearFilter: true,
-        variable: 'temp_c'
-      },
-      {
-        id: 'humidity',
-        label: 'Humidity',
-        description: 'Relative humidity (1940-present)',
-        default: false,
-        locked: false,
-        model: 'weather-grid',
-        icon: '%',
-        hasYearFilter: true,
-        variable: 'humidity'
-      },
-      {
-        id: 'snow-depth',
-        label: 'Snow Depth',
-        description: 'Snow depth (1940-present)',
-        default: false,
-        locked: false,
-        model: 'weather-grid',
-        icon: '#',
-        hasYearFilter: true,
-        variable: 'snow_depth_m'
-      },
-      {
-        id: 'precipitation',
-        label: 'Precipitation',
-        description: 'Rainfall (1940-present)',
-        default: false,
-        locked: false,
-        model: 'weather-grid',
-        icon: ',',
-        hasYearFilter: true,
-        variable: 'precipitation_mm'
-      },
-      {
-        id: 'cloud-cover',
-        label: 'Cloud Cover',
-        description: 'Cloud coverage percent (1940-present)',
-        default: false,
-        locked: false,
-        model: 'weather-grid',
-        icon: 'o',
-        hasYearFilter: true,
-        variable: 'cloud_cover_pct'
-      },
-      {
-        id: 'pressure',
-        label: 'Pressure',
-        description: 'Sea level pressure (1940-2025, historical only)',
-        default: false,
-        locked: false,
-        model: 'weather-grid',
-        icon: 'P',
-        hasYearFilter: true,
-        variable: 'pressure_hpa'
-      },
-      {
-        id: 'solar-radiation',
-        label: 'Solar Radiation',
-        description: 'Surface solar radiation (1940-present)',
-        default: false,
-        locked: false,
-        model: 'weather-grid',
-        icon: 'S',
-        hasYearFilter: true,
-        variable: 'solar_radiation'
-      },
-      {
-        id: 'soil-temp',
-        label: 'Soil Temperature',
-        description: 'Surface soil temperature (1940-present)',
-        default: false,
-        locked: false,
-        model: 'weather-grid',
-        icon: 'G',
-        hasYearFilter: true,
-        variable: 'soil_temp_c'
-      },
-      {
-        id: 'soil-moisture',
-        label: 'Soil Moisture',
-        description: 'Surface soil moisture (1940-present)',
-        default: false,
-        locked: false,
-        model: 'weather-grid',
-        icon: 'M',
-        hasYearFilter: true,
-        variable: 'soil_moisture'
-      },
-      // PLACEHOLDER: Wind and ocean overlays for future deck.gl implementation
-      // {
-      //   id: 'wind-patterns',
-      //   label: 'Wind Patterns',
-      //   description: 'Global wind circulation',
-      //   default: false,
-      //   locked: false,
-      //   model: 'vector',
-      //   icon: '~',
-      //   hasYearFilter: false,
-      //   placeholder: true
-      // },
-      // {
-      //   id: 'currents',
-      //   label: 'Ocean Currents',
-      //   description: 'Ocean circulation patterns',
-      //   default: false,
-      //   locked: false,
-      //   model: 'vector',
-      //   icon: '=',
-      //   hasYearFilter: false,
-      //   placeholder: true
-      // }
+      { id: 'temperature', label: 'Temperature', description: 'Global temperature', default: false, locked: false, model: 'weather-grid', icon: '*', hasYearFilter: true, variable: 'temp_c' },
+      { id: 'humidity', label: 'Humidity', description: 'Relative humidity', default: false, locked: false, model: 'weather-grid', icon: '%', hasYearFilter: true, variable: 'humidity' },
+      { id: 'snow-depth', label: 'Snow Depth', description: 'Snow depth', default: false, locked: false, model: 'weather-grid', icon: '#', hasYearFilter: true, variable: 'snow_depth_m' },
+      { id: 'precipitation', label: 'Precipitation', description: 'Rainfall', default: false, locked: false, model: 'weather-grid', icon: ',', hasYearFilter: true, variable: 'precipitation_mm' },
+      { id: 'cloud-cover', label: 'Cloud Cover', description: 'Cloud coverage', default: false, locked: false, model: 'weather-grid', icon: 'o', hasYearFilter: true, variable: 'cloud_cover_pct' },
+      { id: 'pressure', label: 'Pressure', description: 'Sea level pressure', default: false, locked: false, model: 'weather-grid', icon: 'P', hasYearFilter: true, variable: 'pressure_hpa' },
+      { id: 'solar-radiation', label: 'Solar Radiation', description: 'Surface solar radiation', default: false, locked: false, model: 'weather-grid', icon: 'S', hasYearFilter: true, variable: 'solar_radiation' },
+      { id: 'soil-temp', label: 'Soil Temperature', description: 'Surface soil temp', default: false, locked: false, model: 'weather-grid', icon: 'G', hasYearFilter: true, variable: 'soil_temp_c' },
+      { id: 'soil-moisture', label: 'Soil Moisture', description: 'Surface soil moisture', default: false, locked: false, model: 'weather-grid', icon: 'M', hasYearFilter: true, variable: 'soil_moisture' }
     ]
-  }
-];
+  });
 
-// Flatten overlays for lookup
+  return categories;
+}
+
+/**
+ * Flatten overlays for lookup.
+ */
 function getAllOverlays() {
   const overlays = [];
   for (const cat of CATEGORIES) {
@@ -271,8 +157,6 @@ function getAllOverlays() {
   }
   return overlays;
 }
-
-const OVERLAYS = getAllOverlays();
 
 // Dependencies (set via setDependencies)
 let MapAdapter = null;
@@ -288,6 +172,7 @@ export const OverlaySelector = {
   activeOverlays: new Set(),
   expanded: true,  // Default expanded
   categoryExpanded: {},  // Track which categories are expanded
+  initialized: false,
 
   // DOM elements
   container: null,
@@ -299,9 +184,56 @@ export const OverlaySelector = {
 
   /**
    * Initialize the overlay selector UI.
-   * Creates DOM elements and wires up event handlers.
+   * Fetches categories from API and builds UI.
    */
-  init() {
+  async init() {
+    // Find container first
+    this.container = document.getElementById('overlaySelector');
+    if (!this.container) {
+      console.warn('OverlaySelector: #overlaySelector not found in DOM');
+      return;
+    }
+
+    // Show loading state
+    this.container.innerHTML = '<div class="overlay-header"><span class="overlay-title">Loading overlays...</span></div>';
+
+    try {
+      // Fetch overlay tree from API
+      const response = await fetchMsgpack('/api/catalog/overlays');
+      const overlayTree = response.overlay_tree || {};
+
+      // Build categories from tree
+      CATEGORIES = buildCategoriesFromTree(overlayTree);
+      OVERLAYS = getAllOverlays();
+
+      console.log('OverlaySelector: Loaded', CATEGORIES.length, 'categories,', OVERLAYS.length, 'overlays from catalog');
+    } catch (err) {
+      console.error('OverlaySelector: Failed to load from API, using fallback', err);
+      // Fallback to minimal hardcoded categories
+      CATEGORIES = [
+        {
+          id: 'demographics',
+          label: 'Demographics',
+          icon: 'D',
+          isCategory: false,
+          overlay: { id: 'demographics', label: 'Demographics', description: 'Choropleth data', default: false, locked: false, model: 'choropleth', hasYearFilter: false }
+        },
+        {
+          id: 'disasters',
+          label: 'Disasters',
+          icon: '!',
+          isCategory: true,
+          expanded: true,
+          overlays: [
+            { id: 'earthquakes', label: 'Earthquakes', description: 'Seismic events', default: false, locked: false, model: 'point-radius', icon: 'E', hasYearFilter: true },
+            { id: 'hurricanes', label: 'Hurricanes', description: 'Storm tracks', default: false, locked: false, model: 'track', icon: 'H', hasYearFilter: true },
+            { id: 'wildfires', label: 'Wildfires', description: 'Fire events', default: false, locked: false, model: 'point-radius', icon: 'W', hasYearFilter: true }
+          ]
+        }
+      ];
+      OVERLAYS = getAllOverlays();
+    }
+
     // Try to restore from localStorage, fall back to defaults
     if (!this._restoreState()) {
       // Set default overlays if no saved state
@@ -319,19 +251,13 @@ export const OverlaySelector = {
       }
     }
 
-    // Find or create container
-    this.container = document.getElementById('overlaySelector');
-    if (!this.container) {
-      console.warn('OverlaySelector: #overlaySelector not found in DOM');
-      return;
-    }
-
     // Build UI
     this._buildUI();
 
     // Wire up events
     this._setupEvents();
 
+    this.initialized = true;
     console.log('OverlaySelector initialized with:', Array.from(this.activeOverlays));
   },
 
@@ -616,7 +542,7 @@ export const OverlaySelector = {
     }
 
     // Update checkbox
-    const checkbox = this.list.querySelector(`input[data-overlay-id="${overlayId}"]`);
+    const checkbox = this.list?.querySelector(`input[data-overlay-id="${overlayId}"]`);
     if (checkbox) {
       checkbox.checked = this.activeOverlays.has(overlayId);
     }
@@ -696,8 +622,12 @@ export const OverlaySelector = {
    */
   expand() {
     this.expanded = true;
-    this.list.style.display = 'block';
-    this.header.querySelector('.overlay-toggle').textContent = '-';
+    if (this.list) {
+      this.list.style.display = 'block';
+    }
+    if (this.header) {
+      this.header.querySelector('.overlay-toggle').textContent = '-';
+    }
   },
 
   /**
@@ -705,8 +635,12 @@ export const OverlaySelector = {
    */
   collapse() {
     this.expanded = false;
-    this.list.style.display = 'none';
-    this.header.querySelector('.overlay-toggle').textContent = '+';
+    if (this.list) {
+      this.list.style.display = 'none';
+    }
+    if (this.header) {
+      this.header.querySelector('.overlay-toggle').textContent = '+';
+    }
   },
 
   /**
@@ -725,7 +659,7 @@ export const OverlaySelector = {
     }
 
     // Update checkbox
-    const checkbox = this.list.querySelector(`input[data-overlay-id="${overlayId}"]`);
+    const checkbox = this.list?.querySelector(`input[data-overlay-id="${overlayId}"]`);
     if (checkbox) {
       checkbox.checked = active;
     }

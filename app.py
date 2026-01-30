@@ -491,6 +491,27 @@ async def health_check():
     return {"status": "healthy", "service": "county-map-api"}
 
 
+# === Catalog API ===
+
+@app.get("/api/catalog/overlays")
+async def get_catalog_overlays():
+    """
+    Get overlay tree from catalog for frontend layer panel.
+
+    Returns the overlay_tree which maps overlay paths to sources.
+    Frontend uses this to dynamically build the overlay toggle UI.
+    """
+    from mapmover.data_loading import load_catalog
+
+    catalog = load_catalog()
+    overlay_tree = catalog.get("overlay_tree", {})
+
+    return msgpack_response({
+        "overlay_tree": overlay_tree,
+        "overlay_count": catalog.get("overlay_count", 0)
+    })
+
+
 # === Frontend ===
 
 @app.get("/", response_class=HTMLResponse)
@@ -3569,6 +3590,12 @@ async def chat_endpoint(req: Request):
                 # Execute the order (DB fetch is cheap - local parquets)
                 result = execute_order(confirmed_order)
 
+                # Force flag: skip dedup (used for recovery when frontend cache is cleared)
+                force_refetch = body.get("force", False)
+                if force_refetch:
+                    logger.info("Force refetch requested - clearing session cache for this data")
+                    cache.clear()  # Clear session cache to allow re-sending
+
                 # Post-fetch dedup: filter response by what's already on the frontend
                 # Session cache mirrors frontend exactly
                 is_events = result.get("type") == "events"
@@ -3600,7 +3627,19 @@ async def chat_endpoint(req: Request):
                 elif result.get("multi_year") and result.get("year_data"):
                     # Multi-year data: filter year_data at cell level (loc_id:year:metric)
                     year_data = result["year_data"]
+                    year_count = len(year_data)
+                    total_cells = sum(
+                        sum(len(metrics) for metrics in loc_data.values())
+                        for loc_data in year_data.values()
+                    )
+                    logger.info(f"Multi-year data: {year_count} years, {total_cells} total cells, {original_count} features")
+
                     filtered_year_data = cache.filter_year_data(year_data)
+                    filtered_cells = sum(
+                        sum(len(metrics) for metrics in loc_data.values())
+                        for loc_data in filtered_year_data.values()
+                    )
+                    logger.info(f"After dedup: {filtered_cells} new cells (filtered {total_cells - filtered_cells})")
 
                     # Features needed only if their loc_id has new data cells
                     new_loc_ids = set()
@@ -3612,6 +3651,7 @@ async def chat_endpoint(req: Request):
                         if (f.get("properties", {}).get("loc_id") or f.get("id")) in new_loc_ids
                     ]
                     delta_count = len(new_features)
+                    logger.info(f"Features with new data: {delta_count}/{original_count}")
                     filtered_geojson = {"type": "FeatureCollection", "features": new_features}
 
                 else:
@@ -3633,6 +3673,8 @@ async def chat_endpoint(req: Request):
                 # Build response
                 response = {
                     "type": result.get("type", "data"),
+                    "data_type": result.get("data_type"),
+                    "source_id": result.get("source_id"),
                     "geojson": filtered_geojson,
                     "summary": result["summary"],
                     "count": delta_count,

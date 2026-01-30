@@ -520,6 +520,10 @@ let useLifecycleFiltering = true;
 // Cache for loaded overlay data (full unfiltered datasets)
 const dataCache = {};
 
+// Cache for metrics/choropleth data from order system
+// sourceId -> { geojson, year_data, year_range, loadedAt }
+const metricCache = {};
+
 /**
  * Calculate total cache size - exact bytes via JSON serialization
  * @returns {Object} { totalFeatures, bytes, sizeMB, perOverlay }
@@ -529,12 +533,27 @@ function calculateCacheSize() {
   let totalBytes = 0;
   const perOverlay = {};
 
+  // Event/overlay data cache
   for (const overlayId of Object.keys(dataCache)) {
     const features = dataCache[overlayId]?.features || [];
     if (features.length > 0) {
       // Get exact byte size via JSON serialization
       const bytes = new Blob([JSON.stringify(features)]).size;
-      perOverlay[overlayId] = { features: features.length, bytes };
+      perOverlay[overlayId] = { features: features.length, bytes, type: 'events' };
+      totalFeatures += features.length;
+      totalBytes += bytes;
+    }
+  }
+
+  // Metrics data cache
+  for (const sourceId of Object.keys(metricCache)) {
+    const cached = metricCache[sourceId];
+    const features = cached?.geojson?.features || [];
+    if (features.length > 0 || cached?.year_data) {
+      // Size includes both features and year_data
+      const dataToSize = { features, year_data: cached?.year_data || {} };
+      const bytes = new Blob([JSON.stringify(dataToSize)]).size;
+      perOverlay[sourceId] = { features: features.length, bytes, type: 'metrics' };
       totalFeatures += features.length;
       totalBytes += bytes;
     }
@@ -891,16 +910,36 @@ async function loadRangeData(overlayId, startMs, endMs, signal = null) {
     // Mark range as loaded (remove loading flag)
     rangeEntry.loading = false;
 
-    // Derive years from range for legacy loadedYears compatibility
+    // Track loaded years - only mark a year as loaded if we loaded at least 6 months of it
+    // This prevents the initial 30-day load from marking partial years as "fully loaded"
     if (!loadedYears[overlayId]) {
       loadedYears[overlayId] = new Set();
     }
     const startYear = new Date(startMs).getFullYear();
     const endYear = new Date(endMs).getFullYear();
+    const SIX_MONTHS_MS = 180 * 24 * 60 * 60 * 1000;
+
     for (let y = startYear; y <= endYear; y++) {
-      loadedYears[overlayId].add(y);
+      const yearStartMs = new Date(y, 0, 1).getTime();
+      const yearEndMs = new Date(y, 11, 31, 23, 59, 59).getTime();
+
+      // Calculate how much of this year we actually loaded
+      const loadedStart = Math.max(startMs, yearStartMs);
+      const loadedEnd = Math.min(endMs, yearEndMs);
+      const loadedDuration = loadedEnd - loadedStart;
+
+      // Only mark year as loaded if we got at least 6 months of data
+      // OR if the request was specifically for this full year
+      const isFullYearRequest = (startMs <= yearStartMs && endMs >= yearEndMs);
+
+      if (isFullYearRequest || loadedDuration >= SIX_MONTHS_MS) {
+        loadedYears[overlayId].add(y);
+        console.log(`OverlayController: Marked ${overlayId} year ${y} as loaded (${Math.round(loadedDuration / (24*60*60*1000))} days)`);
+      } else {
+        console.log(`OverlayController: ${overlayId} year ${y} partial load (${Math.round(loadedDuration / (24*60*60*1000))} days) - not marking as loaded`);
+      }
     }
-    console.log(`OverlayController: Marked ${overlayId} years ${startYear}-${endYear} as loaded. Total cached: ${dataCache[overlayId]?.features?.length || 0} features`);
+    console.log(`OverlayController: ${overlayId} total cached: ${dataCache[overlayId]?.features?.length || 0} features`);
 
     // Update year range cache for TimeSlider
     if (!yearRangeCache[overlayId]) {
@@ -4888,6 +4927,7 @@ export const OverlayController = {
       }
     };
 
+    // Event/overlay data (from OVERLAY_ENDPOINTS)
     for (const overlayId of Object.keys(OVERLAY_ENDPOINTS)) {
       const features = dataCache[overlayId]?.features || [];
       const years = loadedYears[overlayId] ? Array.from(loadedYears[overlayId]).sort((a, b) => a - b) : [];
@@ -4911,7 +4951,34 @@ export const OverlayController = {
           yearRange: years.length > 0 ? `${years[0]}-${years[years.length - 1]}` : 'none',
           ranges: ranges,
           rangeStart: rangeStart,
-          rangeEnd: rangeEnd
+          rangeEnd: rangeEnd,
+          dataType: 'events'
+        };
+
+        stats.totals.features += features.length;
+        stats.totals.bytes += overlaySize.bytes;
+        stats.totals.yearsLoaded += years.length;
+        stats.totals.overlaysActive++;
+      }
+    }
+
+    // Metrics data (from order system)
+    for (const sourceId of Object.keys(metricCache)) {
+      const cached = metricCache[sourceId];
+      const features = cached?.geojson?.features || [];
+      const overlaySize = sizeInfo.perOverlay[sourceId] || { features: 0, bytes: 0 };
+      const yearRange = cached?.year_range;
+
+      if (features.length > 0) {
+        const years = yearRange?.available_years || [];
+
+        stats.overlays[sourceId] = {
+          features: features.length,
+          sizeMB: (overlaySize.bytes / (1024 * 1024)).toFixed(2),
+          yearsLoaded: years.length,
+          years: years,
+          yearRange: yearRange ? `${yearRange.min}-${yearRange.max}` : 'none',
+          dataType: 'metrics'
         };
 
         stats.totals.features += features.length;
@@ -5127,6 +5194,57 @@ export const OverlayController = {
     const activeOverlays = OverlaySelector?.getActiveOverlays() || [];
     if (activeOverlays.includes(overlayId)) {
       this.renderCurrentData(overlayId);
+    }
+  },
+
+  /**
+   * Ingest metrics/choropleth data from order system into cache.
+   * Called by the chat system when a metrics order completes.
+   * @param {string} sourceId - Source ID (e.g., 'owid_co2', 'census_population')
+   * @param {Object} geojson - GeoJSON FeatureCollection from the order result
+   * @param {Object} yearData - Optional year_data for multi-year results
+   * @param {Object} yearRange - Optional year range metadata {min, max, available_years}
+   */
+  ingestMetricData(sourceId, geojson, yearData = null, yearRange = null) {
+    if (!geojson?.features) {
+      console.warn(`OverlayController: Cannot ingest metrics - invalid data for source: ${sourceId}`);
+      return;
+    }
+
+    // Store in metrics cache
+    metricCache[sourceId] = {
+      geojson: geojson,
+      year_data: yearData || {},
+      year_range: yearRange,
+      loadedAt: Date.now()
+    };
+
+    console.log(`OverlayController: Ingested ${geojson.features.length} ${sourceId} features into metrics cache`);
+
+    // Update cache size and notify listeners
+    const cacheSize = calculateCacheSize();
+    window.dispatchEvent(new CustomEvent('overlayCacheUpdated', { detail: cacheSize }));
+  },
+
+  /**
+   * Get cached metric data for a source.
+   * @param {string} sourceId - Source ID
+   * @returns {Object|null} Cached data or null if not cached
+   */
+  getCachedMetricData(sourceId) {
+    return metricCache[sourceId] || null;
+  },
+
+  /**
+   * Clear metric data for a source from cache.
+   * @param {string} sourceId - Source ID to clear
+   */
+  clearMetricCache(sourceId) {
+    if (metricCache[sourceId]) {
+      delete metricCache[sourceId];
+      const cacheSize = calculateCacheSize();
+      window.dispatchEvent(new CustomEvent('overlayCacheUpdated', { detail: cacheSize }));
+      console.log(`OverlayController: Cleared metrics cache for ${sourceId}`);
     }
   }
 };
