@@ -6,8 +6,21 @@
     "license": "Public Domain",
     "category": "hazard",
     "description": "Global Fire Atlas derived from MODIS/VIIRS satellite active fire detections. Tracks individual fire events worldwide with daily progression, burned area, and duration data.",
-    "topic_tags": ["disasters", "wildfires", "fire", "hazard"],
-    "keywords": ["wildfire", "fire", "burned area", "MODIS", "VIIRS", "satellite", "Global Fire Atlas"]
+    "topic_tags": [
+      "disasters",
+      "wildfires",
+      "fire",
+      "hazard"
+    ],
+    "keywords": [
+      "wildfire",
+      "fire",
+      "burned area",
+      "MODIS",
+      "VIIRS",
+      "satellite",
+      "Global Fire Atlas"
+    ]
   },
   "datasets": {
     "by_year_enriched/fires_YYYY_enriched.parquet": "Primary fire event records with location, burned area, duration, and land cover",
@@ -25,7 +38,9 @@
     "coverage": "Global - all continents with fire activity",
     "focus": "Satellite-detected fire events from MODIS/VIIRS sensors",
     "temporal": "2002-present",
-    "admin_levels": ["Point locations with burned area perimeters"]
+    "admin_levels": [
+      "Point locations with burned area perimeters"
+    ]
   },
   "data_quality_notes": [
     "Small fires may not be detected by satellite sensors",
@@ -33,5 +48,6 @@
     "Daily progression shows fire spread over time",
     "Some fires may be split into multiple events if separated by gaps",
     "2024 data may be incomplete (partial year)"
-  ]
+  ],
+  "overlay": "disasters/wildfires"
 }

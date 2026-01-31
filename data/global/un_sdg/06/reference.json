@@ -71,5 +71,6 @@
     "ind_6_6_1": "Lakes and rivers permanent water area (square kilometres)",
     "ind_6_a_1": "Total official development assistance (gross disbursement) for water supply and sanitation, by recipient countries (mill",
     "ind_6_b_1": "Countries with users/communities participating in planning programs in water resources planning and management, by level"
-  }
+  },
+  "overlay": "demographics"
 }

@@ -5,6 +5,7 @@
   "license": "Open Data",
   "description": "Sustainable Development Goal 6 (Clean Water and Sanitation) indicators from UN Statistics Division.",
   "category": "development",
+  "data_type": "metrics",
   "topic_tags": [
     "sdg",
     "goal6",
@@ -20,7 +21,7 @@
     "hygiene",
     "drinking water"
   ],
-  "last_updated": "2026-01-28",
+  "last_updated": "2026-01-29",
   "geographic_level": "admin_0",
   "geographic_coverage": {
     "type": "global",
@@ -79,7 +80,7 @@
   },
   "row_count": 5591,
   "file_size_mb": 0.18,
-  "data_completeness": 0.52,
+  "data_completeness": 0.55,
   "update_schedule": "unknown",
   "expected_next_update": "unknown",
   "metrics": {
@@ -360,5 +361,18 @@
     }
   },
   "metric_count": 11,
-  "llm_summary": "2000-2025. Proportion of population using safely managed drinking water services, by urban/rural (%), Proportion of population practicing open defecation, by urban/rural (%), Total wastewater generated (million m3/year), Proportion of bodies of water with good ambient water quality (%), Water Use Efficiency (United States dollars per cubic meter)."
+  "llm_summary": "2000-2025. Proportion of population using safely managed drinking water services, by urban/rural (%), Proportion of population practicing open defecation, by urban/rural (%), Total wastewater generated (million m3/year), Proportion of bodies of water with good ambient water quality (%), Water Use Efficiency (United States dollars per cubic meter).",
+  "overlay": {
+    "path": "demographics",
+    "label": "Demographics",
+    "scope": null,
+    "icon": null,
+    "default_visible": false,
+    "visibility": {
+      "min_zoom": 0,
+      "max_zoom": 18,
+      "min_area_sq_deg": null,
+      "max_area_sq_deg": null
+    }
+  }
 }

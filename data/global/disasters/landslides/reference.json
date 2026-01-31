@@ -6,8 +6,20 @@
     "license": "Public Domain (NASA)",
     "category": "hazard",
     "description": "NASA Global Landslide Catalog (GLC) containing landslide events reported worldwide. Includes rainfall-triggered landslides, debris flows, and mudslides with casualty and damage information.",
-    "topic_tags": ["disasters", "landslides", "geohazard", "hazard"],
-    "keywords": ["landslide", "mudslide", "debris flow", "slope failure", "NASA", "GLC"]
+    "topic_tags": [
+      "disasters",
+      "landslides",
+      "geohazard",
+      "hazard"
+    ],
+    "keywords": [
+      "landslide",
+      "mudslide",
+      "debris flow",
+      "slope failure",
+      "NASA",
+      "GLC"
+    ]
   },
   "metrics": {
     "deaths": "Number of deaths attributed to the landslide",
@@ -21,12 +33,15 @@
     "coverage": "Global - 87+ countries",
     "focus": "Reported landslide events from news, disaster databases, and scientific literature",
     "temporal": "1760-present",
-    "admin_levels": ["Point locations with lat/lon"]
+    "admin_levels": [
+      "Point locations with lat/lon"
+    ]
   },
   "data_quality_notes": [
     "Coverage varies by region - more complete in areas with active reporting",
     "Historical events may have estimated locations and dates",
     "Impact figures from news reports may be estimates or incomplete",
     "sources field contains original data source references"
-  ]
+  ],
+  "overlay": "disasters/landslides"
 }

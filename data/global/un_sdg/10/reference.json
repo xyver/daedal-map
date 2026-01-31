@@ -79,5 +79,6 @@
     "ind_10_a_1": "Proportion of tariff lines applied to imports with zero-tariff (%)",
     "ind_10_b_1": "Total assistance for development, by recipient countries (millions of current United States dollars)",
     "ind_10_c_1": "Average remittance costs of sending $200 in a corridor as a proportion of the amount remitted (%)"
-  }
+  },
+  "overlay": "demographics"
 }

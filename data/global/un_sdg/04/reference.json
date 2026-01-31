@@ -66,8 +66,9 @@
     "ind_4_4_1": "Proportion of youth and adults with information and communications technology (ICT) skills, by sex and type of skill (%)",
     "ind_4_5_1": "Gender parity index for youth/adults with information and communications technology (ICT) skills, by type of skill (rati",
     "ind_4_7_1": "Extent to which global citizenship education and education for sustainable development are mainstreamed in national educ",
-    "ind_4_a_1": "Proportion of schools with access to\u00a0computers for pedagogical purposes, by education level (%)",
+    "ind_4_a_1": "Proportion of schools with access to computers for pedagogical purposes, by education level (%)",
     "ind_4_b_1": "Total official flows for scholarships, by recipient countries (millions of constant 2023 United States dollars)",
     "ind_4_c_1": "Proportion of teachers with the minimum required qualifications, by education level and sex (%)"
-  }
+  },
+  "overlay": "demographics"
 }

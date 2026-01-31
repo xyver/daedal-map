@@ -5,6 +5,7 @@
   "license": "Open Data",
   "description": "Sustainable Development Goal 16 (Peace, Justice and Strong Institutions) indicators from UN Statistics Division.",
   "category": "development",
+  "data_type": "metrics",
   "topic_tags": [
     "sdg",
     "goal16",
@@ -22,7 +23,7 @@
     "governance",
     "violence"
   ],
-  "last_updated": "2026-01-28",
+  "last_updated": "2026-01-29",
   "geographic_level": "admin_0",
   "geographic_coverage": {
     "type": "global",
@@ -74,7 +75,7 @@
   },
   "row_count": 5807,
   "file_size_mb": 0.09,
-  "data_completeness": 0.23,
+  "data_completeness": 0.26,
   "update_schedule": "unknown",
   "expected_next_update": "unknown",
   "metrics": {
@@ -614,5 +615,18 @@
     }
   },
   "metric_count": 21,
-  "llm_summary": "1990-2025. Number of victims of intentional homicide, by sex (number), Number of total conflict-related deaths, by sex, age and cause of death (Number), Proportion of population subjected to robbery in the previous 12 months, by sex (%), Proportion of population that feel safe walking alone around the area they live after dark (%), Countries with at least one verified case of killings of human rights defenders, journalists, and trade unionists (1 = Y."
+  "llm_summary": "1990-2025. Number of victims of intentional homicide, by sex (number), Number of total conflict-related deaths, by sex, age and cause of death (Number), Proportion of population subjected to robbery in the previous 12 months, by sex (%), Proportion of population that feel safe walking alone around the area they live after dark (%), Countries with at least one verified case of killings of human rights defenders, journalists, and trade unionists (1 = Y.",
+  "overlay": {
+    "path": "demographics",
+    "label": "Demographics",
+    "scope": null,
+    "icon": null,
+    "default_visible": false,
+    "visibility": {
+      "min_zoom": 0,
+      "max_zoom": 18,
+      "min_area_sq_deg": null,
+      "max_area_sq_deg": null
+    }
+  }
 }

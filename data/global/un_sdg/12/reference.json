@@ -78,8 +78,9 @@
     "ind_12_6_1": "Number of companies publishing sustainability reports with disclosure by dimension, by level of requirement (Number)",
     "ind_12_7_1": "Number of countries implementing sustainable public procurement policies and action plans",
     "ind_12_8_1": "Extent to which global citizenship education and education for sustainable development are mainstreamed in national educ",
-    "ind_12_a_1": "Installed renewable\u00a0electricity-generating capacity (watts per capita)",
+    "ind_12_a_1": "Installed renewable electricity-generating capacity (watts per capita)",
     "ind_12_b_1": "Implementation of standard accounting tools to monitor the economic and environmental aspects of tourism (number of tabl",
     "ind_12_c_1": "Fossil-fuel subsidies (consumption and production) (billions of nominal United States dollars)"
-  }
+  },
+  "overlay": "demographics"
 }

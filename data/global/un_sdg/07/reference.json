@@ -53,6 +53,7 @@
     "ind_7_2_1": "Renewable energy share in the total final energy consumption (%)",
     "ind_7_3_1": "Energy intensity level of primary energy (megajoules per constant 2021 purchasing power parity GDP)",
     "ind_7_a_1": "International financial flows to developing countries in support of clean energy research and development and renewable ",
-    "ind_7_b_1": "Installed renewable\u00a0electricity-generating capacity (watts per capita)"
-  }
+    "ind_7_b_1": "Installed renewable electricity-generating capacity (watts per capita)"
+  },
+  "overlay": "demographics"
 }

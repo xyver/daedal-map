@@ -21,58 +21,42 @@
     "NASA",
     "GLC"
   ],
-  "last_updated": "2026-01-28",
+  "last_updated": "2026-01-29",
   "geographic_level": null,
   "spatial_coverage": {
     "countries": [
       "AFG",
       "ALB",
       "ARG",
-      "ASM",
-      "AUT",
       "BGD",
       "BOL",
       "BRA",
-      "BTN",
       "CAN",
       "CHE",
-      "CHL",
       "CHN",
       "COD",
       "COL",
       "CRI",
-      "CUB",
-      "CZE",
       "DEU",
-      "DMA",
       "DOM",
-      "DZA",
       "ECU",
-      "EGY",
       "ESP",
       "ETH",
       "FRA",
       "GBR",
       "GHA",
       "GRC",
-      "GRD",
       "GTM",
-      "GUM",
       "HND",
       "HTI",
       "IDN",
       "IND",
-      "IRN",
-      "ISR",
       "ITA",
       "JAM",
-      "JOR",
       "JPN",
       "KEN",
       "KOR",
-      "LAO",
       "LBN",
-      "LCA",
       "LKA",
       "MAR",
       "MEX",
@@ -87,12 +71,9 @@
       "PHL",
       "PNG",
       "PRI",
-      "PRT",
       "PRY",
       "RUS",
       "SAU",
-      "SDN",
-      "SLV",
       "SRB",
       "SYC",
       "THA",
@@ -105,39 +86,37 @@
       "UNK",
       "USA",
       "UZB",
-      "VCT",
       "VEN",
       "VIR",
       "VNM",
       "XKX",
-      "YEM",
       "ZAF"
     ],
-    "country_count": 87,
+    "country_count": 66,
     "water_bodies": [],
     "bounding_box": {
-      "min_lat": -46.7748,
-      "max_lat": 72.6275,
-      "min_lon": -719801.0,
+      "min_lat": -45.8767,
+      "max_lat": 71.5366,
+      "min_lon": -179.9808,
       "max_lon": 179.9914
     },
     "type": "global"
   },
   "temporal_coverage": {
-    "start": "1760-01-01T00:00:00",
+    "start": "2015-01-01T00:00:00",
     "end": "2104-06-24T00:00:00",
     "granularity": "timestamp",
     "field": "timestamp"
   },
   "event_stats": {
-    "total_events": 45483,
-    "unique_event_ids": 42400,
-    "unique_loc_ids": 42400,
-    "total_deaths": 60485,
-    "total_injuries": 17499
+    "total_events": 7587,
+    "unique_event_ids": 7015,
+    "unique_loc_ids": 7015,
+    "total_deaths": 6588,
+    "total_injuries": 4018
   },
-  "row_count": 45483,
-  "file_size_mb": 2.14,
+  "row_count": 7587,
+  "file_size_mb": 0.44,
   "update_schedule": "unknown",
   "metrics": {
     "deaths": {
@@ -146,12 +125,12 @@
       "aggregation": "sum",
       "stats": {
         "min": 0.0,
-        "max": 5000.0,
+        "max": 329.0,
         "median": 0.0,
-        "mean": 3.5219
+        "mean": 1.2035
       },
-      "non_null_count": 17174,
-      "density": 0.378
+      "non_null_count": 5474,
+      "density": 0.721
     },
     "injuries": {
       "name": "Injuries",
@@ -161,10 +140,10 @@
         "min": 0.0,
         "max": 765.0,
         "median": 0.0,
-        "mean": 1.6845
+        "mean": 0.7448
       },
-      "non_null_count": 10388,
-      "density": 0.228
+      "non_null_count": 5395,
+      "density": 0.711
     },
     "missing": {
       "name": "Missing",
@@ -172,12 +151,12 @@
       "aggregation": "sum",
       "stats": {
         "min": 1.0,
-        "max": 800.0,
+        "max": 113.0,
         "median": 2.0,
-        "mean": 11.7186
+        "mean": 8.5938
       },
-      "non_null_count": 469,
-      "density": 0.01
+      "non_null_count": 32,
+      "density": 0.004
     },
     "affected": {
       "name": "Affected",
@@ -185,12 +164,12 @@
       "aggregation": "sum",
       "stats": {
         "min": 1.0,
-        "max": 1400000.0,
-        "median": 30.0,
-        "mean": 1365.23
+        "max": 200800.0,
+        "median": 10.0,
+        "mean": 1246.03
       },
-      "non_null_count": 8965,
-      "density": 0.197
+      "non_null_count": 900,
+      "density": 0.119
     },
     "houses_destroyed": {
       "name": "Houses Destroyed",
@@ -198,12 +177,12 @@
       "aggregation": "sum",
       "stats": {
         "min": 1.0,
-        "max": 7208.0,
-        "median": 2.0,
-        "mean": 13.6086
+        "max": 167.0,
+        "median": 1.0,
+        "mean": 7.5035
       },
-      "non_null_count": 6834,
-      "density": 0.15
+      "non_null_count": 284,
+      "density": 0.037
     },
     "damage_usd": {
       "name": "Damage Usd",
@@ -213,12 +192,26 @@
         "min": 0.0,
         "max": 617000000.0,
         "median": 0.0,
-        "mean": 574357.8711
+        "mean": 585108.4303
       },
-      "non_null_count": 2786,
-      "density": 0.061
+      "non_null_count": 1708,
+      "density": 0.225
     }
   },
   "metric_count": 6,
-  "llm_summary": "45,483 landslide in 87 countries from 1760-01-01T00:00:00 to 2104-06-24T00:00:00."
+  "llm_summary": "7,587 landslide in 66 countries from 2015-01-01T00:00:00 to 2104-06-24T00:00:00.",
+  "overlay": {
+    "path": "disasters/landslides",
+    "label": "Landslides",
+    "scope": null,
+    "icon": null,
+    "default_visible": false,
+    "visibility": {
+      "min_zoom": 0,
+      "max_zoom": 18,
+      "min_area_sq_deg": null,
+      "max_area_sq_deg": null
+    }
+  },
+  "significance_column": "affected"
 }

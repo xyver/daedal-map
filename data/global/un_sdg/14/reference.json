@@ -76,5 +76,6 @@
     "ind_14_a_1": "National ocean science expenditure as a share of total research and development funding (%)",
     "ind_14_b_1": "Degree of application of a legal/regulatory/policy/institutional framework which recognizes and protects access rights f",
     "ind_14_c_1": "Score for the ratification of and accession to UNCLOS and its two implementing agreements (%)"
-  }
+  },
+  "overlay": "demographics"
 }

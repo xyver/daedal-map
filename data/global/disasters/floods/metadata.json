@@ -22,7 +22,7 @@
     "river",
     "coastal"
   ],
-  "last_updated": "2026-01-28",
+  "last_updated": "2026-01-29",
   "geographic_level": null,
   "spatial_coverage": {
     "countries": [
@@ -30,48 +30,28 @@
       "AGO",
       "ALB",
       "ARG",
-      "ASM",
       "AUS",
-      "AUT",
-      "BDI",
-      "BEN",
-      "BFA",
       "BGD",
-      "BGR",
       "BHS",
-      "BMU",
       "BOL",
       "BRA",
       "CAN",
-      "CHE",
-      "CHL",
       "CHN",
-      "CIV",
       "CMR",
-      "COD",
       "COL",
-      "COM",
-      "CRI",
-      "CUB",
-      "CZE",
       "DEU",
-      "DJI",
       "DOM",
       "DZA",
       "ECU",
       "EGY",
       "ESP",
-      "ETH",
-      "FIN",
       "FJI",
       "FRA",
-      "GAB",
       "GBR",
       "GEO",
       "GHA",
       "GRC",
       "GTM",
-      "GUM",
       "GUY",
       "HND",
       "HRV",
@@ -79,13 +59,8 @@
       "HUN",
       "IDN",
       "IND",
-      "IRL",
       "IRN",
-      "ISL",
-      "ISR",
       "ITA",
-      "JAM",
-      "JOR",
       "JPN",
       "KAZ",
       "KEN",
@@ -93,61 +68,25 @@
       "KOR",
       "LBR",
       "LKA",
-      "MAR",
-      "MDA",
       "MDG",
       "MDV",
       "MEX",
-      "MHL",
-      "MKD",
       "MLT",
       "MMR",
       "MNG",
       "MOZ",
-      "MRT",
-      "MUS",
-      "MWI",
       "MYS",
-      "NAM",
-      "NCL",
       "NER",
       "NGA",
-      "NIC",
-      "NOR",
-      "NPL",
       "NZL",
       "OMN",
-      "PAK",
-      "PAN",
-      "PER",
       "PHL",
-      "PNG",
       "POL",
-      "PRI",
-      "PRK",
-      "PRT",
-      "PSE",
-      "PYF",
       "ROU",
       "RUS",
-      "RWA",
       "SAU",
       "SDN",
-      "SEN",
-      "SLB",
-      "SLE",
-      "SLV",
-      "SOM",
-      "SSD",
-      "SVK",
-      "SWE",
-      "SYC",
-      "SYR",
       "THA",
-      "TJK",
-      "TLS",
-      "TTO",
-      "TUN",
       "TUR",
       "TWN",
       "TZA",
@@ -158,37 +97,34 @@
       "USA",
       "VEN",
       "VNM",
-      "VUT",
       "YEM",
-      "Z06",
       "ZAF",
-      "ZMB",
       "ZWE"
     ],
-    "country_count": 138,
+    "country_count": 74,
     "water_bodies": [],
     "bounding_box": {
       "min_lat": -52.963,
-      "max_lat": 68.06,
-      "min_lon": -172.7075,
-      "max_lon": 179.5341
+      "max_lat": 62.7845,
+      "min_lon": -159.4864,
+      "max_lon": 178.5146
     },
     "type": "global"
   },
   "temporal_coverage": {
-    "start": "1985-01-01T00:00:00",
+    "start": "2015-01-01T00:00:00",
     "end": "2019-11-15T00:00:00",
     "granularity": "timestamp",
     "field": "timestamp"
   },
   "event_stats": {
-    "total_events": 4825,
-    "unique_event_ids": 4824,
-    "unique_loc_ids": 4824,
-    "total_deaths": 673813
+    "total_events": 610,
+    "unique_event_ids": 610,
+    "unique_loc_ids": 610,
+    "total_deaths": 16012
   },
-  "row_count": 4825,
-  "file_size_mb": 2.59,
+  "row_count": 610,
+  "file_size_mb": 0.14,
   "update_schedule": "unknown",
   "metrics": {
     "area_km2": {
@@ -196,12 +132,12 @@
       "unit": "unknown",
       "aggregation": "sum",
       "stats": {
-        "min": 11.9565,
-        "max": 4814280.5,
-        "median": 33971.7031,
-        "mean": 106045.4766
+        "min": 139.8937,
+        "max": 1834048.25,
+        "median": 59506.7188,
+        "mean": 128065.9766
       },
-      "non_null_count": 4825,
+      "non_null_count": 610,
       "density": 1.0
     },
     "duration_days": {
@@ -209,12 +145,12 @@
       "unit": "unknown",
       "aggregation": "sum",
       "stats": {
-        "min": 0.0,
-        "max": 418.0,
-        "median": 5.0,
-        "mean": 10.1034
+        "min": 1.0,
+        "max": 76.0,
+        "median": 6.0,
+        "mean": 10.0951
       },
-      "non_null_count": 4825,
+      "non_null_count": 610,
       "density": 1.0
     },
     "severity": {
@@ -225,9 +161,9 @@
         "min": 1.0,
         "max": 2.0,
         "median": 1.0,
-        "mean": 1.1581
+        "mean": 1.1082
       },
-      "non_null_count": 4825,
+      "non_null_count": 610,
       "density": 1.0
     },
     "deaths": {
@@ -236,11 +172,11 @@
       "aggregation": "sum",
       "stats": {
         "min": 0.0,
-        "max": 160000.0,
-        "median": 5.0,
-        "mean": 139.6504
+        "max": 4000.0,
+        "median": 2.0,
+        "mean": 26.2492
       },
-      "non_null_count": 4825,
+      "non_null_count": 610,
       "density": 1.0
     },
     "displaced": {
@@ -249,11 +185,11 @@
       "aggregation": "sum",
       "stats": {
         "min": 0.0,
-        "max": 40000000.0,
-        "median": 1200.0,
-        "mean": 135415.5503
+        "max": 1500000.0,
+        "median": 355.0,
+        "mean": 30623.7852
       },
-      "non_null_count": 4825,
+      "non_null_count": 610,
       "density": 1.0
     },
     "dfo_id": {
@@ -261,12 +197,12 @@
       "unit": "unknown",
       "aggregation": "sum",
       "stats": {
-        "min": 1.0,
+        "min": 4218.0,
         "max": 4827.0,
-        "median": 2414.0,
-        "mean": 2413.794
+        "median": 4522.5,
+        "mean": 4522.5
       },
-      "non_null_count": 4825,
+      "non_null_count": 610,
       "density": 1.0
     },
     "has_geometry": {
@@ -279,7 +215,7 @@
         "median": 1.0,
         "mean": 1.0
       },
-      "non_null_count": 4825,
+      "non_null_count": 610,
       "density": 1.0
     },
     "has_progression": {
@@ -292,7 +228,7 @@
         "median": 0.0,
         "mean": 0.0
       },
-      "non_null_count": 4825,
+      "non_null_count": 610,
       "density": 1.0
     },
     "sibling_level": {
@@ -303,9 +239,9 @@
         "min": 0.0,
         "max": 3.0,
         "median": 1.0,
-        "mean": 0.788
+        "mean": 0.6475
       },
-      "non_null_count": 4825,
+      "non_null_count": 610,
       "density": 1.0
     },
     "loc_confidence": {
@@ -316,12 +252,26 @@
         "min": 0.7,
         "max": 0.95,
         "median": 0.9,
-        "mean": 0.901
+        "mean": 0.9001
       },
-      "non_null_count": 4825,
+      "non_null_count": 610,
       "density": 1.0
     }
   },
   "metric_count": 10,
-  "llm_summary": "4,825 flood in 138 countries from 1985-01-01T00:00:00 to 2019-11-15T00:00:00."
+  "llm_summary": "610 flood in 74 countries from 2015-01-01T00:00:00 to 2019-11-15T00:00:00.",
+  "overlay": {
+    "path": "disasters/floods",
+    "label": "Floods",
+    "scope": null,
+    "icon": null,
+    "default_visible": false,
+    "visibility": {
+      "min_zoom": 0,
+      "max_zoom": 18,
+      "min_area_sq_deg": null,
+      "max_area_sq_deg": null
+    }
+  },
+  "significance_column": "severity"
 }

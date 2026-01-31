@@ -6,8 +6,21 @@
     "license": "Public Domain",
     "category": "hazard",
     "description": "Smithsonian Institution Global Volcanism Program (GVP) database of volcanic eruptions worldwide. Contains detailed eruption records with VEI ratings, duration, and impact data.",
-    "topic_tags": ["disasters", "volcanoes", "eruptions", "hazard"],
-    "keywords": ["volcano", "eruption", "VEI", "lava", "ash", "Smithsonian", "GVP"]
+    "topic_tags": [
+      "disasters",
+      "volcanoes",
+      "eruptions",
+      "hazard"
+    ],
+    "keywords": [
+      "volcano",
+      "eruption",
+      "VEI",
+      "lava",
+      "ash",
+      "Smithsonian",
+      "GVP"
+    ]
   },
   "datasets": {
     "events.parquet": "Individual eruption events with location, timing, VEI, and impact data",
@@ -33,12 +46,15 @@
     "coverage": "Global - 73+ countries with volcanic activity",
     "focus": "Confirmed volcanic eruptions from Holocene to present",
     "temporal": "0001-present (ancient eruptions to current)",
-    "admin_levels": ["Point locations with lat/lon at volcano summit"]
+    "admin_levels": [
+      "Point locations with lat/lon at volcano summit"
+    ]
   },
   "data_quality_notes": [
     "VEI ratings for historical eruptions may be estimated from deposit analysis",
     "Impact data (deaths, damage) primarily available for significant eruptions",
     "earthquake_event_ids and tsunami_event_ids link to related events",
     "noaa_id provides cross-reference to NOAA volcano database"
-  ]
+  ],
+  "overlay": "disasters/volcanoes"
 }

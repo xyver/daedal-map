@@ -5,6 +5,7 @@
   "license": "Open Data",
   "description": "Sustainable Development Goal 13 (Climate Action) indicators from UN Statistics Division.",
   "category": "development",
+  "data_type": "metrics",
   "topic_tags": [
     "sdg",
     "goal13",
@@ -20,7 +21,7 @@
     "disaster",
     "resilience"
   ],
-  "last_updated": "2026-01-28",
+  "last_updated": "2026-01-29",
   "geographic_level": "admin_0",
   "geographic_coverage": {
     "type": "global",
@@ -61,7 +62,7 @@
   },
   "row_count": 2930,
   "file_size_mb": 0.03,
-  "data_completeness": 0.53,
+  "data_completeness": 0.59,
   "update_schedule": "unknown",
   "expected_next_update": "unknown",
   "metrics": {
@@ -192,5 +193,18 @@
     }
   },
   "metric_count": 5,
-  "llm_summary": "2000-2024. Number of deaths and missing persons attributed to disasters (number), Score of adoption and implementation of national DRR strategies in line with the Sendai Framework, Number of local governments (number), Total greenhouse gas emissions without LULUCF for non-Annex I Parties (Mt CO\u2082 equivalent), Extent to which global citizenship education and education for sustainable development are mainstreamed in national educ."
+  "llm_summary": "2000-2024. Number of deaths and missing persons attributed to disasters (number), Score of adoption and implementation of national DRR strategies in line with the Sendai Framework, Number of local governments (number), Total greenhouse gas emissions without LULUCF for non-Annex I Parties (Mt CO\u2082 equivalent), Extent to which global citizenship education and education for sustainable development are mainstreamed in national educ.",
+  "overlay": {
+    "path": "demographics",
+    "label": "Demographics",
+    "scope": null,
+    "icon": null,
+    "default_visible": false,
+    "visibility": {
+      "min_zoom": 0,
+      "max_zoom": 18,
+      "min_area_sq_deg": null,
+      "max_area_sq_deg": null
+    }
+  }
 }

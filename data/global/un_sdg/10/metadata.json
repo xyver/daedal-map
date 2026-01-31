@@ -5,6 +5,7 @@
   "license": "Open Data",
   "description": "Sustainable Development Goal 10 (Reduced Inequalities) indicators from UN Statistics Division.",
   "category": "development",
+  "data_type": "metrics",
   "topic_tags": [
     "sdg",
     "goal10",
@@ -18,7 +19,7 @@
     "income distribution",
     "discrimination"
   ],
-  "last_updated": "2026-01-28",
+  "last_updated": "2026-01-29",
   "geographic_level": "admin_0",
   "geographic_coverage": {
     "type": "global",
@@ -78,7 +79,7 @@
   },
   "row_count": 5927,
   "file_size_mb": 0.14,
-  "data_completeness": 0.38,
+  "data_completeness": 0.41,
   "update_schedule": "unknown",
   "expected_next_update": "unknown",
   "metrics": {
@@ -418,5 +419,18 @@
     }
   },
   "metric_count": 13,
-  "llm_summary": "1963-2024. Growth rates of household expenditure or income per capita (%), Proportion of people living below 50 percent of median income (%), Proportion of population reporting having felt discriminated against, by grounds of discrimination, sex and disability (, Labour share of GDP (%), Redistributive impact of fiscal policy, Gini index (%)."
+  "llm_summary": "1963-2024. Growth rates of household expenditure or income per capita (%), Proportion of people living below 50 percent of median income (%), Proportion of population reporting having felt discriminated against, by grounds of discrimination, sex and disability (, Labour share of GDP (%), Redistributive impact of fiscal policy, Gini index (%).",
+  "overlay": {
+    "path": "demographics",
+    "label": "Demographics",
+    "scope": null,
+    "icon": null,
+    "default_visible": false,
+    "visibility": {
+      "min_zoom": 0,
+      "max_zoom": 18,
+      "min_area_sq_deg": null,
+      "max_area_sq_deg": null
+    }
+  }
 }

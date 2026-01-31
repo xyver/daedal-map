@@ -1591,3 +1591,82 @@ body {
   padding-top: 8px;
   border-top: 1px solid #e0e0e0;
 }
+
+/* ========== Geometry Popup Styles ========== */
+
+.geometry-popup {
+  background: #fff;
+  padding: 12px;
+  border-radius: 6px;
+  min-width: 200px;
+  max-width: 280px;
+}
+
+.geometry-popup-header {
+  margin-bottom: 10px;
+}
+
+.geometry-popup-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #333;
+  margin-bottom: 2px;
+}
+
+.geometry-popup-type {
+  font-size: 11px;
+  color: #666;
+  text-transform: uppercase;
+}
+
+.geometry-popup-body {
+  border-top: 1px solid #e0e0e0;
+  padding-top: 8px;
+}
+
+.geometry-popup-row {
+  font-size: 12px;
+  color: #444;
+  padding: 3px 0;
+}
+
+.geometry-label {
+  font-weight: 500;
+  color: #666;
+}
+
+/* Geometry Hover Styles */
+
+.geometry-hover {
+  background: #fff;
+  padding: 8px 10px;
+  border-radius: 4px;
+  min-width: 140px;
+  max-width: 220px;
+}
+
+.geometry-hover-title {
+  font-weight: 600;
+  font-size: 13px;
+  color: #333;
+  margin-bottom: 2px;
+}
+
+.geometry-hover-code {
+  font-size: 12px;
+  color: #444;
+  font-weight: 500;
+}
+
+.geometry-hover-type {
+  font-size: 11px;
+  color: #666;
+  margin-top: 2px;
+}
+
+.geometry-hover-hint {
+  font-size: 10px;
+  color: #0f4c75;
+  margin-top: 6px;
+  font-style: italic;
+}

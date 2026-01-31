@@ -3590,6 +3590,16 @@ async def chat_endpoint(req: Request):
                 # Execute the order (DB fetch is cheap - local parquets)
                 result = execute_order(confirmed_order)
 
+                # Handle removal orders - return directly (no geojson to filter)
+                if result.get("action") == "remove":
+                    logger.info(f"Removal order executed: {result.get('count')} items from {result.get('source_id')}")
+                    return msgpack_response({"type": "order_response", **result})
+
+                # Handle mixed orders (add + remove) - return directly
+                if result.get("type") == "mixed_order":
+                    logger.info(f"Mixed order executed: added {result.get('add_count', 0)}, removed {result.get('remove_count', 0)}")
+                    return msgpack_response(result)
+
                 # Force flag: skip dedup (used for recovery when frontend cache is cleared)
                 force_refetch = body.get("force", False)
                 if force_refetch:
@@ -3599,6 +3609,7 @@ async def chat_endpoint(req: Request):
                 # Post-fetch dedup: filter response by what's already on the frontend
                 # Session cache mirrors frontend exactly
                 is_events = result.get("type") == "events"
+                is_geometry = result.get("data_type") == "geometry"
                 # source_id must match what frontend sends in clear-source
                 # Events use overlay ID (matches frontend overlay naming)
                 EVENT_TYPE_TO_OVERLAY = {
@@ -3620,6 +3631,13 @@ async def chat_endpoint(req: Request):
                 if is_events:
                     # Event dedup: filter by event_id (all-or-nothing per event)
                     new_features = cache.filter_events(features)
+                    delta_count = len(new_features)
+                    filtered_geojson = {"type": "FeatureCollection", "features": new_features}
+                    filtered_year_data = None
+
+                elif is_geometry:
+                    # Geometry dedup: filter by loc_id (all-or-nothing per feature)
+                    new_features = cache.filter_geometry_features(features)
                     delta_count = len(new_features)
                     filtered_geojson = {"type": "FeatureCollection", "features": new_features}
                     filtered_year_data = None
@@ -3686,6 +3704,10 @@ async def chat_endpoint(req: Request):
                     response["event_type"] = result.get("event_type")
                     response["time_range"] = result.get("time_range")
 
+                # Include geometry metadata if present
+                if is_geometry:
+                    response["overlay_type"] = result.get("overlay_type", "zcta")
+
                 # Include multi-year data if present (for time slider)
                 if result.get("multi_year"):
                     response["multi_year"] = True
@@ -3698,6 +3720,10 @@ async def chat_endpoint(req: Request):
                 # Register what was actually sent (mirrors frontend cache)
                 if is_events and new_features:
                     cache.register_sent_events(new_features, source_id)
+                elif is_geometry and new_features:
+                    # Geometry registers by source_id (e.g., "geometry_zcta")
+                    geo_source_id = result.get("source_id") or "geometry_zcta"
+                    cache.register_sent_geometry(new_features, geo_source_id)
                 elif filtered_year_data:
                     # Each metric registers as its own source (clearing = deleting a column)
                     cache.register_sent_year_data(filtered_year_data)
@@ -3867,19 +3893,32 @@ async def chat_endpoint(req: Request):
 
         elif result["type"] == "navigate":
             # LLM decided this is a navigation request (Phase 4 - post-LLM routing)
+            # May include geometry_overlay for "show me ZIP codes in X" queries
             locations = result.get("locations", [])
             loc_ids = [loc.get("loc_id") for loc in locations if loc.get("loc_id")]
             message = result.get("message", f"Showing {len(locations)} location(s)")
 
             logger.debug(f"LLM navigation: {len(locations)} locations")
 
+            # Check for geometry overlay (e.g., ZCTA, tribal areas)
+            geometry_overlay = result.get("geometry_overlay")
+            geojson = {"type": "FeatureCollection", "features": []}
+
+            if geometry_overlay:
+                # Load geometry overlay data filtered by the navigation region
+                from mapmover.order_executor import execute_geometry_overlay
+                geojson = execute_geometry_overlay(geometry_overlay, loc_ids)
+                logger.info(f"Loaded geometry overlay: {len(geojson.get('features', []))} features")
+
             return msgpack_response({
                 "type": "navigate",
+                "data_type": "geometry" if geometry_overlay else None,
                 "message": message,
                 "locations": locations,
                 "loc_ids": loc_ids,
                 "original_query": query,
-                "geojson": {"type": "FeatureCollection", "features": []},
+                "geojson": geojson,
+                "geometry_overlay": geometry_overlay,
             })
 
         elif result["type"] == "disambiguate":
@@ -4124,13 +4163,24 @@ async def chat_stream_endpoint(req: Request):
             elif result["type"] == "navigate":
                 locations = result.get("locations", [])
                 loc_ids = [loc.get("loc_id") for loc in locations if loc.get("loc_id")]
+
+                # Check for geometry overlay
+                geometry_overlay = result.get("geometry_overlay")
+                geojson = {"type": "FeatureCollection", "features": []}
+
+                if geometry_overlay:
+                    from mapmover.order_executor import execute_geometry_overlay
+                    geojson = execute_geometry_overlay(geometry_overlay, loc_ids)
+
                 final_result = {
                     "type": "navigate",
+                    "data_type": "geometry" if geometry_overlay else None,
                     "message": result.get("message", f"Showing {len(locations)} location(s)"),
                     "locations": locations,
                     "loc_ids": loc_ids,
                     "original_query": query,
-                    "geojson": {"type": "FeatureCollection", "features": []},
+                    "geojson": geojson,
+                    "geometry_overlay": geometry_overlay,
                 }
                 yield f"data: {json.dumps({'stage': 'complete', 'result': final_result})}\n\n"
 

@@ -154,6 +154,10 @@ export const DetailedEventCache = {
   }
 };
 
+// Note: GeometryOrderCache was removed - geometry orders now use the unified
+// SessionCache (backend) like all other order types. The only difference is
+// frontend display routing based on data_type: "geometry".
+
 export const LocationInfoCache = {
   cache: new Map(),
   maxSize: 500,

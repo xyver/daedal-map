@@ -81,5 +81,6 @@
     "ind_11_a_1": "Countries that have national urban policies or regional development plans that respond to population dynamics; ensure ba",
     "ind_11_b_1": "Score of adoption and implementation of national DRR strategies in line with the Sendai Framework",
     "ind_11_b_2": "Number of local governments (number)"
-  }
+  },
+  "overlay": "demographics"
 }

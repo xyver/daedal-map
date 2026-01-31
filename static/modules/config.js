@@ -46,6 +46,26 @@ export const CONFIG = {
     strokeHoverWidth: 2
   },
 
+  // Hierarchy fill colors (gradient from light to dark purple)
+  // Used for loc_id prefix-based coloring: deeper hierarchy match = darker color
+  // Index 0 = country match (lightest), higher indices = deeper admin level match
+  ancestorColors: {
+    // Fill colors - gradient from light purple to dark purple
+    stroke: [
+      '#d4a5e8',  // Country match - lightest purple
+      '#b87fd0',  // State match - light purple
+      '#9c59b8',  // County match - medium purple
+      '#8033a0',  // Tract match - dark purple
+      '#640d88',  // Block match - darkest purple
+    ],
+    // Stroke widths - thicker for higher levels (more important boundaries)
+    strokeWidth: [4, 3.5, 3, 2.5, 2],
+    // Fill opacity - very subtle, just enough to show the area
+    fillOpacity: 0.03,
+    // Stroke opacity
+    strokeOpacity: 0.85
+  },
+
   // Debug mode colors (by coverage ratio: actual_depth / expected_depth)
   // Press 'D' to toggle debug mode
   debugColors: {
@@ -62,9 +82,16 @@ export const CONFIG = {
     stroke: 'regions-stroke',
     source: 'regions',
     // Parent outline layer (shows what region you're drilling into)
+    // Legacy single-parent layers (kept for compatibility)
     parentSource: 'parent-region',
     parentStroke: 'parent-stroke',
     parentFill: 'parent-fill',
+    // Multi-level ancestor layers (shows boundaries at all levels)
+    // Use getAncestorLayerId() to generate level-specific IDs
+    ancestorSourcePrefix: 'ancestor-',
+    ancestorStrokePrefix: 'ancestor-stroke-',
+    ancestorFillPrefix: 'ancestor-fill-',
+    maxAncestorLevels: 5,  // Track up to 5 ancestor levels
     // City overlay layer
     citySource: 'cities',
     cityCircle: 'cities-circle',

@@ -195,6 +195,126 @@ class SessionCache:
             self._sent_all.discard(key)
         return len(keys_to_remove)
 
+    # -------------------------------------------------------------------------
+    # Geometry tracking (dedup by loc_id, no year/metric dimension)
+    # -------------------------------------------------------------------------
+
+    def register_sent_geometry(self, features: list, source_id: str):
+        """
+        Register geometry features that were sent to the frontend.
+        Tracks by loc_id (geometry features are all-or-nothing per loc_id).
+
+        Args:
+            features: List of GeoJSON features with loc_id in properties
+            source_id: Source identifier (e.g., "geometry_zcta")
+        """
+        # Use "geom:{source_id}" as the key prefix to avoid collision with events
+        geo_source_key = f"geom:{source_id}"
+        source_set = self._sent_by_source.setdefault(geo_source_key, set())
+
+        for f in features:
+            props = f.get("properties", {})
+            loc_id = props.get("loc_id")
+            if loc_id:
+                # Key format: "geom:{loc_id}" to distinguish from event/metric keys
+                key = f"geom:{loc_id}"
+                self._sent_all.add(key)
+                source_set.add(key)
+
+    def is_geometry_sent(self, loc_id: str) -> bool:
+        """Check if a geometry feature was already sent."""
+        return f"geom:{loc_id}" in self._sent_all
+
+    def filter_geometry_features(self, features: list) -> list:
+        """
+        Filter geometry features to only include those not yet sent.
+        Dedup by loc_id.
+
+        Args:
+            features: List of GeoJSON features
+
+        Returns:
+            List of features not yet sent
+        """
+        new_features = []
+        for f in features:
+            props = f.get("properties", {})
+            loc_id = props.get("loc_id")
+            if not loc_id or f"geom:{loc_id}" not in self._sent_all:
+                new_features.append(f)
+        return new_features
+
+    def clear_geometry_source(self, source_id: str) -> int:
+        """
+        Clear all sent geometry for a specific source.
+        Returns number of keys removed.
+
+        Args:
+            source_id: Source identifier (e.g., "geometry_zcta")
+        """
+        geo_source_key = f"geom:{source_id}"
+        return self.clear_source(geo_source_key)
+
+    def get_geometry_loc_ids_by_region(self, source_id: str, regions: list) -> list:
+        """
+        Get loc_ids for a source that match the given regions.
+        Used for removal orders - returns what would be removed.
+
+        Args:
+            source_id: Source identifier (e.g., "geometry_zcta")
+            regions: List of region prefixes (e.g., ["USA-FL"])
+
+        Returns:
+            List of loc_ids that match the regions
+        """
+        geo_source_key = f"geom:{source_id}"
+        source_set = self._sent_by_source.get(geo_source_key, set())
+
+        if not source_set or not regions:
+            return []
+
+        # Build prefixes for matching (e.g., "USA-FL-" to match parent_id "USA-FL-12001")
+        # But we store "geom:{loc_id}" where loc_id is the ZCTA code, not parent_id
+        # So we need to track parent_id separately or use the loc_id directly
+
+        # For now, return all loc_ids for this source (backend should filter)
+        # The actual filtering by parent_id happens in the geometry features themselves
+        matching = []
+        prefix = "geom:"
+        for key in source_set:
+            if key.startswith(prefix):
+                loc_id = key[len(prefix):]
+                matching.append(loc_id)
+        return matching
+
+    def remove_geometry_by_loc_ids(self, source_id: str, loc_ids: list) -> int:
+        """
+        Remove specific geometry loc_ids from the cache.
+        Used after frontend confirms removal.
+
+        Args:
+            source_id: Source identifier (e.g., "geometry_zcta")
+            loc_ids: List of loc_ids to remove
+
+        Returns:
+            Number of loc_ids removed
+        """
+        geo_source_key = f"geom:{source_id}"
+        source_set = self._sent_by_source.get(geo_source_key)
+
+        if not source_set:
+            return 0
+
+        removed = 0
+        for loc_id in loc_ids:
+            key = f"geom:{loc_id}"
+            if key in source_set:
+                source_set.discard(key)
+                self._sent_all.discard(key)
+                removed += 1
+
+        return removed
+
     @property
     def sent_count(self) -> int:
         """Number of data points tracked as sent."""

@@ -5,6 +5,7 @@
   "license": "Public Domain",
   "description": "NOAA Storm Prediction Center (SPC) tornado database containing detailed tornado event records for the United States. Includes track paths, intensity ratings, casualties, and damage estimates.",
   "category": "hazard",
+  "data_type": "metrics",
   "topic_tags": [
     "disasters",
     "tornadoes",
@@ -20,7 +21,7 @@
     "EF scale",
     "Fujita"
   ],
-  "last_updated": "2026-01-28",
+  "last_updated": "2026-01-29",
   "geographic_level": "unknown",
   "geographic_coverage": {
     "type": "unknown",
@@ -29,13 +30,13 @@
     "admin_levels": []
   },
   "temporal_coverage": {
-    "start": 1950,
+    "start": 2015,
     "end": 2025,
     "frequency": "annual",
     "granularity": "yearly",
     "field": "year"
   },
-  "row_count": 116,
+  "row_count": 21,
   "file_size_mb": 0.01,
   "data_completeness": 1.0,
   "update_schedule": "unknown",
@@ -49,11 +50,11 @@
       "stats": {
         "min": 1.0,
         "max": 2137.0,
-        "median": 707.5
+        "median": 1081.0
       },
       "density": 1.0,
       "years": [
-        1950,
+        2015,
         2025
       ],
       "by_era": {
@@ -62,15 +63,7 @@
           "stats": {
             "min": 1.0,
             "max": 2137.0,
-            "median": 1061.0
-          }
-        },
-        "1950-1999": {
-          "density": 1.0,
-          "stats": {
-            "min": 36.0,
-            "max": 1529.0,
-            "median": 661.5
+            "median": 1081.0
           }
         }
       }
@@ -82,12 +75,12 @@
       "keywords": [],
       "stats": {
         "min": 0.5,
-        "max": 8338.0996,
-        "median": 2371.4502
+        "max": 7927.3999,
+        "median": 2737.7
       },
       "density": 1.0,
       "years": [
-        1950,
+        2015,
         2025
       ],
       "by_era": {
@@ -95,16 +88,8 @@
           "density": 1.0,
           "stats": {
             "min": 0.5,
-            "max": 8338.0996,
-            "median": 2915.0
-          }
-        },
-        "1950-1999": {
-          "density": 1.0,
-          "stats": {
-            "min": 6.7,
-            "max": 5664.8999,
-            "median": 2297.25
+            "max": 7927.3999,
+            "median": 2737.7
           }
         }
       }
@@ -116,12 +101,12 @@
       "keywords": [],
       "stats": {
         "min": 0.0,
-        "max": 553.0,
-        "median": 35.5
+        "max": 103.0,
+        "median": 10.0
       },
       "density": 1.0,
       "years": [
-        1950,
+        2015,
         2025
       ],
       "by_era": {
@@ -129,16 +114,8 @@
           "density": 1.0,
           "stats": {
             "min": 0.0,
-            "max": 553.0,
-            "median": 22.0
-          }
-        },
-        "1950-1999": {
-          "density": 1.0,
-          "stats": {
-            "min": 0.0,
-            "max": 519.0,
-            "median": 39.0
+            "max": 103.0,
+            "median": 10.0
           }
         }
       }
@@ -150,12 +127,12 @@
       "keywords": [],
       "stats": {
         "min": 0.0,
-        "max": 6824.0,
-        "median": 645.0
+        "max": 955.0,
+        "median": 199.0
       },
       "density": 1.0,
       "years": [
-        1950,
+        2015,
         2025
       ],
       "by_era": {
@@ -163,16 +140,8 @@
           "density": 1.0,
           "stats": {
             "min": 0.0,
-            "max": 5483.0,
-            "median": 319.5
-          }
-        },
-        "1950-1999": {
-          "density": 1.0,
-          "stats": {
-            "min": 0.0,
-            "max": 6824.0,
-            "median": 784.5
+            "max": 955.0,
+            "median": 199.0
           }
         }
       }
@@ -184,12 +153,12 @@
       "keywords": [],
       "stats": {
         "min": 0.0,
-        "max": 9184650700.0,
-        "median": 217234400.0
+        "max": 3090497500.0,
+        "median": 181176200.0
       },
       "density": 1.0,
       "years": [
-        1950,
+        2015,
         2025
       ],
       "by_era": {
@@ -197,21 +166,26 @@
           "density": 1.0,
           "stats": {
             "min": 0.0,
-            "max": 9184650700.0,
-            "median": 367848300.0
-          }
-        },
-        "1950-1999": {
-          "density": 1.0,
-          "stats": {
-            "min": 0.0,
-            "max": 2152814350.0,
-            "median": 190754640.0
+            "max": 3090497500.0,
+            "median": 181176200.0
           }
         }
       }
     }
   },
   "metric_count": 5,
-  "llm_summary": "1950-2025. Tornado Count, Total Track Miles, Deaths, Injuries, Damage Usd."
+  "llm_summary": "2015-2025. Tornado Count, Total Track Miles, Deaths, Injuries, Damage Usd.",
+  "overlay": {
+    "path": "disasters/tornadoes",
+    "label": "Tornadoes",
+    "scope": null,
+    "icon": null,
+    "default_visible": false,
+    "visibility": {
+      "min_zoom": 0,
+      "max_zoom": 18,
+      "min_area_sq_deg": null,
+      "max_area_sq_deg": null
+    }
+  }
 }

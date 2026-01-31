@@ -764,18 +764,40 @@ def load_subcounty_geometry(iso3: str, admin_level: int, state_abbrev: str = Non
     """
     countries_dir = DATA_ROOT / "countries" / iso3
 
-    # Country-specific level mappings
-    # Each country can define which files map to which admin levels
+    # Country-specific level mappings for sub-county geometry
+    #
+    # Navigation layers (contiguous, smooth zoom):
+    #   0: Countries (global.csv)
+    #   1: States (geometry/{ISO3}.parquet admin_level=1)
+    #   2: Counties (geometry/{ISO3}.parquet admin_level=2)
+    #   3+: Sub-county from countries/{ISO3}/geometry/ files OR GADM admin_level=3+
+    #
+    # GADM level 3+ works smoothly for MOST countries (European communes, Asian
+    # hierarchies, etc.) - they have contiguous administrative coverage at all levels.
+    #
+    # FRAGMENTED EXCEPTIONS (GADM level 3 doesn't cover all land):
+    #   - USA: L3 = "incorporated places" (cities/towns) - much land is unincorporated
+    #          Solution: Use Census tracts/blockgroups/blocks instead
+    #   - CAN: L3 = Census subdivisions - varies by province, northern areas sparse
+    #          Solution: May need StatsCan geometry (TODO)
+    #   - RUS: L3 has only 127 regions vs 2,409 at L2 - selective coverage
+    #          Solution: Stay at L2 or find better source (TODO)
+    #
+    # Overlay geometry (non-contiguous, chat-accessible via data_type="geometry"):
+    #   - Cities/places (GADM level 3 for USA)
+    #   - Tribal lands, ZCTAs, watersheds, parks, etc.
+    #
     level_file_mapping = {
         "USA": {
-            3: {"type": "zcta", "partitioned": False},
-            4: {"type": "tract", "partitioned": True},
-            5: {"type": "blockgroup", "partitioned": True},
-            6: {"type": "block", "partitioned": True}
+            # USA is fragmented at GADM L3 - use Census geometry instead
+            # Levels 0-2: geometry/USA.parquet (GADM states + counties)
+            # Levels 3-5: countries/USA/geometry/{tract,blockgroup,block}/
+            3: {"type": "tract", "partitioned": True},
+            4: {"type": "blockgroup", "partitioned": True},
+            5: {"type": "block", "partitioned": True}
         }
-        # Future: Add other countries here
-        # "CAN": {3: {"type": "postal", "partitioned": False}, ...}
-        # "GBR": {3: {"type": "postal", "partitioned": False}, ...}
+        # CAN: TODO - needs StatsCan dissemination areas for smooth L3+
+        # RUS: TODO - needs better source or stay at L2
     }
 
     # Get file mapping for this country/level
@@ -796,7 +818,7 @@ def load_subcounty_geometry(iso3: str, admin_level: int, state_abbrev: str = Non
         if cache_key in _subcounty_geometry_cache:
             return _subcounty_geometry_cache[cache_key]
 
-        file_path = countries_dir / f"geometry_{geom_type}.parquet"
+        file_path = countries_dir / "geometry" / f"{geom_type}.parquet"
         if not file_path.exists():
             logger.debug(f"Sub-county geometry not found: {file_path}")
             return None
@@ -816,13 +838,13 @@ def load_subcounty_geometry(iso3: str, admin_level: int, state_abbrev: str = Non
             logger.warning(f"Region/state code required for {iso3} admin level {admin_level}")
             return None
 
-        subdir = f"geometry_{geom_type}"
-        cache_key = f"{iso3}_{subdir}_{state_abbrev}"
+        subdir = geom_type  # e.g., "tract", "blockgroup", "block"
+        cache_key = f"{iso3}_geometry_{subdir}_{state_abbrev}"
 
         if cache_key in _subcounty_geometry_cache:
             return _subcounty_geometry_cache[cache_key]
 
-        file_path = countries_dir / subdir / f"{iso3}-{state_abbrev}.parquet"
+        file_path = countries_dir / "geometry" / subdir / f"{iso3}-{state_abbrev}.parquet"
         if not file_path.exists():
             logger.debug(f"Sub-county geometry not found: {file_path}")
             return None

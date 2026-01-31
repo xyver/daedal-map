@@ -11,6 +11,7 @@ Implements the "Empty Box" model from CHAT_REDESIGN.md:
 6. Return GeoJSON with all filled properties
 """
 
+import logging
 import pandas as pd
 import json
 from pathlib import Path
@@ -50,13 +51,275 @@ def _load_catalog() -> dict:
 def _get_source_data_type(source_id: str) -> str:
     """
     Get data_type for a source from catalog.
-    Returns: 'events', 'metrics', 'gridded', or 'metrics' as default.
+    Returns: 'events', 'metrics', 'gridded', 'geometry', or 'metrics' as default.
     """
     catalog = _load_catalog()
     for src in catalog.get("sources", []):
         if src.get("source_id") == source_id:
             return src.get("data_type", "metrics")
     return "metrics"  # Default to metrics if not found
+
+
+def _get_source_path(source_id: str) -> Optional[str]:
+    """Get the path for a source from catalog."""
+    catalog = _load_catalog()
+    for src in catalog.get("sources", []):
+        if src.get("source_id") == source_id:
+            return src.get("path")
+    return None
+
+
+# Special geographic levels that need geometry from dual sources (not standard admin hierarchy)
+SPECIAL_GEOMETRY_LEVELS = {"zcta", "tribal"}
+
+
+def _has_geometry_data_type(data_type) -> bool:
+    """Check if data_type includes geometry (handles both string and array formats)."""
+    if data_type is None:
+        return False
+    if isinstance(data_type, list):
+        return "geometry" in data_type
+    return data_type == "geometry"
+
+
+def _find_geometry_source_for_level(geo_level: str, scope: str = None) -> Optional[dict]:
+    """
+    Find a catalog source that provides geometry for a special geographic level.
+
+    For special levels like 'zcta' or 'tribal', we need to find the dual source
+    that has both geometry data and matches the geographic_level.
+
+    Args:
+        geo_level: The geographic level (e.g., 'zcta', 'tribal')
+        scope: Optional scope filter (e.g., 'usa')
+
+    Returns:
+        Source dict from catalog if found, None otherwise
+    """
+    catalog = _load_catalog()
+    for src in catalog.get("sources", []):
+        # Match geographic_level
+        if src.get("geographic_level") != geo_level:
+            continue
+        # Must have geometry in data_type
+        if not _has_geometry_data_type(src.get("data_type")):
+            continue
+        # Optional scope filter
+        if scope and src.get("scope", "").lower() != scope.lower():
+            continue
+        return src
+    return None
+
+
+def _load_geometry_from_source(source_info: dict, filter_regions: set = None) -> Optional[pd.DataFrame]:
+    """
+    Load geometry dataframe from a catalog source, optionally filtered by region.
+
+    Args:
+        source_info: Source dict from catalog with 'path' key
+        filter_regions: Optional set of parent region codes to filter by (e.g., {"USA-FL"})
+
+    Returns:
+        DataFrame with loc_id, name, geometry columns, or None
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+
+    source_path = source_info.get("path")
+    if not source_path:
+        return None
+
+    full_path = DATA_ROOT / source_path
+    parquet_files = list(full_path.glob("*.parquet")) if full_path.is_dir() else []
+
+    if not parquet_files:
+        logger.warning(f"No parquet files found in {full_path}")
+        return None
+
+    # Load the parquet file
+    parquet_path = parquet_files[0]
+    logger.info(f"Loading geometry from dual source: {parquet_path}")
+
+    try:
+        df = pd.read_parquet(parquet_path)
+
+        # Filter by parent region if specified (e.g., filter_region = "USA-FL" for Florida ZIPs)
+        # parent_id is at county level (USA-FL-12001), so use prefix matching
+        # Use vectorized str.startswith with tuple for efficiency (same pattern as metrics pipeline)
+        if filter_regions and "parent_id" in df.columns:
+            # Build prefix tuple with trailing dash for hierarchy matching
+            prefixes = tuple(f"{r}-" for r in filter_regions)
+            # Vectorized: match prefix OR exact match
+            mask = df["parent_id"].str.startswith(prefixes, na=False) | df["parent_id"].isin(filter_regions)
+            df = df[mask]
+            logger.info(f"Filtered to {len(df)} features matching regions: {filter_regions}")
+
+        # Return only geometry-relevant columns
+        cols = ["loc_id", "name", "geometry", "parent_id"]
+        available_cols = [c for c in cols if c in df.columns]
+        if "loc_id" not in available_cols or "geometry" not in available_cols:
+            logger.warning(f"Missing required columns in {parquet_path}")
+            return None
+        return df[available_cols]
+    except Exception as e:
+        logger.error(f"Error loading geometry from {parquet_path}: {e}")
+        return None
+
+
+def execute_geometry_overlay(geometry_overlay: dict, filter_loc_ids: list = None) -> dict:
+    """
+    Load geometry overlay data and return as GeoJSON.
+
+    Used for "show me ZIP codes in California" type queries.
+
+    Args:
+        geometry_overlay: {source_id, overlay_type}
+        filter_loc_ids: List of loc_ids to filter by (e.g., ["USA-CA"] for California)
+
+    Returns:
+        GeoJSON FeatureCollection with geometry features
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+
+    source_id = geometry_overlay.get("source_id")
+    if not source_id:
+        logger.warning("No source_id in geometry_overlay")
+        return {"type": "FeatureCollection", "features": []}
+
+    # Get source path from catalog
+    source_path = _get_source_path(source_id)
+    if not source_path:
+        logger.warning(f"Source not found in catalog: {source_id}")
+        return {"type": "FeatureCollection", "features": []}
+
+    # Build full path to parquet file
+    # Path format: countries/USA/geometry/zcta -> countries/USA/geometry/zcta/USA.parquet
+    full_path = DATA_ROOT / source_path
+    parquet_files = list(full_path.glob("*.parquet")) if full_path.is_dir() else []
+
+    if not parquet_files:
+        logger.warning(f"No parquet files found in {full_path}")
+        return {"type": "FeatureCollection", "features": []}
+
+    # Load the parquet file (use first one found)
+    parquet_path = parquet_files[0]
+    logger.info(f"Loading geometry overlay from {parquet_path}")
+
+    try:
+        df = pd.read_parquet(parquet_path)
+        logger.info(f"Loaded {len(df)} features from {parquet_path}")
+
+        # Filter by region if specified
+        # For ZCTA, parent_id contains the county loc_id (e.g., USA-CA-6037)
+        # To filter by state, we check if parent_id starts with the state prefix
+        if filter_loc_ids and len(filter_loc_ids) > 0 and "parent_id" in df.columns:
+            filter_conditions = []
+            for loc_id in filter_loc_ids:
+                # Match parent_id that starts with the filter loc_id
+                # e.g., filter_loc_id="USA-CA" matches parent_id="USA-CA-6037"
+                filter_conditions.append(df["parent_id"].str.startswith(loc_id + "-", na=False))
+                # Also match exact parent_id
+                filter_conditions.append(df["parent_id"] == loc_id)
+
+            if filter_conditions:
+                combined_filter = filter_conditions[0]
+                for cond in filter_conditions[1:]:
+                    combined_filter = combined_filter | cond
+                df = df[combined_filter]
+                logger.info(f"Filtered to {len(df)} features for regions: {filter_loc_ids}")
+
+        # Convert to GeoJSON
+        geojson = df_to_geojson(df, polygon_only=True)
+        logger.info(f"Returning {len(geojson.get('features', []))} geometry features")
+
+        return geojson
+
+    except Exception as e:
+        logger.error(f"Error loading geometry overlay: {e}")
+        return {"type": "FeatureCollection", "features": []}
+
+
+def execute_geometry_order(order: dict) -> dict:
+    """
+    Execute geometry order, returning GeoJSON with all requested features.
+
+    Routes through the order system to enable:
+    - Accumulating multiple geometry requests in an order
+    - Using cache system with dedup by loc_id
+    - Add/remove regions incrementally
+
+    Args:
+        order: {items: [{source_id, region, overlay_type}], summary: str}
+
+    Returns:
+        {
+            type: "geometry",
+            data_type: "geometry",
+            geojson: {type: "FeatureCollection", features: [...]},
+            count: int,
+            overlay_type: str,
+            summary: str
+        }
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+
+    items = order.get("items", [])
+    summary = order.get("summary", "")
+
+    if not items:
+        return {
+            "type": "geometry",
+            "data_type": "geometry",
+            "geojson": {"type": "FeatureCollection", "features": []},
+            "count": 0,
+            "message": "No items in order"
+        }
+
+    all_features = []
+    overlay_type = None
+
+    for item in items:
+        source_id = item.get("source_id")
+        region = item.get("region")
+        item_overlay_type = item.get("overlay_type")
+
+        if not source_id:
+            continue
+
+        # Track overlay_type for response
+        if item_overlay_type and not overlay_type:
+            overlay_type = item_overlay_type
+
+        # Build filter_loc_ids from region
+        # Region can be "USA-CA" for California or "USA-CA-6037" for a county
+        filter_loc_ids = [region] if region else None
+
+        logger.info(f"Executing geometry order: source={source_id}, region={region}, overlay_type={item_overlay_type}")
+
+        # Execute geometry overlay for this item
+        geojson = execute_geometry_overlay(
+            {"source_id": source_id, "overlay_type": item_overlay_type},
+            filter_loc_ids=filter_loc_ids
+        )
+
+        # Accumulate features
+        item_features = geojson.get("features", [])
+        all_features.extend(item_features)
+        logger.info(f"Added {len(item_features)} features from {source_id}")
+
+    return {
+        "type": "geometry",
+        "data_type": "geometry",
+        "overlay_type": overlay_type or "zcta",
+        "geojson": {
+            "type": "FeatureCollection",
+            "features": all_features
+        },
+        "count": len(all_features),
+        "summary": summary or f"Showing {len(all_features)} geometry features"
+    }
 
 
 def _get_source_path(source_id: str) -> Path:
@@ -198,6 +461,10 @@ def expand_region(region: str) -> set:
     """
     if not region or region.lower() in ("global", "all", "world"):
         return set()
+
+    # If it's already a loc_id format (e.g., USA-FL, USA-CA-6037), return as-is
+    if "-" in region and region.split("-")[0].isupper() and len(region.split("-")[0]) == 3:
+        return {region}
 
     conversions = _load_conversions()
     region_lower = region.lower()
@@ -380,6 +647,32 @@ def _get_significance_column(source_id: str) -> str:
     """Get significance column from catalog metadata."""
     source = _get_source_from_catalog(source_id)
     return source.get("significance_column")
+
+
+def _find_source_files(source_id: str) -> list:
+    """
+    Find parquet files for a source_id.
+
+    Args:
+        source_id: Source ID (e.g., "geometry_zcta")
+
+    Returns:
+        List of Path objects to parquet files, or empty list if not found
+    """
+    source = _get_source_from_catalog(source_id)
+    if not source:
+        return []
+
+    source_path = source.get("path")
+    if not source_path:
+        return []
+
+    full_path = DATA_ROOT / source_path
+    if full_path.is_dir():
+        return list(full_path.glob("*.parquet"))
+    elif full_path.with_suffix(".parquet").exists():
+        return [full_path.with_suffix(".parquet")]
+    return []
 
 
 def _get_coordinate_columns(df: pd.DataFrame) -> tuple:
@@ -616,6 +909,299 @@ def execute_event_order(order: dict) -> dict:
     }
 
 
+def _execute_removal_order(order: dict, items: list, source_id: str) -> dict:
+    """
+    Execute a removal order - returns minimal identifiers for frontend to remove.
+
+    Scalable for all data types:
+    - Geometry: returns loc_ids (filter features by loc_id)
+    - Events: returns event_ids (filter features by event_id)
+    - Metrics: returns loc_ids + years + metric (delete column from year_data)
+
+    Backend queries its cache/parquet to find matching items, returns them
+    to frontend for removal. This keeps caches synchronized.
+
+    Args:
+        order: The full order dict with action="remove"
+        items: Order items (each has region/criteria to remove)
+        source_id: Primary source ID
+
+    Returns:
+        Geometry: {data_type, action, source_id, loc_ids, regions, summary, count}
+        Events: {data_type, action, source_id, event_ids, regions, summary, count}
+        Metrics: {data_type, action, source_id, loc_ids, years, metric, regions, summary, count}
+    """
+    logger = logging.getLogger(__name__)
+    from .session_cache import session_manager
+
+    # Determine data_type from catalog (events, geometry, or metrics)
+    data_type = _get_source_data_type(source_id) if source_id else "metrics"
+    source_info = _get_source_from_catalog(source_id)
+    geo_level = source_info.get("geographic_level") if source_info else None
+
+    # Override: special geometry levels are geometry type
+    if geo_level in ("zcta", "tribal", "watershed", "park"):
+        data_type = "geometry"
+
+    # Collect regions from items
+    regions = []
+    for item in items:
+        region = item.get("region")
+        if region:
+            expanded = expand_region(region)
+            regions.extend(expanded)
+    regions = list(set(regions))  # deduplicate
+
+    # Collect metric/year info for metrics removal
+    metric_to_remove = None
+    years_to_remove = []
+    for item in items:
+        if item.get("metric"):
+            metric_to_remove = item.get("metric")
+        if item.get("year"):
+            years_to_remove.append(item.get("year"))
+        if item.get("year_start") and item.get("year_end"):
+            years_to_remove.extend(range(item["year_start"], item["year_end"] + 1))
+    years_to_remove = list(set(years_to_remove))
+
+    # Get session cache
+    session_id = order.get("session_id")
+    cache = session_manager.get(session_id) if session_id else None
+
+    # Build response based on data_type
+    response = {
+        "data_type": data_type,
+        "action": "remove",
+        "source_id": source_id,
+        "regions": regions,
+    }
+
+    if data_type == "geometry":
+        # Query parquet for loc_ids matching regions
+        loc_ids = _get_loc_ids_by_region(source_id, regions) if regions else []
+        response["loc_ids"] = loc_ids
+        response["geographic_level"] = geo_level
+        response["count"] = len(loc_ids)
+        response["summary"] = order.get("summary", f"Removed {len(loc_ids)} areas from {', '.join(regions)}")
+
+        # Clear from session cache
+        if cache and loc_ids:
+            removed = cache.remove_geometry_by_loc_ids(source_id, loc_ids)
+            logger.info(f"Removed {removed} geometry items from session cache")
+
+    elif data_type == "events":
+        # Query parquet for event_ids matching regions/time
+        event_ids = _get_event_ids_by_region(source_id, regions) if regions else []
+        response["event_ids"] = event_ids
+        response["count"] = len(event_ids)
+        response["summary"] = order.get("summary", f"Removed {len(event_ids)} events from {', '.join(regions)}")
+
+        # Clear from session cache
+        if cache and event_ids:
+            for eid in event_ids:
+                cache._sent_all.discard(eid)
+            # Also clear from source tracking
+            source_set = cache._sent_by_source.get(source_id, set())
+            for eid in event_ids:
+                source_set.discard(eid)
+            logger.info(f"Removed {len(event_ids)} event items from session cache")
+
+    else:  # metrics
+        # For metrics, we remove a "column" - all cells for given metric + optional region/year filter
+        loc_ids = _get_loc_ids_by_region(source_id, regions) if regions else []
+        response["loc_ids"] = loc_ids
+        response["years"] = years_to_remove
+        response["metric"] = metric_to_remove
+        response["count"] = len(loc_ids) * max(len(years_to_remove), 1)
+        response["summary"] = order.get("summary", f"Removed {metric_to_remove or 'data'} from {', '.join(regions) or 'selection'}")
+
+        # Clear from session cache (metric-based keys)
+        if cache and metric_to_remove:
+            removed = cache.clear_source(metric_to_remove)
+            logger.info(f"Removed {removed} metric items from session cache")
+
+    return response
+
+
+def _get_event_ids_by_region(source_id: str, regions: list) -> list:
+    """
+    Query parquet file to get event_ids matching regions.
+
+    Args:
+        source_id: Source ID (e.g., "earthquakes_usgs")
+        regions: List of region prefixes (e.g., ["USA-CA"])
+
+    Returns:
+        List of matching event_ids
+    """
+    logger = logging.getLogger(__name__)
+    try:
+        parquet_files = _find_source_files(source_id)
+        if not parquet_files:
+            return []
+
+        df = pd.read_parquet(parquet_files[0])
+
+        if "event_id" not in df.columns:
+            return []
+
+        # Events use loc_id for region matching (where the event occurred)
+        if "loc_id" in df.columns and regions:
+            prefixes = tuple(f"{r}-" for r in regions)
+            region_set = set(regions)
+            mask = df["loc_id"].str.startswith(prefixes, na=False) | df["loc_id"].isin(region_set)
+            matching = df[mask]
+        else:
+            matching = df
+
+        event_ids = matching["event_id"].tolist()
+        logger.info(f"Found {len(event_ids)} event_ids matching regions {regions} in {source_id}")
+        return event_ids
+
+    except Exception as e:
+        logger.error(f"Error getting event_ids by region: {e}")
+        return []
+
+
+def _get_loc_ids_by_region(source_id: str, regions: list) -> list:
+    """
+    Query parquet file to get loc_ids matching regions by parent_id prefix.
+
+    Args:
+        source_id: Source ID (e.g., "geometry_zcta")
+        regions: List of region prefixes (e.g., ["USA-FL"])
+
+    Returns:
+        List of matching loc_ids
+    """
+    logger = logging.getLogger(__name__)
+    try:
+        # Find parquet file for this source
+        parquet_files = _find_source_files(source_id)
+        if not parquet_files:
+            logger.warning(f"No parquet files found for source: {source_id}")
+            return []
+
+        # Load and filter by parent_id
+        df = pd.read_parquet(parquet_files[0])
+
+        if "parent_id" not in df.columns:
+            logger.warning(f"No parent_id column in {source_id}")
+            return []
+
+        # Build prefix tuple for matching
+        prefixes = tuple(f"{r}-" for r in regions)
+        region_set = set(regions)
+
+        # Vectorized filter
+        mask = df["parent_id"].str.startswith(prefixes, na=False) | df["parent_id"].isin(region_set)
+        matching = df[mask]
+
+        loc_ids = matching["loc_id"].tolist() if "loc_id" in matching.columns else []
+        logger.info(f"Found {len(loc_ids)} loc_ids matching regions {regions} in {source_id}")
+        return loc_ids
+
+    except Exception as e:
+        logger.error(f"Error getting loc_ids by region: {e}")
+        return []
+
+
+def _execute_mixed_order_if_needed(order: dict, items: list, source_id: str) -> dict:
+    """
+    Check if order has mixed add/remove items and execute accordingly.
+
+    Checks for:
+    1. Explicit item.action = "remove" on some items
+    2. Session cache: regions already loaded should be removed, new regions added
+
+    If mixed, splits into two operations and returns combined results.
+    Returns None if not a mixed order (let normal flow handle it).
+    """
+    logger = logging.getLogger(__name__)
+    from .session_cache import session_manager
+
+    session_id = order.get("session_id")
+    cache = session_manager.get(session_id) if session_id else None
+
+    # Get source info for geometry check
+    source_info = _get_source_from_catalog(source_id)
+    geo_level = source_info.get("geographic_level") if source_info else None
+    is_geometry = geo_level in ("zcta", "tribal", "watershed", "park")
+
+    # Only handle geometry mixed orders for now (most common case)
+    if not is_geometry:
+        return None
+
+    # Check for explicit item-level actions
+    add_items = []
+    remove_items = []
+
+    for item in items:
+        item_action = item.get("action", "add")
+        if item_action == "remove":
+            remove_items.append(item)
+        else:
+            add_items.append(item)
+
+    # If we have explicit removes, handle the split
+    if remove_items:
+        logger.info(f"Mixed order detected: {len(add_items)} adds, {len(remove_items)} removes")
+        return _execute_split_order(order, add_items, remove_items, source_id)
+
+    # No explicit removes - check cache to see if any regions already exist
+    # (user says "show california" when texas is loaded = remove texas, add california)
+    # This is optional behavior - for now, just return None and let normal accumulation happen
+    return None
+
+
+def _execute_split_order(order: dict, add_items: list, remove_items: list, source_id: str) -> dict:
+    """
+    Execute a split order with both adds and removes.
+
+    Executes removals first, then adds, returns combined response.
+    """
+    logger = logging.getLogger(__name__)
+    results = []
+
+    # Execute removals first
+    if remove_items:
+        remove_order = {
+            **order,
+            "action": "remove",
+            "items": remove_items,
+            "summary": f"Removing {len(remove_items)} region(s)"
+        }
+        remove_result = _execute_removal_order(remove_order, remove_items, source_id)
+        results.append(remove_result)
+        logger.info(f"Split order: removed {remove_result.get('count', 0)} items")
+
+    # Execute adds second
+    add_result = None
+    if add_items:
+        add_order = {
+            **order,
+            "action": "add",
+            "items": add_items,
+        }
+        # Call execute_order recursively for adds (but it won't recurse again since no removes)
+        add_result = execute_order(add_order)
+        results.append(add_result)
+        logger.info(f"Split order: added {add_result.get('count', 0)} items")
+
+    # Return combined response
+    if len(results) == 1:
+        return results[0]
+
+    # Combine results for mixed response
+    return {
+        "type": "mixed_order",
+        "results": results,
+        "summary": order.get("summary", f"Processed {len(add_items)} adds and {len(remove_items)} removes"),
+        "add_count": add_result.get("count", 0) if add_result else 0,
+        "remove_count": results[0].get("count", 0) if remove_items else 0
+    }
+
+
 def execute_order(order: dict) -> dict:
     """
     Execute a confirmed order and return GeoJSON response.
@@ -643,6 +1229,7 @@ def execute_order(order: dict) -> dict:
     """
     items = order.get("items", [])
     summary = order.get("summary", "")
+    action = order.get("action", "add")  # "add" (default) or "remove"
 
     if not items:
         return {
@@ -656,6 +1243,16 @@ def execute_order(order: dict) -> dict:
     # (for tagging the response so frontend knows which pipeline to use)
     primary_source_id = items[0].get("source_id") if items else None
     order_data_type = _get_source_data_type(primary_source_id) if primary_source_id else "metrics"
+
+    # Handle removal orders (negative orders)
+    if action == "remove":
+        return _execute_removal_order(order, items, primary_source_id)
+
+    # Handle mixed orders (some items to add, some to remove based on item.action or cache state)
+    # This allows "remove texas, add california" in a single order
+    mixed_result = _execute_mixed_order_if_needed(order, items, primary_source_id)
+    if mixed_result:
+        return mixed_result
 
     # Check if this is an events order (explicit mode or data_type from catalog)
     def is_event_item(item):
@@ -672,7 +1269,8 @@ def execute_order(order: dict) -> dict:
         result["source_id"] = primary_source_id
         return result
 
-    # Otherwise, continue with metrics pipeline below
+    # Note: Geometry orders (dual sources like ZCTA) go through metrics pipeline
+    # They get special handling in Step 4 based on geographic_level
 
     # Check if any item uses year range (multi-year mode)
     multi_year_mode = any(
@@ -712,6 +1310,7 @@ def execute_order(order: dict) -> dict:
     metric_source_map = {}  # Track which metric belongs to which source
     requested_year_start = None  # Track requested range for comparison
     requested_year_end = None
+    all_region_codes = set()  # Track all requested region codes for GeoJSON
 
     # Step 3: Process each order item
     for item in items:
@@ -775,6 +1374,8 @@ def execute_order(order: dict) -> dict:
 
         # Filter by region
         region_codes = expand_region(region)
+        if region_codes:
+            all_region_codes.update(region_codes)  # Track for GeoJSON building
         if region_codes and "loc_id" in df.columns:
             # Check for US state filtering (loc_ids starting with USA-)
             us_state_prefixes = [c for c in region_codes if c.startswith("USA-")]
@@ -857,10 +1458,26 @@ def execute_order(order: dict) -> dict:
     # Determine geographic level from sources
     primary_level = "country" if "country" in geo_levels else list(geo_levels)[0] if geo_levels else "country"
 
-    if primary_level == "country":
+    geometry_df = None
+
+    if primary_level in SPECIAL_GEOMETRY_LEVELS:
+        # Special levels (zcta, tribal) - find geometry from dual source with matching geographic_level
+        # The source has data_type: ["geometry", "metrics"] and geographic_level matching primary_level
+        geometry_source = _find_geometry_source_for_level(primary_level)
+        if geometry_source:
+            # Filter by requested regions (e.g., USA-FL for Florida ZIPs)
+            geometry_df = _load_geometry_from_source(geometry_source, filter_regions=all_region_codes if all_region_codes else None)
+            print(f"Loaded {len(geometry_df) if geometry_df is not None else 0} geometries from dual source: {geometry_source.get('source_id')} (filtered to {len(all_region_codes) if all_region_codes else 'all'} regions)")
+        else:
+            print(f"Warning: No geometry source found for special level: {primary_level}")
+
+    elif primary_level == "country":
         geometry_df = load_global_countries()
+        # Filter to requested region if specified (so all region countries appear, with or without data)
+        if all_region_codes and "loc_id" in geometry_df.columns:
+            geometry_df = geometry_df[geometry_df["loc_id"].isin(all_region_codes)]
     else:
-        # Load geometry for all relevant countries
+        # Standard admin levels (admin_1, admin_2) - load from country parquet files
         iso3_codes = set()
         loc_ids_to_check = boxes.keys() if boxes else set()
         if year_data:
@@ -880,6 +1497,7 @@ def execute_order(order: dict) -> dict:
         geometry_df = pd.concat(geometry_rows, ignore_index=True) if geometry_rows else None
 
     # Step 5: Build GeoJSON features
+    # Include ALL locations in geometry (region), with or without data
     features = []
 
     if geometry_df is not None:
@@ -887,12 +1505,8 @@ def execute_order(order: dict) -> dict:
 
         if multi_year_mode:
             # Multi-year: build base geometry features (no year-specific data)
-            # Collect all loc_ids across all years
-            all_loc_ids = set()
-            for year_locs in year_data.values():
-                all_loc_ids.update(year_locs.keys())
-
-            for loc_id in all_loc_ids:
+            # Include ALL geometry rows, not just those with data
+            for loc_id in geom_lookup.keys():
                 geom_data = geom_lookup.get(loc_id)
                 if not geom_data:
                     continue
@@ -915,8 +1529,8 @@ def execute_order(order: dict) -> dict:
                     "properties": properties
                 })
         else:
-            # Single year: include values in properties
-            for loc_id, props in boxes.items():
+            # Single year: include ALL geometry rows, with data where available
+            for loc_id in geom_lookup.keys():
                 geom_data = geom_lookup.get(loc_id)
                 if not geom_data:
                     continue
@@ -930,9 +1544,10 @@ def execute_order(order: dict) -> dict:
                 except (json.JSONDecodeError, TypeError):
                     continue
 
-                # Build properties
+                # Build properties - get data from boxes if available
                 properties = {"loc_id": loc_id, "name": geom_data.get("name", loc_id)}
-                properties.update(props)
+                if boxes and loc_id in boxes:
+                    properties.update(boxes[loc_id])
 
                 features.append({
                     "type": "Feature",
@@ -955,9 +1570,14 @@ def execute_order(order: dict) -> dict:
     # Determine primary source_id for this response
     primary_source = list(sources_used.keys())[0] if sources_used else None
 
+    # Determine response data_type - use "geometry" for special levels, "metrics" otherwise
+    # This tells frontend whether to render as geometry overlay or choropleth
+    response_data_type = "geometry" if primary_level in SPECIAL_GEOMETRY_LEVELS else "metrics"
+
     response = {
         "type": "data",
-        "data_type": "metrics",
+        "data_type": response_data_type,
+        "geographic_level": primary_level,
         "source_id": primary_source,
         "geojson": {
             "type": "FeatureCollection",

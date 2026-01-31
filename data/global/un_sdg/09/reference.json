@@ -67,5 +67,6 @@
     "ind_9_a_1": "Total official flows for infrastructure, by recipient countries (millions of constant 2023 United States dollars)",
     "ind_9_b_1": "Proportion of medium and high-tech manufacturing value added in total value added (%)",
     "ind_9_c_1": "Proportion of population covered by at least a 2G mobile network (%)"
-  }
+  },
+  "overlay": "demographics"
 }

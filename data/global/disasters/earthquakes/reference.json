@@ -6,8 +6,22 @@
     "license": "Public Domain",
     "category": "hazard",
     "description": "Global earthquake events combining NOAA NGDC Significant Earthquakes database (historical events with damage/casualties) and USGS real-time earthquake data. Includes magnitude, depth, impact data, and aftershock relationships.",
-    "topic_tags": ["disasters", "earthquakes", "seismic", "hazard"],
-    "keywords": ["earthquake", "seismic", "magnitude", "aftershock", "tsunami", "USGS", "NOAA", "NGDC"]
+    "topic_tags": [
+      "disasters",
+      "earthquakes",
+      "seismic",
+      "hazard"
+    ],
+    "keywords": [
+      "earthquake",
+      "seismic",
+      "magnitude",
+      "aftershock",
+      "tsunami",
+      "USGS",
+      "NOAA",
+      "NGDC"
+    ]
   },
   "metrics": {
     "magnitude": "Earthquake magnitude (Richter/Mw scale)",
@@ -25,12 +39,15 @@
     "coverage": "Global - all significant earthquakes worldwide",
     "focus": "Earthquakes with recorded damage, casualties, or magnitude 4.0+",
     "temporal": "1521-present",
-    "admin_levels": ["Point locations with lat/lon"]
+    "admin_levels": [
+      "Point locations with lat/lon"
+    ]
   },
   "data_quality_notes": [
     "Historical events (pre-1900) may have estimated magnitudes and locations",
     "Deaths/injuries/damage only recorded for significant events",
     "Aftershock relationships computed from spatial-temporal clustering",
     "tsunami_event_id and volcano_event_id link to related disaster events"
-  ]
+  ],
+  "overlay": "disasters/earthquakes"
 }

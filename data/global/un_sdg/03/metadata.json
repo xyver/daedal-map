@@ -5,6 +5,7 @@
   "license": "Open Data",
   "description": "Sustainable Development Goal 3 (Good Health and Well-being) indicators from UN Statistics Division.",
   "category": "development",
+  "data_type": "metrics",
   "topic_tags": [
     "sdg",
     "goal3",
@@ -20,7 +21,7 @@
     "disease",
     "wellbeing"
   ],
-  "last_updated": "2026-01-28",
+  "last_updated": "2026-01-29",
   "geographic_level": "admin_0",
   "geographic_coverage": {
     "type": "global",
@@ -64,7 +65,7 @@
   },
   "row_count": 5113,
   "file_size_mb": 0.14,
-  "data_completeness": 0.42,
+  "data_completeness": 0.45,
   "update_schedule": "unknown",
   "expected_next_update": "unknown",
   "metrics": {
@@ -554,5 +555,18 @@
     }
   },
   "metric_count": 19,
-  "llm_summary": "1985-2024. Proportion of births attended by skilled health personnel (%), Number of new HIV infections per 1,000 uninfected population, by sex and age (per 1,000 uninfected population), Tuberculosis incidence (per 100,000 population), Malaria incidence per 1,000 population at risk (per 1,000 population), Number of people requiring interventions against neglected tropical diseases (number)."
+  "llm_summary": "1985-2024. Proportion of births attended by skilled health personnel (%), Number of new HIV infections per 1,000 uninfected population, by sex and age (per 1,000 uninfected population), Tuberculosis incidence (per 100,000 population), Malaria incidence per 1,000 population at risk (per 1,000 population), Number of people requiring interventions against neglected tropical diseases (number).",
+  "overlay": {
+    "path": "demographics",
+    "label": "Demographics",
+    "scope": null,
+    "icon": null,
+    "default_visible": false,
+    "visibility": {
+      "min_zoom": 0,
+      "max_zoom": 18,
+      "min_area_sq_deg": null,
+      "max_area_sq_deg": null
+    }
+  }
 }

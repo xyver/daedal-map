@@ -42,14 +42,21 @@ export const ViewportLoader = {
   // Viewport area thresholds (in square degrees) for admin level selection
   // These are tunable - smaller areas = deeper admin levels
   // Area roughly corresponds to zoom: zoom 10 ~ 1-2 sq deg, zoom 14 ~ 0.01 sq deg
+  //
+  // Navigation layers (contiguous, smooth zoom):
+  //   0: Countries, 1: States, 2: Counties, 3: Tracts, 4: Block Groups, 5: Blocks
+  //
+  // Note: GADM admin_level=3 (cities/places) is fragmented/non-contiguous.
+  // Use it as an overlay via chat queries, not in navigation zoom.
+  // Census tracts provide smooth contiguous coverage at the sub-county level.
   areaThresholds: {
     level0: 3000,   // > 3000 sq deg = countries (world/continent view, zoom ~2-4)
     level1: 300,    // > 300 sq deg = states (large country view, zoom ~4-6)
     level2: 30,     // > 30 sq deg = counties (state view, zoom ~6-8)
-    level3: 3,      // > 3 sq deg = subdivisions/ZCTAs (county view, zoom ~8-10)
-    level4: 0.3,    // > 0.3 sq deg = census tracts (city view, zoom ~10-12)
-    level5: 0.03    // > 0.03 sq deg = block groups (neighborhood, zoom ~12-14)
-                    // < 0.03 sq deg = blocks (street level, zoom ~14+)
+    level3: 3,      // > 3 sq deg = census tracts (county view, zoom ~8-10)
+    level4: 0.3,    // > 0.3 sq deg = block groups (city view, zoom ~10-12)
+    level5: 0.03    // > 0.03 sq deg = blocks (neighborhood, zoom ~12-14)
+                    // < 0.03 sq deg = (reserved for future deeper levels)
   },
 
   /**
@@ -65,14 +72,16 @@ export const ViewportLoader = {
    * Get admin level based on viewport area (smarter than fixed zoom thresholds)
    * Larger viewport = shallower level, smaller viewport = deeper level
    *
-   * Admin levels:
+   * Navigation levels (contiguous, smooth zoom):
    *   0 = Countries
    *   1 = States/Provinces
    *   2 = Counties
-   *   3 = Subdivisions/ZCTAs (postal)
-   *   4 = Census Tracts
-   *   5 = Block Groups
-   *   6 = Blocks
+   *   3 = Census Tracts
+   *   4 = Block Groups
+   *   5 = Blocks
+   *
+   * Note: GADM admin_level=3 (cities/places) is skipped - it's fragmented.
+   * Use overlay system for cities, tribal lands, ZCTAs, watersheds, etc.
    */
   getAdminLevelForViewport(bounds) {
     const area = this.getViewportArea(bounds);
@@ -80,10 +89,9 @@ export const ViewportLoader = {
     if (area > this.areaThresholds.level0) return 0;  // Countries
     if (area > this.areaThresholds.level1) return 1;  // States
     if (area > this.areaThresholds.level2) return 2;  // Counties
-    if (area > this.areaThresholds.level3) return 3;  // Subdivisions/ZCTAs
-    if (area > this.areaThresholds.level4) return 4;  // Census Tracts
-    if (area > this.areaThresholds.level5) return 5;  // Block Groups
-    return 6;  // Blocks
+    if (area > this.areaThresholds.level3) return 3;  // Census Tracts
+    if (area > this.areaThresholds.level4) return 4;  // Block Groups
+    return 5;  // Blocks (deepest navigation level)
   },
 
   /**
@@ -96,11 +104,10 @@ export const ViewportLoader = {
       case 0: return 5000;    // Countries: > 3000 sq deg, target ~5000
       case 1: return 1000;    // States: 300-3000 sq deg, target ~1000
       case 2: return 150;     // Counties: 30-300 sq deg, target ~150 (zoom ~7.5)
-      case 3: return 15;      // Subdivisions/ZCTAs: 3-30 sq deg, target ~15
-      case 4: return 1.5;     // Census Tracts: 0.3-3 sq deg, target ~1.5
-      case 5: return 0.15;    // Block Groups: 0.03-0.3 sq deg, target ~0.15
-      case 6: return 0.015;   // Blocks: < 0.03 sq deg, target ~0.015
-      default: return 15;     // Fallback to subdivisions
+      case 3: return 15;      // Census Tracts: 3-30 sq deg, target ~15
+      case 4: return 1.5;     // Block Groups: 0.3-3 sq deg, target ~1.5
+      case 5: return 0.15;    // Blocks: < 0.3 sq deg, target ~0.15
+      default: return 15;     // Fallback to tracts
     }
   },
 
@@ -313,6 +320,7 @@ export const ViewportLoader = {
     if (newLevel !== this.currentAdminLevel) {
       const lockInfo = this.levelLocked ? ' [LOCKED]' : '';
       console.log(`Viewport area ${area.toFixed(0)} sq deg -> Admin level ${newLevel}${lockInfo}`);
+
       this.currentAdminLevel = newLevel;
       this.load(newLevel);
 

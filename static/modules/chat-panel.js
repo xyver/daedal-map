@@ -109,6 +109,22 @@ function ingestMetricsToCache(response) {
   OverlayController.ingestMetricData(sourceId, response.geojson, response.year_data, yearRange);
 }
 
+/**
+ * Route geometry order results to OverlayController for rendering.
+ * Backend SessionCache handles deduplication - this just renders.
+ * @param {Object} response - API response with data_type 'geometry'
+ */
+function renderGeometryOrder(response) {
+  if (!OverlayController?.renderGeometryData) return;
+  if (!response?.geojson?.features) return;
+
+  const sourceId = response.source_id || 'geometry_zcta';
+  const geometryType = response.geographic_level || response.overlay_type || 'zcta';
+
+  // Render geometry (backend handles dedup via SessionCache)
+  OverlayController.renderGeometryData(sourceId, response.geojson, geometryType, {});
+}
+
 // Module-level instances (created during init)
 let orderPanel = null;
 let orderTracker = null;
@@ -179,7 +195,10 @@ export const ChatManager = {
       },
       onClear: () => {
         App?.clearNavigationMode();
-        App?.loadCountries();
+        // Turn off demographics overlay - user can re-enable to see countries
+        if (OverlaySelector?.isActive('demographics')) {
+          OverlaySelector.toggle('demographics');
+        }
       },
       onClearSource: (overlayId) => {
         if (!OverlayController) return;
@@ -259,6 +278,20 @@ export const ChatManager = {
     } else if (data.type === 'error') {
       this.addMessage(data.message || 'Failed to load data.', 'assistant');
       throw new Error(data.message || 'Order execution failed');
+    } else if (data.action === 'remove') {
+      // Handle removal orders (no geojson, just identifiers)
+      const message = data.summary || `Removed ${data.count || 0} ${data.data_type || 'items'}`;
+      this.addMessage(message, 'assistant');
+      App?.displayData(data);
+      if (orderPanel.switchTab) orderPanel.switchTab('loaded');
+    } else if (data.type === 'mixed_order' && data.results) {
+      // Handle mixed add/remove orders - process each result
+      for (const result of data.results) {
+        App?.displayData(result);
+      }
+      const message = data.summary || `Updated map: added ${data.add_count || 0}, removed ${data.remove_count || 0}`;
+      this.addMessage(message, 'assistant');
+      if (orderPanel.switchTab) orderPanel.switchTab('loaded');
     } else if (data.geojson) {
       // Route by data_type for cache ingestion
       const dataType = data.data_type || (data.type === 'events' ? 'events' : 'metrics');
@@ -271,6 +304,10 @@ export const ChatManager = {
         const message = data.data_note || `Loaded ${data.count || data.geojson.features?.length || 0} locations`;
         this.addMessage(message, 'assistant');
         ingestMetricsToCache(data);
+      } else if (dataType === 'geometry') {
+        const message = data.summary || `Showing ${data.count || data.geojson.features?.length || 0} ${data.geographic_level || data.overlay_type || 'geometry'} areas`;
+        this.addMessage(message, 'assistant');
+        renderGeometryOrder(data);
       } else {
         // Fallback for unknown data_type
         const message = data.summary || data.data_note || `Loaded ${data.count || 0} items`;
@@ -732,6 +769,32 @@ export const ChatManager = {
         this.addMessage(response.message || 'Here is the current state.', 'assistant');
         break;
 
+      case 'order_response':
+        // Handle order execution responses (including removals)
+        if (response.action === 'remove') {
+          this.addMessage(response.summary || `Removed ${response.count || 0} ${response.data_type || 'items'}.`, 'assistant');
+        } else {
+          this.addMessage(response.summary || 'Order complete.', 'assistant');
+        }
+        App?.displayData(response);
+        break;
+
+      case 'mixed_order':
+        // Handle mixed add/remove orders
+        if (response.results) {
+          for (const result of response.results) {
+            App?.displayData(result);
+          }
+        }
+        this.addMessage(response.summary || `Updated: added ${response.add_count || 0}, removed ${response.remove_count || 0}`, 'assistant');
+        break;
+
+      case 'geometry_remove':
+        // Legacy: Remove geometry regions from display (now handled by order_response)
+        this.addMessage(response.message || 'Removing geometry.', 'assistant');
+        App?.displayData({ ...response, action: 'remove', data_type: 'geometry' });
+        break;
+
       case 'filter_update':
         this.addMessage(response.message || 'Updating filters.', 'assistant');
         this.applyFilterUpdate(response);
@@ -923,11 +986,14 @@ export const ChatManager = {
 
   /**
    * Handle navigation request - zoom to locations and highlight them.
-   * @param {Object} response - Navigate response with locations and loc_ids
+   * Optionally displays geometry overlay data (ZCTAs, tribal areas, etc.)
+   * @param {Object} response - Navigate response with locations, loc_ids, and optional geojson
    */
   async handleNavigation(response) {
     const locIds = response.loc_ids || [];
     const locations = response.locations || [];
+    const geometryOverlay = response.geometry_overlay || null;
+    const overlayGeojson = response.geojson || null;
 
     if (locIds.length === 0) {
       console.warn('Navigation: no loc_ids to show');
@@ -935,6 +1001,30 @@ export const ChatManager = {
     }
 
     try {
+      // If geometry overlay data was returned, display it directly
+      // Geometry overlays (ZCTA, tribal, etc.) are complete data - no metrics needed
+      if (geometryOverlay && overlayGeojson && overlayGeojson.features && overlayGeojson.features.length > 0) {
+        console.log(`Navigation with geometry overlay: ${overlayGeojson.features.length} features`);
+
+        // Display the geometry overlay via the geometry pipeline
+        // displayData will handle fitToBounds internally
+        App?.displayData({
+          data_type: 'geometry',
+          geojson: overlayGeojson,
+          source_id: geometryOverlay.source_id,
+          summary: response.message || `Showing ${overlayGeojson.features.length} areas`
+        });
+
+        // Note: Don't call clearOrder() here - it triggers onClear() which calls loadCountries()
+        // and would overwrite the geometry we just displayed. Just render the panel to update UI.
+        if (orderPanel) {
+          orderPanel.currentOrder = null;
+          orderPanel.render();
+        }
+        return;
+      }
+
+      // Standard navigation (no geometry overlay) - fetch and highlight location boundaries
       const geojson = await postMsgpack('/geometry/selection', { loc_ids: locIds });
 
       if (geojson.features && geojson.features.length > 0) {

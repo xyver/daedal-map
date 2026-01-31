@@ -71,5 +71,6 @@
     "ind_1_a_1": "Official development assistance grants for poverty reduction, by recipient countries (percentage of GNI)",
     "ind_1_a_2": "Proportion of total government spending on essential services, health (%)",
     "ind_1_b_1": "Proportion of government spending which benefits the poorest 20 percent (%)"
-  }
+  },
+  "overlay": "demographics"
 }

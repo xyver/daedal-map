@@ -95,5 +95,6 @@
     "ind_16_8_1": "Proportion of members of developing countries in international organizations, by organization (%)",
     "ind_16_a_1": "Proportion of countries with independent National Human Rights Institutions in compliance with the Paris Principles (%)",
     "ind_16_b_1": "Proportion of population reporting having felt discriminated against, by grounds of discrimination, sex and disability ("
-  }
+  },
+  "overlay": "demographics"
 }

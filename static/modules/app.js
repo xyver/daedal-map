@@ -20,6 +20,7 @@ import { OverlaySelector, setDependencies as setOverlayDeps } from './overlay-se
 import { ModelRegistry } from './models/model-registry.js';
 import { OverlayController, setDependencies as setOverlayControllerDeps } from './overlay-controller.js';
 import { DisasterPopup, setDependencies as setDisasterPopupDeps } from './disaster-popup.js';
+import { GeometryModel, setDependencies as setGeometryDeps } from './models/model-geometry.js';
 
 // ============================================================================
 // APP - Main application controller
@@ -28,6 +29,7 @@ import { DisasterPopup, setDependencies as setDisasterPopupDeps } from './disast
 export const App = {
   currentData: null,
   debugMode: false,  // Toggle with 'D' key - shows hierarchy depth colors
+  geometryOverlayActive: false,  // True when geometry overlay (ZCTA, tribal, etc.) is displayed
 
   /**
    * Merge new multi-year data into existing data (same source).
@@ -119,6 +121,7 @@ export const App = {
     ModelRegistry.setDependencies({ MapAdapter, TimeSlider });
     setOverlayControllerDeps({ MapAdapter, ModelRegistry, OverlaySelector, TimeSlider });
     setDisasterPopupDeps({ MapAdapter });
+    setGeometryDeps({ MapAdapter });
 
     // Initialize components
     ChatManager.init();
@@ -273,6 +276,8 @@ export const App = {
    * Load world countries
    */
   async loadCountries() {
+    // Note: Geometry overlays (ZCTA, tribal) use separate layers, so they can coexist
+    // with the main choropleth display. No need to skip.
     try {
       console.log('Loading countries...');
 
@@ -483,6 +488,124 @@ export const App = {
     MapAdapter.clearHurricaneLayer();
     MapAdapter.clearHurricaneTrack();
     MapAdapter.clearEventLayer();
+
+    // Handle removal orders first (works for all data types)
+    // Removal payloads are minimal - just identifiers, not full data
+    if (data.action === 'remove') {
+      console.log(`Removal order: ${data.data_type}, source: ${data.source_id}`);
+      let result = { removed: 0, remaining: 0 };
+
+      if (data.data_type === 'geometry') {
+        // Geometry: remove by loc_ids
+        let geometryType = data.geographic_level || 'zcta';
+        if (data.source_id) {
+          const match = data.source_id.match(/geometry_(\w+)/);
+          if (match) geometryType = match[1];
+        }
+        result = OverlayController.removeGeometryData(
+          data.source_id,
+          { loc_ids: data.loc_ids, regions: data.regions },
+          geometryType
+        );
+      } else if (data.data_type === 'events') {
+        // Events: remove by event_ids
+        result = OverlayController.removeEventData(
+          data.source_id,
+          { event_ids: data.event_ids, regions: data.regions }
+        );
+      } else if (data.data_type === 'metrics') {
+        // Metrics: remove column (loc_ids + years + metric)
+        result = OverlayController.removeMetricData(
+          data.source_id,
+          { loc_ids: data.loc_ids, years: data.years, metric: data.metric }
+        );
+      }
+
+      // Trigger overlay refresh (same as add - turn on overlay, which refreshes from cache)
+      if (data.data_type === 'geometry') {
+        const geometryTypeToOverlayId = {
+          'zcta': 'zip_codes',
+          'tribal': 'tribal_areas',
+          'watershed': 'watersheds',
+          'park': 'parks'
+        };
+        let geometryType = data.geographic_level || 'zcta';
+        if (data.source_id) {
+          const match = data.source_id.match(/geometry_(\w+)/);
+          if (match) geometryType = match[1];
+        }
+        const overlayId = geometryTypeToOverlayId[geometryType] || 'zip_codes';
+        OverlayController.handleOverlayChange(overlayId, true);
+      }
+
+      // Update summary display
+      const summaryEl = document.getElementById('queryStatus');
+      if (summaryEl) {
+        summaryEl.textContent = data.summary || `Removed ${result.removed} items (${result.remaining} remaining)`;
+      }
+      return;
+    }
+
+    // Check if this is geometry overlay data (ZCTA, tribal, watersheds, etc.)
+    if (data.data_type === 'geometry') {
+      // Determine geometry type early
+      let geometryType = 'geometry';
+      if (data.source_id) {
+        const match = data.source_id.match(/geometry_(\w+)/);
+        if (match) geometryType = match[1];
+      }
+      if (geometryType === 'geometry' && data.geographic_level) {
+        geometryType = data.geographic_level;
+      }
+
+      console.log(`Geometry overlay detected: ${data.source_id}, ${data.geojson?.features?.length || 0} features`);
+
+      // Set geometry overlay flag - prevents loadCountries from overwriting
+      App.geometryOverlayActive = true;
+      ViewportLoader.orderMode = true;
+
+      TimeSlider.reset();
+      ChoroplethManager.reset();
+
+      // Render geometry if we have features (geometryType already computed above)
+      if (data.geojson && data.geojson.features && data.geojson.features.length > 0) {
+        // Map geometryType to overlay ID
+        const geometryTypeToOverlayId = {
+          'zcta': 'zip_codes',
+          'tribal': 'tribal_areas',
+          'watershed': 'watersheds',
+          'park': 'parks'
+        };
+        const overlayId = geometryTypeToOverlayId[geometryType] || 'zip_codes';
+
+        // Store geometry data for OverlayController to render when overlay is enabled
+        // This ensures render happens AFTER overlay is toggled ON
+        OverlayController.pendingGeometry = {
+          geojson: data.geojson,
+          geometryType: geometryType,
+          sourceId: data.source_id,
+          options: { showLabels: false }
+        };
+
+        // Enable the overlay - handleOverlayChange will render from pendingGeometry
+        // If already active, it will refresh the display
+        if (OverlaySelector && !OverlaySelector.isActive(overlayId)) {
+          OverlaySelector.setActive(overlayId, true);
+        }
+        // Always notify - if already on, this triggers a refresh
+        OverlayController.handleOverlayChange(overlayId, true);
+
+        console.log(`Geometry queued for render as type: ${geometryType}`);
+      }
+
+      // Update summary display
+      const summaryEl = document.getElementById('queryStatus');
+      if (summaryEl) {
+        summaryEl.textContent = data.summary || `${data.geojson?.features?.length || 0} areas`;
+      }
+
+      return;
+    }
 
     // Check if this is event mode data (earthquakes, volcanoes, etc.)
     if (data.type === 'events') {
@@ -728,7 +851,14 @@ export const App = {
       this._navigationClickHandler = null;
     }
 
-    // Re-enable viewport loading
+    // Clear geometry overlay layers (zcta, tribal, etc.) if active
+    if (this.geometryOverlayActive) {
+      // Clear all geometry layers via GeometryModel
+      GeometryModel.clear();
+    }
+
+    // Clear geometry overlay flag and re-enable viewport loading
+    this.geometryOverlayActive = false;
     ViewportLoader.orderMode = false;
   }
 };

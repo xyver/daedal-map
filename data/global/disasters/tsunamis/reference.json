@@ -6,8 +6,21 @@
     "license": "Public Domain",
     "category": "hazard",
     "description": "NOAA National Geophysical Data Center (NGDC) Global Historical Tsunami Database. Contains tsunami source events and runup observations worldwide from ancient times to present.",
-    "topic_tags": ["disasters", "tsunamis", "coastal", "hazard"],
-    "keywords": ["tsunami", "tidal wave", "runup", "inundation", "earthquake", "NOAA", "NGDC"]
+    "topic_tags": [
+      "disasters",
+      "tsunamis",
+      "coastal",
+      "hazard"
+    ],
+    "keywords": [
+      "tsunami",
+      "tidal wave",
+      "runup",
+      "inundation",
+      "earthquake",
+      "NOAA",
+      "NGDC"
+    ]
   },
   "datasets": {
     "events.parquet": "Tsunami source events with cause, magnitude, and impact data",
@@ -33,7 +46,9 @@
     "coverage": "Global - all ocean basins",
     "focus": "Historical tsunami events and runup observations",
     "temporal": "0001-present (2000+ years of records)",
-    "admin_levels": ["Point locations with lat/lon"]
+    "admin_levels": [
+      "Point locations with lat/lon"
+    ]
   },
   "data_quality_notes": [
     "Ancient events (pre-1900) based on historical accounts and may have uncertain dates/locations",
@@ -41,5 +56,6 @@
     "parent_event_id links related tsunami events",
     "eq_event_id links to triggering earthquake in earthquakes dataset",
     "volcano_id links to triggering volcano in volcanoes dataset"
-  ]
+  ],
+  "overlay": "disasters/tsunamis"
 }

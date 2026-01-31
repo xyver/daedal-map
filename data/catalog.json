@@ -1,5 +1,5 @@
 {
-  "catalog_version": "1.0",
+  "catalog_version": "2.0",
   "last_updated": "2026-01-29",
   "total_sources": 25,
   "sources": [
@@ -7,6 +7,7 @@
       "source_id": "01",
       "source_name": "UN SDG Goal 1: No Poverty",
       "category": "development",
+      "data_type": "metrics",
       "scope": "global",
       "topic_tags": [
         "sdg",
@@ -209,6 +210,19 @@
       },
       "llm_summary": "1963-2024. Proportion of population below international poverty line (%), Proportion of population living below the national poverty line (%), Proportion of population living in multidimensional poverty (%), [World Bank] Proportion of population covered by social assistance programs (%), Proportion of population using basic sanitation services, by location (%).",
       "path": "global/un_sdg/01",
+      "overlay": {
+        "path": "demographics",
+        "label": "Demographics",
+        "scope": null,
+        "icon": null,
+        "default_visible": false,
+        "visibility": {
+          "min_zoom": 0,
+          "max_zoom": 18,
+          "min_area_sq_deg": null,
+          "max_area_sq_deg": null
+        }
+      },
       "reference": {
         "source": {
           "source_id": "01",
@@ -264,6 +278,7 @@
       "source_id": "02",
       "source_name": "UN SDG Goal 2: Zero Hunger",
       "category": "development",
+      "data_type": "metrics",
       "scope": "global",
       "topic_tags": [
         "sdg",
@@ -442,6 +457,19 @@
       },
       "llm_summary": "1995-2025. Prevalence of undernourishment (%), Prevalence of moderate or severe food insecurity in the population (%), Productivity of small-scale food producers (agricultural output per labour day, PPP) (constant 2017 international $), Average income of small-scale food producers, PPP (constant 2017 international $), [PROXY] Progress toward productive and sustainable agriculture, current status score.",
       "path": "global/un_sdg/02",
+      "overlay": {
+        "path": "demographics",
+        "label": "Demographics",
+        "scope": null,
+        "icon": null,
+        "default_visible": false,
+        "visibility": {
+          "min_zoom": 0,
+          "max_zoom": 18,
+          "min_area_sq_deg": null,
+          "max_area_sq_deg": null
+        }
+      },
       "reference": {
         "source": {
           "source_id": "02",
@@ -493,6 +521,7 @@
       "source_id": "03",
       "source_name": "UN SDG Goal 3: Good Health and Well-being",
       "category": "development",
+      "data_type": "metrics",
       "scope": "global",
       "topic_tags": [
         "sdg",
@@ -743,6 +772,19 @@
       },
       "llm_summary": "1985-2024. Proportion of births attended by skilled health personnel (%), Number of new HIV infections per 1,000 uninfected population, by sex and age (per 1,000 uninfected population), Tuberculosis incidence (per 100,000 population), Malaria incidence per 1,000 population at risk (per 1,000 population), Number of people requiring interventions against neglected tropical diseases (number).",
       "path": "global/un_sdg/03",
+      "overlay": {
+        "path": "demographics",
+        "label": "Demographics",
+        "scope": null,
+        "icon": null,
+        "default_visible": false,
+        "visibility": {
+          "min_zoom": 0,
+          "max_zoom": 18,
+          "min_area_sq_deg": null,
+          "max_area_sq_deg": null
+        }
+      },
       "reference": {
         "source": {
           "source_id": "03",
@@ -802,6 +844,7 @@
       "source_id": "04",
       "source_name": "UN SDG Goal 4: Quality Education",
       "category": "development",
+      "data_type": "metrics",
       "scope": "global",
       "topic_tags": [
         "sdg",
@@ -951,6 +994,19 @@
       },
       "llm_summary": "2000-2024. Proportion of children and young people achieving a minimum proficiency level in reading and mathematics (%), Completion rate, by sex, location, wealth quintile and education level (%), Participation rate in organized learning (one year before the official primary entry age), by sex (%), Proportion of youth and adults with information and communications technology (ICT) skills, by sex and type of skill (%), Gender parity index for youth/adults with information and communications technology (ICT) skills, by type of skill (rati.",
       "path": "global/un_sdg/04",
+      "overlay": {
+        "path": "demographics",
+        "label": "Demographics",
+        "scope": null,
+        "icon": null,
+        "default_visible": false,
+        "visibility": {
+          "min_zoom": 0,
+          "max_zoom": 18,
+          "min_area_sq_deg": null,
+          "max_area_sq_deg": null
+        }
+      },
       "reference": {
         "source": {
           "source_id": "04",
@@ -1000,6 +1056,7 @@
       "source_id": "05",
       "source_name": "UN SDG Goal 5: Gender Equality",
       "category": "development",
+      "data_type": "metrics",
       "scope": "global",
       "topic_tags": [
         "sdg",
@@ -1125,6 +1182,19 @@
       },
       "llm_summary": "2009-2025. Legal frameworks that promote, enforce and monitor gender equality (percentage of achievement, 0 - 100) -- Area 3: emplo, Current number of seats in national parliaments (number), (S.4.C.13) Extent to which countries have laws and regulations that guarantee full and equal access to women and men age, Proportion of total agricultural population with ownership or secure rights over agricultural land, by sex (%), Degree to which the legal framework (including customary law) guarantees women\u2019s equal rights to land ownership and/or c.",
       "path": "global/un_sdg/05",
+      "overlay": {
+        "path": "demographics",
+        "label": "Demographics",
+        "scope": null,
+        "icon": null,
+        "default_visible": false,
+        "visibility": {
+          "min_zoom": 0,
+          "max_zoom": 18,
+          "min_area_sq_deg": null,
+          "max_area_sq_deg": null
+        }
+      },
       "reference": {
         "source": {
           "source_id": "05",
@@ -1172,6 +1242,7 @@
       "source_id": "06",
       "source_name": "UN SDG Goal 6: Clean Water and Sanitation",
       "category": "development",
+      "data_type": "metrics",
       "scope": "global",
       "topic_tags": [
         "sdg",
@@ -1357,6 +1428,19 @@
       },
       "llm_summary": "2000-2025. Proportion of population using safely managed drinking water services, by urban/rural (%), Proportion of population practicing open defecation, by urban/rural (%), Total wastewater generated (million m3/year), Proportion of bodies of water with good ambient water quality (%), Water Use Efficiency (United States dollars per cubic meter).",
       "path": "global/un_sdg/06",
+      "overlay": {
+        "path": "demographics",
+        "label": "Demographics",
+        "scope": null,
+        "icon": null,
+        "default_visible": false,
+        "visibility": {
+          "min_zoom": 0,
+          "max_zoom": 18,
+          "min_area_sq_deg": null,
+          "max_area_sq_deg": null
+        }
+      },
       "reference": {
         "source": {
           "source_id": "06",
@@ -1408,6 +1492,7 @@
       "source_id": "07",
       "source_name": "UN SDG Goal 7: Affordable and Clean Energy",
       "category": "development",
+      "data_type": "metrics",
       "scope": "global",
       "topic_tags": [
         "sdg",
@@ -1542,6 +1627,19 @@
       },
       "llm_summary": "2000-2023. Proportion of population with access to electricity, by urban/rural (%), Proportion of population with primary reliance on clean fuels and technology (%), Renewable energy share in the total final energy consumption (%), Energy intensity level of primary energy (megajoules per constant 2021 purchasing power parity GDP), International financial flows to developing countries in support of clean energy research and development and renewable .",
       "path": "global/un_sdg/07",
+      "overlay": {
+        "path": "demographics",
+        "label": "Demographics",
+        "scope": null,
+        "icon": null,
+        "default_visible": false,
+        "visibility": {
+          "min_zoom": 0,
+          "max_zoom": 18,
+          "min_area_sq_deg": null,
+          "max_area_sq_deg": null
+        }
+      },
       "reference": {
         "source": {
           "source_id": "07",
@@ -1588,6 +1686,7 @@
       "source_id": "08",
       "source_name": "UN SDG Goal 8: Decent Work and Economic Growth",
       "category": "development",
+      "data_type": "metrics",
       "scope": "global",
       "topic_tags": [
         "sdg",
@@ -1744,6 +1843,19 @@
       },
       "llm_summary": "2000-2024. Annual growth rate of real GDP per capita (%), Material footprint per capita, by type of raw material (tonnes), Domestic material consumption, by type of raw material (tonnes), Level of national compliance with labour rights (freedom of association and collective bargaining) based on Internationa, Tourism direct GDP as a proportion of total GDP (%).",
       "path": "global/un_sdg/08",
+      "overlay": {
+        "path": "demographics",
+        "label": "Demographics",
+        "scope": null,
+        "icon": null,
+        "default_visible": false,
+        "visibility": {
+          "min_zoom": 0,
+          "max_zoom": 18,
+          "min_area_sq_deg": null,
+          "max_area_sq_deg": null
+        }
+      },
       "reference": {
         "source": {
           "source_id": "08",
@@ -1798,6 +1910,7 @@
       "source_id": "09",
       "source_name": "UN SDG Goal 9: Industry, Innovation and Infrastructure",
       "category": "development",
+      "data_type": "metrics",
       "scope": "global",
       "topic_tags": [
         "sdg",
@@ -1978,6 +2091,19 @@
       },
       "llm_summary": "2000-2025. Container port traffic, maritime transport (twenty-foot equivalent units - TEUs), Manufacturing value added (constant 2015 United States dollars) as a proportion of GDP (%), Manufacturing employment as a proportion of total employment - 13th ICLS (%), Proportion of small-scale manufacturing industries in total manufacturing value added based on international classificat, Proportion of small-scale industries with a loan or line of credit (%).",
       "path": "global/un_sdg/09",
+      "overlay": {
+        "path": "demographics",
+        "label": "Demographics",
+        "scope": null,
+        "icon": null,
+        "default_visible": false,
+        "visibility": {
+          "min_zoom": 0,
+          "max_zoom": 18,
+          "min_area_sq_deg": null,
+          "max_area_sq_deg": null
+        }
+      },
       "reference": {
         "source": {
           "source_id": "09",
@@ -2029,6 +2155,7 @@
       "source_id": "10",
       "source_name": "UN SDG Goal 10: Reduced Inequalities",
       "category": "development",
+      "data_type": "metrics",
       "scope": "global",
       "topic_tags": [
         "sdg",
@@ -2233,6 +2360,19 @@
       },
       "llm_summary": "1963-2024. Growth rates of household expenditure or income per capita (%), Proportion of people living below 50 percent of median income (%), Proportion of population reporting having felt discriminated against, by grounds of discrimination, sex and disability (, Labour share of GDP (%), Redistributive impact of fiscal policy, Gini index (%).",
       "path": "global/un_sdg/10",
+      "overlay": {
+        "path": "demographics",
+        "label": "Demographics",
+        "scope": null,
+        "icon": null,
+        "default_visible": false,
+        "visibility": {
+          "min_zoom": 0,
+          "max_zoom": 18,
+          "min_area_sq_deg": null,
+          "max_area_sq_deg": null
+        }
+      },
       "reference": {
         "source": {
           "source_id": "10",
@@ -2288,6 +2428,7 @@
       "source_id": "11",
       "source_name": "UN SDG Goal 11: Sustainable Cities and Communities",
       "category": "development",
+      "data_type": "metrics",
       "scope": "global",
       "topic_tags": [
         "sdg",
@@ -2516,6 +2657,19 @@
       },
       "llm_summary": "2000-2025. Proportion of urban population living in inadequate housing (%), Proportion of population that has convenient access to public transport (%), Ratio of land consumption rate to population growth rate, Proportion of cities with a direct participation structure of civil society in urban planning and management that operat, Total expenditure per capita spent on cultural and natural heritage, public (PPP, constant 2017 United States dollars).",
       "path": "global/un_sdg/11",
+      "overlay": {
+        "path": "demographics",
+        "label": "Demographics",
+        "scope": null,
+        "icon": null,
+        "default_visible": false,
+        "visibility": {
+          "min_zoom": 0,
+          "max_zoom": 18,
+          "min_area_sq_deg": null,
+          "max_area_sq_deg": null
+        }
+      },
       "reference": {
         "source": {
           "source_id": "11",
@@ -2573,6 +2727,7 @@
       "source_id": "12",
       "source_name": "UN SDG Goal 12: Responsible Consumption and Production",
       "category": "development",
+      "data_type": "metrics",
       "scope": "global",
       "topic_tags": [
         "sdg",
@@ -2778,6 +2933,19 @@
       },
       "llm_summary": "2000-2025. Countries with policy instrument for sustainable consumption and production (1 = YES; 0 = NO), Material footprint per capita, by type of raw material (tonnes), Domestic material consumption, by type of raw material (tonnes), Food waste (Tonnes), Parties meeting their commitments and obligations in transmitting information as required by Montreal Protocol on hazard.",
       "path": "global/un_sdg/12",
+      "overlay": {
+        "path": "demographics",
+        "label": "Demographics",
+        "scope": null,
+        "icon": null,
+        "default_visible": false,
+        "visibility": {
+          "min_zoom": 0,
+          "max_zoom": 18,
+          "min_area_sq_deg": null,
+          "max_area_sq_deg": null
+        }
+      },
       "reference": {
         "source": {
           "source_id": "12",
@@ -2831,6 +2999,7 @@
       "source_id": "13",
       "source_name": "UN SDG Goal 13: Climate Action",
       "category": "development",
+      "data_type": "metrics",
       "scope": "global",
       "topic_tags": [
         "sdg",
@@ -2938,6 +3107,19 @@
       },
       "llm_summary": "2000-2024. Number of deaths and missing persons attributed to disasters (number), Score of adoption and implementation of national DRR strategies in line with the Sendai Framework, Number of local governments (number), Total greenhouse gas emissions without LULUCF for non-Annex I Parties (Mt CO\u2082 equivalent), Extent to which global citizenship education and education for sustainable development are mainstreamed in national educ.",
       "path": "global/un_sdg/13",
+      "overlay": {
+        "path": "demographics",
+        "label": "Demographics",
+        "scope": null,
+        "icon": null,
+        "default_visible": false,
+        "visibility": {
+          "min_zoom": 0,
+          "max_zoom": 18,
+          "min_area_sq_deg": null,
+          "max_area_sq_deg": null
+        }
+      },
       "reference": {
         "source": {
           "source_id": "13",
@@ -2983,6 +3165,7 @@
       "source_id": "14",
       "source_name": "UN SDG Goal 14: Life Below Water",
       "category": "development",
+      "data_type": "metrics",
       "scope": "global",
       "topic_tags": [
         "sdg",
@@ -3172,6 +3355,19 @@
       },
       "llm_summary": "1996-2025. Beach litter originating from national land-based sources that ends in the beach (Tonnes), Number of countries using ecosystem-based approaches to managing marine areas (1 = YES; 0 = NO), Average marine acidity (pH) measured at agreed suite of representative sampling stations, Proportion of fish stocks within biologically sustainable levels (not overexploited) (%), Average proportion of Marine Key Biodiversity Areas (KBAs) covered by protected areas (%).",
       "path": "global/un_sdg/14",
+      "overlay": {
+        "path": "demographics",
+        "label": "Demographics",
+        "scope": null,
+        "icon": null,
+        "default_visible": false,
+        "visibility": {
+          "min_zoom": 0,
+          "max_zoom": 18,
+          "min_area_sq_deg": null,
+          "max_area_sq_deg": null
+        }
+      },
       "reference": {
         "source": {
           "source_id": "14",
@@ -3224,6 +3420,7 @@
       "source_id": "15",
       "source_name": "UN SDG Goal 15: Life on Land",
       "category": "development",
+      "data_type": "metrics",
       "scope": "global",
       "topic_tags": [
         "sdg",
@@ -3440,6 +3637,19 @@
       },
       "llm_summary": "1993-2024. Land area (thousands of hectares), Average proportion of Terrestrial Key Biodiversity Areas (KBAs) covered by protected areas (%), Forest area certified under an independently verified certification scheme (thousands of hectares), Proportion of land that is degraded over total land area (%), Average proportion of Mountain Key Biodiversity Areas (KBAs) covered by protected areas (%).",
       "path": "global/un_sdg/15",
+      "overlay": {
+        "path": "demographics",
+        "label": "Demographics",
+        "scope": null,
+        "icon": null,
+        "default_visible": false,
+        "visibility": {
+          "min_zoom": 0,
+          "max_zoom": 18,
+          "min_area_sq_deg": null,
+          "max_area_sq_deg": null
+        }
+      },
       "reference": {
         "source": {
           "source_id": "15",
@@ -3494,6 +3704,7 @@
       "source_id": "16",
       "source_name": "UN SDG Goal 16: Peace, Justice and Strong Institutions",
       "category": "development",
+      "data_type": "metrics",
       "scope": "global",
       "topic_tags": [
         "sdg",
@@ -3774,6 +3985,19 @@
       },
       "llm_summary": "1990-2025. Number of victims of intentional homicide, by sex (number), Number of total conflict-related deaths, by sex, age and cause of death (Number), Proportion of population subjected to robbery in the previous 12 months, by sex (%), Proportion of population that feel safe walking alone around the area they live after dark (%), Countries with at least one verified case of killings of human rights defenders, journalists, and trade unionists (1 = Y.",
       "path": "global/un_sdg/16",
+      "overlay": {
+        "path": "demographics",
+        "label": "Demographics",
+        "scope": null,
+        "icon": null,
+        "default_visible": false,
+        "visibility": {
+          "min_zoom": 0,
+          "max_zoom": 18,
+          "min_area_sq_deg": null,
+          "max_area_sq_deg": null
+        }
+      },
       "reference": {
         "source": {
           "source_id": "16",
@@ -3837,6 +4061,7 @@
       "source_id": "17",
       "source_name": "UN SDG Goal 17: Partnerships for the Goals",
       "category": "development",
+      "data_type": "metrics",
       "scope": "global",
       "topic_tags": [
         "sdg",
@@ -4152,6 +4377,19 @@
       },
       "llm_summary": "1990-2025. Total government revenue, in local currency, Proportion of domestic budget funded by domestic taxes (%), Worldwide weighted tariff-average, most-favoured-nation status, by type of product (%), Developing countries\u2019 and least developed countries\u2019 share of global merchandise exports (%), Average tariff applied by developed countries, most-favored nation status, by type of product (%).",
       "path": "global/un_sdg/17",
+      "overlay": {
+        "path": "demographics",
+        "label": "Demographics",
+        "scope": null,
+        "icon": null,
+        "default_visible": false,
+        "visibility": {
+          "min_zoom": 0,
+          "max_zoom": 18,
+          "min_area_sq_deg": null,
+          "max_area_sq_deg": null
+        }
+      },
       "reference": {
         "source": {
           "source_id": "17",
@@ -4216,6 +4454,7 @@
       "source_id": "earthquakes",
       "source_name": "NOAA Significant Earthquakes + USGS",
       "category": "hazard",
+      "data_type": "events",
       "scope": "global",
       "topic_tags": [
         "disasters",
@@ -4237,7 +4476,7 @@
       "geographic_coverage": {},
       "coverage_description": "Unknown coverage",
       "temporal_coverage": {
-        "start": "1521-08-16T02:07:37",
+        "start": "2015-01-01T00:10:00.590000",
         "end": "2026-01-24T21:38:55.274000",
         "granularity": "timestamp",
         "field": "timestamp"
@@ -4248,35 +4487,35 @@
           "unit": "Richter/Mw",
           "years": null,
           "countries": null,
-          "density": 0.999
+          "density": 1.0
         },
         "depth_km": {
           "name": "Depth",
           "unit": "km",
           "years": null,
           "countries": null,
-          "density": 0.997
+          "density": 1.0
         },
         "felt_radius_km": {
           "name": "Felt Radius",
           "unit": "km",
           "years": null,
           "countries": null,
-          "density": 0.999
+          "density": 1.0
         },
         "damage_radius_km": {
           "name": "Damage Radius",
           "unit": "km",
           "years": null,
           "countries": null,
-          "density": 0.999
+          "density": 1.0
         },
         "deaths": {
           "name": "Deaths",
           "unit": "count",
           "years": null,
           "countries": null,
-          "density": 0.002
+          "density": 0.001
         },
         "injuries": {
           "name": "Injuries",
@@ -4290,7 +4529,7 @@
           "unit": "million USD",
           "years": null,
           "countries": null,
-          "density": 0.001
+          "density": 0.0
         },
         "houses_destroyed": {
           "name": "Houses Destroyed",
@@ -4304,18 +4543,33 @@
           "unit": "MMI",
           "years": null,
           "countries": null,
-          "density": 0.003
+          "density": 0.001
         },
         "aftershock_count": {
           "name": "Aftershock Count",
           "unit": "unknown",
           "years": null,
           "countries": null,
-          "density": 0.997
+          "density": 0.998
         }
       },
-      "llm_summary": "1,056,559 earthquake in 38 countries from 1521-08-16T02:07:37 to 2026-01-24T21:38:55.274000.",
+      "llm_summary": "313,369 earthquake in 34 countries from 2015-01-01T00:10:00.590000 to 2026-01-24T21:38:55.274000.",
       "path": "global/disasters/earthquakes",
+      "event_type": "earthquake",
+      "significance_column": "magnitude",
+      "overlay": {
+        "path": "disasters/earthquakes",
+        "label": "Earthquakes",
+        "scope": null,
+        "icon": null,
+        "default_visible": false,
+        "visibility": {
+          "min_zoom": 0,
+          "max_zoom": 18,
+          "min_area_sq_deg": null,
+          "max_area_sq_deg": null
+        }
+      },
       "reference": {
         "source": {
           "source_id": "earthquakes",
@@ -4359,6 +4613,7 @@
       "source_id": "floods",
       "source_name": "Dartmouth Flood Observatory",
       "category": "hazard",
+      "data_type": "events",
       "scope": "global",
       "topic_tags": [
         "disasters",
@@ -4379,7 +4634,7 @@
       "geographic_coverage": {},
       "coverage_description": "Unknown coverage",
       "temporal_coverage": {
-        "start": "1985-01-01T00:00:00",
+        "start": "2015-01-01T00:00:00",
         "end": "2019-11-15T00:00:00",
         "granularity": "timestamp",
         "field": "timestamp"
@@ -4456,8 +4711,23 @@
           "density": 1.0
         }
       },
-      "llm_summary": "4,825 flood in 138 countries from 1985-01-01T00:00:00 to 2019-11-15T00:00:00.",
+      "llm_summary": "610 flood in 74 countries from 2015-01-01T00:00:00 to 2019-11-15T00:00:00.",
       "path": "global/disasters/floods",
+      "event_type": "flood",
+      "significance_column": "severity",
+      "overlay": {
+        "path": "disasters/floods",
+        "label": "Floods",
+        "scope": null,
+        "icon": null,
+        "default_visible": false,
+        "visibility": {
+          "min_zoom": 0,
+          "max_zoom": 18,
+          "min_area_sq_deg": null,
+          "max_area_sq_deg": null
+        }
+      },
       "reference": {
         "source": {
           "source_id": "floods",
@@ -4496,6 +4766,7 @@
       "source_id": "hurricanes",
       "source_name": "IBTrACS",
       "category": "hazard",
+      "data_type": "events",
       "scope": "global",
       "topic_tags": [
         "disasters",
@@ -4516,7 +4787,7 @@
       "geographic_coverage": {},
       "coverage_description": "Unknown coverage",
       "temporal_coverage": {
-        "start": "1842-10-25T03:00:00",
+        "start": "2015-01-01T00:00:00",
         "end": "2026-01-08T00:00:00",
         "granularity": "timestamp",
         "field": "timestamp"
@@ -4527,102 +4798,117 @@
           "unit": "unknown",
           "years": null,
           "countries": null,
-          "density": 0.628
+          "density": 0.976
         },
         "pressure_mb": {
           "name": "Pressure Mb",
           "unit": "unknown",
           "years": null,
           "countries": null,
-          "density": 0.493
+          "density": 0.99
         },
         "r34_ne": {
           "name": "R34 Ne",
           "unit": "unknown",
           "years": null,
           "countries": null,
-          "density": 0.099
+          "density": 0.496
         },
         "r34_se": {
           "name": "R34 Se",
           "unit": "unknown",
           "years": null,
           "countries": null,
-          "density": 0.097
+          "density": 0.481
         },
         "r34_sw": {
           "name": "R34 Sw",
           "unit": "unknown",
           "years": null,
           "countries": null,
-          "density": 0.091
+          "density": 0.446
         },
         "r34_nw": {
           "name": "R34 Nw",
           "unit": "unknown",
           "years": null,
           "countries": null,
-          "density": 0.096
+          "density": 0.476
         },
         "r50_ne": {
           "name": "R50 Ne",
           "unit": "unknown",
           "years": null,
           "countries": null,
-          "density": 0.051
+          "density": 0.265
         },
         "r50_se": {
           "name": "R50 Se",
           "unit": "unknown",
           "years": null,
           "countries": null,
-          "density": 0.05
+          "density": 0.256
         },
         "r50_sw": {
           "name": "R50 Sw",
           "unit": "unknown",
           "years": null,
           "countries": null,
-          "density": 0.046
+          "density": 0.236
         },
         "r50_nw": {
           "name": "R50 Nw",
           "unit": "unknown",
           "years": null,
           "countries": null,
-          "density": 0.049
+          "density": 0.252
         },
         "r64_ne": {
           "name": "R64 Ne",
           "unit": "unknown",
           "years": null,
           "countries": null,
-          "density": 0.032
+          "density": 0.17
         },
         "r64_se": {
           "name": "R64 Se",
           "unit": "unknown",
           "years": null,
           "countries": null,
-          "density": 0.031
+          "density": 0.166
         },
         "r64_sw": {
           "name": "R64 Sw",
           "unit": "unknown",
           "years": null,
           "countries": null,
-          "density": 0.03
+          "density": 0.156
         },
         "r64_nw": {
           "name": "R64 Nw",
           "unit": "unknown",
           "years": null,
           "countries": null,
-          "density": 0.031
+          "density": 0.164
         }
       },
-      "llm_summary": "722,507 hurricane in 12 countries from 1842-10-25T03:00:00 to 2026-01-08T00:00:00.",
+      "llm_summary": "70,037 hurricane in 12 countries from 2015-01-01T00:00:00 to 2026-01-08T00:00:00.",
       "path": "global/disasters/hurricanes",
+      "event_type": "hurricane",
+      "significance_column": "wind_kt",
+      "overlay": {
+        "path": "disasters/hurricanes",
+        "label": "Hurricanes",
+        "scope": null,
+        "icon": null,
+        "default_visible": false,
+        "visibility": {
+          "min_zoom": 0,
+          "max_zoom": 18,
+          "min_area_sq_deg": null,
+          "max_area_sq_deg": null
+        }
+      },
       "reference": {
         "source": {
           "source_id": "hurricanes",
@@ -4670,6 +4956,7 @@
       "source_id": "landslides",
       "source_name": "NASA Global Landslide Catalog",
       "category": "hazard",
+      "data_type": "events",
       "scope": "global",
       "topic_tags": [
         "disasters",
@@ -4689,7 +4976,7 @@
       "geographic_coverage": {},
       "coverage_description": "Unknown coverage",
       "temporal_coverage": {
-        "start": "1760-01-01T00:00:00",
+        "start": "2015-01-01T00:00:00",
         "end": "2104-06-24T00:00:00",
         "granularity": "timestamp",
         "field": "timestamp"
@@ -4700,46 +4987,61 @@
           "unit": "unknown",
           "years": null,
           "countries": null,
-          "density": 0.378
+          "density": 0.721
         },
         "injuries": {
           "name": "Injuries",
           "unit": "unknown",
           "years": null,
           "countries": null,
-          "density": 0.228
+          "density": 0.711
         },
         "missing": {
           "name": "Missing",
           "unit": "unknown",
           "years": null,
           "countries": null,
-          "density": 0.01
+          "density": 0.004
         },
         "affected": {
           "name": "Affected",
           "unit": "unknown",
           "years": null,
           "countries": null,
-          "density": 0.197
+          "density": 0.119
         },
         "houses_destroyed": {
           "name": "Houses Destroyed",
           "unit": "unknown",
           "years": null,
           "countries": null,
-          "density": 0.15
+          "density": 0.037
         },
         "damage_usd": {
           "name": "Damage Usd",
           "unit": "unknown",
           "years": null,
           "countries": null,
-          "density": 0.061
+          "density": 0.225
         }
       },
-      "llm_summary": "45,483 landslide in 87 countries from 1760-01-01T00:00:00 to 2104-06-24T00:00:00.",
+      "llm_summary": "7,587 landslide in 66 countries from 2015-01-01T00:00:00 to 2104-06-24T00:00:00.",
       "path": "global/disasters/landslides",
+      "event_type": "landslide",
+      "significance_column": "affected",
+      "overlay": {
+        "path": "disasters/landslides",
+        "label": "Landslides",
+        "scope": null,
+        "icon": null,
+        "default_visible": false,
+        "visibility": {
+          "min_zoom": 0,
+          "max_zoom": 18,
+          "min_area_sq_deg": null,
+          "max_area_sq_deg": null
+        }
+      },
       "reference": {
         "source": {
           "source_id": "landslides",
@@ -4777,6 +5079,7 @@
       "source_id": "tornadoes",
       "source_name": "NOAA Storm Prediction Center",
       "category": "hazard",
+      "data_type": "metrics",
       "scope": "global",
       "topic_tags": [
         "disasters",
@@ -4804,7 +5107,7 @@
       },
       "coverage_description": "0 countries",
       "temporal_coverage": {
-        "start": 1950,
+        "start": 2015,
         "end": 2025,
         "granularity": "yearly",
         "field": "year"
@@ -4814,7 +5117,7 @@
           "name": "Tornado Count",
           "unit": "unknown",
           "years": [
-            1950,
+            2015,
             2025
           ],
           "countries": null,
@@ -4824,7 +5127,7 @@
           "name": "Total Track Miles",
           "unit": "unknown",
           "years": [
-            1950,
+            2015,
             2025
           ],
           "countries": null,
@@ -4834,7 +5137,7 @@
           "name": "Deaths",
           "unit": "unknown",
           "years": [
-            1950,
+            2015,
             2025
           ],
           "countries": null,
@@ -4844,7 +5147,7 @@
           "name": "Injuries",
           "unit": "unknown",
           "years": [
-            1950,
+            2015,
             2025
           ],
           "countries": null,
@@ -4854,15 +5157,28 @@
           "name": "Damage Usd",
           "unit": "unknown",
           "years": [
-            1950,
+            2015,
             2025
           ],
           "countries": null,
           "density": 1.0
         }
       },
-      "llm_summary": "1950-2025. Tornado Count, Total Track Miles, Deaths, Injuries, Damage Usd.",
+      "llm_summary": "2015-2025. Tornado Count, Total Track Miles, Deaths, Injuries, Damage Usd.",
       "path": "global/disasters/tornadoes",
+      "overlay": {
+        "path": "disasters/tornadoes",
+        "label": "Tornadoes",
+        "scope": null,
+        "icon": null,
+        "default_visible": false,
+        "visibility": {
+          "min_zoom": 0,
+          "max_zoom": 18,
+          "min_area_sq_deg": null,
+          "max_area_sq_deg": null
+        }
+      },
       "reference": {
         "source": {
           "source_id": "tornadoes",
@@ -4904,6 +5220,7 @@
       "source_id": "tsunamis",
       "source_name": "NOAA NGDC Tsunami Database",
       "category": "hazard",
+      "data_type": "events",
       "scope": "global",
       "topic_tags": [
         "disasters",
@@ -4924,43 +5241,100 @@
       "geographic_coverage": {},
       "coverage_description": "Unknown coverage",
       "temporal_coverage": {
-        "start": "0001-01-01T00:00:00",
-        "end": "2025-12-12T00:00:00",
+        "start": "2015-02-16T00:00:00",
+        "end": "2026-01-12T00:00:00",
         "granularity": "timestamp",
         "field": "timestamp"
       },
       "metrics": {
-        "dist_from_source_km": {
-          "name": "Dist From Source Km",
+        "cause_code": {
+          "name": "Cause Code",
           "unit": "unknown",
           "years": null,
           "countries": null,
-          "density": 0.988
+          "density": 1.0
+        },
+        "eq_magnitude": {
+          "name": "Eq Magnitude",
+          "unit": "unknown",
+          "years": null,
+          "countries": null,
+          "density": 0.785
+        },
+        "max_water_height_m": {
+          "name": "Max Wave Height",
+          "unit": "meters",
+          "years": null,
+          "countries": null,
+          "density": 0.897
+        },
+        "intensity": {
+          "name": "Intensity",
+          "unit": "Soloviev scale",
+          "years": null,
+          "countries": null,
+          "density": null
+        },
+        "runup_count": {
+          "name": "Runup Count",
+          "unit": "count",
+          "years": null,
+          "countries": null,
+          "density": 1.0
         },
         "deaths": {
           "name": "Deaths",
           "unit": "unknown",
           "years": null,
           "countries": null,
-          "density": 0.021
+          "density": 0.067
         },
         "deaths_order": {
           "name": "Deaths Order",
           "unit": "unknown",
           "years": null,
           "countries": null,
-          "density": 0.028
+          "density": 0.072
+        },
+        "damage_millions": {
+          "name": "Damage Millions",
+          "unit": "unknown",
+          "years": null,
+          "countries": null,
+          "density": 0.026
         },
         "damage_order": {
           "name": "Damage Order",
           "unit": "unknown",
           "years": null,
           "countries": null,
-          "density": 0.074
+          "density": 0.144
+        },
+        "max_runup_dist_km": {
+          "name": "Max Runup Dist Km",
+          "unit": "unknown",
+          "years": null,
+          "countries": null,
+          "density": 0.785
         }
       },
-      "llm_summary": "33,623 tsunami in 12 countries from 0001-01-01T00:00:00 to 2025-12-12T00:00:00.",
+      "llm_summary": "195 tsunami in 10 countries from 2015-02-16T00:00:00 to 2026-01-12T00:00:00.",
       "path": "global/disasters/tsunamis",
+      "event_type": "tsunami",
+      "significance_column": "max_water_height_m",
+      "overlay": {
+        "path": "disasters/tsunamis",
+        "label": "Tsunamis",
+        "scope": null,
+        "icon": null,
+        "default_visible": false,
+        "visibility": {
+          "min_zoom": 0,
+          "max_zoom": 18,
+          "min_area_sq_deg": null,
+          "max_area_sq_deg": null
+        }
+      },
       "reference": {
         "source": {
           "source_id": "tsunamis",
@@ -5007,6 +5381,7 @@
       "source_id": "volcanoes",
       "source_name": "Smithsonian Global Volcanism Program",
       "category": "hazard",
+      "data_type": "events",
       "scope": "global",
       "topic_tags": [
         "disasters",
@@ -5023,216 +5398,139 @@
         "Smithsonian",
         "GVP"
       ],
-      "geographic_level": "admin_0",
-      "geographic_coverage": {
-        "type": "global",
-        "countries": null,
-        "common_count": 53,
-        "common_missing": [
-          "AFG",
-          "AGO",
-          "ALB",
-          "AND",
-          "ARE",
-          "ARM",
-          "ATG",
-          "AUT",
-          "AZE",
-          "BDI",
-          "BEL",
-          "BEN",
-          "BFA",
-          "BGD",
-          "BGR",
-          "BHR",
-          "BHS",
-          "BIH",
-          "BLR",
-          "BLZ",
-          "BOL",
-          "BRA",
-          "BRB",
-          "BRN",
-          "BTN",
-          "BWA",
-          "CAF",
-          "CHE",
-          "CIV",
-          "COG",
-          "COK",
-          "CUB",
-          "CYP",
-          "CZE",
-          "DEU",
-          "DNK",
-          "DOM",
-          "DZA",
-          "EGY",
-          "EST",
-          "FIN",
-          "FJI",
-          "FSM",
-          "GAB",
-          "GEO",
-          "GHA",
-          "GIN",
-          "GMB",
-          "GNB",
-          "GUY",
-          "HKG",
-          "HND",
-          "HRV",
-          "HTI",
-          "HUN",
-          "IRL",
-          "IRN",
-          "IRQ",
-          "ISR",
-          "JAM",
-          "JOR",
-          "KAZ",
-          "KGZ",
-          "KHM",
-          "KIR",
-          "KOR",
-          "KWT",
-          "LAO",
-          "LBN",
-          "LBR",
-          "LBY",
-          "LCA",
-          "LIE",
-          "LKA",
-          "LSO",
-          "LTU",
-          "LUX",
-          "LVA",
-          "MAC",
-          "MAR",
-          "MCO",
-          "MDA",
-          "MDG",
-          "MDV",
-          "MHL",
-          "MKD",
-          "MLI",
-          "MLT",
-          "MMR",
-          "MNE",
-          "MNG",
-          "MOZ",
-          "MRT",
-          "MUS",
-          "MWI",
-          "MYS",
-          "NAM",
-          "NER",
-          "NGA",
-          "NIU",
-          "NLD",
-          "NPL",
-          "NRU",
-          "OMN",
-          "PAK",
-          "PAN",
-          "PLW",
-          "POL",
-          "PRK",
-          "PRY",
-          "PSE",
-          "QAT",
-          "ROU",
-          "RWA",
-          "SDN",
-          "SEN",
-          "SGP",
-          "SLE",
-          "SMR",
-          "SOM",
-          "SRB",
-          "SSD",
-          "STP",
-          "SUR",
-          "SVK",
-          "SVN",
-          "SWE",
-          "SWZ",
-          "SYC",
-          "SYR",
-          "TCD",
-          "TGO",
-          "THA",
-          "TJK",
-          "TKM",
-          "TLS",
-          "TTO",
-          "TUN",
-          "TUV",
-          "UGA",
-          "UKR",
-          "URY",
-          "UZB",
-          "VAT",
-          "VEN",
-          "ZMB",
-          "ZWE"
-        ],
-        "uncommonly_included": [
-          "ATA"
-        ],
-        "region_coverage": {}
-      },
-      "coverage_description": "53/200 common",
+      "geographic_level": null,
+      "geographic_coverage": {},
+      "coverage_description": "Unknown coverage",
       "temporal_coverage": {
-        "start": 1800,
-        "end": 2025,
-        "granularity": "yearly",
-        "field": "year"
+        "start": "2015-01-01T00:00:00",
+        "end": "2025-12-29T00:00:00",
+        "granularity": "timestamp",
+        "field": "timestamp"
       },
       "metrics": {
-        "eruption_count": {
-          "name": "Number of eruptions (in aggregates)",
-          "unit": null,
-          "years": [
-            1800,
-            2025
-          ],
-          "countries": 57,
+        "eruption_id": {
+          "name": "Eruption Id",
+          "unit": "unknown",
+          "years": null,
+          "countries": null,
           "density": 1.0
         },
-        "volcano_count": {
-          "name": "Number of active volcanoes (in aggregates)",
-          "unit": null,
-          "years": [
-            1800,
-            2025
-          ],
-          "countries": 57,
+        "end_year": {
+          "name": "End Year",
+          "unit": "unknown",
+          "years": null,
+          "countries": null,
           "density": 1.0
         },
-        "max_vei": {
-          "name": "Maximum VEI for the period",
-          "unit": null,
-          "years": [
-            1800,
-            2025
-          ],
-          "countries": 54,
-          "density": 0.951
+        "duration_days": {
+          "name": "Duration Days",
+          "unit": "unknown",
+          "years": null,
+          "countries": null,
+          "density": 0.987
         },
-        "avg_vei": {
-          "name": "Average VEI for the period",
-          "unit": null,
-          "years": [
-            1800,
-            2025
-          ],
-          "countries": 54,
-          "density": 0.951
+        "is_ongoing": {
+          "name": "Is Ongoing",
+          "unit": "unknown",
+          "years": null,
+          "countries": null,
+          "density": 1.0
+        },
+        "sibling_level": {
+          "name": "Sibling Level",
+          "unit": "unknown",
+          "years": null,
+          "countries": null,
+          "density": 0.922
+        },
+        "felt_radius_km": {
+          "name": "Felt Radius Km",
+          "unit": "unknown",
+          "years": null,
+          "countries": null,
+          "density": 1.0
+        },
+        "damage_radius_km": {
+          "name": "Damage Radius",
+          "unit": "km",
+          "years": null,
+          "countries": null,
+          "density": 1.0
+        },
+        "volcano_number": {
+          "name": "Volcano Number",
+          "unit": "unknown",
+          "years": null,
+          "countries": null,
+          "density": 1.0
+        },
+        "VEI": {
+          "name": "Vei",
+          "unit": "unknown",
+          "years": null,
+          "countries": null,
+          "density": 0.896
+        },
+        "deaths": {
+          "name": "Deaths",
+          "unit": "unknown",
+          "years": null,
+          "countries": null,
+          "density": null
+        },
+        "injuries": {
+          "name": "Injuries",
+          "unit": "unknown",
+          "years": null,
+          "countries": null,
+          "density": null
+        },
+        "missing": {
+          "name": "Missing",
+          "unit": "unknown",
+          "years": null,
+          "countries": null,
+          "density": null
+        },
+        "houses_destroyed": {
+          "name": "Houses Destroyed",
+          "unit": "unknown",
+          "years": null,
+          "countries": null,
+          "density": null
+        },
+        "noaa_id": {
+          "name": "Noaa Id",
+          "unit": "unknown",
+          "years": null,
+          "countries": null,
+          "density": null
+        },
+        "damage_usd": {
+          "name": "Damage Usd",
+          "unit": "unknown",
+          "years": null,
+          "countries": null,
+          "density": null
         }
       },
-      "llm_summary": "1800-2025. Number of eruptions (in aggregates), Number of active volcanoes (in aggregates), Maximum VEI for the period, Average VEI for the period.",
+      "llm_summary": "383 volcano in 30 countries from 2015-01-01T00:00:00 to 2025-12-29T00:00:00.",
       "path": "global/disasters/volcanoes",
+      "event_type": "volcano",
+      "significance_column": "VEI",
+      "overlay": {
+        "path": "disasters/volcanoes",
+        "label": "Volcanoes",
+        "scope": null,
+        "icon": null,
+        "default_visible": false,
+        "visibility": {
+          "min_zoom": 0,
+          "max_zoom": 18,
+          "min_area_sq_deg": null,
+          "max_area_sq_deg": null
+        }
+      },
       "reference": {
         "source": {
           "source_id": "volcanoes",
@@ -5279,6 +5577,7 @@
       "source_id": "wildfires",
       "source_name": "Global Fire Atlas",
       "category": "hazard",
+      "data_type": "events",
       "scope": "global",
       "topic_tags": [
         "disasters",
@@ -5334,8 +5633,23 @@
           "density": 1.0
         }
       },
-      "llm_summary": "49,788 wildfire in 95 countries.",
+      "llm_summary": "26,728 wildfire in 80 countries.",
       "path": "global/disasters/wildfires",
+      "event_type": "wildfire",
+      "significance_column": "area_km2",
+      "overlay": {
+        "path": "disasters/wildfires",
+        "label": "Wildfires",
+        "scope": null,
+        "icon": null,
+        "default_visible": false,
+        "visibility": {
+          "min_zoom": 0,
+          "max_zoom": 18,
+          "min_area_sq_deg": null,
+          "max_area_sq_deg": null
+        }
+      },
       "reference": {
         "source": {
           "source_id": "wildfires",
@@ -5370,5 +5684,8 @@
         }
       }
     }
-  ]
+  ],
+  "overlay_tree": {},
+  "visibility_rules": {},
+  "overlay_count": 25
 }

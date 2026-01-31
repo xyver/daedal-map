@@ -59,6 +59,38 @@ const COLORS = {
     severe: '#993300',
     moderate: '#cc9900'
   },
+  // Geometry overlay colors (ZCTA, tribal, watersheds, parks, etc.)
+  // These are reference boundaries, not disaster events
+  zcta: {
+    fill: '#2d8659',        // Teal green
+    fillOpacity: 0.25,
+    stroke: '#3da06d',
+    strokeWidth: 1.5
+  },
+  tribal: {
+    fill: '#8b4513',        // Saddle brown
+    fillOpacity: 0.3,
+    stroke: '#a0522d',
+    strokeWidth: 2
+  },
+  watershed: {
+    fill: '#4169e1',        // Royal blue
+    fillOpacity: 0.2,
+    stroke: '#6495ed',
+    strokeWidth: 1.5
+  },
+  park: {
+    fill: '#228b22',        // Forest green
+    fillOpacity: 0.25,
+    stroke: '#32cd32',
+    strokeWidth: 1.5
+  },
+  geometry: {
+    fill: '#2d8659',        // Default geometry color (teal green)
+    fillOpacity: 0.25,
+    stroke: '#3da06d',
+    strokeWidth: 1.5
+  },
   default: {
     fill: '#ffcc00',
     fillOpacity: 0.35,

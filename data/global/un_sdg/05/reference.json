@@ -63,8 +63,9 @@
     "ind_5_5_1": "Current number of seats in national parliaments (number)",
     "ind_5_6_2": "(S.4.C.13) Extent to which countries have laws and regulations that guarantee full and equal access to women and men age",
     "ind_5_a_1": "Proportion of total agricultural population with ownership or secure rights over agricultural land, by sex (%)",
-    "ind_5_a_2": "Degree to which the legal framework (including customary law) guarantees women\u2019s equal rights to land ownership and/or c",
+    "ind_5_a_2": "Degree to which the legal framework (including customary law) guarantees women’s equal rights to land ownership and/or c",
     "ind_5_b_1": "Proportion of individuals who own a mobile telephone, by sex (%)",
     "ind_5_c_1": "Countries with systems to track and make public allocations for gender equality and women's empowerment (0 = does not me"
-  }
+  },
+  "overlay": "demographics"
 }

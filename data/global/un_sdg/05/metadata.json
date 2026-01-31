@@ -5,6 +5,7 @@
   "license": "Open Data",
   "description": "Sustainable Development Goal 5 (Gender Equality) indicators from UN Statistics Division.",
   "category": "development",
+  "data_type": "metrics",
   "topic_tags": [
     "sdg",
     "goal5",
@@ -20,7 +21,7 @@
     "equality",
     "empowerment"
   ],
-  "last_updated": "2026-01-28",
+  "last_updated": "2026-01-29",
   "geographic_level": "admin_0",
   "geographic_coverage": {
     "type": "global",
@@ -58,8 +59,8 @@
     "field": "year"
   },
   "row_count": 1596,
-  "file_size_mb": 0.01,
-  "data_completeness": 0.42,
+  "file_size_mb": 0.02,
+  "data_completeness": 0.48,
   "update_schedule": "unknown",
   "expected_next_update": "unknown",
   "metrics": {
@@ -240,5 +241,18 @@
     }
   },
   "metric_count": 7,
-  "llm_summary": "2009-2025. Legal frameworks that promote, enforce and monitor gender equality (percentage of achievement, 0 - 100) -- Area 3: emplo, Current number of seats in national parliaments (number), (S.4.C.13) Extent to which countries have laws and regulations that guarantee full and equal access to women and men age, Proportion of total agricultural population with ownership or secure rights over agricultural land, by sex (%), Degree to which the legal framework (including customary law) guarantees women\u2019s equal rights to land ownership and/or c."
+  "llm_summary": "2009-2025. Legal frameworks that promote, enforce and monitor gender equality (percentage of achievement, 0 - 100) -- Area 3: emplo, Current number of seats in national parliaments (number), (S.4.C.13) Extent to which countries have laws and regulations that guarantee full and equal access to women and men age, Proportion of total agricultural population with ownership or secure rights over agricultural land, by sex (%), Degree to which the legal framework (including customary law) guarantees women\u2019s equal rights to land ownership and/or c.",
+  "overlay": {
+    "path": "demographics",
+    "label": "Demographics",
+    "scope": null,
+    "icon": null,
+    "default_visible": false,
+    "visibility": {
+      "min_zoom": 0,
+      "max_zoom": 18,
+      "min_area_sq_deg": null,
+      "max_area_sq_deg": null
+    }
+  }
 }

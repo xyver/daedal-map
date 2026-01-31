@@ -5,6 +5,7 @@
   "license": "Open Data",
   "description": "Sustainable Development Goal 2 (Zero Hunger) indicators from UN Statistics Division.",
   "category": "development",
+  "data_type": "metrics",
   "topic_tags": [
     "sdg",
     "goal2",
@@ -20,7 +21,7 @@
     "nutrition",
     "agriculture"
   ],
-  "last_updated": "2026-01-28",
+  "last_updated": "2026-01-29",
   "geographic_level": "admin_0",
   "geographic_coverage": {
     "type": "global",
@@ -72,7 +73,7 @@
   },
   "row_count": 5390,
   "file_size_mb": 0.08,
-  "data_completeness": 0.51,
+  "data_completeness": 0.55,
   "update_schedule": "unknown",
   "expected_next_update": "unknown",
   "metrics": {
@@ -362,5 +363,18 @@
     }
   },
   "metric_count": 11,
-  "llm_summary": "1995-2025. Prevalence of undernourishment (%), Prevalence of moderate or severe food insecurity in the population (%), Productivity of small-scale food producers (agricultural output per labour day, PPP) (constant 2017 international $), Average income of small-scale food producers, PPP (constant 2017 international $), [PROXY] Progress toward productive and sustainable agriculture, current status score."
+  "llm_summary": "1995-2025. Prevalence of undernourishment (%), Prevalence of moderate or severe food insecurity in the population (%), Productivity of small-scale food producers (agricultural output per labour day, PPP) (constant 2017 international $), Average income of small-scale food producers, PPP (constant 2017 international $), [PROXY] Progress toward productive and sustainable agriculture, current status score.",
+  "overlay": {
+    "path": "demographics",
+    "label": "Demographics",
+    "scope": null,
+    "icon": null,
+    "default_visible": false,
+    "visibility": {
+      "min_zoom": 0,
+      "max_zoom": 18,
+      "min_area_sq_deg": null,
+      "max_area_sq_deg": null
+    }
+  }
 }

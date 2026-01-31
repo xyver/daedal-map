@@ -5,6 +5,7 @@
   "license": "Open Data",
   "description": "Sustainable Development Goal 15 (Life on Land) indicators from UN Statistics Division.",
   "category": "development",
+  "data_type": "metrics",
   "topic_tags": [
     "sdg",
     "goal15",
@@ -20,7 +21,7 @@
     "biodiversity",
     "desertification"
   ],
-  "last_updated": "2026-01-28",
+  "last_updated": "2026-01-29",
   "geographic_level": "admin_0",
   "geographic_coverage": {
     "type": "global",
@@ -80,7 +81,7 @@
   },
   "row_count": 7104,
   "file_size_mb": 0.17,
-  "data_completeness": 0.42,
+  "data_completeness": 0.45,
   "update_schedule": "unknown",
   "expected_next_update": "unknown",
   "metrics": {
@@ -445,5 +446,18 @@
     }
   },
   "metric_count": 14,
-  "llm_summary": "1993-2024. Land area (thousands of hectares), Average proportion of Terrestrial Key Biodiversity Areas (KBAs) covered by protected areas (%), Forest area certified under an independently verified certification scheme (thousands of hectares), Proportion of land that is degraded over total land area (%), Average proportion of Mountain Key Biodiversity Areas (KBAs) covered by protected areas (%)."
+  "llm_summary": "1993-2024. Land area (thousands of hectares), Average proportion of Terrestrial Key Biodiversity Areas (KBAs) covered by protected areas (%), Forest area certified under an independently verified certification scheme (thousands of hectares), Proportion of land that is degraded over total land area (%), Average proportion of Mountain Key Biodiversity Areas (KBAs) covered by protected areas (%).",
+  "overlay": {
+    "path": "demographics",
+    "label": "Demographics",
+    "scope": null,
+    "icon": null,
+    "default_visible": false,
+    "visibility": {
+      "min_zoom": 0,
+      "max_zoom": 18,
+      "min_area_sq_deg": null,
+      "max_area_sq_deg": null
+    }
+  }
 }

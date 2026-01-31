@@ -5,6 +5,7 @@
   "license": "Open Data",
   "description": "Sustainable Development Goal 11 (Sustainable Cities and Communities) indicators from UN Statistics Division.",
   "category": "development",
+  "data_type": "metrics",
   "topic_tags": [
     "sdg",
     "goal11",
@@ -22,7 +23,7 @@
     "transport",
     "sustainable"
   ],
-  "last_updated": "2026-01-28",
+  "last_updated": "2026-01-29",
   "geographic_level": "admin_0",
   "geographic_coverage": {
     "type": "global",
@@ -82,7 +83,7 @@
   },
   "row_count": 3677,
   "file_size_mb": 0.07,
-  "data_completeness": 0.29,
+  "data_completeness": 0.33,
   "update_schedule": "unknown",
   "expected_next_update": "unknown",
   "metrics": {
@@ -463,5 +464,18 @@
     }
   },
   "metric_count": 15,
-  "llm_summary": "2000-2025. Proportion of urban population living in inadequate housing (%), Proportion of population that has convenient access to public transport (%), Ratio of land consumption rate to population growth rate, Proportion of cities with a direct participation structure of civil society in urban planning and management that operat, Total expenditure per capita spent on cultural and natural heritage, public (PPP, constant 2017 United States dollars)."
+  "llm_summary": "2000-2025. Proportion of urban population living in inadequate housing (%), Proportion of population that has convenient access to public transport (%), Ratio of land consumption rate to population growth rate, Proportion of cities with a direct participation structure of civil society in urban planning and management that operat, Total expenditure per capita spent on cultural and natural heritage, public (PPP, constant 2017 United States dollars).",
+  "overlay": {
+    "path": "demographics",
+    "label": "Demographics",
+    "scope": null,
+    "icon": null,
+    "default_visible": false,
+    "visibility": {
+      "min_zoom": 0,
+      "max_zoom": 18,
+      "min_area_sq_deg": null,
+      "max_area_sq_deg": null
+    }
+  }
 }

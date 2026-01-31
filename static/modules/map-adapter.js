@@ -40,6 +40,8 @@ export const MapAdapter = {
   currentStateLocId: null,
   currentRegionGeojson: null,  // Store current regions for parent outline
   focusedParentId: null,  // Parent ID of focal area (center of viewport)
+  focalLocId: null,  // Full loc_id of focal feature (for hierarchy coloring)
+  focalPrefixes: [],  // Hierarchy prefixes: ['USA', 'USA-CA', 'USA-CA-029']
   clickTimeout: null,  // Timer to distinguish single vs double click
   pendingClickFeature: null,  // Feature from pending single click
 
@@ -425,6 +427,9 @@ export const MapAdapter = {
       feature.id = index;
     });
 
+    // Store current geojson for use as ancestor boundary
+    this.currentRegionGeojson = geojson;
+
     // Update focused parent based on center of viewport
     this.updateFocusedParent(geojson);
 
@@ -489,53 +494,108 @@ export const MapAdapter = {
   },
 
   /**
-   * Update the focused parent ID based on the feature at center of viewport
-   * @param {Object} geojson - GeoJSON FeatureCollection to search
+   * Update the focal loc_id based on the feature at center of viewport
+   * This determines the hierarchy coloring (same county = dark, same state = medium, etc.)
+   * @param {Object} geojson - GeoJSON FeatureCollection to search (used as fallback)
    */
   updateFocusedParent(geojson) {
-    if (!this.map || !geojson || !geojson.features) {
+    if (!this.map) {
+      this.focalLocId = null;
+      this.focalPrefixes = [];
       this.focusedParentId = null;
       return;
     }
 
+    // Method 1: Query the actual rendered feature at viewport center (most accurate)
+    // This finds which polygon CONTAINS the center point, not just closest centroid
     const center = this.map.getCenter();
-    const centerLng = center.lng;
-    const centerLat = center.lat;
+    const centerPoint = this.map.project(center);  // Convert to screen coordinates
 
-    // Find the feature closest to center (using centroid)
-    let closestFeature = null;
-    let closestDist = Infinity;
+    let focalFeature = null;
 
-    for (const feature of geojson.features) {
-      const props = feature.properties || {};
-      const lon = props.centroid_lon;
-      const lat = props.centroid_lat;
-
-      if (lon == null || lat == null) continue;
-
-      // Simple euclidean distance (good enough for finding closest)
-      const dist = Math.pow(lon - centerLng, 2) + Math.pow(lat - centerLat, 2);
-      if (dist < closestDist) {
-        closestDist = dist;
-        closestFeature = feature;
+    // Query features at the center point
+    if (this.map.getLayer(CONFIG.layers.fill)) {
+      const features = this.map.queryRenderedFeatures(centerPoint, {
+        layers: [CONFIG.layers.fill]
+      });
+      if (features.length > 0) {
+        focalFeature = features[0];
       }
     }
 
-    // Set the focused parent ID
-    if (closestFeature && closestFeature.properties) {
-      this.focusedParentId = closestFeature.properties.parent_id || null;
+    // Method 2: Fallback to centroid distance if no feature at center
+    // (can happen if center is over water or outside any polygon)
+    if (!focalFeature && geojson && geojson.features) {
+      const centerLng = center.lng;
+      const centerLat = center.lat;
+      let closestDist = Infinity;
+
+      for (const feature of geojson.features) {
+        const props = feature.properties || {};
+        const lon = props.centroid_lon;
+        const lat = props.centroid_lat;
+
+        if (lon == null || lat == null) continue;
+
+        const dist = Math.pow(lon - centerLng, 2) + Math.pow(lat - centerLat, 2);
+        if (dist < closestDist) {
+          closestDist = dist;
+          focalFeature = feature;
+        }
+      }
+    }
+
+    // Extract loc_id and build prefix hierarchy
+    if (focalFeature && focalFeature.properties) {
+      const locId = focalFeature.properties.loc_id || '';
+      const prevFocalLocId = this.focalLocId;
+      this.focalLocId = locId;
+      this.focusedParentId = focalFeature.properties.parent_id || null;
+
+      // Build prefixes: USA-CA-029-001 -> ['USA', 'USA-CA', 'USA-CA-029', 'USA-CA-029-001']
+      const parts = locId.split('-');
+      this.focalPrefixes = [];
+      for (let i = 1; i <= parts.length; i++) {
+        this.focalPrefixes.push(parts.slice(0, i).join('-'));
+      }
+
+      // Log when focal changes (useful for border crossing debugging)
+      if (prevFocalLocId !== locId) {
+        const name = focalFeature.properties.name || 'unknown';
+        console.log(`Focal changed: ${prevFocalLocId} -> ${locId} (${name})`);
+      }
     } else {
+      if (this.focalLocId) {
+        console.log(`Focal cleared (was ${this.focalLocId}), no feature at viewport center`);
+      }
+      this.focalLocId = null;
+      this.focalPrefixes = [];
       this.focusedParentId = null;
     }
   },
 
   /**
-   * Get MapLibre expression for focal fill color
-   * Features matching focusedParentId get green, others get blue
+   * Get MapLibre expression for hierarchical fill color based on loc_id prefix matching.
+   *
+   * Color logic (generalizes globally via loc_id hierarchy):
+   * - Blue = no match (different country entirely)
+   * - Orange 1 (lightest) = same country as focal
+   * - Orange 2 = same admin1 (state/province) as focal
+   * - Orange 3 = same admin2 (county/district) as focal
+   * - Orange 4 = same admin3 (tract) as focal
+   * - Orange 5 (darkest) = same admin4+ as focal
+   *
+   * Hover adds +1 orange level to preview the next zoom depth.
+   *
+   * Example: focal = ITA-PIE-001 (Italian Piedmont commune)
+   * - FRA-ARA-001 (French commune) -> no match -> BLUE
+   * - ITA-LOM-001 (Lombardy commune) -> matches ITA -> Orange 1
+   * - ITA-PIE-002 (other Piedmont commune) -> matches ITA-PIE -> Orange 2
+   * - ITA-PIE-001 (focal) -> matches ITA-PIE-001 -> Orange 3
    */
   getFocalFillColorExpression() {
-    if (!this.focusedParentId) {
-      // No focal parent - use default blue
+    if (!this.focalPrefixes || this.focalPrefixes.length === 0) {
+      // No focal point - use default blue with hover
       return [
         'case',
         ['boolean', ['feature-state', 'hover'], false],
@@ -544,36 +604,58 @@ export const MapAdapter = {
       ];
     }
 
-    // Color based on parent_id match
-    return [
+    const colors = CONFIG.ancestorColors.stroke;  // Orange gradient [0]=lightest to [4]=darkest
+    const prefixes = this.focalPrefixes;
+    // prefixes[0] = country (e.g., 'ITA')
+    // prefixes[1] = state/region (e.g., 'ITA-PIE')
+    // prefixes[2] = county/commune (e.g., 'ITA-PIE-001')
+    // prefixes[3] = tract, etc.
+
+    let expr = ['case'];
+
+    // Check prefix matches from most specific to least specific
+    // Include ALL levels including country (index 0)
+    // Color mapping: prefix index 0 -> colors[0], index 1 -> colors[1], etc.
+    for (let i = prefixes.length - 1; i >= 0; i--) {
+      const prefix = prefixes[i];
+      // Base color: direct mapping prefixes[i] -> colors[i]
+      const baseColorIdx = Math.min(i, colors.length - 1);
+      // Hover color: +1 level (capped at darkest)
+      const hoverColorIdx = Math.min(i + 1, colors.length - 1);
+
+      // If loc_id starts with this prefix
+      expr.push(['==', ['index-of', prefix, ['get', 'loc_id']], 0]);
+      // Return hover color if hovered, otherwise base color
+      expr.push([
+        'case',
+        ['boolean', ['feature-state', 'hover'], false],
+        colors[hoverColorIdx],
+        colors[baseColorIdx]
+      ]);
+    }
+
+    // Default: no match at all = blue (different country entirely)
+    expr.push([
       'case',
       ['boolean', ['feature-state', 'hover'], false],
       CONFIG.colors.fillHover,
-      ['==', ['get', 'parent_id'], this.focusedParentId],
-      CONFIG.colors.focalFill,
       CONFIG.colors.fill
-    ];
+    ]);
+
+    return expr;
   },
 
   /**
    * Get MapLibre expression for focal stroke color
    */
   getFocalStrokeColorExpression() {
-    if (!this.focusedParentId) {
-      return CONFIG.colors.stroke;
-    }
-
-    return [
-      'case',
-      ['==', ['get', 'parent_id'], this.focusedParentId],
-      CONFIG.colors.focalStroke,
-      CONFIG.colors.stroke
-    ];
+    // Keep strokes consistent - don't vary by hierarchy
+    return CONFIG.colors.stroke;
   },
 
   /**
    * Get MapLibre expression for focal stroke opacity
-   * Focal features (siblings sharing parent_id) get 0 opacity to hide internal lines
+   * Features sharing the same parent get reduced stroke opacity to de-emphasize internal boundaries
    */
   getFocalStrokeOpacityExpression() {
     if (!this.focusedParentId) {
@@ -583,13 +665,14 @@ export const MapAdapter = {
     return [
       'case',
       ['==', ['get', 'parent_id'], this.focusedParentId],
-      0,  // Hide strokes between siblings
-      1   // Show strokes for non-focal features
+      0.3,  // Reduced opacity for siblings (same parent)
+      1     // Full opacity for non-focal features
     ];
   },
 
   /**
-   * Update focal coloring based on current focusedParentId
+   * Update focal coloring based on current focalPrefixes
+   * Rebuilds the MapLibre fill-color expression with updated hierarchy
    */
   updateFocalColors() {
     if (!this.map.getLayer(CONFIG.layers.fill)) return;
@@ -607,6 +690,11 @@ export const MapAdapter = {
       CONFIG.colors.strokeHover,
       strokeColor
     ]);
+
+    // Debug: log when colors are updated
+    if (this.focalPrefixes.length > 0) {
+      console.log(`Updated fill colors for focal: ${this.focalPrefixes[this.focalPrefixes.length - 1]}`);
+    }
   },
 
   /**

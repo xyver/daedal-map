@@ -5,6 +5,7 @@
   "license": "Open Data",
   "description": "Sustainable Development Goal 7 (Affordable and Clean Energy) indicators from UN Statistics Division.",
   "category": "development",
+  "data_type": "metrics",
   "topic_tags": [
     "sdg",
     "goal7",
@@ -20,7 +21,7 @@
     "renewable",
     "clean energy"
   ],
-  "last_updated": "2026-01-28",
+  "last_updated": "2026-01-29",
   "geographic_level": "admin_0",
   "geographic_coverage": {
     "type": "global",
@@ -78,7 +79,7 @@
   },
   "row_count": 5230,
   "file_size_mb": 0.08,
-  "data_completeness": 0.9,
+  "data_completeness": 0.91,
   "update_schedule": "unknown",
   "expected_next_update": "unknown",
   "metrics": {
@@ -234,5 +235,18 @@
     }
   },
   "metric_count": 6,
-  "llm_summary": "2000-2023. Proportion of population with access to electricity, by urban/rural (%), Proportion of population with primary reliance on clean fuels and technology (%), Renewable energy share in the total final energy consumption (%), Energy intensity level of primary energy (megajoules per constant 2021 purchasing power parity GDP), International financial flows to developing countries in support of clean energy research and development and renewable ."
+  "llm_summary": "2000-2023. Proportion of population with access to electricity, by urban/rural (%), Proportion of population with primary reliance on clean fuels and technology (%), Renewable energy share in the total final energy consumption (%), Energy intensity level of primary energy (megajoules per constant 2021 purchasing power parity GDP), International financial flows to developing countries in support of clean energy research and development and renewable .",
+  "overlay": {
+    "path": "demographics",
+    "label": "Demographics",
+    "scope": null,
+    "icon": null,
+    "default_visible": false,
+    "visibility": {
+      "min_zoom": 0,
+      "max_zoom": 18,
+      "min_area_sq_deg": null,
+      "max_area_sq_deg": null
+    }
+  }
 }

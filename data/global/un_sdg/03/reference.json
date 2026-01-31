@@ -87,5 +87,6 @@
     "ind_3_c_1": "Health worker density, by type of occupation (per 10,000 population)",
     "ind_3_d_1": "International Health Regulations (IHR) capacity, by type of IHR capacity (%)",
     "ind_3_d_2": "Percentage of bloodstream infection due to Escherichia coli resistant to 3rd-generation cephalosporin (e.g., ESBL- E. co"
-  }
+  },
+  "overlay": "demographics"
 }

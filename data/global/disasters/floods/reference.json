@@ -6,8 +6,21 @@
     "license": "Public Domain",
     "category": "hazard",
     "description": "Global Active Archive of Large Flood Events from the Dartmouth Flood Observatory (DFO). Contains major flood events worldwide with extent, duration, and impact data.",
-    "topic_tags": ["disasters", "floods", "hydrology", "hazard"],
-    "keywords": ["flood", "inundation", "DFO", "Dartmouth", "displaced", "river", "coastal"]
+    "topic_tags": [
+      "disasters",
+      "floods",
+      "hydrology",
+      "hazard"
+    ],
+    "keywords": [
+      "flood",
+      "inundation",
+      "DFO",
+      "Dartmouth",
+      "displaced",
+      "river",
+      "coastal"
+    ]
   },
   "metrics": {
     "area_km2": "Flood extent area in square kilometers",
@@ -21,7 +34,9 @@
     "coverage": "Global - 138+ countries",
     "focus": "Large flood events detected via satellite and news reports",
     "temporal": "1985-2019",
-    "admin_levels": ["Point locations with flood extent polygons"]
+    "admin_levels": [
+      "Point locations with flood extent polygons"
+    ]
   },
   "data_quality_notes": [
     "Only includes large-scale flood events meeting DFO criteria",
@@ -29,5 +44,6 @@
     "Death and displacement figures from news reports may be estimates",
     "dfo_id links to original DFO database record",
     "glide_index provides cross-reference to GLIDE disaster database"
-  ]
+  ],
+  "overlay": "disasters/floods"
 }

@@ -83,7 +83,7 @@
     "ind_17_1_1": "Total government revenue, in local currency",
     "ind_17_1_2": "Proportion of domestic budget funded by domestic taxes (%)",
     "ind_17_10_1": "Worldwide weighted tariff-average, most-favoured-nation status, by type of product (%)",
-    "ind_17_11_1": "Developing countries\u2019 and least developed countries\u2019 share of global merchandise exports (%)",
+    "ind_17_11_1": "Developing countries’ and least developed countries’ share of global merchandise exports (%)",
     "ind_17_12_1": "Average tariff applied by developed countries, most-favored nation status, by type of product (%)",
     "ind_17_13_1": "DEC alternative conversion factor (in local currency unit per United States dollar)",
     "ind_17_14_1": "Mechanisms in place to enhance policy coherence for sustainable development (%)",
@@ -100,9 +100,10 @@
     "ind_17_3_2": "Volume of remittances (in United States dollars) as a proportion of total GDP (%)",
     "ind_17_4_1": "Debt service as a proportion of exports of goods, services and primary income (%)",
     "ind_17_5_1": "Number of countries with an outward investment promotion scheme which can benefit developing countries, including LDCs (",
-    "ind_17_6_1": "Fixed broadband subscriptions per 100\u00a0inhabitants, by speed (per 100 inhabitants)",
+    "ind_17_6_1": "Fixed broadband subscriptions per 100 inhabitants, by speed (per 100 inhabitants)",
     "ind_17_7_1": "Total trade of tracked Environmentally Sound Technologies (current United States dollars)",
     "ind_17_8_1": "Proportion of individuals using the Internet (%)",
     "ind_17_9_1": "Total official development assistance (gross disbursement) for technical cooperation (millions of 2023 United States dol"
-  }
+  },
+  "overlay": "demographics"
 }

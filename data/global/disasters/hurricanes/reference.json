@@ -6,8 +6,21 @@
     "license": "Public Domain",
     "category": "hazard",
     "description": "International Best Track Archive for Climate Stewardship (IBTrACS) - the most complete global dataset of tropical cyclones. Includes hurricanes, typhoons, and cyclones from all ocean basins with track positions, intensity, and wind radii data.",
-    "topic_tags": ["disasters", "hurricanes", "tropical cyclones", "hazard"],
-    "keywords": ["hurricane", "typhoon", "cyclone", "tropical storm", "IBTrACS", "wind speed", "storm surge"]
+    "topic_tags": [
+      "disasters",
+      "hurricanes",
+      "tropical cyclones",
+      "hazard"
+    ],
+    "keywords": [
+      "hurricane",
+      "typhoon",
+      "cyclone",
+      "tropical storm",
+      "IBTrACS",
+      "wind speed",
+      "storm surge"
+    ]
   },
   "datasets": {
     "storms.parquet": "Storm-level records with name, basin, max intensity, and track summary",
@@ -34,12 +47,21 @@
     "coverage": "Global - all ocean basins",
     "focus": "Tropical cyclones, hurricanes, typhoons worldwide",
     "temporal": "1842-present",
-    "basins": ["North Atlantic (NA)", "Eastern Pacific (EP)", "Western Pacific (WP)", "North Indian (NI)", "South Indian (SI)", "South Pacific (SP)", "South Atlantic (SA)"]
+    "basins": [
+      "North Atlantic (NA)",
+      "Eastern Pacific (EP)",
+      "Western Pacific (WP)",
+      "North Indian (NI)",
+      "South Indian (SI)",
+      "South Pacific (SP)",
+      "South Atlantic (SA)"
+    ]
   },
   "data_quality_notes": [
     "Pre-satellite era (before 1966) may have incomplete tracks",
     "Wind radii data available primarily from 2004 onward",
     "source_agency indicates which agency provided the best track data",
     "Category based on Saffir-Simpson scale for Atlantic/E.Pacific, equivalent for other basins"
-  ]
+  ],
+  "overlay": "disasters/hurricanes"
 }

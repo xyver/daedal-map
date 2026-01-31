@@ -5,6 +5,7 @@
   "license": "Open Data",
   "description": "Sustainable Development Goal 14 (Life Below Water) indicators from UN Statistics Division.",
   "category": "development",
+  "data_type": "metrics",
   "topic_tags": [
     "sdg",
     "goal14",
@@ -22,7 +23,7 @@
     "fishing",
     "coastal"
   ],
-  "last_updated": "2026-01-28",
+  "last_updated": "2026-01-29",
   "geographic_level": "admin_0",
   "geographic_coverage": {
     "type": "global",
@@ -93,7 +94,7 @@
   },
   "row_count": 4394,
   "file_size_mb": 0.03,
-  "data_completeness": 0.3,
+  "data_completeness": 0.36,
   "update_schedule": "unknown",
   "expected_next_update": "unknown",
   "metrics": {
@@ -358,5 +359,18 @@
     }
   },
   "metric_count": 10,
-  "llm_summary": "1996-2025. Beach litter originating from national land-based sources that ends in the beach (Tonnes), Number of countries using ecosystem-based approaches to managing marine areas (1 = YES; 0 = NO), Average marine acidity (pH) measured at agreed suite of representative sampling stations, Proportion of fish stocks within biologically sustainable levels (not overexploited) (%), Average proportion of Marine Key Biodiversity Areas (KBAs) covered by protected areas (%)."
+  "llm_summary": "1996-2025. Beach litter originating from national land-based sources that ends in the beach (Tonnes), Number of countries using ecosystem-based approaches to managing marine areas (1 = YES; 0 = NO), Average marine acidity (pH) measured at agreed suite of representative sampling stations, Proportion of fish stocks within biologically sustainable levels (not overexploited) (%), Average proportion of Marine Key Biodiversity Areas (KBAs) covered by protected areas (%).",
+  "overlay": {
+    "path": "demographics",
+    "label": "Demographics",
+    "scope": null,
+    "icon": null,
+    "default_visible": false,
+    "visibility": {
+      "min_zoom": 0,
+      "max_zoom": 18,
+      "min_area_sq_deg": null,
+      "max_area_sq_deg": null
+    }
+  }
 }

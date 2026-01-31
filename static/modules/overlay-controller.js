@@ -16,6 +16,7 @@ import { CONFIG } from './config.js';
 import { DetailedEventCache } from './cache.js';
 import { fetchMsgpack } from './utils/fetch.js';
 import { WeatherGridModel, setDependencies as setWeatherGridDeps } from './models/model-weather-grid.js';
+import { GeometryModel } from './models/model-geometry.js';
 
 // Dependencies set via setDependencies
 let MapAdapter = null;
@@ -1011,6 +1012,10 @@ export const OverlayController = {
 
   // Active aftershock sequence scale ID
   activeSequenceScaleId: null,
+
+  // Pending geometry data to render when geography overlay is enabled
+  // Format: { geojson, geometryType, options }
+  pendingGeometry: null,
 
   /**
    * Initialize the overlay controller.
@@ -3992,13 +3997,14 @@ export const OverlayController = {
     console.log(`OverlayController: ${overlayId} ${isActive ? 'ON' : 'OFF'}`);
 
     // Demographics controls choropleth visibility AND loads countries
+    // Note: Can coexist with geometry overlays (separate layer systems)
     if (overlayId === 'demographics') {
       if (isActive) {
-        // Load countries if not already loaded (lazy load on first demographics enable)
-        const App = window.App;  // Get App reference
-        if (App && typeof App.loadCountries === 'function') {
-          // Check if countries are already loaded by checking if there's geojson data
-          if (!App.currentData?.geojson) {
+        // Load countries if choropleth layers don't exist yet
+        const choroplethLayerExists = MapAdapter?.map?.getLayer('regions-fill');
+        if (!choroplethLayerExists) {
+          const App = window.App;
+          if (App && typeof App.loadCountries === 'function') {
             console.log('OverlayController: Loading countries for demographics overlay');
             await App.loadCountries();
           }
@@ -4009,6 +4015,63 @@ export const OverlayController = {
       } else {
         if (MapAdapter) {
           MapAdapter.setChoroplethVisible(false);
+        }
+      }
+      return;
+    }
+
+    // Geography overlay controls geometry layers (ZCTA, tribal, watersheds, etc.)
+    // These are rendered via GeometryModel with type-specific layers
+    // Handle both the category toggle ('geography') and individual toggles ('zip_codes', etc.)
+    // Note: Can coexist with demographics (separate layer systems)
+    const geometryOverlayIds = ['geography', 'zip_codes', 'tribal_areas', 'watersheds', 'parks'];
+    if (geometryOverlayIds.includes(overlayId)) {
+      if (MapAdapter?.map) {
+        if (isActive) {
+          // If there's pending geometry data, store it in cache first
+          if (this.pendingGeometry) {
+            const { geojson, geometryType, sourceId, options } = this.pendingGeometry;
+            console.log(`OverlayController: Storing pending geometry (${geometryType}, ${geojson.features?.length || 0} features)`);
+            this.renderGeometryData(sourceId, geojson, geometryType, options);
+            this.pendingGeometry = null;
+          }
+          // Render all geometry from cache
+          this.refreshGeometryFromCache();
+          // Show all geometry layers
+          const geometryTypes = ['zcta', 'tribal', 'watershed', 'park', 'geometry'];
+          for (const geoType of geometryTypes) {
+            const fillId = `${geoType}-geometry-fill`;
+            const strokeId = `${geoType}-geometry-stroke`;
+            const labelId = `${geoType}-geometry-label`;
+            if (MapAdapter.map.getLayer(fillId)) {
+              MapAdapter.map.setLayoutProperty(fillId, 'visibility', 'visible');
+            }
+            if (MapAdapter.map.getLayer(strokeId)) {
+              MapAdapter.map.setLayoutProperty(strokeId, 'visibility', 'visible');
+            }
+            if (MapAdapter.map.getLayer(labelId)) {
+              MapAdapter.map.setLayoutProperty(labelId, 'visibility', 'visible');
+            }
+          }
+          console.log(`OverlayController: Geography layers shown`);
+        } else {
+          // Hide all geometry layers
+          const geometryTypes = ['zcta', 'tribal', 'watershed', 'park', 'geometry'];
+          for (const geoType of geometryTypes) {
+            const fillId = `${geoType}-geometry-fill`;
+            const strokeId = `${geoType}-geometry-stroke`;
+            const labelId = `${geoType}-geometry-label`;
+            if (MapAdapter.map.getLayer(fillId)) {
+              MapAdapter.map.setLayoutProperty(fillId, 'visibility', 'none');
+            }
+            if (MapAdapter.map.getLayer(strokeId)) {
+              MapAdapter.map.setLayoutProperty(strokeId, 'visibility', 'none');
+            }
+            if (MapAdapter.map.getLayer(labelId)) {
+              MapAdapter.map.setLayoutProperty(labelId, 'visibility', 'none');
+            }
+          }
+          console.log(`OverlayController: Geography layers hidden`);
         }
       }
       return;
@@ -4962,12 +5025,13 @@ export const OverlayController = {
       }
     }
 
-    // Metrics data (from order system)
+    // Metrics and geometry data (from order system)
     for (const sourceId of Object.keys(metricCache)) {
       const cached = metricCache[sourceId];
       const features = cached?.geojson?.features || [];
       const overlaySize = sizeInfo.perOverlay[sourceId] || { features: 0, bytes: 0 };
       const yearRange = cached?.year_range;
+      const isGeometry = cached?.dataType === 'geometry';
 
       if (features.length > 0) {
         const years = yearRange?.available_years || [];
@@ -4977,8 +5041,8 @@ export const OverlayController = {
           sizeMB: (overlaySize.bytes / (1024 * 1024)).toFixed(2),
           yearsLoaded: years.length,
           years: years,
-          yearRange: yearRange ? `${yearRange.min}-${yearRange.max}` : 'none',
-          dataType: 'metrics'
+          yearRange: isGeometry ? 'n/a' : (yearRange ? `${yearRange.min}-${yearRange.max}` : 'none'),
+          dataType: cached?.dataType || 'metrics'
         };
 
         stats.totals.features += features.length;
@@ -5246,5 +5310,289 @@ export const OverlayController = {
       window.dispatchEvent(new CustomEvent('overlayCacheUpdated', { detail: cacheSize }));
       console.log(`OverlayController: Cleared metrics cache for ${sourceId}`);
     }
+  },
+
+  // -------------------------------------------------------------------------
+  // Geometry Cache (for geometry orders - ZCTA, tribal, watersheds, etc.)
+  // Deduplicates by loc_id, similar to event_id dedup for events.
+  // -------------------------------------------------------------------------
+  // Geometry Order Rendering
+  // Note: Backend SessionCache handles deduplication. Frontend just renders.
+  // -------------------------------------------------------------------------
+
+  /**
+   * Render geometry data from a chat order (ZCTA, tribal, etc.)
+   * Backend SessionCache handles deduplication - frontend just renders.
+   * @param {string} sourceId - Source ID (e.g., 'geometry_zcta')
+   * @param {Object} geojson - GeoJSON FeatureCollection from the order result
+   * @param {string} geometryType - Geometry type for rendering ('zcta', 'tribal', etc.)
+   * @param {Object} options - Render options (showLabels, etc.)
+   * @returns {number} Number of features rendered
+   */
+  renderGeometryData(sourceId, geojson, geometryType = 'zcta', options = {}) {
+    if (!geojson?.features) {
+      console.warn(`OverlayController: Cannot render geometry - invalid data for source: ${sourceId}`);
+      return 0;
+    }
+
+    // Accumulate in metricCache for Loaded tab tracking (keyed by sourceId)
+    // Backend deduplicates, so we accumulate new features from each response
+    const existing = metricCache[sourceId];
+    if (existing?.geojson?.features) {
+      // Merge new features with existing (dedup by loc_id)
+      const existingLocIds = new Set(existing.geojson.features.map(f => f.properties?.loc_id));
+      const newFeatures = geojson.features.filter(f => !existingLocIds.has(f.properties?.loc_id));
+      existing.geojson.features = existing.geojson.features.concat(newFeatures);
+      existing.loadedAt = Date.now();
+      console.log(`OverlayController: Accumulated ${newFeatures.length} new ${geometryType} features (total: ${existing.geojson.features.length})`);
+    } else {
+      // First load for this source
+      metricCache[sourceId] = {
+        geojson: geojson,
+        year_data: {},
+        year_range: null,
+        dataType: 'geometry',
+        loadedAt: Date.now()
+      };
+    }
+
+    // Notify Loaded tab to update
+    window.dispatchEvent(new CustomEvent('overlayCacheUpdated'));
+
+    console.log(`OverlayController: Stored ${metricCache[sourceId].geojson.features.length} ${geometryType} features in cache`);
+    return metricCache[sourceId].geojson.features.length;
+  },
+
+  /**
+   * Refresh geometry display from cache.
+   * Called when overlay is turned on or when new data arrives while overlay is already on.
+   */
+  refreshGeometryFromCache() {
+    const sourceIdToType = {
+      'geometry_zcta': 'zcta',
+      'geometry_tribal': 'tribal',
+      'geometry_watershed': 'watershed',
+      'geometry_park': 'park'
+    };
+
+    let totalFeatures = 0;
+    for (const [sourceId, typeId] of Object.entries(sourceIdToType)) {
+      const cached = metricCache[sourceId];
+      if (cached?.geojson?.features?.length > 0) {
+        GeometryModel.render(cached.geojson, typeId, { showLabels: false });
+        totalFeatures += cached.geojson.features.length;
+        console.log(`OverlayController: Rendered ${cached.geojson.features.length} ${typeId} features from cache`);
+      }
+    }
+
+    if (totalFeatures > 0) {
+      console.log(`OverlayController: Refreshed ${totalFeatures} total geometry features from cache`);
+    }
+  },
+
+  /**
+   * Remove geometry features from cache and re-render.
+   * Supports two removal modes (backend-driven preferred):
+   * 1. loc_ids: Exact list from backend (keeps caches in sync)
+   * 2. regions: Prefix-based removal (fallback)
+   *
+   * @param {string} sourceId - Source ID (e.g., 'geometry_zcta')
+   * @param {Object} criteria - Removal criteria
+   * @param {Array} [criteria.loc_ids] - Specific loc_ids to remove (preferred, from backend)
+   * @param {Array} [criteria.regions] - Regions to remove by prefix (e.g., ['USA-FL'])
+   * @param {string} geometryType - Geometry type for rendering ('zcta', 'tribal', etc.)
+   * @returns {Object} { removed: number, remaining: number }
+   */
+  removeGeometryData(sourceId, criteria, geometryType = 'zcta') {
+    const cached = metricCache[sourceId];
+    if (!cached?.geojson?.features) {
+      console.warn(`OverlayController: No cached geometry for source: ${sourceId}`);
+      return { removed: 0, remaining: 0 };
+    }
+
+    const originalCount = cached.geojson.features.length;
+    const { loc_ids, regions } = criteria;
+
+    if (loc_ids && loc_ids.length > 0) {
+      // Backend-driven: remove exact loc_ids (preferred - keeps caches in sync)
+      const locIdSet = new Set(loc_ids);
+      cached.geojson.features = cached.geojson.features.filter(f => {
+        const locId = f.properties?.loc_id;
+        return !locIdSet.has(locId);
+      });
+      console.log(`OverlayController: Removed ${loc_ids.length} features by loc_id from ${sourceId}`);
+    } else if (regions && regions.length > 0) {
+      // Fallback: region-based prefix matching
+      const prefixes = regions.map(r => `${r}-`);
+      const regionSet = new Set(regions);
+      cached.geojson.features = cached.geojson.features.filter(f => {
+        const parentId = f.properties?.parent_id || '';
+        const matchesPrefix = prefixes.some(p => parentId.startsWith(p));
+        const matchesExact = regionSet.has(parentId);
+        return !matchesPrefix && !matchesExact;
+      });
+      console.log(`OverlayController: Removed features matching regions: ${regions.join(', ')}`);
+    } else {
+      console.warn(`OverlayController: removeGeometryData called without loc_ids or regions`);
+      return { removed: 0, remaining: originalCount };
+    }
+
+    const removedCount = originalCount - cached.geojson.features.length;
+    cached.loadedAt = Date.now();
+
+    // If no features left, remove from cache
+    if (cached.geojson.features.length === 0) {
+      delete metricCache[sourceId];
+    }
+
+    // Notify Loaded tab to update
+    window.dispatchEvent(new CustomEvent('overlayCacheUpdated'));
+
+    console.log(`OverlayController: Removal complete - removed ${removedCount}, remaining ${cached.geojson?.features?.length || 0}`);
+    return { removed: removedCount, remaining: cached.geojson?.features?.length || 0 };
+  },
+
+  /**
+   * Remove event data from cache by event_ids.
+   * Like removing rows from a feature collection.
+   *
+   * @param {string} sourceId - Source ID (e.g., 'earthquakes_usgs')
+   * @param {Object} criteria - Removal criteria
+   * @param {Array} [criteria.event_ids] - Specific event_ids to remove
+   * @param {Array} [criteria.regions] - Regions to remove by loc_id prefix
+   * @returns {Object} { removed: number, remaining: number }
+   */
+  removeEventData(sourceId, criteria) {
+    const cached = metricCache[sourceId];
+    if (!cached?.geojson?.features) {
+      console.warn(`OverlayController: No cached events for source: ${sourceId}`);
+      return { removed: 0, remaining: 0 };
+    }
+
+    const originalCount = cached.geojson.features.length;
+    const { event_ids, regions } = criteria;
+
+    if (event_ids && event_ids.length > 0) {
+      // Backend-driven: remove exact event_ids
+      const eventIdSet = new Set(event_ids);
+      cached.geojson.features = cached.geojson.features.filter(f => {
+        const eventId = f.properties?.event_id || f.id;
+        return !eventIdSet.has(eventId);
+      });
+      console.log(`OverlayController: Removed ${event_ids.length} events by event_id from ${sourceId}`);
+    } else if (regions && regions.length > 0) {
+      // Fallback: region-based prefix matching on loc_id
+      const prefixes = regions.map(r => `${r}-`);
+      const regionSet = new Set(regions);
+      cached.geojson.features = cached.geojson.features.filter(f => {
+        const locId = f.properties?.loc_id || '';
+        const matchesPrefix = prefixes.some(p => locId.startsWith(p));
+        const matchesExact = regionSet.has(locId);
+        return !matchesPrefix && !matchesExact;
+      });
+      console.log(`OverlayController: Removed events matching regions: ${regions.join(', ')}`);
+    } else {
+      console.warn(`OverlayController: removeEventData called without event_ids or regions`);
+      return { removed: 0, remaining: originalCount };
+    }
+
+    const removedCount = originalCount - cached.geojson.features.length;
+    cached.loadedAt = Date.now();
+
+    // Re-render remaining events or clear if none left
+    if (cached.geojson.features.length > 0) {
+      // TODO: Re-render event layer with remaining features
+      // EventModel.render(cached.geojson, sourceId);
+    } else {
+      delete metricCache[sourceId];
+    }
+
+    window.dispatchEvent(new CustomEvent('overlayCacheUpdated'));
+    console.log(`OverlayController: Event removal complete - removed ${removedCount}, remaining ${cached.geojson?.features?.length || 0}`);
+    return { removed: removedCount, remaining: cached.geojson?.features?.length || 0 };
+  },
+
+  /**
+   * Remove metric data from cache - like deleting a column from a spreadsheet.
+   * Removes all values for a specific metric, optionally filtered by region/years.
+   *
+   * @param {string} sourceId - Source ID (e.g., 'census')
+   * @param {Object} criteria - Removal criteria
+   * @param {Array} [criteria.loc_ids] - Specific loc_ids to remove from
+   * @param {Array} [criteria.years] - Specific years to remove from
+   * @param {string} [criteria.metric] - Metric column to remove
+   * @returns {Object} { removed: number, remaining: number }
+   */
+  removeMetricData(sourceId, criteria) {
+    const cached = metricCache[sourceId];
+    if (!cached) {
+      console.warn(`OverlayController: No cached metrics for source: ${sourceId}`);
+      return { removed: 0, remaining: 0 };
+    }
+
+    const { loc_ids, years, metric } = criteria;
+    let removedCount = 0;
+
+    // Remove from year_data (the main data store)
+    if (cached.year_data && metric) {
+      const locIdSet = loc_ids?.length > 0 ? new Set(loc_ids) : null;
+      const yearSet = years?.length > 0 ? new Set(years.map(String)) : null;
+
+      for (const [yearStr, locData] of Object.entries(cached.year_data)) {
+        // Skip if year filter doesn't match
+        if (yearSet && !yearSet.has(yearStr)) continue;
+
+        for (const [locId, metrics] of Object.entries(locData)) {
+          // Skip if loc_id filter doesn't match
+          if (locIdSet && !locIdSet.has(locId)) continue;
+
+          // Delete the metric column
+          if (metrics[metric] !== undefined) {
+            delete metrics[metric];
+            removedCount++;
+          }
+        }
+      }
+      console.log(`OverlayController: Removed ${removedCount} metric values for '${metric}' from ${sourceId}`);
+    }
+
+    // Also remove from features if geojson has properties with this metric
+    if (cached.geojson?.features && metric) {
+      const locIdSet = loc_ids?.length > 0 ? new Set(loc_ids) : null;
+      for (const feature of cached.geojson.features) {
+        if (locIdSet && !locIdSet.has(feature.properties?.loc_id)) continue;
+        if (feature.properties?.[metric] !== undefined) {
+          delete feature.properties[metric];
+        }
+      }
+    }
+
+    cached.loadedAt = Date.now();
+
+    // Check if source has any data left
+    const hasYearData = cached.year_data && Object.keys(cached.year_data).length > 0;
+    const hasFeatures = cached.geojson?.features?.length > 0;
+
+    if (!hasYearData && !hasFeatures) {
+      delete metricCache[sourceId];
+    }
+
+    // Notify for UI updates
+    window.dispatchEvent(new CustomEvent('overlayCacheUpdated'));
+
+    // TODO: Trigger choropleth re-render if needed
+    // ChoroplethManager.refresh();
+
+    console.log(`OverlayController: Metric removal complete - removed ${removedCount} cells`);
+    return { removed: removedCount, remaining: hasYearData ? Object.keys(cached.year_data).length : 0 };
+  },
+
+  /**
+   * Clear geometry display for a specific type.
+   * @param {string} geometryType - Geometry type for layer cleanup (zcta, tribal, etc.)
+   */
+  clearGeometryDisplay(geometryType = 'zcta') {
+    GeometryModel.clearType(geometryType);
+    console.log(`OverlayController: Cleared ${geometryType} geometry display`);
   }
 };

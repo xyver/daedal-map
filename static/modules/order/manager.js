@@ -266,7 +266,10 @@ export class OrderPanel {
     if (!this.currentOrder || !this.currentOrder.items || this.currentOrder.items.length === 0) {
       if (count) count.textContent = '(empty)';
       if (items) items.innerHTML = '<div style="color: #999; font-size: 12px; text-align: center; padding: 10px;">Ask for data to add items here</div>';
-      if (confirmBtn) confirmBtn.disabled = true;
+      if (confirmBtn) {
+        confirmBtn.disabled = true;
+        confirmBtn.textContent = 'Display on Map';
+      }
       return;
     }
 
@@ -287,6 +290,24 @@ export class OrderPanel {
       confirmBtn.title = hasInvalid ? 'Fix invalid items before displaying' : '';
     }
 
+    // Check if this is a removal order (order-level or all items are removes)
+    const orderAction = this.currentOrder.action || 'add';
+    const hasRemoves = orderItems.some(item => (item.action || orderAction) === 'remove');
+    const hasAdds = orderItems.some(item => (item.action || orderAction) === 'add');
+    const isMixedOrder = hasRemoves && hasAdds;
+    const isAllRemoves = hasRemoves && !hasAdds;
+
+    // Update button text based on order type
+    if (confirmBtn) {
+      if (isAllRemoves) {
+        confirmBtn.textContent = 'Remove from Map';
+      } else if (isMixedOrder) {
+        confirmBtn.textContent = 'Update Map';
+      } else {
+        confirmBtn.textContent = 'Display on Map';
+      }
+    }
+
     if (items) {
       items.innerHTML = orderItems.map((item, index) => {
         const label = item.metric_label || item.metric || 'unknown';
@@ -300,13 +321,23 @@ export class OrderPanel {
         const isValid = item._valid !== false;
         const error = item._error || '';
         const details = [region, year].filter(Boolean).join(' | ');
-        const itemClass = isValid ? 'order-item' : 'order-item order-item-invalid';
+
+        // Check item-level action, fall back to order-level action
+        const itemAction = item.action || orderAction;
+        const isRemoval = itemAction === 'remove';
+
+        const itemClass = isValid
+          ? (isRemoval ? 'order-item order-item-removal' : 'order-item')
+          : 'order-item order-item-invalid';
         const errorHtml = error ? `<div class="order-item-error">${escapeHtml(error)}</div>` : '';
+        const actionBadge = isRemoval
+          ? '<span class="order-action-badge remove">REMOVE</span>'
+          : (isMixedOrder ? '<span class="order-action-badge add">ADD</span>' : '');
 
         return `
           <div class="${itemClass}">
             <div class="order-item-info">
-              <div class="order-item-name">${escapeHtml(label)}</div>
+              <div class="order-item-name">${actionBadge}${escapeHtml(label)}</div>
               <div class="order-item-details">${escapeHtml(details)}</div>
               ${errorHtml}
             </div>

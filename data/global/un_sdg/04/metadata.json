@@ -5,6 +5,7 @@
   "license": "Open Data",
   "description": "Sustainable Development Goal 4 (Quality Education) indicators from UN Statistics Division.",
   "category": "development",
+  "data_type": "metrics",
   "topic_tags": [
     "sdg",
     "goal4",
@@ -20,7 +21,7 @@
     "school",
     "learning"
   ],
-  "last_updated": "2026-01-28",
+  "last_updated": "2026-01-29",
   "geographic_level": "admin_0",
   "geographic_coverage": {
     "type": "global",
@@ -63,7 +64,7 @@
   },
   "row_count": 4298,
   "file_size_mb": 0.1,
-  "data_completeness": 0.45,
+  "data_completeness": 0.49,
   "update_schedule": "unknown",
   "expected_next_update": "unknown",
   "metrics": {
@@ -294,5 +295,18 @@
     }
   },
   "metric_count": 9,
-  "llm_summary": "2000-2024. Proportion of children and young people achieving a minimum proficiency level in reading and mathematics (%), Completion rate, by sex, location, wealth quintile and education level (%), Participation rate in organized learning (one year before the official primary entry age), by sex (%), Proportion of youth and adults with information and communications technology (ICT) skills, by sex and type of skill (%), Gender parity index for youth/adults with information and communications technology (ICT) skills, by type of skill (rati."
+  "llm_summary": "2000-2024. Proportion of children and young people achieving a minimum proficiency level in reading and mathematics (%), Completion rate, by sex, location, wealth quintile and education level (%), Participation rate in organized learning (one year before the official primary entry age), by sex (%), Proportion of youth and adults with information and communications technology (ICT) skills, by sex and type of skill (%), Gender parity index for youth/adults with information and communications technology (ICT) skills, by type of skill (rati.",
+  "overlay": {
+    "path": "demographics",
+    "label": "Demographics",
+    "scope": null,
+    "icon": null,
+    "default_visible": false,
+    "visibility": {
+      "min_zoom": 0,
+      "max_zoom": 18,
+      "min_area_sq_deg": null,
+      "max_area_sq_deg": null
+    }
+  }
 }

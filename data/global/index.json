@@ -285,10 +285,10 @@
       "geographic_level": null,
       "has_coordinates": true,
       "temporal_coverage": {
-        "start": "1521-08-16T02:07:37",
+        "start": "2015-01-01T00:10:00.590000",
         "end": "2026-01-24T21:38:55.274000"
       },
-      "row_count": 1056559
+      "row_count": 313369
     },
     "floods": {
       "source_name": "Dartmouth Flood Observatory",
@@ -301,10 +301,10 @@
       "geographic_level": null,
       "has_coordinates": true,
       "temporal_coverage": {
-        "start": "1985-01-01T00:00:00",
+        "start": "2015-01-01T00:00:00",
         "end": "2019-11-15T00:00:00"
       },
-      "row_count": 4825
+      "row_count": 610
     },
     "hurricanes": {
       "source_name": "IBTrACS",
@@ -318,10 +318,10 @@
       "geographic_level": null,
       "has_coordinates": true,
       "temporal_coverage": {
-        "start": "1842-10-25T03:00:00",
+        "start": "2015-01-01T00:00:00",
         "end": "2026-01-08T00:00:00"
       },
-      "row_count": 722507
+      "row_count": 70037
     },
     "landslides": {
       "source_name": "NASA Global Landslide Catalog",
@@ -334,10 +334,10 @@
       "geographic_level": null,
       "has_coordinates": true,
       "temporal_coverage": {
-        "start": "1760-01-01T00:00:00",
+        "start": "2015-01-01T00:00:00",
         "end": "2104-06-24T00:00:00"
       },
-      "row_count": 45483
+      "row_count": 7587
     },
     "tornadoes": {
       "source_name": "NOAA Storm Prediction Center",
@@ -351,10 +351,10 @@
       "geographic_level": "unknown",
       "has_coordinates": false,
       "temporal_coverage": {
-        "start": 1950,
+        "start": 2015,
         "end": 2025
       },
-      "row_count": 116
+      "row_count": 21
     },
     "tsunamis": {
       "source_name": "NOAA NGDC Tsunami Database",
@@ -368,10 +368,10 @@
       "geographic_level": null,
       "has_coordinates": true,
       "temporal_coverage": {
-        "start": "0001-01-01T00:00:00",
-        "end": "2025-12-12T00:00:00"
+        "start": "2015-02-16T00:00:00",
+        "end": "2026-01-12T00:00:00"
       },
-      "row_count": 33623
+      "row_count": 195
     },
     "volcanoes": {
       "source_name": "Smithsonian Global Volcanism Program",
@@ -382,13 +382,13 @@
         "disasters/volcanoes/events.parquet"
       ],
       "file_count": 2,
-      "geographic_level": "admin_0",
-      "has_coordinates": false,
+      "geographic_level": null,
+      "has_coordinates": true,
       "temporal_coverage": {
-        "start": 1800,
-        "end": 2025
+        "start": "2015-01-01T00:00:00",
+        "end": "2025-12-29T00:00:00"
       },
-      "row_count": 2881
+      "row_count": 383
     },
     "wildfires": {
       "source_name": "Global Fire Atlas",
@@ -423,7 +423,7 @@
       "subfolders": [
         "by_year_enriched"
       ],
-      "row_count": 6127
+      "row_count": 26728
     }
   },
   "categories": {

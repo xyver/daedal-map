@@ -51,7 +51,8 @@
     "ind_13_1_1": "Number of deaths and missing persons attributed to disasters (number)",
     "ind_13_1_2": "Score of adoption and implementation of national DRR strategies in line with the Sendai Framework",
     "ind_13_1_3": "Number of local governments (number)",
-    "ind_13_2_2": "Total greenhouse gas emissions without LULUCF for non-Annex I Parties (Mt CO\u2082 equivalent)",
+    "ind_13_2_2": "Total greenhouse gas emissions without LULUCF for non-Annex I Parties (Mt CO₂ equivalent)",
     "ind_13_3_1": "Extent to which global citizenship education and education for sustainable development are mainstreamed in national educ"
-  }
+  },
+  "overlay": "demographics"
 }

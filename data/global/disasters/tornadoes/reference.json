@@ -6,8 +6,21 @@
     "license": "Public Domain",
     "category": "hazard",
     "description": "NOAA Storm Prediction Center (SPC) tornado database containing detailed tornado event records for the United States. Includes track paths, intensity ratings, casualties, and damage estimates.",
-    "topic_tags": ["disasters", "tornadoes", "severe weather", "hazard"],
-    "keywords": ["tornado", "twister", "severe weather", "NOAA", "SPC", "EF scale", "Fujita"]
+    "topic_tags": [
+      "disasters",
+      "tornadoes",
+      "severe weather",
+      "hazard"
+    ],
+    "keywords": [
+      "tornado",
+      "twister",
+      "severe weather",
+      "NOAA",
+      "SPC",
+      "EF scale",
+      "Fujita"
+    ]
   },
   "datasets": {
     "events.parquet": "Individual tornado events with paths, intensity, and impact data",
@@ -28,12 +41,15 @@
     "coverage": "United States (continental)",
     "focus": "Confirmed tornado touchdowns",
     "temporal": "1950-present",
-    "admin_levels": ["Point/path locations with start/end coordinates"]
+    "admin_levels": [
+      "Point/path locations with start/end coordinates"
+    ]
   },
   "data_quality_notes": [
     "Pre-1990 intensity ratings may be less reliable due to different assessment methods",
     "Path length and width estimates improved with Doppler radar era (post-1990)",
     "EF scale replaced Fujita scale in 2007",
     "sequence_id groups tornadoes from same outbreak/supercell"
-  ]
+  ],
+  "overlay": "disasters/tornadoes"
 }

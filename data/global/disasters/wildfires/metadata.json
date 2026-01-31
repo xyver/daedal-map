@@ -6,6 +6,7 @@
   "description": "Global Fire Atlas derived from MODIS/VIIRS satellite active fire detections. Tracks individual fire events worldwide with daily progression, burned area, and duration data.",
   "category": "hazard",
   "data_type": "events",
+  "event_type": "wildfire",
   "topic_tags": [
     "disasters",
     "wildfires",
@@ -25,17 +26,15 @@
   "geographic_level": null,
   "spatial_coverage": {
     "countries": [
-      "",
-      "AFG",
       "AGO",
       "ARG",
       "AUS",
       "AZE",
-      "BEN",
+      "BDI",
       "BFA",
-      "BLR",
       "BOL",
       "BRA",
+      "BTN",
       "BWA",
       "CAF",
       "CAN",
@@ -46,98 +45,125 @@
       "COD",
       "COG",
       "COL",
+      "ECU",
       "ESP",
       "ETH",
+      "FRA",
       "GAB",
       "GHA",
       "GIN",
+      "GNB",
       "GRC",
+      "GTM",
+      "GUY",
+      "HND",
       "IND",
+      "IRN",
+      "IRQ",
       "KAZ",
+      "KEN",
+      "KHM",
+      "LAO",
+      "MDA",
+      "MDG",
+      "MEX",
       "MLI",
       "MMR",
+      "MNE",
       "MNG",
       "MOZ",
-      "MRT",
+      "MWI",
       "NAM",
       "NER",
       "NGA",
-      "NPL",
+      "NIC",
+      "PAK",
+      "PER",
+      "PRK",
       "PRT",
       "PRY",
+      "ROU",
       "RUS",
       "SDN",
       "SEN",
       "SLE",
+      "SOM",
       "SSD",
+      "SYR",
       "TCD",
+      "TGO",
+      "THA",
       "TKM",
       "TUR",
       "TZA",
       "UGA",
+      "UKR",
       "USA",
+      "UZB",
       "VEN",
-      "XCA",
+      "VNM",
+      "Z07",
       "ZAF",
       "ZMB",
       "ZWE"
     ],
-    "country_count": 56,
+    "country_count": 80,
     "water_bodies": [],
-    "bounding_box": {
-      "min_lat": -42.477,
-      "max_lat": 67.9896,
-      "min_lon": -156.299,
-      "max_lon": 166.5789
-    },
+    "bounding_box": null,
     "type": "global"
   },
   "temporal_coverage": {
-    "start": "2015-01-01 00:00:00",
-    "end": "2024-02-27 00:00:00",
-    "granularity": "timestamp",
-    "field": "timestamp"
+    "start": null,
+    "end": null,
+    "granularity": "unknown",
+    "field": null
   },
-  "row_count": 6127,
+  "event_stats": {
+    "total_events": 26728,
+    "unique_event_ids": 3787,
+    "unique_loc_ids": 3787
+  },
+  "row_count": 26728,
+  "file_size_mb": 11.34,
   "update_schedule": "unknown",
   "metrics": {
-    "burned_acres": {
-      "name": "Burned Acres",
+    "day_num": {
+      "name": "Day Num",
       "unit": "unknown",
       "aggregation": "sum",
       "stats": {
-        "min": 74161.0,
-        "max": 6839011.0,
-        "median": 113994.0,
-        "mean": 169825.606
+        "min": 1.0,
+        "max": 95.0,
+        "median": 7.0,
+        "mean": 10.9352
       },
-      "non_null_count": 6127,
+      "non_null_count": 26728,
       "density": 1.0
     },
     "area_km2": {
-      "name": "Area Km2",
+      "name": "Burned Area",
       "unit": "km2",
       "aggregation": "sum",
       "stats": {
-        "min": 300.12,
-        "max": 27676.54,
-        "median": 461.32,
-        "mean": 687.2609
+        "min": 0.107,
+        "max": 4792.0059,
+        "median": 20.4421,
+        "mean": 239.3481
       },
-      "non_null_count": 6127,
+      "non_null_count": 26728,
       "density": 1.0
     },
-    "duration_days": {
-      "name": "Duration Days",
-      "unit": "days",
+    "sibling_level": {
+      "name": "Sibling Level",
+      "unit": "unknown",
       "aggregation": "sum",
       "stats": {
-        "min": 1.0,
-        "max": 122.0,
-        "median": 23.0,
-        "mean": 25.4292
+        "min": 0.0,
+        "max": 3.0,
+        "median": 3.0,
+        "mean": 2.5812
       },
-      "non_null_count": 6127,
+      "non_null_count": 26728,
       "density": 1.0
     },
     "loc_confidence": {
@@ -148,214 +174,26 @@
         "min": 0.3,
         "max": 0.95,
         "median": 0.95,
-        "mean": 0.926
+        "mean": 0.9357
       },
-      "non_null_count": 6127,
+      "non_null_count": 26728,
       "density": 1.0
     }
   },
   "metric_count": 4,
-  "event_type": "wildfire",
-  "event_stats": {
-    "total_events": 6127,
-    "unique_event_ids": 6065,
-    "unique_loc_ids": 6086
-  },
-  "llm_summary": "6,127 wildfires in 56 countries from 2015-01-01 00:00:00 to 2024-02-27 00:00:00.",
-  "file_size_mb": 13.61,
-  "primary_files": [
-    "by_year_enriched\\fires_2014_enriched.parquet",
-    "by_year_enriched\\fires_2015_enriched.parquet",
-    "by_year_enriched\\fires_2016_enriched.parquet",
-    "by_year_enriched\\fires_2017_enriched.parquet",
-    "by_year_enriched\\fires_2018_enriched.parquet",
-    "by_year_enriched\\fires_2019_enriched.parquet",
-    "by_year_enriched\\fires_2020_enriched.parquet",
-    "by_year_enriched\\fires_2021_enriched.parquet",
-    "by_year_enriched\\fires_2022_enriched.parquet",
-    "by_year_enriched\\fires_2023_enriched.parquet",
-    "by_year_enriched\\fires_2024_enriched.parquet"
-  ],
-  "related_files": {
-    "fire_progression_2015.parquet": {
-      "description": "Daily fire spread/progression data for animation",
-      "row_count": 26728,
-      "columns": [
-        "event_id",
-        "date",
-        "day_num",
-        "area_km2",
-        "perimeter",
-        "loc_id",
-        "source",
-        "parent_loc_id",
-        "sibling_level",
-        "iso3",
-        "loc_confidence"
-      ],
-      "file_size_mb": 11.34
-    },
-    "fire_progression_2016.parquet": {
-      "description": "Daily fire spread/progression data for animation",
-      "row_count": 26620,
-      "columns": [
-        "event_id",
-        "date",
-        "day_num",
-        "area_km2",
-        "perimeter",
-        "loc_id",
-        "source",
-        "parent_loc_id",
-        "sibling_level",
-        "iso3",
-        "loc_confidence"
-      ],
-      "file_size_mb": 11.22
-    },
-    "fire_progression_2017.parquet": {
-      "description": "Daily fire spread/progression data for animation",
-      "row_count": 38904,
-      "columns": [
-        "event_id",
-        "date",
-        "day_num",
-        "area_km2",
-        "perimeter",
-        "loc_id",
-        "source",
-        "parent_loc_id",
-        "sibling_level",
-        "iso3",
-        "loc_confidence"
-      ],
-      "file_size_mb": 16.46
-    },
-    "fire_progression_2018.parquet": {
-      "description": "Daily fire spread/progression data for animation",
-      "row_count": 34478,
-      "columns": [
-        "event_id",
-        "date",
-        "day_num",
-        "area_km2",
-        "perimeter",
-        "loc_id",
-        "source",
-        "parent_loc_id",
-        "sibling_level",
-        "iso3",
-        "loc_confidence"
-      ],
-      "file_size_mb": 13.08
-    },
-    "fire_progression_2019.parquet": {
-      "description": "Daily fire spread/progression data for animation",
-      "row_count": 36074,
-      "columns": [
-        "event_id",
-        "date",
-        "day_num",
-        "area_km2",
-        "perimeter",
-        "loc_id",
-        "source",
-        "parent_loc_id",
-        "sibling_level",
-        "iso3",
-        "loc_confidence"
-      ],
-      "file_size_mb": 13.98
-    },
-    "fire_progression_2020.parquet": {
-      "description": "Daily fire spread/progression data for animation",
-      "row_count": 35783,
-      "columns": [
-        "event_id",
-        "date",
-        "day_num",
-        "area_km2",
-        "perimeter",
-        "loc_id",
-        "source",
-        "parent_loc_id",
-        "sibling_level",
-        "iso3",
-        "loc_confidence"
-      ],
-      "file_size_mb": 20.5
-    },
-    "fire_progression_2021.parquet": {
-      "description": "Daily fire spread/progression data for animation",
-      "row_count": 34299,
-      "columns": [
-        "event_id",
-        "date",
-        "day_num",
-        "area_km2",
-        "perimeter",
-        "loc_id",
-        "source",
-        "parent_loc_id",
-        "sibling_level",
-        "iso3",
-        "loc_confidence"
-      ],
-      "file_size_mb": 25.83
-    },
-    "fire_progression_2022.parquet": {
-      "description": "Daily fire spread/progression data for animation",
-      "row_count": 29522,
-      "columns": [
-        "event_id",
-        "date",
-        "day_num",
-        "area_km2",
-        "perimeter",
-        "loc_id",
-        "source",
-        "parent_loc_id",
-        "sibling_level",
-        "iso3",
-        "loc_confidence"
-      ],
-      "file_size_mb": 15.86
-    },
-    "fire_progression_2023.parquet": {
-      "description": "Daily fire spread/progression data for animation",
-      "row_count": 38186,
-      "columns": [
-        "event_id",
-        "date",
-        "day_num",
-        "area_km2",
-        "perimeter",
-        "loc_id",
-        "source",
-        "parent_loc_id",
-        "sibling_level",
-        "iso3",
-        "loc_confidence"
-      ],
-      "file_size_mb": 43.32
-    },
-    "fire_progression_2024.parquet": {
-      "description": "Daily fire spread/progression data for animation",
-      "row_count": 3177,
-      "columns": [
-        "event_id",
-        "date",
-        "day_num",
-        "area_km2",
-        "perimeter",
-        "loc_id",
-        "source",
-        "parent_loc_id",
-        "sibling_level",
-        "iso3",
-        "loc_confidence"
-      ],
-      "file_size_mb": 1.23
+  "llm_summary": "26,728 wildfire in 80 countries.",
+  "overlay": {
+    "path": "disasters/wildfires",
+    "label": "Wildfires",
+    "scope": null,
+    "icon": null,
+    "default_visible": false,
+    "visibility": {
+      "min_zoom": 0,
+      "max_zoom": 18,
+      "min_area_sq_deg": null,
+      "max_area_sq_deg": null
     }
-  }
+  },
+  "significance_column": "area_km2"
 }

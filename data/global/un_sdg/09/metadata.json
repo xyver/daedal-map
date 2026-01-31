@@ -5,6 +5,7 @@
   "license": "Open Data",
   "description": "Sustainable Development Goal 9 (Industry, Innovation and Infrastructure) indicators from UN Statistics Division.",
   "category": "development",
+  "data_type": "metrics",
   "topic_tags": [
     "sdg",
     "goal9",
@@ -20,7 +21,7 @@
     "innovation",
     "technology"
   ],
-  "last_updated": "2026-01-28",
+  "last_updated": "2026-01-29",
   "geographic_level": "admin_0",
   "geographic_coverage": {
     "type": "global",
@@ -74,7 +75,7 @@
   },
   "row_count": 5193,
   "file_size_mb": 0.15,
-  "data_completeness": 0.55,
+  "data_completeness": 0.58,
   "update_schedule": "unknown",
   "expected_next_update": "unknown",
   "metrics": {
@@ -355,5 +356,18 @@
     }
   },
   "metric_count": 11,
-  "llm_summary": "2000-2025. Container port traffic, maritime transport (twenty-foot equivalent units - TEUs), Manufacturing value added (constant 2015 United States dollars) as a proportion of GDP (%), Manufacturing employment as a proportion of total employment - 13th ICLS (%), Proportion of small-scale manufacturing industries in total manufacturing value added based on international classificat, Proportion of small-scale industries with a loan or line of credit (%)."
+  "llm_summary": "2000-2025. Container port traffic, maritime transport (twenty-foot equivalent units - TEUs), Manufacturing value added (constant 2015 United States dollars) as a proportion of GDP (%), Manufacturing employment as a proportion of total employment - 13th ICLS (%), Proportion of small-scale manufacturing industries in total manufacturing value added based on international classificat, Proportion of small-scale industries with a loan or line of credit (%).",
+  "overlay": {
+    "path": "demographics",
+    "label": "Demographics",
+    "scope": null,
+    "icon": null,
+    "default_visible": false,
+    "visibility": {
+      "min_zoom": 0,
+      "max_zoom": 18,
+      "min_area_sq_deg": null,
+      "max_area_sq_deg": null
+    }
+  }
 }

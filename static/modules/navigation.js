@@ -113,7 +113,7 @@ export const NavigationManager = {
    * @param {number} adminLevel - Current admin level
    */
   updateLevelDisplay(adminLevel) {
-    const levelNames = ['World', 'States', 'Counties', 'Subdivisions'];
+    const levelNames = ['World', 'States', 'Counties', 'Tracts', 'Block Groups', 'Blocks'];
     const levelName = levelNames[adminLevel] || `Level ${adminLevel}`;
 
     // Update the path to reflect current level

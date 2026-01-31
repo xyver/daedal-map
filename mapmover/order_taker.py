@@ -277,28 +277,40 @@ RESPONSE TYPES (return JSON with "type" field):
 {{"type": "order", "items": [{{"source_id": "...", "metric": "...", "region": "..."}}], "summary": "..."}}
 ```
 
-2. NAVIGATION - User wants to zoom/navigate to a location (no data):
+2. GEOMETRY ORDER - User wants to see boundary overlays (ZIP codes, tribal areas, etc.):
+```json
+{{"type": "order", "items": [{{"source_id": "geometry_zcta", "region": "USA-CA", "overlay_type": "zcta"}}], "summary": "ZIP code boundaries for California"}}
+```
+Geometry sources: geometry_zcta (ZIP codes/ZCTA for USA)
+- For "show me ZIP codes in California": return order with source_id="geometry_zcta", region="USA-CA"
+- For "add Oregon" (when geometry is displayed): return order with region="USA-OR" to add to existing
+- For "remove California": return order with action="remove" at order level:
+  {{"type": "order", "action": "remove", "items": [{{"source_id": "geometry_zcta", "region": "USA-CA"}}], "summary": "Removing California ZIP codes"}}
+- For mixed "remove Texas, add California": use item-level action for each item:
+  {{"type": "order", "items": [{{"source_id": "geometry_zcta", "region": "USA-TX", "action": "remove"}}, {{"source_id": "geometry_zcta", "region": "USA-CA", "action": "add"}}], "summary": "Removing Texas, adding California ZIP codes"}}
+
+3. NAVIGATION - User wants to zoom/navigate to a location:
 ```json
 {{"type": "navigate", "locations": [{{"loc_id": "USA-CA", "name": "California"}}], "message": "Zooming to California"}}
 ```
 
-3. DISAMBIGUATION - Multiple locations match, need user to pick:
+4. DISAMBIGUATION - Multiple locations match, need user to pick:
 ```json
 {{"type": "disambiguate", "message": "Which Washington did you mean?", "options": [{{"loc_id": "USA-WA", "name": "Washington State"}}, {{"loc_id": "USA-DC", "name": "Washington DC"}}]}}
 ```
 
-4. FILTER UPDATE - User wants to change disaster overlay filters:
+5. FILTER UPDATE - User wants to change disaster overlay filters:
 ```json
 {{"type": "filter_update", "overlay": "earthquakes", "filters": {{"minMagnitude": 5.0}}, "message": "Filtering to magnitude 5+"}}
 ```
 
-5. OVERLAY TOGGLE - User wants to enable/disable a disaster overlay:
+6. OVERLAY TOGGLE - User wants to enable/disable a disaster overlay:
 ```json
 {{"type": "overlay_toggle", "overlay": "earthquakes", "enabled": true, "message": "Enabling earthquakes overlay"}}
 ```
 Overlays: earthquakes, hurricanes, volcanoes, tsunamis, tornadoes, wildfires, floods
 
-6. CHAT - General response, information, or clarifying question:
+7. CHAT - General response, information, or clarifying question:
 ```json
 {{"type": "chat", "message": "..."}}
 ```
@@ -623,6 +635,15 @@ def parse_llm_response(content: str, hints: dict = None) -> dict:
                 "type": "navigate",
                 "locations": parsed_json.get("locations", []),
                 "message": parsed_json.get("message", "Navigating to location")
+            }
+
+        elif response_type == "geometry_remove":
+            # Remove geometry regions from display
+            return {
+                "type": "geometry_remove",
+                "regions": parsed_json.get("regions", []),
+                "geometry_type": parsed_json.get("geometry_type", "zcta"),
+                "message": parsed_json.get("message", "Removing geometry")
             }
 
         elif response_type == "disambiguate":

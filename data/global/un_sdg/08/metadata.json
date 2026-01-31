@@ -5,6 +5,7 @@
   "license": "Open Data",
   "description": "Sustainable Development Goal 8 (Decent Work and Economic Growth) indicators from UN Statistics Division.",
   "category": "development",
+  "data_type": "metrics",
   "topic_tags": [
     "sdg",
     "goal8",
@@ -22,7 +23,7 @@
     "jobs",
     "gdp"
   ],
-  "last_updated": "2026-01-28",
+  "last_updated": "2026-01-29",
   "geographic_level": "admin_0",
   "geographic_coverage": {
     "type": "global",
@@ -80,7 +81,7 @@
   },
   "row_count": 5333,
   "file_size_mb": 0.09,
-  "data_completeness": 0.52,
+  "data_completeness": 0.56,
   "update_schedule": "unknown",
   "expected_next_update": "unknown",
   "metrics": {
@@ -286,5 +287,18 @@
     }
   },
   "metric_count": 8,
-  "llm_summary": "2000-2024. Annual growth rate of real GDP per capita (%), Material footprint per capita, by type of raw material (tonnes), Domestic material consumption, by type of raw material (tonnes), Level of national compliance with labour rights (freedom of association and collective bargaining) based on Internationa, Tourism direct GDP as a proportion of total GDP (%)."
+  "llm_summary": "2000-2024. Annual growth rate of real GDP per capita (%), Material footprint per capita, by type of raw material (tonnes), Domestic material consumption, by type of raw material (tonnes), Level of national compliance with labour rights (freedom of association and collective bargaining) based on Internationa, Tourism direct GDP as a proportion of total GDP (%).",
+  "overlay": {
+    "path": "demographics",
+    "label": "Demographics",
+    "scope": null,
+    "icon": null,
+    "default_visible": false,
+    "visibility": {
+      "min_zoom": 0,
+      "max_zoom": 18,
+      "min_area_sq_deg": null,
+      "max_area_sq_deg": null
+    }
+  }
 }

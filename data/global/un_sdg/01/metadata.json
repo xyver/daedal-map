@@ -5,6 +5,7 @@
   "license": "Open Data",
   "description": "Sustainable Development Goal 1 (No Poverty) indicators from UN Statistics Division.",
   "category": "development",
+  "data_type": "metrics",
   "topic_tags": [
     "sdg",
     "goal1",
@@ -18,7 +19,7 @@
     "income",
     "social protection"
   ],
-  "last_updated": "2026-01-28",
+  "last_updated": "2026-01-29",
   "geographic_level": "admin_0",
   "geographic_coverage": {
     "type": "global",
@@ -76,7 +77,7 @@
   },
   "row_count": 5908,
   "file_size_mb": 0.14,
-  "data_completeness": 0.37,
+  "data_completeness": 0.41,
   "update_schedule": "unknown",
   "expected_next_update": "unknown",
   "metrics": {
@@ -416,5 +417,18 @@
     }
   },
   "metric_count": 13,
-  "llm_summary": "1963-2024. Proportion of population below international poverty line (%), Proportion of population living below the national poverty line (%), Proportion of population living in multidimensional poverty (%), [World Bank] Proportion of population covered by social assistance programs (%), Proportion of population using basic sanitation services, by location (%)."
+  "llm_summary": "1963-2024. Proportion of population below international poverty line (%), Proportion of population living below the national poverty line (%), Proportion of population living in multidimensional poverty (%), [World Bank] Proportion of population covered by social assistance programs (%), Proportion of population using basic sanitation services, by location (%).",
+  "overlay": {
+    "path": "demographics",
+    "label": "Demographics",
+    "scope": null,
+    "icon": null,
+    "default_visible": false,
+    "visibility": {
+      "min_zoom": 0,
+      "max_zoom": 18,
+      "min_area_sq_deg": null,
+      "max_area_sq_deg": null
+    }
+  }
 }

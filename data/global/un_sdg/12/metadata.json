@@ -5,6 +5,7 @@
   "license": "Open Data",
   "description": "Sustainable Development Goal 12 (Responsible Consumption and Production) indicators from UN Statistics Division.",
   "category": "development",
+  "data_type": "metrics",
   "topic_tags": [
     "sdg",
     "goal12",
@@ -20,7 +21,7 @@
     "waste",
     "recycling"
   ],
-  "last_updated": "2026-01-28",
+  "last_updated": "2026-01-29",
   "geographic_level": "admin_0",
   "geographic_coverage": {
     "type": "global",
@@ -79,7 +80,7 @@
   },
   "row_count": 5452,
   "file_size_mb": 0.12,
-  "data_completeness": 0.37,
+  "data_completeness": 0.41,
   "update_schedule": "unknown",
   "expected_next_update": "unknown",
   "metrics": {
@@ -410,5 +411,18 @@
     }
   },
   "metric_count": 13,
-  "llm_summary": "2000-2025. Countries with policy instrument for sustainable consumption and production (1 = YES; 0 = NO), Material footprint per capita, by type of raw material (tonnes), Domestic material consumption, by type of raw material (tonnes), Food waste (Tonnes), Parties meeting their commitments and obligations in transmitting information as required by Montreal Protocol on hazard."
+  "llm_summary": "2000-2025. Countries with policy instrument for sustainable consumption and production (1 = YES; 0 = NO), Material footprint per capita, by type of raw material (tonnes), Domestic material consumption, by type of raw material (tonnes), Food waste (Tonnes), Parties meeting their commitments and obligations in transmitting information as required by Montreal Protocol on hazard.",
+  "overlay": {
+    "path": "demographics",
+    "label": "Demographics",
+    "scope": null,
+    "icon": null,
+    "default_visible": false,
+    "visibility": {
+      "min_zoom": 0,
+      "max_zoom": 18,
+      "min_area_sq_deg": null,
+      "max_area_sq_deg": null
+    }
+  }
 }

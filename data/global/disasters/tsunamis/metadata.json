@@ -22,7 +22,7 @@
     "NOAA",
     "NGDC"
   ],
-  "last_updated": "2026-01-28",
+  "last_updated": "2026-01-29",
   "geographic_level": null,
   "spatial_coverage": {
     "countries": [
@@ -34,62 +34,105 @@
       "XSA",
       "XSB",
       "XSC",
-      "XSG",
-      "XSL",
       "XSR",
       "XST"
     ],
-    "country_count": 12,
+    "country_count": 10,
     "water_bodies": [],
     "bounding_box": {
-      "min_lat": -77.85,
-      "max_lat": 72.85,
-      "min_lon": -179.95,
-      "max_lon": 179.9377
+      "min_lat": -69.417,
+      "max_lat": 72.81,
+      "min_lon": -179.0,
+      "max_lon": 179.444
     },
     "type": "regional"
   },
   "temporal_coverage": {
-    "start": "0001-01-01T00:00:00",
-    "end": "2025-12-12T00:00:00",
+    "start": "2015-02-16T00:00:00",
+    "end": "2026-01-12T00:00:00",
     "granularity": "timestamp",
     "field": "timestamp"
   },
   "event_stats": {
-    "total_events": 33623,
-    "unique_event_ids": 2336,
-    "unique_loc_ids": 12,
-    "total_deaths": 283837
+    "total_events": 195,
+    "unique_event_ids": 195,
+    "unique_loc_ids": 169,
+    "total_deaths": 4809,
+    "total_damage_millions": 1878
   },
-  "row_count": 33623,
-  "file_size_mb": 1.09,
+  "row_count": 195,
+  "file_size_mb": 0.03,
   "update_schedule": "unknown",
   "metrics": {
-    "dist_from_source_km": {
-      "name": "Dist From Source Km",
+    "cause_code": {
+      "name": "Cause Code",
       "unit": "unknown",
       "aggregation": "sum",
       "stats": {
         "min": 0.0,
-        "max": 19338.3246,
-        "median": 248.4758,
-        "mean": 2416.9689
+        "max": 9.0,
+        "median": 1.0,
+        "mean": 2.3897
       },
-      "non_null_count": 33208,
-      "density": 0.988
+      "non_null_count": 195,
+      "density": 1.0
+    },
+    "eq_magnitude": {
+      "name": "Eq Magnitude",
+      "unit": "unknown",
+      "aggregation": "sum",
+      "stats": {
+        "min": 4.1,
+        "max": 8.8,
+        "median": 7.0,
+        "mean": 6.9582
+      },
+      "non_null_count": 153,
+      "density": 0.785
+    },
+    "max_water_height_m": {
+      "name": "Max Wave Height",
+      "unit": "meters",
+      "aggregation": "max",
+      "stats": {
+        "min": 0.0,
+        "max": 470.0,
+        "median": 0.24,
+        "mean": 8.0972
+      },
+      "non_null_count": 175,
+      "density": 0.897
+    },
+    "intensity": {
+      "name": "Intensity",
+      "unit": "Soloviev scale",
+      "aggregation": "max"
+    },
+    "runup_count": {
+      "name": "Runup Count",
+      "unit": "count",
+      "aggregation": "sum",
+      "stats": {
+        "min": 0.0,
+        "max": 1263.0,
+        "median": 2.0,
+        "mean": 25.9077
+      },
+      "non_null_count": 195,
+      "density": 1.0
     },
     "deaths": {
       "name": "Deaths",
       "unit": "unknown",
       "aggregation": "sum",
       "stats": {
-        "min": 0.0,
-        "max": 36000.0,
-        "median": 13.0,
-        "mean": 394.7663
+        "min": 1.0,
+        "max": 4340.0,
+        "median": 2.0,
+        "mean": 369.9231
       },
-      "non_null_count": 719,
-      "density": 0.021
+      "non_null_count": 13,
+      "density": 0.067
     },
     "deaths_order": {
       "name": "Deaths Order",
@@ -99,25 +142,65 @@
         "min": 1.0,
         "max": 4.0,
         "median": 1.0,
-        "mean": 1.7552
+        "mean": 1.3571
       },
-      "non_null_count": 956,
-      "density": 0.028
+      "non_null_count": 14,
+      "density": 0.072
+    },
+    "damage_millions": {
+      "name": "Damage Millions",
+      "unit": "unknown",
+      "aggregation": "sum",
+      "stats": {
+        "min": 0.2,
+        "max": 1500.0,
+        "median": 118.648,
+        "mean": 375.7696
+      },
+      "non_null_count": 5,
+      "density": 0.026
     },
     "damage_order": {
       "name": "Damage Order",
       "unit": "unknown",
       "aggregation": "sum",
       "stats": {
-        "min": 0.0,
+        "min": 1.0,
         "max": 4.0,
         "median": 1.0,
-        "mean": 1.3671
+        "mean": 1.5714
       },
-      "non_null_count": 2498,
-      "density": 0.074
+      "non_null_count": 28,
+      "density": 0.144
+    },
+    "max_runup_dist_km": {
+      "name": "Max Runup Dist Km",
+      "unit": "unknown",
+      "aggregation": "sum",
+      "stats": {
+        "min": 0.0,
+        "max": 18385.3799,
+        "median": 317.7116,
+        "mean": 1412.0875
+      },
+      "non_null_count": 153,
+      "density": 0.785
     }
   },
-  "metric_count": 4,
-  "llm_summary": "33,623 tsunami in 12 countries from 0001-01-01T00:00:00 to 2025-12-12T00:00:00."
+  "metric_count": 10,
+  "llm_summary": "195 tsunami in 10 countries from 2015-02-16T00:00:00 to 2026-01-12T00:00:00.",
+  "overlay": {
+    "path": "disasters/tsunamis",
+    "label": "Tsunamis",
+    "scope": null,
+    "icon": null,
+    "default_visible": false,
+    "visibility": {
+      "min_zoom": 0,
+      "max_zoom": 18,
+      "min_area_sq_deg": null,
+      "max_area_sq_deg": null
+    }
+  },
+  "significance_column": "max_water_height_m"
 }
