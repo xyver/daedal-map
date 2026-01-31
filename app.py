@@ -3706,7 +3706,10 @@ async def chat_endpoint(req: Request):
 
                 # Include geometry metadata if present
                 if is_geometry:
-                    response["overlay_type"] = result.get("overlay_type", "zcta")
+                    # Use geographic_level (e.g., "tribal") for correct popup labels
+                    geo_level = result.get("geographic_level") or result.get("overlay_type", "zcta")
+                    response["overlay_type"] = geo_level
+                    response["geographic_level"] = geo_level
 
                 # Include multi-year data if present (for time slider)
                 if result.get("multi_year"):
@@ -3750,6 +3753,7 @@ async def chat_endpoint(req: Request):
         cache_stats = body.get("cacheStats")  # {overlayId: {count, years, minMag, ...}}
         time_state = body.get("timeState")  # {isLiveLocked, currentTime, timezone, ...}
         saved_order_names = body.get("savedOrderNames", [])  # Phase 7: Saved order names for load/save
+        loaded_data = body.get("loadedData", [])  # Loaded data list for LLM context
 
         if not query:
             return msgpack_error("No query provided", 400)
@@ -3759,7 +3763,7 @@ async def chat_endpoint(req: Request):
             logger.debug(f"Active overlay: {active_overlays.get('type')} with filters: {active_overlays.get('filters')}")
 
         # Run preprocessor to extract hints (Tier 2) with viewport context
-        hints = preprocess_query(query, viewport=viewport, active_overlays=active_overlays, cache_stats=cache_stats, saved_order_names=saved_order_names, time_state=time_state)
+        hints = preprocess_query(query, viewport=viewport, active_overlays=active_overlays, cache_stats=cache_stats, saved_order_names=saved_order_names, time_state=time_state, loaded_data=loaded_data)
         if hints.get("summary"):
             logger.debug(f"Preprocessor hints: {hints['summary']}")
 
@@ -4061,6 +4065,7 @@ async def chat_stream_endpoint(req: Request):
             cache_stats = body.get("cacheStats")
             time_state = body.get("timeState")  # {isLiveLocked, currentTime, timezone, ...}
             saved_order_names = body.get("savedOrderNames", [])  # Phase 7: Saved order names
+            loaded_data = body.get("loadedData", [])  # Loaded data list for LLM context
 
             if not query:
                 yield f"data: {json.dumps({'stage': 'complete', 'result': {'type': 'error', 'message': 'No query provided'}})}\n\n"
@@ -4071,7 +4076,7 @@ async def chat_stream_endpoint(req: Request):
             yield f"data: {json.dumps({'stage': 'analyzing', 'message': 'Analyzing your request...'})}\n\n"
             await asyncio.sleep(0)  # Allow event to flush
 
-            hints = preprocess_query(query, viewport=viewport, active_overlays=active_overlays, cache_stats=cache_stats, saved_order_names=saved_order_names, time_state=time_state)
+            hints = preprocess_query(query, viewport=viewport, active_overlays=active_overlays, cache_stats=cache_stats, saved_order_names=saved_order_names, time_state=time_state, loaded_data=loaded_data)
             t_preprocess_end = time.time()
             logger.info(f"[TIMING] Preprocessing: {(t_preprocess_end - t_preprocess_start)*1000:.0f}ms")
 

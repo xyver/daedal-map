@@ -310,7 +310,9 @@ export class OrderPanel {
 
     if (items) {
       items.innerHTML = orderItems.map((item, index) => {
-        const label = item.metric_label || item.metric || 'unknown';
+        // For geometry items, derive label from source_id; for data items, use metric_label/metric
+        const geometryLabel = item.overlay_type ? (item.source_id || '').replace('geometry_', '').toUpperCase() : null;
+        const label = geometryLabel || item.metric_label || item.metric || 'unknown';
         const region = item.region || 'global';
         let year;
         if (item.year_start && item.year_end) {

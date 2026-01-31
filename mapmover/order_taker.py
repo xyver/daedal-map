@@ -277,17 +277,19 @@ RESPONSE TYPES (return JSON with "type" field):
 {{"type": "order", "items": [{{"source_id": "...", "metric": "...", "region": "..."}}], "summary": "..."}}
 ```
 
-2. GEOMETRY ORDER - User wants to see boundary overlays (ZIP codes, tribal areas, etc.):
+2. GEOMETRY ORDER - User wants to see boundary overlays (ZIP codes, tribal areas, watersheds, etc.):
 ```json
-{{"type": "order", "items": [{{"source_id": "geometry_zcta", "region": "USA-CA", "overlay_type": "zcta"}}], "summary": "ZIP code boundaries for California"}}
+{{"type": "order", "items": [{{"source_id": "geometry_xxx", "region": "USA-CA", "overlay_type": "xxx"}}], "summary": "..."}}
 ```
-Geometry sources: geometry_zcta (ZIP codes/ZCTA for USA)
-- For "show me ZIP codes in California": return order with source_id="geometry_zcta", region="USA-CA"
-- For "add Oregon" (when geometry is displayed): return order with region="USA-OR" to add to existing
-- For "remove California": return order with action="remove" at order level:
-  {{"type": "order", "action": "remove", "items": [{{"source_id": "geometry_zcta", "region": "USA-CA"}}], "summary": "Removing California ZIP codes"}}
-- For mixed "remove Texas, add California": use item-level action for each item:
-  {{"type": "order", "items": [{{"source_id": "geometry_zcta", "region": "USA-TX", "action": "remove"}}, {{"source_id": "geometry_zcta", "region": "USA-CA", "action": "add"}}], "summary": "Removing Texas, adding California ZIP codes"}}
+Geometry sources are in the catalog with category="geography" and data_type containing "geometry".
+Match the user's request to the appropriate source_id from the catalog based on source_name/description.
+The overlay_type is derived from the source_id (e.g., geometry_zcta -> overlay_type="zcta", geometry_tribal -> overlay_type="tribal").
+
+Examples:
+- "show me ZIP codes in California": find the ZCTA source in catalog, use its source_id
+- "show me tribal areas in Arizona": find the tribal/reservation source in catalog, use its source_id
+- For "remove California": use action="remove" at order level
+- For mixed "remove Texas, add California": use item-level action for each item
 
 3. NAVIGATION - User wants to zoom/navigate to a location:
 ```json
@@ -322,6 +324,14 @@ INTERPRETATION RULES:
 - If location is marked [LIKELY FALSE POSITIVE], ignore that location match
 - If query mentions a data source by name, it's almost certainly a data request, NOT navigation
 - "show me data from X" = data request, NOT navigation to a place called "data"
+
+INCREMENTAL ORDERS (IMPORTANT):
+- Orders describe ONLY what's changing, not the total map state
+- The system automatically maintains loaded data - users don't need to repeat previous items
+- "add Alaska" = only include Alaska in the order items, NOT previously loaded regions
+- "remove Iowa" = only include Iowa with action="remove"
+- NEVER include items from previous orders unless the user explicitly asks for them again
+- If user says "add X and remove Y", the order should have exactly 2 items: X (add) and Y (remove)
 
 CLARIFYING QUESTIONS - BE SPECIFIC:
 - "Which metric?" if they didn't specify what data

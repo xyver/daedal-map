@@ -221,10 +221,6 @@ class SessionCache:
                 self._sent_all.add(key)
                 source_set.add(key)
 
-    def is_geometry_sent(self, loc_id: str) -> bool:
-        """Check if a geometry feature was already sent."""
-        return f"geom:{loc_id}" in self._sent_all
-
     def filter_geometry_features(self, features: list) -> list:
         """
         Filter geometry features to only include those not yet sent.
@@ -243,49 +239,6 @@ class SessionCache:
             if not loc_id or f"geom:{loc_id}" not in self._sent_all:
                 new_features.append(f)
         return new_features
-
-    def clear_geometry_source(self, source_id: str) -> int:
-        """
-        Clear all sent geometry for a specific source.
-        Returns number of keys removed.
-
-        Args:
-            source_id: Source identifier (e.g., "geometry_zcta")
-        """
-        geo_source_key = f"geom:{source_id}"
-        return self.clear_source(geo_source_key)
-
-    def get_geometry_loc_ids_by_region(self, source_id: str, regions: list) -> list:
-        """
-        Get loc_ids for a source that match the given regions.
-        Used for removal orders - returns what would be removed.
-
-        Args:
-            source_id: Source identifier (e.g., "geometry_zcta")
-            regions: List of region prefixes (e.g., ["USA-FL"])
-
-        Returns:
-            List of loc_ids that match the regions
-        """
-        geo_source_key = f"geom:{source_id}"
-        source_set = self._sent_by_source.get(geo_source_key, set())
-
-        if not source_set or not regions:
-            return []
-
-        # Build prefixes for matching (e.g., "USA-FL-" to match parent_id "USA-FL-12001")
-        # But we store "geom:{loc_id}" where loc_id is the ZCTA code, not parent_id
-        # So we need to track parent_id separately or use the loc_id directly
-
-        # For now, return all loc_ids for this source (backend should filter)
-        # The actual filtering by parent_id happens in the geometry features themselves
-        matching = []
-        prefix = "geom:"
-        for key in source_set:
-            if key.startswith(prefix):
-                loc_id = key[len(prefix):]
-                matching.append(loc_id)
-        return matching
 
     def remove_geometry_by_loc_ids(self, source_id: str, loc_ids: list) -> int:
         """

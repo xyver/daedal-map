@@ -2405,7 +2405,7 @@ def extract_multiple_locations(query: str, viewport: dict = None) -> dict:
 # Main Preprocessor Function
 # =============================================================================
 
-def preprocess_query(query: str, viewport: dict = None, active_overlays: dict = None, cache_stats: dict = None, saved_order_names: list = None, time_state: dict = None) -> dict:
+def preprocess_query(query: str, viewport: dict = None, active_overlays: dict = None, cache_stats: dict = None, saved_order_names: list = None, time_state: dict = None, loaded_data: list = None) -> dict:
     """
     Main preprocessor function - extracts all hints from query.
 
@@ -2416,6 +2416,7 @@ def preprocess_query(query: str, viewport: dict = None, active_overlays: dict = 
         cache_stats: Optional dict with per-overlay stats {overlayId: {count, years, ...}}
         saved_order_names: Optional list of saved order names from frontend
         time_state: Optional dict with time slider state {isLiveLocked, currentTime, etc.}
+        loaded_data: Optional list of loaded data entries {source_id, region, metric, years, data_type}
 
     Returns a hints dict that can be injected into LLM context.
     """
@@ -2604,6 +2605,8 @@ def preprocess_query(query: str, viewport: dict = None, active_overlays: dict = 
         "saved_order_names": saved_order_names or [],  # Names of saved orders for load/save commands
         # Time state (live mode)
         "time_state": time_state,  # {isLiveLocked, currentTime, currentTimeFormatted, granularity, timezone}
+        # Loaded data for LLM context (what regions/sources are currently on map)
+        "loaded_data": loaded_data or [],
     }
 
     # Build summary for LLM context injection
@@ -2683,6 +2686,21 @@ def preprocess_query(query: str, viewport: dict = None, active_overlays: dict = 
     # Add saved orders info if any exist
     if saved_order_names:
         summary_parts.append(f"SAVED_ORDERS: {', '.join(saved_order_names)}")
+
+    # Add loaded data info for removal context
+    if loaded_data:
+        loaded_strs = []
+        for entry in loaded_data:
+            src = entry.get("source_id", "?")
+            region = entry.get("region", "global")
+            metric = entry.get("metric")
+            years = entry.get("years", "")
+            dtype = entry.get("data_type", "metrics")
+            if metric:
+                loaded_strs.append(f"{src}: {metric} in {region} ({years})")
+            else:
+                loaded_strs.append(f"{src}: {region} ({years})")
+        summary_parts.append(f"LOADED_DATA: {'; '.join(loaded_strs)}")
 
     hints["summary"] = "; ".join(summary_parts) if summary_parts else None
 
@@ -2822,6 +2840,28 @@ def build_tier3_context(hints: dict) -> str:
                         extra_info.append(f"years {years[0]}-{years[-1]}")
                 info_str = f" ({', '.join(extra_info)})" if extra_info else ""
                 context_parts.append(f"[CACHE: {count} {overlay_id} loaded{info_str}]")
+
+    # Add loaded data context (for removal operations - tells LLM what regions are loaded)
+    loaded_data = hints.get("loaded_data")
+    if loaded_data:
+        loaded_lines = []
+        for entry in loaded_data:
+            src = entry.get("source_id", "unknown")
+            region = entry.get("region", "global")
+            metric = entry.get("metric")
+            years = entry.get("years", "")
+            overlay_type = entry.get("overlay_type")
+            if overlay_type:
+                loaded_lines.append(f"- {src}: {overlay_type} overlay for {region}")
+            elif metric:
+                loaded_lines.append(f"- {src}: {metric} for {region} ({years})")
+            else:
+                loaded_lines.append(f"- {src}: {region} ({years})")
+        if loaded_lines:
+            context_parts.append(
+                "[LOADED DATA - use this to match regions for removal requests]\n" +
+                "\n".join(loaded_lines)
+            )
 
     # Check if user explicitly mentioned a location in their query
     explicit_location = hints.get("location")

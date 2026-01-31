@@ -1123,16 +1123,7 @@ def _execute_mixed_order_if_needed(order: dict, items: list, source_id: str) -> 
     session_id = order.get("session_id")
     cache = session_manager.get(session_id) if session_id else None
 
-    # Get source info for geometry check
-    source_info = _get_source_from_catalog(source_id)
-    geo_level = source_info.get("geographic_level") if source_info else None
-    is_geometry = geo_level in ("zcta", "tribal", "watershed", "park")
-
-    # Only handle geometry mixed orders for now (most common case)
-    if not is_geometry:
-        return None
-
-    # Check for explicit item-level actions
+    # Check for explicit item-level actions (works for all data types: geometry, metrics, events)
     add_items = []
     remove_items = []
 

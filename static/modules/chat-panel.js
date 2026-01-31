@@ -63,6 +63,104 @@ const EVENT_TYPE_TO_OVERLAY = {
   landslide: 'landslides'
 };
 
+// =============================================================================
+// Loaded Data Tracker - tracks what data has been loaded for LLM context
+// =============================================================================
+
+/**
+ * Tracks loaded data for LLM context.
+ * Each entry: { source_id, source_name, region, metric, years, data_type, overlay_type }
+ */
+let loadedDataList = [];
+
+/**
+ * Register loaded data from an executed order.
+ * Called when orders complete successfully.
+ * @param {Object} order - The executed order
+ * @param {Object} response - The API response
+ */
+function registerLoadedData(order, response) {
+  if (!order?.items) return;
+
+  const dataType = response?.data_type || 'metrics';
+
+  for (const item of order.items) {
+    // Skip removal items
+    if (item.action === 'remove') continue;
+
+    const entry = {
+      source_id: item.source_id,
+      region: item.region || 'global',
+      metric: item.metric_label || item.metric || null,
+      data_type: dataType,
+      overlay_type: item.overlay_type || null
+    };
+
+    // Add year info
+    if (item.year_start && item.year_end) {
+      entry.years = `${item.year_start}-${item.year_end}`;
+    } else if (item.year) {
+      entry.years = String(item.year);
+    } else {
+      entry.years = 'latest';
+    }
+
+    // Dedupe: don't add if same source+region+metric already exists
+    const exists = loadedDataList.some(e =>
+      e.source_id === entry.source_id &&
+      e.region === entry.region &&
+      e.metric === entry.metric
+    );
+
+    if (!exists) {
+      loadedDataList.push(entry);
+      console.log('[LoadedData] Registered:', entry);
+    }
+  }
+}
+
+/**
+ * Remove loaded data entries matching criteria.
+ * Called when removal orders complete.
+ * @param {Object} order - The removal order
+ */
+function unregisterLoadedData(order) {
+  if (!order?.items) return;
+
+  for (const item of order.items) {
+    if (item.action !== 'remove') continue;
+
+    const sourceId = item.source_id;
+    const region = item.region;
+
+    // Remove matching entries
+    const before = loadedDataList.length;
+    loadedDataList = loadedDataList.filter(e =>
+      !(e.source_id === sourceId && (e.region === region || region === 'global'))
+    );
+
+    if (loadedDataList.length < before) {
+      console.log('[LoadedData] Unregistered:', { source_id: sourceId, region });
+    }
+  }
+}
+
+/**
+ * Get loaded data summary for LLM context.
+ * @returns {Array} List of loaded data entries
+ */
+export function getLoadedDataList() {
+  return [...loadedDataList];
+}
+
+/**
+ * Clear all loaded data (on session reset).
+ */
+export function clearLoadedDataList() {
+  loadedDataList = [];
+  console.log('[LoadedData] Cleared');
+}
+
 /**
  * Route event-type order results to OverlayController for cache ingestion.
  * @param {Object} response - API response with data_type 'events'
@@ -256,6 +354,29 @@ export const ChatManager = {
       ? `${API_BASE_URL}/chat`
       : '/chat';
 
+    // Check for mixed geometry orders (different source_ids with overlay_type)
+    // Split them into separate calls so backend processes each geometry type correctly
+    const geometryItems = (order.items || []).filter(item => item.overlay_type);
+    if (geometryItems.length > 0) {
+      const sourceIds = new Set(geometryItems.map(item => item.source_id));
+      if (sourceIds.size > 1) {
+        console.log('Mixed geometry order detected, splitting by source_id:', [...sourceIds]);
+        // Group items by source_id
+        const itemsBySource = {};
+        for (const item of order.items) {
+          const key = item.source_id || 'default';
+          if (!itemsBySource[key]) itemsBySource[key] = [];
+          itemsBySource[key].push(item);
+        }
+        // Execute each group separately (recursive call, but each group has only 1 source_id so won't split again)
+        for (const [sourceId, items] of Object.entries(itemsBySource)) {
+          const subOrder = { ...order, items, summary: order.summary };
+          await this.executeOrder(subOrder, options);
+        }
+        return;
+      }
+    }
+
     console.log('Sending order:', JSON.stringify(order, null, 2));
 
     const data = await postMsgpack(apiUrl, {
@@ -283,12 +404,16 @@ export const ChatManager = {
       const message = data.summary || `Removed ${data.count || 0} ${data.data_type || 'items'}`;
       this.addMessage(message, 'assistant');
       App?.displayData(data);
+      unregisterLoadedData(order);  // Track removal for LLM context
       if (orderPanel.switchTab) orderPanel.switchTab('loaded');
     } else if (data.type === 'mixed_order' && data.results) {
       // Handle mixed add/remove orders - process each result
       for (const result of data.results) {
         App?.displayData(result);
       }
+      // Track both adds and removes for LLM context
+      registerLoadedData(order, data);
+      unregisterLoadedData(order);
       const message = data.summary || `Updated map: added ${data.add_count || 0}, removed ${data.remove_count || 0}`;
       this.addMessage(message, 'assistant');
       if (orderPanel.switchTab) orderPanel.switchTab('loaded');
@@ -318,6 +443,9 @@ export const ChatManager = {
       if (!options.skipLog) {
         logExecutedOrder(order);
       }
+
+      // Track loaded data for LLM context
+      registerLoadedData(order, data);
 
       App?.displayData(data);
     }
@@ -408,6 +536,7 @@ export const ChatManager = {
     if (window.App?.clearMapViewSettings) window.App.clearMapViewSettings();
     clearApiCalls();
     clearExecutedOrders();
+    clearLoadedDataList();  // Clear loaded data tracker
 
     // Reset session
     this.sessionId = resetSessionId();
@@ -1105,6 +1234,7 @@ export const ChatManager = {
       cacheStats: this.getCacheStats(),
       timeState: this.getTimeState(),
       savedOrderNames: SavedOrders.getNames(),
+      loadedData: getLoadedDataList(),  // Track what data is loaded for LLM context
       ...extraOptions
     };
   },
