@@ -2,8 +2,7 @@
 
 An interactive map system that lets you explore global data through natural language. Ask questions about any location and see the answers visualized on a 3D globe.
 
-**Live Demo**: [county-map.up.railway.app](https://county-map.up.railway.app)
-
+**Live Demo**: [[county-map.up.railway.app](https://county-map-production.up.railway.app/)]
 ---
 
 ## This Is a Demo
