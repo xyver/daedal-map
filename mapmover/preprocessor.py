@@ -87,44 +87,9 @@ _CONVERSIONS_CACHE = None
 # Country index.json cache
 _COUNTRY_INDEX_CACHE = {}  # iso3 -> dict
 
-# Caches for new reference files
-_STOPWORDS_CACHE = None
+# Caches for reference files
 _TOPICS_CACHE = None
 _DISASTERS_CACHE = None
-
-
-def _load_stopwords() -> set:
-    """
-    Load location stop words from reference file.
-
-    DISABLED: Returns empty set. The stopwords.json file is kept for future use
-    but we're not applying stop word filtering currently to avoid false negatives.
-    Re-enable by uncommenting the loading code below if needed.
-    """
-    global _STOPWORDS_CACHE
-    if _STOPWORDS_CACHE is not None:
-        return _STOPWORDS_CACHE
-
-    # DISABLED - return empty set (file kept at reference/stopwords.json for future use)
-    _STOPWORDS_CACHE = set()
-    return _STOPWORDS_CACHE
-
-    # To re-enable, uncomment below:
-    # ref_path = REFERENCE_DIR / "stopwords.json"
-    # try:
-    #     with open(ref_path, encoding='utf-8') as f:
-    #         data = json.load(f)
-    #         words = set()
-    #         for key, value in data.items():
-    #             if not key.startswith("_") and isinstance(value, list):
-    #                 words.update(value)
-    #         _STOPWORDS_CACHE = words
-    #         logger.debug(f"Loaded {len(words)} stop words from reference file")
-    #         return _STOPWORDS_CACHE
-    # except Exception as e:
-    #     logger.warning(f"Error loading stopwords.json: {e}")
-    #     _STOPWORDS_CACHE = set()
-    #     return _STOPWORDS_CACHE
 
 
 def _load_topics() -> dict:
@@ -198,10 +163,6 @@ def _load_disaster_overlays() -> dict:
         logger.warning(f"Error loading disasters.json: {e}")
         _DISASTERS_CACHE = {}
         return _DISASTERS_CACHE
-
-# Location stop words - loaded from reference/stopwords.json
-# Use _load_stopwords() to access
-
 
 def normalize_query_for_location_matching(query: str) -> str:
     """
@@ -362,7 +323,7 @@ def get_sorted_location_names(iso3: str) -> list:
     """
     Get pre-sorted list of location names for a country (cached).
     Names are sorted by length (longest first) and filtered to remove
-    stop words, numbers, and single characters.
+    numbers and single characters.
     """
     global _PARQUET_SORTED_NAMES_CACHE
 
@@ -376,11 +337,9 @@ def get_sorted_location_names(iso3: str) -> list:
         return []
 
     # Build sorted list once and cache it
-    stopwords = _load_stopwords()
     sorted_names = sorted(
         [n for n in names.keys()
-         if n not in stopwords
-         and not n.isdigit()
+         if not n.isdigit()
          and len(n) >= 2],
         key=len, reverse=True
     )
@@ -1703,101 +1662,9 @@ SHOW_BORDERS_PATTERNS = [
 ]
 
 
-def detect_source_from_query(query: str) -> Optional[dict]:
-    """
-    Detect if user mentions a specific data source by name.
-    Maps human-readable source names to source_ids.
-    
-    Handles:
-    - Full source_name matches
-    - Partial source_name matches (e.g., 'Australian Bureau of Statistics' matches 'ABS - Regional Demographics')
-    - source_id matches (for power users)
-    
-    Returns dict with source_id and source_name if found, None otherwise.
-    """
-    query_lower = query.lower()
-    catalog = load_catalog()
-
-    if not catalog:
-        return None
-
-    sources = catalog.get("sources", [])
-
-    # Handle common aliases and patterns BEFORE main loop
-    # SDG patterns: "SDG 8", "sdg8", "SDG-8", "goal 8", "sustainable development goal 8"
-    import re
-    sdg_pattern = re.search(r'\b(?:sdg|sustainable\s+development\s+goal)[\s\-_]*(\d{1,2})\b', query_lower)
-    if sdg_pattern:
-        goal_num = int(sdg_pattern.group(1))
-        if 1 <= goal_num <= 17:
-            # Dynamically search catalog for matching SDG source by topic_tags or source_name
-            goal_tag = f"goal{goal_num}"
-            for source in sources:
-                topic_tags = source.get("topic_tags", [])
-                # Check if this source has the matching goal tag
-                if goal_tag in topic_tags:
-                    return {
-                        "source_id": source.get("source_id"),
-                        "source_name": source.get("source_name", f"UN SDG Goal {goal_num}")
-                    }
-                # Also check if source_name mentions the goal number
-                source_name = source.get("source_name", "").lower()
-                if f"goal {goal_num}:" in source_name or f"goal {goal_num} " in source_name:
-                    return {
-                        "source_id": source.get("source_id"),
-                        "source_name": source.get("source_name", f"UN SDG Goal {goal_num}")
-                    }
-    source_matches = []
-    
-    for source in sources:
-        source_id = source.get("source_id", "")
-        source_name = source.get("source_name", "")
-        source_name_lower = source_name.lower() if source_name else ""
-        
-        # Check if full source_name appears in query
-        if source_name and source_name_lower in query_lower:
-            source_matches.append({
-                "source_id": source_id,
-                "source_name": source_name,
-                "match_length": len(source_name)
-            })
-        # Also check if main part of source_name appears in query
-        # Split by common separators like ' - ', ':', ','
-        elif source_name:
-            name_parts = [p.strip() for p in source_name.replace(' - ', '|').replace(': ', '|').split('|')]
-            for part in name_parts:
-                if len(part) >= 4 and part.lower() in query_lower:
-                    source_matches.append({
-                        "source_id": source_id,
-                        "source_name": source_name,
-                        "match_length": len(part)
-                    })
-                    break
-        
-        # Check if source_id appears (for power users, underscore-separated)
-        if source_id and source_id.lower() in query_lower:
-            source_matches.append({
-                "source_id": source_id,
-                "source_name": source_name or source_id,
-                "match_length": len(source_id) + 10  # Boost exact source_id matches
-            })
-    
-    if source_matches:
-        # Return the longest match (most specific)
-        best_match = max(source_matches, key=lambda x: x["match_length"])
-        return {
-            "source_id": best_match["source_id"],
-            "source_name": best_match["source_name"]
-        }
-    
-    return None
-
-
 # =============================================================================
-# CANDIDATE-BASED DETECTION (Phase 1 Refactor)
+# Candidate-Based Detection
 # =============================================================================
-# These functions return ALL candidates with confidence scores, letting the LLM
-# decide which interpretation is correct based on full context.
 
 def detect_source_candidates(query: str) -> dict:
     """
@@ -1823,10 +1690,40 @@ def detect_source_candidates(query: str) -> dict:
     sources = catalog.get("sources", [])
     candidates = []
 
+    def add_candidate(source_id: str, source_name: str, confidence: float, match_type: str, matched_text: str) -> None:
+        candidates.append({
+            "source_id": source_id,
+            "source_name": source_name or source_id,
+            "confidence": min(1.0, confidence),
+            "match_type": match_type,
+            "matched_text": matched_text
+        })
+
     # Check for data-related keywords that boost source interpretation
     data_keywords = ["data", "statistics", "dataset", "source", "metrics", "from the"]
     has_data_context = any(kw in query_lower for kw in data_keywords)
     data_boost = 0.1 if has_data_context else 0.0
+
+    # Handle SDG aliases (e.g., "SDG 8", "sdg-8", "sustainable development goal 8")
+    sdg_pattern = re.search(r'\b(?:sdg|sustainable\s+development\s+goal)[\s\-_]*(\d{1,2})\b', query_lower)
+    if sdg_pattern:
+        goal_num = int(sdg_pattern.group(1))
+        if 1 <= goal_num <= 17:
+            goal_tag = f"goal{goal_num}"
+            for source in sources:
+                source_id = source.get("source_id", "")
+                source_name = source.get("source_name", f"UN SDG Goal {goal_num}")
+                topic_tags = source.get("topic_tags", [])
+                source_name_lower = source_name.lower()
+
+                if goal_tag in topic_tags or f"goal {goal_num}:" in source_name_lower or f"goal {goal_num} " in source_name_lower:
+                    add_candidate(
+                        source_id=source_id,
+                        source_name=source_name,
+                        confidence=1.0,
+                        match_type="sdg_alias",
+                        matched_text=sdg_pattern.group(0)
+                    )
 
     for source in sources:
         source_id = source.get("source_id", "")
@@ -1835,13 +1732,7 @@ def detect_source_candidates(query: str) -> dict:
 
         # Check if full source_name appears in query
         if source_name and source_name_lower in query_lower:
-            candidates.append({
-                "source_id": source_id,
-                "source_name": source_name,
-                "confidence": min(1.0, 1.0 + data_boost),
-                "match_type": "full_name",
-                "matched_text": source_name
-            })
+            add_candidate(source_id, source_name, 1.0 + data_boost, "full_name", source_name)
         # Check partial name matches
         elif source_name:
             name_parts = [p.strip() for p in source_name.replace(' - ', '|').replace(': ', '|').split('|')]
@@ -1853,24 +1744,12 @@ def detect_source_candidates(query: str) -> dict:
                         base_score = 0.7
                     else:
                         base_score = 0.5
-                    candidates.append({
-                        "source_id": source_id,
-                        "source_name": source_name,
-                        "confidence": min(1.0, base_score + data_boost),
-                        "match_type": "partial_name",
-                        "matched_text": part
-                    })
+                    add_candidate(source_id, source_name, base_score + data_boost, "partial_name", part)
                     break  # Only add once per source
 
         # Check if source_id appears (for power users)
         if source_id and source_id.lower() in query_lower:
-            candidates.append({
-                "source_id": source_id,
-                "source_name": source_name or source_id,
-                "confidence": min(1.0, 0.9 + data_boost),
-                "match_type": "source_id",
-                "matched_text": source_id
-            })
+            add_candidate(source_id, source_name, 0.9 + data_boost, "source_id", source_id)
 
     # Sort by confidence (highest first)
     candidates = sorted(candidates, key=lambda x: -x["confidence"])
@@ -2420,25 +2299,17 @@ def preprocess_query(query: str, viewport: dict = None, active_overlays: dict = 
 
     Returns a hints dict that can be injected into LLM context.
     """
-    # Check for "show borders" intent first - follow-up to display geometry without data
     show_borders = detect_show_borders_intent(query)
-
-    # Check for navigation intent first
     nav_intent = detect_navigation_intent(query)
 
-    # For navigation queries, try to extract multiple locations
     navigation = None
     disambiguation = None
 
     if nav_intent.get("is_navigation") and nav_intent.get("location_text"):
-        # Try to extract multiple locations from the query
         location_result = extract_multiple_locations(nav_intent["location_text"], viewport)
         locations = location_result.get("locations", [])
-
         if locations:
-            # Check if disambiguation is needed (singular suffix with multiple matches)
             if location_result.get("needs_disambiguation"):
-                # User said "washington county" (singular) but we found many - need to pick one
                 disambiguation = {
                     "needed": True,
                     "query_term": location_result.get("query_term", "location"),
@@ -2446,7 +2317,6 @@ def preprocess_query(query: str, viewport: dict = None, active_overlays: dict = 
                     "count": len(locations)
                 }
             else:
-                # Either single match, or plural suffix (show all), or explicit list
                 navigation = {
                     "is_navigation": True,
                     "pattern": nav_intent.get("pattern"),
@@ -2454,29 +2324,26 @@ def preprocess_query(query: str, viewport: dict = None, active_overlays: dict = 
                     "count": len(locations)
                 }
 
-    # Detect source FIRST - if user mentions a data source by name, this takes priority
-    # over location matching (e.g., "Australian Bureau of Statistics" should not match "Bureau County")
-    detected_source = detect_source_from_query(query)
-    
+    # Canonical source detection path: candidate-based only.
+    source_candidates = detect_source_candidates(query)
+    detected_source = source_candidates.get("best")
+
     # Resolve location for non-navigation queries (data orders, etc.)
     # Pass viewport to enable parquet-based city/location lookups
     location = None
 
     if not navigation and not disambiguation:
         location_result = extract_country_from_query(query, viewport=viewport)
-        
-        # If a source was detected, filter out false positive location matches
-        # that are substrings of the source name
+
+        # Filter likely false positives where location token is part of the source name.
         if detected_source and location_result.get("match"):
             source_name_lower = detected_source.get("source_name", "").lower()
             matched_term = location_result["match"][0].lower()
-            # If the matched location term is part of the source name, ignore it
             if matched_term in source_name_lower:
-                location_result = {}  # Clear the false positive match
+                location_result = {}
 
         if location_result.get("match"):
             matched_term, iso3, is_subregion = location_result["match"]
-            # Get proper country name from ISO3
             iso_data = load_reference_file(REFERENCE_DIR / "iso_codes.json")
             country_name = iso_data.get("iso3_to_name", {}).get(iso3, matched_term.title()) if iso_data else matched_term.title()
             location = {
@@ -2487,37 +2354,28 @@ def preprocess_query(query: str, viewport: dict = None, active_overlays: dict = 
                 "source": location_result.get("source"),
             }
 
-            # Check for ambiguity - multiple locations with same name
             if location_result.get("ambiguous") and location_result.get("matches"):
                 matches = location_result["matches"]
 
-                # Try to resolve ambiguity using viewport context
                 resolved_by_viewport = False
                 if viewport:
                     filtered_matches = matches
 
-                    # STEP 1: Filter by admin_level based on current zoom
-                    # Check from current level downward (2->1->0) but never above
-                    # This excludes cities/towns (level 3) when viewing states/counties
                     current_admin_level = viewport.get("adminLevel")
                     if current_admin_level is not None and current_admin_level >= 0:
-                        # Check each level from current down to 0
                         for check_level in range(current_admin_level, -1, -1):
                             level_matches = [
                                 m for m in filtered_matches
                                 if m.get("admin_level", 0) == check_level
                             ]
                             if level_matches:
-                                # Found matches at this level - use them
                                 filtered_matches = level_matches
                                 logger.debug(f"Admin level filter: {len(level_matches)} matches at level {check_level} (viewing level {current_admin_level})")
                                 break
 
-                    # STEP 2: Filter by country (if still multiple matches)
                     if len(filtered_matches) > 1 and viewport.get("bounds"):
                         countries_in_view = get_countries_in_viewport(viewport["bounds"])
                         if countries_in_view:
-                            # Filter matches to those in viewport (check ISO3 country prefix)
                             country_matches = [
                                 m for m in filtered_matches
                                 if m.get("iso3", "").split("-")[0] in countries_in_view
@@ -2525,9 +2383,7 @@ def preprocess_query(query: str, viewport: dict = None, active_overlays: dict = 
                             if country_matches:
                                 filtered_matches = country_matches
 
-                    # Check result after filtering
                     if len(filtered_matches) == 1:
-                        # Single match after filtering - auto-select
                         m = filtered_matches[0]
                         location = {
                             "matched_term": m.get("matched_term", matched_term),
@@ -2540,7 +2396,6 @@ def preprocess_query(query: str, viewport: dict = None, active_overlays: dict = 
                         resolved_by_viewport = True
                         logger.info(f"Viewport auto-resolved '{matched_term}' to {m.get('loc_id')}")
                     elif len(filtered_matches) > 1:
-                        # Multiple matches remain - show disambiguation with filtered list
                         disambiguation = {
                             "needed": True,
                             "query_term": matched_term,
@@ -2549,7 +2404,6 @@ def preprocess_query(query: str, viewport: dict = None, active_overlays: dict = 
                         }
                         resolved_by_viewport = True
 
-                # If viewport didn't resolve, show all options
                 if not resolved_by_viewport:
                     disambiguation = {
                         "needed": True,
@@ -2558,17 +2412,10 @@ def preprocess_query(query: str, viewport: dict = None, active_overlays: dict = 
                         "count": len(matches)
                     }
 
-    # Detect filter-related intent (read or change filters)
     filter_intent = detect_filter_intent(query, active_overlays) if active_overlays else None
 
-    # Detect overlay intent (works even when no overlay is active)
     overlay_intent = detect_overlay_intent(query, active_overlays)
 
-    # ==========================================================================
-    # CANDIDATE-BASED DETECTION (Phase 1 Refactor)
-    # Gather ALL candidates with confidence scores - LLM decides interpretation
-    # ==========================================================================
-    source_candidates = detect_source_candidates(query)
     location_candidates = detect_location_candidates(query, viewport)
     intent_candidates = detect_intent_candidates(query, source_candidates, location_candidates)
 
@@ -2583,29 +2430,24 @@ def preprocess_query(query: str, viewport: dict = None, active_overlays: dict = 
 
     hints = {
         "original_query": query,
-        "viewport": viewport,  # Pass through for downstream use
-        "show_borders": show_borders if show_borders.get("is_show_borders") else None,  # Display geometry without data
-        "navigation": navigation,  # Navigation intent with multiple locations
+        "viewport": viewport,
+        "show_borders": show_borders if show_borders.get("is_show_borders") else None,
+        "navigation": navigation,
         "topics": extract_topics(query),
         "regions": resolve_regions(query),
-        "location": location,  # Single location resolution (city->country or direct country)
-        "disambiguation": disambiguation,  # If multiple locations matched, need user clarification
+        "location": location,
+        "disambiguation": disambiguation,
         "time": detect_time_patterns(query),
         "reference_lookup": detect_reference_lookup(query),
         "derived_intent": detect_derived_intent(query),
-        "detected_source": detected_source,  # Already detected earlier for location filtering
-        # Overlay integration (Phase 1)
-        "active_overlays": active_overlays,  # Current overlay state from frontend
-        "cache_stats": cache_stats,  # What's currently loaded in frontend cache
-        "filter_intent": filter_intent,  # User intent to read/change filters
-        "overlay_intent": overlay_intent,  # Disaster overlay detection (works without active overlay)
-        # CANDIDATE-BASED (Phase 1 Refactor) - all interpretations with confidence scores
+        "detected_source": detected_source,
+        "active_overlays": active_overlays,
+        "cache_stats": cache_stats,
+        "filter_intent": filter_intent,
+        "overlay_intent": overlay_intent,
         "candidates": candidates,
-        # Saved orders (Phase 7 - Cache Unification)
-        "saved_order_names": saved_order_names or [],  # Names of saved orders for load/save commands
-        # Time state (live mode)
-        "time_state": time_state,  # {isLiveLocked, currentTime, currentTimeFormatted, granularity, timezone}
-        # Loaded data for LLM context (what regions/sources are currently on map)
+        "saved_order_names": saved_order_names or [],
+        "time_state": time_state,
         "loaded_data": loaded_data or [],
     }
 
