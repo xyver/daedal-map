@@ -25,6 +25,7 @@ from .geometry_handlers import (
 
 from .paths import DATA_ROOT, CATALOG_PATH
 from .data_loading import load_source_metadata
+from .aggregation_system import build_aggregation_spec, apply_temporal_aggregation
 
 CONVERSIONS_PATH = Path(__file__).parent / "conversions.json"
 REFERENCE_DIR = Path(__file__).parent / "reference"
@@ -554,6 +555,123 @@ def find_metric_column(df: pd.DataFrame, metric: str) -> Optional[str]:
             return col
 
     return None
+
+
+def _extract_date_window(item: dict) -> tuple[Optional[pd.Timestamp], Optional[pd.Timestamp]]:
+    """Infer date window from order item fields."""
+    date_start = pd.to_datetime(item.get("date_start"), errors="coerce")
+    date_end = pd.to_datetime(item.get("date_end"), errors="coerce")
+
+    year = item.get("year")
+    year_start = item.get("year_start")
+    year_end = item.get("year_end")
+
+    if pd.isna(date_start) and year_start:
+        date_start = pd.Timestamp(int(year_start), 1, 1)
+    if pd.isna(date_end) and year_end:
+        date_end = pd.Timestamp(int(year_end), 12, 31)
+    if pd.isna(date_start) and year:
+        date_start = pd.Timestamp(int(year), 1, 1)
+    if pd.isna(date_end) and year:
+        date_end = pd.Timestamp(int(year), 12, 31)
+
+    return (None if pd.isna(date_start) else date_start, None if pd.isna(date_end) else date_end)
+
+
+def _load_fx_with_aggregation(source_id: str, item: dict, metadata: dict) -> tuple[Optional[pd.DataFrame], dict]:
+    """
+    Load FX data with temporal aggregation contract.
+
+    Returns:
+        (df_or_none, trace)
+    """
+    trace = {
+        "source_id": source_id,
+        "requested": {
+            "time_granularity": item.get("time_granularity"),
+            "aggregation": item.get("aggregation"),
+            "date_start": item.get("date_start"),
+            "date_end": item.get("date_end"),
+            "year": item.get("year"),
+            "year_start": item.get("year_start"),
+            "year_end": item.get("year_end"),
+        },
+    }
+
+    spec = build_aggregation_spec(item, metadata)
+    trace["spec"] = spec.to_dict()
+
+    # Runtime metrics contract is yearly; use default runtime parquet when no override is requested.
+    has_temporal_override = bool(item.get("time_granularity") or item.get("aggregation") or item.get("date_start") or item.get("date_end"))
+    if not has_temporal_override:
+        trace["applied"] = {"path": "all_countries.parquet", "mode": "native_yearly"}
+        return None, trace
+
+    source_dir = _get_source_path(source_id)
+    daily_path = source_dir / "fx_staging_daily.parquet"
+    if not daily_path.exists():
+        trace["applied"] = {"path": "all_countries.parquet", "mode": "fallback_no_daily_staging"}
+        return None, trace
+
+    try:
+        fx = pd.read_parquet(daily_path, columns=["date", "loc_id", "local_per_usd"])
+    except Exception as e:
+        trace["applied"] = {"path": "all_countries.parquet", "mode": "fallback_read_error", "error": str(e)}
+        return None, trace
+
+    start_ts, end_ts = _extract_date_window(item)
+    if start_ts is not None:
+        fx = fx[pd.to_datetime(fx["date"], errors="coerce") >= start_ts]
+    if end_ts is not None:
+        fx = fx[pd.to_datetime(fx["date"], errors="coerce") <= end_ts]
+
+    if fx.empty:
+        trace["applied"] = {"path": str(daily_path), "mode": "empty_after_filter"}
+        return pd.DataFrame(columns=["loc_id", "year", "source", "local_per_usd"]), trace
+
+    aggregated = apply_temporal_aggregation(
+        fx,
+        spec,
+        date_col="date",
+        value_col="local_per_usd",
+        group_cols=("loc_id",),
+    )
+
+    if aggregated.empty:
+        trace["applied"] = {"path": str(daily_path), "mode": "empty_after_aggregation"}
+        return pd.DataFrame(columns=["loc_id", "year", "source", "local_per_usd"]), trace
+
+    aggregated["year"] = pd.to_datetime(aggregated["date"], errors="coerce").dt.year
+    aggregated = aggregated.dropna(subset=["year"])
+    aggregated["year"] = aggregated["year"].astype(int)
+
+    # Keep runtime map contract stable: loc_id + year + metric.
+    yearly_method = "last" if spec.method == "last" else "mean"
+    if yearly_method == "last":
+        yearly = (
+            aggregated.sort_values(["loc_id", "year", "date"])
+            .groupby(["loc_id", "year"], as_index=False)
+            .tail(1)[["loc_id", "year", "local_per_usd"]]
+            .reset_index(drop=True)
+        )
+    else:
+        yearly = (
+            aggregated.groupby(["loc_id", "year"], as_index=False)
+            .agg(local_per_usd=("local_per_usd", "mean"))
+        )
+
+    yearly["source"] = source_id
+    trace["applied"] = {
+        "path": str(daily_path),
+        "mode": "daily_staging_temporal_aggregation",
+        "requested_granularity": spec.time_granularity,
+        "requested_method": spec.method,
+        "coerced_output": "yearly_for_runtime",
+        "input_rows": int(len(fx)),
+        "post_agg_rows": int(len(aggregated)),
+        "yearly_rows": int(len(yearly)),
+    }
+    return yearly[["loc_id", "year", "source", "local_per_usd"]], trace
 
 
 # =============================================================================
@@ -1299,6 +1417,7 @@ def execute_order(order: dict) -> dict:
     all_metrics = []  # Track ALL metric labels for multi-metric support
     metric_year_ranges = {}  # Track year range per metric for time slider adjustment
     metric_source_map = {}  # Track which metric belongs to which source
+    aggregation_trace = []  # Track applied aggregation contract per item
     requested_year_start = None  # Track requested range for comparison
     requested_year_end = None
     all_region_codes = set()  # Track all requested region codes for GeoJSON
@@ -1326,6 +1445,13 @@ def execute_order(order: dict) -> dict:
         except Exception as e:
             print(f"Error loading {source_id}: {e}")
             continue
+
+        # Apply shared aggregation contract for FX temporal requests.
+        if source_id == "fx_usd_historical":
+            fx_df, trace = _load_fx_with_aggregation(source_id, item, metadata)
+            aggregation_trace.append(trace)
+            if fx_df is not None:
+                df = fx_df
 
         # Find the metric column first (needed for smart year filtering)
         if metric:
@@ -1577,7 +1703,8 @@ def execute_order(order: dict) -> dict:
         "summary": summary or f"Showing {len(features)} locations",
         "count": len(features),
         "sources": source_info,
-        "metric_sources": metric_source_map
+        "metric_sources": metric_source_map,
+        "aggregation_trace": aggregation_trace,
     }
 
     # Add multi-year data if applicable

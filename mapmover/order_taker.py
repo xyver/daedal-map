@@ -18,6 +18,7 @@ from .data_loading import load_catalog, load_source_metadata, get_source_path
 from .preprocessor import build_tier3_context, build_tier4_context
 from .constants import CHAT_HISTORY_LLM_LIMIT
 from .llm_tools import format_tools_for_provider, execute_tool, format_tool_result_for_llm
+from .aggregation_system import validate_aggregation_policy
 
 load_dotenv()
 
@@ -258,11 +259,17 @@ ORDER FORMAT (JSON when user requests data):
 {{"items": [{{"source_id": "owid_co2", "metric": "co2", "region": "europe", "year": 2022}}], "summary": "CO2 for Europe 2022"}}
 ```
 
+OPTIONAL AGGREGATION FIELDS (only when user explicitly asks):
+- `time_granularity`: `daily | weekly | monthly | yearly`
+- `aggregation`: `period_end | period_avg` (FX default is period_end if omitted)
+- `date_start` / `date_end`: ISO date bounds for time filtering when needed
+
 RULES:
 - source_id: Must EXACTLY match one of the available sources
 - metric: Must be an EXACT column name from the source, OR use "*" for ALL metrics from that source
 - region: lowercase (europe, g7, australia) or null for global
 - year: null = most recent
+- Only include aggregation fields when the user asks for a specific time granularity or averaging behavior
 
 WILDCARD METRICS (internal - never mention "*" to users):
 Use "metric": "*" when user asks for "all data", "everything", or "all metrics" from a source.
@@ -577,9 +584,22 @@ def validate_order_item(item: dict) -> dict:
             item["_error"] = f"Year start {year_start} is after year end {year_end}"
             return item
 
+    # Validate optional aggregation fields against canonical policy.
+    metric_info = metrics.get(metric, {}) if metric else {}
+    policy_ok, policy_error, policy_trace = validate_aggregation_policy(
+        item,
+        source_metadata=metadata,
+        metric_name=metric,
+        metric_info=metric_info,
+    )
+    item["_aggregation_policy"] = policy_trace
+    if not policy_ok:
+        item["_valid"] = False
+        item["_error"] = policy_error or "Invalid aggregation policy"
+        return item
+
     # Valid - add metric label if missing
     if metric and not item.get("metric_label"):
-        metric_info = metrics.get(metric, {})
         name = metric_info.get("name", metric)
         unit = metric_info.get("unit", "")
         if unit and unit != "unknown":
