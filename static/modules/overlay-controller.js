@@ -783,40 +783,8 @@ async function loadWeatherYearData(overlayId, year, endpoint, signal = null) {
       return true;
     }
 
-    // Fallback: single variable response (backwards compatibility)
-    if (!dataCache[overlayId]) {
-      dataCache[overlayId] = { years: {}, colorScale: null, grid: null };
-    }
-
-    dataCache[overlayId].years[year] = {
-      timestamps: data.timestamps,
-      values: data.values,
-      tier: data.tier
-    };
-
-    if (data.color_scale) {
-      dataCache[overlayId].colorScale = data.color_scale;
-    }
-    if (data.grid) {
-      dataCache[overlayId].grid = data.grid;
-    }
-
-    const frameCount = data.timestamps?.length || 0;
-    console.log(`OverlayController: Cached weather ${overlayId} year ${year} (${frameCount} frames)`);
-
-    if (!yearRangeCache[overlayId]) {
-      yearRangeCache[overlayId] = { min: year, max: year, available: [] };
-    }
-    yearRangeCache[overlayId].min = Math.min(yearRangeCache[overlayId].min, year);
-    yearRangeCache[overlayId].max = Math.max(yearRangeCache[overlayId].max, year);
-    if (!yearRangeCache[overlayId].available.includes(year)) {
-      yearRangeCache[overlayId].available.push(year);
-      yearRangeCache[overlayId].available.sort((a, b) => a - b);
-    }
-
-    window.dispatchEvent(new CustomEvent('overlayCacheUpdated', { detail: { overlayId, year } }));
-
-    return true;
+    console.error('OverlayController: Unexpected weather response shape (expected multi-variable payload)');
+    return false;
   } catch (error) {
     loadedYears[overlayId]?.delete(year);
 
@@ -3929,9 +3897,6 @@ export const OverlayController = {
         // Render from cache
         this.renderFilteredData(overlayId, timestamp, { useTimestamp: true });
 
-        if (overlayId === 'hurricanes') {
-          this.checkHurricaneRollingAnimation(timestamp);
-        }
       }
     }
   },
@@ -3964,10 +3929,6 @@ export const OverlayController = {
       const currentTimestamp = TimeSlider.currentTime;
       this.renderFilteredData(overlayId, currentTimestamp, { useTimestamp: true });
 
-      // For hurricanes, check if we should start rolling animation
-      if (overlayId === 'hurricanes') {
-        this.checkHurricaneRollingAnimation(currentTimestamp);
-      }
     } else if (timestamp && useLifecycleFiltering) {
       this.renderFilteredData(overlayId, timestamp, { useTimestamp: true });
     } else {
@@ -3978,14 +3939,6 @@ export const OverlayController = {
     if (loaded) {
       console.log(`OverlayController: Loaded and rendered ${overlayId} for year ${year}`);
     }
-  },
-
-  /**
-   * DEPRECATED: No-op. Hurricane animation now handled by filterByLifecycle.
-   * Kept for API compatibility - callers don't need to be updated.
-   */
-  checkHurricaneRollingAnimation() {
-    // filterByLifecycle handles progressive track display via timestamp trimming
   },
 
   /**
