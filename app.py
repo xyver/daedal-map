@@ -2927,8 +2927,7 @@ async def get_storms_list(year: int = None, min_year: int = None, basin: str = N
 @app.get("/api/weather/grid")
 async def get_weather_grid(
     tier: str,
-    variable: str = None,
-    variables: str = None,
+    variables: str,
     year: int = None
 ):
     """
@@ -2939,13 +2938,8 @@ async def get_weather_grid(
 
     Args:
         tier: 'hourly', 'weekly', or 'monthly'
-        variable: Single variable (legacy, for backwards compatibility)
         variables: Comma-separated list of variables (e.g., 'temp_c,humidity,snow_depth_m')
         year: For monthly tier, which year to load
-
-    Response format:
-        Single variable: { values: [[...], ...], variable: 'temp_c', ... }
-        Multiple variables: { values: { temp_c: [[...], ...], humidity: [[...], ...] }, variables: [...], ... }
     """
     import pandas as pd
     import numpy as np
@@ -2959,28 +2953,18 @@ async def get_weather_grid(
         if tier not in ('hourly', 'weekly', 'monthly'):
             return msgpack_error(f"Invalid tier: {tier}. Must be hourly, weekly, or monthly", 400)
 
-        # Parse variables - support both single 'variable' and multi 'variables' params
+        # Parse variables (canonical path: multi-variable request only)
         valid_vars = {
             'temp_c', 'humidity', 'snow_depth_m',
             'precipitation_mm', 'cloud_cover_pct', 'pressure_hpa',
             'solar_radiation', 'soil_temp_c', 'soil_moisture'
         }
-        if variables:
-            # Multi-variable request
-            requested_vars = [v.strip() for v in variables.split(',')]
-            invalid = [v for v in requested_vars if v not in valid_vars]
-            if invalid:
-                return msgpack_error(f"Invalid variables: {invalid}. Must be one of: {valid_vars}", 400)
-        elif variable:
-            # Single variable (backwards compatible)
-            if variable not in valid_vars:
-                return msgpack_error(f"Invalid variable: {variable}. Must be one of: {valid_vars}", 400)
-            requested_vars = [variable]
-        else:
-            # Default to temp_c
-            requested_vars = ['temp_c']
-
-        is_multi = len(requested_vars) > 1
+        requested_vars = [v.strip() for v in variables.split(',') if v.strip()]
+        if not requested_vars:
+            return msgpack_error("Missing variables parameter", 400)
+        invalid = [v for v in requested_vars if v not in valid_vars]
+        if invalid:
+            return msgpack_error(f"Invalid variables: {invalid}. Must be one of: {valid_vars}", 400)
 
         # Tier cascade: if requested tier unavailable for year, fall back to finer resolution
         actual_tier = tier
@@ -3196,32 +3180,16 @@ async def get_weather_grid(
                 'rows': 90, 'cols': 180
             }
 
-        # Build response - different format for single vs multi variable
-        if is_multi:
-            # Multi-variable response
-            return msgpack_response({
-                'tier': actual_tier,
-                'requested_tier': tier,
-                'variables': requested_vars,
-                'timestamps': timestamps,
-                'values': all_values,  # Dict: { 'temp_c': [[...], ...], 'humidity': [[...], ...] }
-                'grid': grid_info,
-                'color_scales': {var: color_scales.get(var, color_scales['temp_c']) for var in requested_vars},
-                'count': len(timestamps)
-            })
-        else:
-            # Single variable response (backwards compatible)
-            single_var = requested_vars[0]
-            return msgpack_response({
-                'tier': actual_tier,
-                'requested_tier': tier,
-                'variable': single_var,
-                'timestamps': timestamps,
-                'values': all_values[single_var],  # List: [[...], ...]
-                'grid': grid_info,
-                'color_scale': color_scales.get(single_var, color_scales['temp_c']),
-                'count': len(timestamps)
-            })
+        return msgpack_response({
+            'tier': actual_tier,
+            'requested_tier': tier,
+            'variables': requested_vars,
+            'timestamps': timestamps,
+            'values': all_values,  # Dict: { 'temp_c': [[...], ...], 'humidity': [[...], ...] }
+            'grid': grid_info,
+            'color_scales': {var: color_scales.get(var, color_scales['temp_c']) for var in requested_vars},
+            'count': len(timestamps)
+        })
 
     except Exception as e:
         logger.error(f"Error fetching weather grid: {e}")
