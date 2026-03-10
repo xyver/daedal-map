@@ -5,8 +5,13 @@ This module provides all file system paths used across the application.
 Supports both local development and deployed environments via environment variables.
 
 Environment Variables (in priority order):
+    STORAGE_MODE     - `local` (default) or `s3`
     DATA_ROOT        - Direct path to data folder (parquet, geometry, catalog)
                        e.g. DATA_ROOT=/mnt/data or DATA_ROOT=D:/county-map-data
+    S3_BUCKET        - Bucket name when STORAGE_MODE=s3
+    S3_PREFIX        - Optional prefix inside bucket for county-map-data
+    S3_LOCAL_CACHE   - Local mirror folder used when STORAGE_MODE=s3
+    S3_ENDPOINT_URL  - Optional custom endpoint (R2/MinIO/etc.)
     COUNTY_MAP_ROOT  - Path to county-map app folder
     GLOBAL_MAP_ROOT  - Path to parent folder containing all project folders
 
@@ -23,6 +28,8 @@ Folder Structure (local development):
 
 import os
 from pathlib import Path
+
+from .storage_mode import ensure_s3_data_root, get_s3_cache_root, get_storage_mode
 
 # =============================================================================
 # Base Path Detection
@@ -66,10 +73,15 @@ def _get_data_root() -> Path:
     Get the county-map-data folder (parquet files, geometry, catalog).
 
     Priority:
-    1. DATA_ROOT environment variable (direct path to data folder)
-    2. Derived from GLOBAL_MAP_ROOT / county-map-data (local dev with full data)
-    3. Bundled data/ folder inside the app (demo/deployment fallback)
+    1. If STORAGE_MODE=s3, hydrate local S3 mirror cache and use that
+    2. DATA_ROOT environment variable (direct path to local data folder)
+    3. Derived from GLOBAL_MAP_ROOT / county-map-data (local dev with full data)
+    4. Bundled data/ folder inside the app (demo/deployment fallback)
     """
+    if get_storage_mode() == "s3":
+        cache_root = get_s3_cache_root(_get_project_root())
+        return ensure_s3_data_root(cache_root)
+
     env_root = os.environ.get("DATA_ROOT")
     if env_root:
         return Path(env_root)
@@ -222,7 +234,10 @@ if __name__ == "__main__":
     # Quick validation when run directly
     print("Path Configuration:")
     print("=" * 60)
+    print(f"  STORAGE_MODE:        {get_storage_mode()}")
     print(f"  DATA_ROOT env:       {os.environ.get('DATA_ROOT', '(not set)')}")
+    print(f"  S3_BUCKET env:       {os.environ.get('S3_BUCKET', '(not set)')}")
+    print(f"  S3_PREFIX env:       {os.environ.get('S3_PREFIX', '(not set)')}")
     print(f"  GLOBAL_MAP_ROOT env: {os.environ.get('GLOBAL_MAP_ROOT', '(not set)')}")
     print(f"  COUNTY_MAP_ROOT env: {os.environ.get('COUNTY_MAP_ROOT', '(not set)')}")
     print(f"  Resolved DATA_ROOT:  {DATA_ROOT}")

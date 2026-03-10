@@ -12,8 +12,78 @@
 import { TrackAnimator, MultiTrackAnimator, setDependencies as setTrackAnimatorDeps } from './track-animator.js';
 import EventAnimator, { AnimationMode, setDependencies as setEventAnimatorDeps } from './event-animator.js';
 import { TIME_SYSTEM } from './time-slider.js';
-import { CONFIG } from './config.js';
-import { DetailedEventCache } from './cache.js';
+import {
+  calculateCacheSize,
+  dataCache,
+  displayedYear,
+  loadedRanges,
+  loadedYears,
+  yearRangeCache
+} from './overlay-cache.js';
+import {
+  clearAllOverlayCaches,
+  clearMetricCacheEntry,
+  clearOverlayData,
+  clearOverlayFilters,
+  getActiveFiltersForOverlay,
+  getCachedData as getOverlayCachedData,
+  getCachedMetricData as getOverlayCachedMetricData,
+  getCacheStats as getOverlayCacheStats,
+  getLoadedFiltersForOverlay,
+  getLoadedYearsForOverlay,
+  ingestMetricData as ingestOverlayMetricData,
+  refreshGeometryFromCache as refreshCachedGeometry,
+  removeEventData as removeOverlayEventData,
+  removeGeometryData as removeOverlayGeometryData,
+  removeMetricData as removeOverlayMetricData,
+  renderGeometryData as renderOverlayGeometryData,
+  updateOverlayFilters
+} from './overlay-cache-ops.js';
+import { loadRangeData, loadWeatherYearData } from './overlay-data-loader.js';
+import {
+  addAnimateTrackButton as addHurricaneTrackButton,
+  drillDownHurricane as showHurricaneTrackDetail,
+  exitTrackDrillDown,
+  exitTrackView as exitHurricaneTrackView,
+  handleHurricaneDrillDown as runHurricaneDrillDown,
+  hideHurricaneOverlay,
+  restoreHurricaneOverlay,
+  setupTrackPositionClickHandler as bindTrackPositionClickHandler,
+  showHurricanePopup,
+  stopHurricaneRollingAnimation as stopRollingHurricanes,
+  startTrackAnimation as startHurricaneTrackAnimation
+} from './overlay-hurricane.js';
+import { addGenericExitButton } from './overlay-disaster-common.js';
+import {
+  exitFireAnimation,
+  exitWildfireImpact,
+  exitWildfirePerimeter,
+  handleFireAnimation as runFireAnimation,
+  handleFireProgression as runFireProgression,
+  handleWildfireImpact as runWildfireImpact,
+  handleWildfirePerimeter as runWildfirePerimeter
+} from './overlay-wildfire.js';
+import {
+  exitFloodAnimation,
+  exitFloodImpact,
+  handleFloodAnimation as runFloodAnimation,
+  handleFloodImpact as runFloodImpact
+} from './overlay-flood.js';
+import {
+  exitTornadoPointAnimation,
+  handleTornadoPointAnimation as runTornadoPointAnimation,
+  handleTornadoSequence as runTornadoSequence
+} from './overlay-tornado.js';
+import {
+  handleTsunamiRunups as runTsunamiRunups
+} from './overlay-tsunami.js';
+import {
+  handleSequenceChange as runSequenceChange
+} from './overlay-earthquake.js';
+import {
+  exitVolcanoImpact,
+  handleVolcanoImpact as runVolcanoImpact
+} from './overlay-volcano.js';
 import { fetchMsgpack } from './utils/fetch.js';
 import { WeatherGridModel, setDependencies as setWeatherGridDeps } from './models/model-weather-grid.js';
 import { GeometryModel } from './models/model-geometry.js';
@@ -518,453 +588,6 @@ function easeOutQuad(t) {
 // Feature flag to enable/disable lifecycle filtering (for gradual rollout)
 let useLifecycleFiltering = true;
 
-// Cache for loaded overlay data (full unfiltered datasets)
-const dataCache = {};
-
-// Cache for metrics/choropleth data from order system
-// sourceId -> { geojson, year_data, year_range, loadedAt }
-const metricCache = {};
-
-/**
- * Calculate total cache size - exact bytes via JSON serialization
- * @returns {Object} { totalFeatures, bytes, sizeMB, perOverlay }
- */
-function calculateCacheSize() {
-  let totalFeatures = 0;
-  let totalBytes = 0;
-  const perOverlay = {};
-
-  // Event/overlay data cache
-  for (const overlayId of Object.keys(dataCache)) {
-    const features = dataCache[overlayId]?.features || [];
-    if (features.length > 0) {
-      // Get exact byte size via JSON serialization
-      const bytes = new Blob([JSON.stringify(features)]).size;
-      perOverlay[overlayId] = { features: features.length, bytes, type: 'events' };
-      totalFeatures += features.length;
-      totalBytes += bytes;
-    }
-  }
-
-  // Metrics data cache
-  for (const sourceId of Object.keys(metricCache)) {
-    const cached = metricCache[sourceId];
-    const features = cached?.geojson?.features || [];
-    if (features.length > 0 || cached?.year_data) {
-      // Size includes both features and year_data
-      const dataToSize = { features, year_data: cached?.year_data || {} };
-      const bytes = new Blob([JSON.stringify(dataToSize)]).size;
-      perOverlay[sourceId] = { features: features.length, bytes, type: 'metrics' };
-      totalFeatures += features.length;
-      totalBytes += bytes;
-    }
-  }
-
-  const sizeMB = (totalBytes / (1024 * 1024)).toFixed(2);
-
-  return { totalFeatures, bytes: totalBytes, sizeMB, perOverlay };
-}
-
-// Track which time ranges have been loaded per overlay
-// Each entry is an array of {start, end} (millisecond timestamps)
-const loadedRanges = {};  // overlayId -> [{start, end}, ...]
-
-// Legacy: loadedYears kept as derived view for compatibility with render logic
-const loadedYears = {};  // overlayId -> Set of years (derived from loadedRanges)
-
-// Track current displayed year per overlay
-const displayedYear = {};
-
-// Cache year ranges per overlay (for recalculating combined range when overlays change)
-const yearRangeCache = {};
-
-// Active filter overrides per overlay (for chat-based filter modifications)
-// These override the defaults in OVERLAY_ENDPOINTS.params
-const activeFilters = {};  // overlayId -> {minMagnitude, maxMagnitude, ...}
-
-// Track filters that were used when data was LOADED (for Phase 7 cache awareness)
-// This lets chat know if a request can be satisfied from cache without new API call
-// Example: loaded with minMagnitude=5.0, display set to 6.0 - can filter to 5.5 from cache
-const loadedFilters = {};  // overlayId -> {minMagnitude, minVei, ...}
-
-/**
- * Build URL for fetching data within a time range.
- * @param {Object} endpoint - Endpoint config from OVERLAY_ENDPOINTS
- * @param {number} startMs - Start timestamp in milliseconds
- * @param {number} endMs - End timestamp in milliseconds
- * @param {string} overlayId - Overlay ID for looking up active filters
- * @returns {string} Full URL with start/end and other params
- */
-function buildRangeUrl(endpoint, startMs, endMs, overlayId = null) {
-  const url = new URL(endpoint.baseUrl, window.location.origin);
-
-  // Start with default params from endpoint config
-  const defaultParams = endpoint.params || {};
-
-  // Get active filter overrides (from chat-based filter changes)
-  const overrides = overlayId ? (activeFilters[overlayId] || {}) : {};
-
-  // Build effective params, with overrides taking precedence
-  const effectiveParams = { ...defaultParams };
-
-  // Map user-friendly filter names to API param names
-  if (overrides.minMagnitude !== undefined) {
-    effectiveParams.min_magnitude = String(overrides.minMagnitude);
-  }
-  if (overrides.maxMagnitude !== undefined) {
-    effectiveParams.max_magnitude = String(overrides.maxMagnitude);
-  }
-  if (overrides.minCategory !== undefined) {
-    effectiveParams.min_category = `Cat${overrides.minCategory}`;
-  }
-  if (overrides.minScale !== undefined) {
-    effectiveParams.min_scale = `EF${overrides.minScale}`;
-  }
-  if (overrides.minAreaKm2 !== undefined) {
-    effectiveParams.min_area_km2 = String(overrides.minAreaKm2);
-  }
-  if (overrides.minVei !== undefined) {
-    effectiveParams.min_vei = String(overrides.minVei);
-  }
-
-  // Location filters (for disaster queries like "earthquakes in California")
-  if (overrides.locPrefix !== undefined) {
-    effectiveParams.loc_prefix = overrides.locPrefix;
-  }
-  if (overrides.affectedLocId !== undefined) {
-    effectiveParams.affected_loc_id = overrides.affectedLocId;
-  }
-
-  // Add all params to URL
-  for (const [key, value] of Object.entries(effectiveParams)) {
-    url.searchParams.set(key, value);
-  }
-
-  // Add time range filter
-  url.searchParams.set('start', String(startMs));
-  url.searchParams.set('end', String(endMs));
-
-  return url.toString();
-}
-
-/**
- * Load weather grid data for a specific year.
- * Weather data uses a different format than GeoJSON overlays.
- * @param {string} overlayId - Overlay ID (temperature, humidity, snow-depth)
- * @param {number} year - Year to load
- * @param {Object} endpoint - Endpoint config from OVERLAY_ENDPOINTS
- * @param {AbortSignal} signal - Optional abort signal
- * @returns {Promise<boolean>} True if data was loaded
- */
-// All climate variables to fetch together (optimization: one API call for all)
-const CLIMATE_VARIABLES = [
-  'temp_c', 'humidity', 'snow_depth_m',
-  'precipitation_mm', 'cloud_cover_pct', 'pressure_hpa',
-  'solar_radiation', 'soil_temp_c', 'soil_moisture'
-];
-const CLIMATE_OVERLAY_MAP = {
-  'temperature': 'temp_c',
-  'humidity': 'humidity',
-  'snow-depth': 'snow_depth_m',
-  'precipitation': 'precipitation_mm',
-  'cloud-cover': 'cloud_cover_pct',
-  'pressure': 'pressure_hpa',
-  'solar-radiation': 'solar_radiation',
-  'soil-temp': 'soil_temp_c',
-  'soil-moisture': 'soil_moisture'
-};
-const VARIABLE_OVERLAY_MAP = {
-  'temp_c': 'temperature',
-  'humidity': 'humidity',
-  'snow_depth_m': 'snow-depth',
-  'precipitation_mm': 'precipitation',
-  'cloud_cover_pct': 'cloud-cover',
-  'pressure_hpa': 'pressure',
-  'solar_radiation': 'solar-radiation',
-  'soil_temp_c': 'soil-temp',
-  'soil_moisture': 'soil-moisture'
-};
-
-async function loadWeatherYearData(overlayId, year, endpoint, signal = null) {
-  // Check if we already have this year's data cached (from a previous batch request)
-  if (dataCache[overlayId]?.years?.[year]) {
-    console.log(`OverlayController: Using cached data for ${overlayId} year ${year}`);
-    return true;
-  }
-
-  // Smart batching: check which variables are missing from cache for this year
-  const missingVars = CLIMATE_VARIABLES.filter(varName => {
-    const varOverlayId = VARIABLE_OVERLAY_MAP[varName];
-    return !dataCache[varOverlayId]?.years?.[year];
-  });
-
-  // If nothing is missing (shouldn't happen but safety check), we're done
-  if (missingVars.length === 0) {
-    console.log(`OverlayController: All climate variables already cached for year ${year}`);
-    return true;
-  }
-
-  // Build URL for weather API - only fetch missing variables
-  const url = new URL(endpoint.baseUrl, window.location.origin);
-  url.searchParams.set('tier', endpoint.params.tier || 'monthly');
-  url.searchParams.set('variables', missingVars.join(','));  // Only missing vars
-  url.searchParams.set('year', year);
-
-  console.log(`OverlayController: Fetching ${missingVars.length} climate variable(s) for year ${year}: ${missingVars.join(', ')}`);
-
-  try {
-    const fetchOptions = signal ? { signal } : {};
-    const data = await fetchMsgpack(url.toString(), fetchOptions);
-
-    if (data.error) {
-      console.error(`OverlayController: Weather API error:`, data.error);
-      loadedYears[overlayId]?.delete(year);
-      return false;
-    }
-
-    // Log if tier cascade occurred (e.g., monthly -> hourly for recent data)
-    if (data.tier && data.requested_tier && data.tier !== data.requested_tier) {
-      console.log(`OverlayController: Tier cascade for ${year}: ${data.requested_tier} -> ${data.tier}`);
-    }
-
-    // Multi-variable response: cache all variables at once
-    if (data.variables && data.color_scales) {
-      for (const variable of data.variables) {
-        const varOverlayId = VARIABLE_OVERLAY_MAP[variable];
-        if (!varOverlayId) continue;
-
-        // Initialize cache structure
-        if (!dataCache[varOverlayId]) {
-          dataCache[varOverlayId] = { years: {}, colorScale: null, grid: null };
-        }
-
-        // Store the year's data for this variable
-        dataCache[varOverlayId].years[year] = {
-          timestamps: data.timestamps,
-          values: data.values[variable],
-          tier: data.tier
-        };
-
-        // Store color scale and grid
-        if (data.color_scales[variable]) {
-          dataCache[varOverlayId].colorScale = data.color_scales[variable];
-        }
-        if (data.grid) {
-          dataCache[varOverlayId].grid = data.grid;
-        }
-
-        // Update year range cache
-        if (!yearRangeCache[varOverlayId]) {
-          yearRangeCache[varOverlayId] = { min: year, max: year, available: [] };
-        }
-        yearRangeCache[varOverlayId].min = Math.min(yearRangeCache[varOverlayId].min, year);
-        yearRangeCache[varOverlayId].max = Math.max(yearRangeCache[varOverlayId].max, year);
-        if (!yearRangeCache[varOverlayId].available.includes(year)) {
-          yearRangeCache[varOverlayId].available.push(year);
-          yearRangeCache[varOverlayId].available.sort((a, b) => a - b);
-        }
-
-        // Mark as loaded
-        if (!loadedYears[varOverlayId]) loadedYears[varOverlayId] = new Set();
-        loadedYears[varOverlayId].add(year);
-      }
-
-      const frameCount = data.timestamps?.length || 0;
-      console.log(`OverlayController: Cached ${data.variables.length} climate variables for year ${year} (${frameCount} frames)`);
-
-      // Dispatch cache update event for all variables
-      for (const variable of data.variables) {
-        const varOverlayId = VARIABLE_OVERLAY_MAP[variable];
-        if (varOverlayId) {
-          window.dispatchEvent(new CustomEvent('overlayCacheUpdated', { detail: { overlayId: varOverlayId, year } }));
-        }
-      }
-
-      return true;
-    }
-
-    console.error('OverlayController: Unexpected weather response shape (expected multi-variable payload)');
-    return false;
-  } catch (error) {
-    loadedYears[overlayId]?.delete(year);
-
-    if (error.name === 'AbortError') {
-      console.log(`OverlayController: Weather fetch aborted for ${overlayId} ${year}`);
-      return false;
-    }
-    console.error(`OverlayController: Failed to load weather ${overlayId} for ${year}:`, error);
-    return false;
-  }
-}
-
-/**
- * Load data for a time range and merge into cache.
- * Skips if range is already fully covered by loaded ranges.
- * @param {string} overlayId - Overlay ID
- * @param {number} startMs - Start timestamp in milliseconds
- * @param {number} endMs - End timestamp in milliseconds
- * @param {AbortSignal} signal - Optional abort signal
- * @returns {Promise<boolean>} True if new data was loaded
- */
-async function loadRangeData(overlayId, startMs, endMs, signal = null) {
-  const endpoint = OVERLAY_ENDPOINTS[overlayId];
-  if (!endpoint) return false;
-
-  // Weather grid overlays still use year-based loading
-  if (endpoint.isWeatherGrid) {
-    const year = new Date(endMs).getFullYear();
-    return await loadWeatherYearData(overlayId, year, endpoint, signal);
-  }
-
-  // Initialize loadedRanges if needed
-  if (!loadedRanges[overlayId]) {
-    loadedRanges[overlayId] = [];
-  }
-
-  // Check if this range is already fully covered
-  const isRangeCovered = loadedRanges[overlayId].some(
-    r => r.start <= startMs && r.end >= endMs
-  );
-  if (isRangeCovered) {
-    console.log(`OverlayController: ${overlayId} range already cached`);
-    return false;
-  }
-
-  // Mark range as loading to prevent duplicate requests
-  const rangeEntry = { start: startMs, end: endMs, loading: true };
-  loadedRanges[overlayId].push(rangeEntry);
-
-  const url = buildRangeUrl(endpoint, startMs, endMs, overlayId);
-  const startDate = new Date(startMs).toISOString().split('T')[0];
-  const endDate = new Date(endMs).toISOString().split('T')[0];
-  console.log(`OverlayController: Fetching ${overlayId} for ${startDate} to ${endDate}`);
-  console.log(`OverlayController: URL = ${url}`);
-
-  try {
-    const fetchOptions = signal ? { signal } : {};
-    const geojson = await fetchMsgpack(url, fetchOptions);
-    const featureCount = geojson.features?.length || 0;
-
-    // Initialize cache if needed
-    if (!dataCache[overlayId]) {
-      dataCache[overlayId] = { type: 'FeatureCollection', features: [] };
-    }
-
-    // Merge new features (avoid duplicates by event_id if available)
-    if (featureCount > 0) {
-      const existingIds = new Set(
-        dataCache[overlayId].features
-          .map(f => f.properties?.event_id || f.properties?.storm_id || f.id)
-          .filter(Boolean)
-      );
-
-      const newFeatures = geojson.features.filter(f => {
-        const id = f.properties?.event_id || f.properties?.storm_id || f.id;
-        return !id || !existingIds.has(id);
-      });
-
-      dataCache[overlayId].features.push(...newFeatures);
-      console.log(`OverlayController: Added ${newFeatures.length} ${overlayId} features (total: ${dataCache[overlayId].features.length})`);
-
-      // Log total cache size when new data received
-      const cacheSize = calculateCacheSize();
-      console.log(`OverlayController: Total cache: ${cacheSize.totalFeatures} features (${cacheSize.sizeMB} MB)`);
-
-      // Dispatch event for UI to update cache status display
-      window.dispatchEvent(new CustomEvent('overlayCacheUpdated', { detail: cacheSize }));
-    } else {
-      console.log(`OverlayController: No ${overlayId} events in range`);
-    }
-
-    // Mark range as loaded (remove loading flag)
-    rangeEntry.loading = false;
-
-    // Track loaded years - only mark a year as loaded if we loaded at least 6 months of it
-    // This prevents the initial 30-day load from marking partial years as "fully loaded"
-    if (!loadedYears[overlayId]) {
-      loadedYears[overlayId] = new Set();
-    }
-    const startYear = new Date(startMs).getFullYear();
-    const endYear = new Date(endMs).getFullYear();
-    const SIX_MONTHS_MS = 180 * 24 * 60 * 60 * 1000;
-
-    for (let y = startYear; y <= endYear; y++) {
-      const yearStartMs = new Date(y, 0, 1).getTime();
-      const yearEndMs = new Date(y, 11, 31, 23, 59, 59).getTime();
-
-      // Calculate how much of this year we actually loaded
-      const loadedStart = Math.max(startMs, yearStartMs);
-      const loadedEnd = Math.min(endMs, yearEndMs);
-      const loadedDuration = loadedEnd - loadedStart;
-
-      // Only mark year as loaded if we got at least 6 months of data
-      // OR if the request was specifically for this full year
-      const isFullYearRequest = (startMs <= yearStartMs && endMs >= yearEndMs);
-
-      if (isFullYearRequest || loadedDuration >= SIX_MONTHS_MS) {
-        loadedYears[overlayId].add(y);
-        console.log(`OverlayController: Marked ${overlayId} year ${y} as loaded (${Math.round(loadedDuration / (24*60*60*1000))} days)`);
-      } else {
-        console.log(`OverlayController: ${overlayId} year ${y} partial load (${Math.round(loadedDuration / (24*60*60*1000))} days) - not marking as loaded`);
-      }
-    }
-    console.log(`OverlayController: ${overlayId} total cached: ${dataCache[overlayId]?.features?.length || 0} features`);
-
-    // Update year range cache for TimeSlider
-    if (!yearRangeCache[overlayId]) {
-      yearRangeCache[overlayId] = { min: startYear, max: endYear, available: [] };
-    }
-    yearRangeCache[overlayId].min = Math.min(yearRangeCache[overlayId].min, startYear);
-    yearRangeCache[overlayId].max = Math.max(yearRangeCache[overlayId].max, endYear);
-
-    // Track filters used at load time (Phase 7 cache awareness)
-    const defaultParams = endpoint.params || {};
-    const overrides = activeFilters[overlayId] || {};
-    const effectiveFilters = { ...defaultParams, ...overrides };
-
-    if (!loadedFilters[overlayId]) {
-      loadedFilters[overlayId] = {};
-    }
-    if (effectiveFilters.min_magnitude !== undefined) {
-      const current = loadedFilters[overlayId].minMagnitude;
-      loadedFilters[overlayId].minMagnitude = current !== undefined
-        ? Math.min(current, effectiveFilters.min_magnitude)
-        : effectiveFilters.min_magnitude;
-    }
-    if (effectiveFilters.min_vei !== undefined) {
-      const current = loadedFilters[overlayId].minVei;
-      loadedFilters[overlayId].minVei = current !== undefined
-        ? Math.min(current, effectiveFilters.min_vei)
-        : effectiveFilters.min_vei;
-    }
-    if (effectiveFilters.min_category !== undefined) {
-      loadedFilters[overlayId].minCategory = effectiveFilters.min_category;
-    }
-    if (effectiveFilters.min_scale !== undefined) {
-      loadedFilters[overlayId].minScale = effectiveFilters.min_scale;
-    }
-    if (effectiveFilters.min_area_km2 !== undefined) {
-      const current = loadedFilters[overlayId].minAreaKm2;
-      loadedFilters[overlayId].minAreaKm2 = current !== undefined
-        ? Math.min(current, effectiveFilters.min_area_km2)
-        : effectiveFilters.min_area_km2;
-    }
-
-    return featureCount > 0;
-  } catch (error) {
-    // Remove failed range entry
-    const idx = loadedRanges[overlayId].indexOf(rangeEntry);
-    if (idx >= 0) loadedRanges[overlayId].splice(idx, 1);
-
-    if (error.name === 'AbortError') {
-      console.log(`OverlayController: Range fetch aborted for ${overlayId}`);
-      return false;
-    }
-    console.error(`OverlayController: Failed to load ${overlayId}:`, error);
-    return false;
-  }
-}
-
 export const OverlayController = {
   // Currently loading overlays (prevent duplicate requests)
   loading: new Set(),
@@ -1330,84 +953,7 @@ export const OverlayController = {
    * @param {Object} data - { geojson, eventId, runupCount }
    */
   handleTsunamiRunups(data) {
-    const { geojson, eventId, runupCount } = data;
-    console.log(`OverlayController: Starting tsunami runups animation for ${eventId} with ${runupCount} runups`);
-
-    if (!geojson || !geojson.features || geojson.features.length < 2) {
-      console.warn('OverlayController: Not enough data for tsunami animation');
-      return;
-    }
-
-    // Find source event (is_source: true)
-    const sourceEvent = geojson.features.find(f => f.properties?.is_source === true);
-    if (!sourceEvent) {
-      console.warn('OverlayController: No source event found in tsunami data');
-      return;
-    }
-
-    // Get source coordinates for centering
-    const sourceCoords = sourceEvent.geometry?.coordinates;
-    if (!sourceCoords) {
-      console.warn('OverlayController: Source event has no coordinates');
-      return;
-    }
-
-    // Hide any popups
-    MapAdapter?.hidePopup?.();
-    MapAdapter.popupLocked = false;
-
-    // Zoom to source location first (like earthquake sequences)
-    MapAdapter.map.flyTo({
-      center: sourceCoords,
-      zoom: 7,
-      duration: 1500
-    });
-
-    // Start radial animation using EventAnimator
-    const animationId = `tsunami-${eventId}`;
-    const sourceYear = sourceEvent.properties?.year || new Date().getFullYear();
-    const sourceDate = sourceEvent.properties?.timestamp
-      ? new Date(sourceEvent.properties.timestamp).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
-      : sourceYear;
-
-    const started = EventAnimator.start({
-      id: animationId,
-      label: `Tsunami ${sourceDate}`,
-      mode: AnimationMode.RADIAL,
-      events: geojson.features,
-      eventType: 'tsunami',
-      timeField: 'timestamp',
-      granularity: '12m',  // 12-minute steps for smooth wave animation (5 steps per hour)
-      renderer: 'point-radius',
-      // Don't auto-center - we already did flyTo above
-      rendererOptions: {
-        eventType: 'tsunami'  // Tell renderer to use tsunami styling
-      },
-      onExit: () => {
-        console.log('OverlayController: Tsunami animation exited');
-        // Restore original tsunami overlay
-        const currentYear = this.getCurrentYear();
-        if (dataCache.tsunamis) {
-          this.renderFilteredData('tsunamis', currentYear);
-        }
-        // Recalculate time range for TimeSlider
-        this.recalculateTimeRange();
-        if (TimeSlider && Object.keys(yearRangeCache).length > 0) {
-          TimeSlider.show();
-        }
-      }
-    });
-
-    if (started) {
-      console.log(`OverlayController: Tsunami animation started with ${geojson.features.length} features`);
-    } else {
-      console.error('OverlayController: Failed to start tsunami animation');
-      // Try to restore the overlay
-      const currentYear = this.getCurrentYear();
-      if (dataCache.tsunamis) {
-        this.renderFilteredData('tsunamis', currentYear);
-      }
-    }
+    runTsunamiRunups(this, data, { EventAnimator, MapAdapter, TimeSlider, dataCache, yearRangeCache });
   },
 
   /**
@@ -1416,103 +962,14 @@ export const OverlayController = {
    * @param {Object} data - { geojson, seedEventId, sequenceCount }
    */
   handleTornadoSequence(data) {
-    const { geojson, seedEventId, sequenceCount } = data;
-    console.log(`OverlayController: Starting tornado sequence animation for ${seedEventId} with ${sequenceCount} tornadoes`);
-
-    if (!geojson || !geojson.features || geojson.features.length === 0) {
-      console.warn('OverlayController: No data for tornado sequence animation');
-      return;
-    }
-
-    // For single tornadoes, only proceed if it has track geometry
-    // (otherwise route to point animation)
-    if (geojson.features.length === 1) {
-      const feature = geojson.features[0];
-      if (!feature.properties?.track) {
-        console.log('OverlayController: Single tornado without track - routing to point animation');
-        // Extract data and trigger point animation
-        const props = feature.properties || {};
-        this.handleTornadoPointAnimation({
-          eventId: props.event_id || seedEventId,
-          latitude: props.latitude,
-          longitude: props.longitude,
-          scale: props.tornado_scale || 'EF0',
-          timestamp: props.timestamp || null
-        });
-        return;
-      }
-    }
-
-    // Hide any popups
-    MapAdapter?.hidePopup?.();
-    MapAdapter.popupLocked = false;
-
-    // Find the seed tornado to get initial center
-    const seedTornado = geojson.features.find(f =>
-      String(f.properties?.event_id) === String(seedEventId)
-    ) || geojson.features[0];
-
-    const centerLon = seedTornado.properties?.longitude;
-    const centerLat = seedTornado.properties?.latitude;
-
-    // Get time range for animation label
-    let minTime = Infinity, maxTime = -Infinity;
-    for (const f of geojson.features) {
-      const t = new Date(f.properties?.timestamp).getTime();
-      if (!isNaN(t)) {
-        if (t < minTime) minTime = t;
-        if (t > maxTime) maxTime = t;
-      }
-    }
-
-    // Format label - different for single vs sequence
-    const startDate = new Date(minTime);
-    const isSingle = geojson.features.length === 1;
-    const label = isSingle
-      ? `Tornado ${startDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`
-      : `Tornado Sequence ${startDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`;
-
-    // Start tornado sequence animation using EventAnimator
-    const animationId = `tornado-seq-${seedEventId}`;
-
-    const started = EventAnimator.start({
-      id: animationId,
-      label: label,
-      mode: AnimationMode.TORNADO_SEQUENCE,
-      events: geojson.features,
-      eventType: 'tornado',
-      timeField: 'timestamp',
-      granularity: '1h',
-      renderer: 'point-radius',
-      center: centerLat && centerLon ? { lat: centerLat, lon: centerLon } : null,
-      zoom: 8,
-      rendererOptions: {
-        eventType: 'tornado'
-      },
-      onExit: () => {
-        console.log('OverlayController: Tornado sequence animation exited');
-        // Restore original tornado overlay
-        const currentYear = this.getCurrentYear();
-        if (dataCache.tornadoes) {
-          this.renderFilteredData('tornadoes', currentYear);
-        }
-        // Recalculate time range for TimeSlider
-        this.recalculateTimeRange();
-        if (TimeSlider && Object.keys(yearRangeCache).length > 0) {
-          TimeSlider.show();
-        }
-      }
+    runTornadoSequence(this, data, {
+      EventAnimator,
+      MapAdapter,
+      TimeSlider,
+      dataCache,
+      yearRangeCache,
+      onFallbackPointAnimation: (payload) => this.handleTornadoPointAnimation(payload)
     });
-
-    if (started) {
-      console.log(`OverlayController: Tornado sequence animation started with ${geojson.features.length} tornadoes`);
-    } else {
-      console.error('OverlayController: Failed to start tornado sequence animation');
-      const currentYear = this.getCurrentYear();
-      if (dataCache.tornadoes) {
-        this.renderFilteredData('tornadoes', currentYear);
-      }
-    }
   },
 
   /**
@@ -1522,205 +979,7 @@ export const OverlayController = {
    * @param {Object} data - { eventId, latitude, longitude, scale, timestamp }
    */
   handleTornadoPointAnimation(data) {
-    const { eventId, scale, timestamp } = data;
-    // Parse coordinates as floats to ensure valid numbers
-    const latitude = parseFloat(data.latitude);
-    const longitude = parseFloat(data.longitude);
-    console.log(`OverlayController: Starting point-only tornado animation for ${eventId} at [${longitude}, ${latitude}]`);
-
-    if (isNaN(latitude) || isNaN(longitude)) {
-      console.warn('OverlayController: Invalid coordinates for tornado point animation:', data);
-      return;
-    }
-
-    // Hide popup
-    MapAdapter?.hidePopup?.();
-    MapAdapter.popupLocked = false;
-
-    // Note: We keep the tornado overlay visible so the source point stays on screen
-    // The animation circle will appear on top of the existing point
-
-    // Get color and size based on scale
-    const scaleColors = {
-      'EF0': '#98fb98', 'F0': '#98fb98',
-      'EF1': '#32cd32', 'F1': '#32cd32',
-      'EF2': '#ffd700', 'F2': '#ffd700',
-      'EF3': '#ff8c00', 'F3': '#ff8c00',
-      'EF4': '#ff4500', 'F4': '#ff4500',
-      'EF5': '#8b0000', 'F5': '#8b0000'
-    };
-    const scaleRadii = {
-      'EF0': 500,   // meters
-      'EF1': 800,
-      'EF2': 1200,
-      'EF3': 1800,
-      'EF4': 2500,
-      'EF5': 3500
-    };
-
-    // Estimated duration in minutes based on EF scale
-    // Stronger tornadoes tend to last longer
-    const scaleDurations = {
-      'EF0': 3, 'F0': 3,     // ~3 minutes (weak, short-lived)
-      'EF1': 5, 'F1': 5,     // ~5 minutes
-      'EF2': 10, 'F2': 10,   // ~10 minutes
-      'EF3': 15, 'F3': 15,   // ~15 minutes
-      'EF4': 20, 'F4': 20,   // ~20 minutes
-      'EF5': 30, 'F5': 30    // ~30 minutes (violent, long-lived)
-    };
-
-    const color = scaleColors[scale] || '#32cd32';
-    const radius = scaleRadii[scale] || scaleRadii['EF0'] || 500;
-    const durationMinutes = scaleDurations[scale] || 5;
-    const layerId = 'tornado-point-animation';
-    const sourceId = 'tornado-point-animation-source';
-
-    // Calculate time range
-    // Use timestamp if available, otherwise use a default time
-    let startMs;
-    if (timestamp) {
-      startMs = new Date(timestamp).getTime();
-    } else {
-      // Fallback: use noon on Jan 1 of some year (arbitrary but valid)
-      startMs = new Date('2020-01-01T12:00:00Z').getTime();
-    }
-    const endMs = startMs + (durationMinutes * 60 * 1000);
-
-    // Create GeoJSON for the point
-    const geojson = {
-      type: 'FeatureCollection',
-      features: [{
-        type: 'Feature',
-        geometry: { type: 'Point', coordinates: [longitude, latitude] },
-        properties: { scale: scale, radius: radius }
-      }]
-    };
-
-    // Zoom to location first
-    const zoomLevel = 11;
-    MapAdapter.flyTo([longitude, latitude], zoomLevel);
-
-    // Wait for flyTo to complete, then setup TimeSlider and layers
-    setTimeout(() => {
-      const map = MapAdapter.map;
-      if (!map) return;
-
-      // Clean up any previous animation layers
-      if (map.getLayer(layerId)) map.removeLayer(layerId);
-      if (map.getLayer(layerId + '-outline')) map.removeLayer(layerId + '-outline');
-      if (map.getSource(sourceId)) map.removeSource(sourceId);
-
-      // Add source
-      map.addSource(sourceId, {
-        type: 'geojson',
-        data: geojson
-      });
-
-      // Convert meters to pixels using proper geographic scaling
-      // Note: ['zoom'] can only be used at top-level interpolate/step, so we use
-      // interpolate with pre-calculated meters/pixel values at zoom stops:
-      // Zoom 8: 611.5 m/px, Zoom 11: 76.44 m/px, Zoom 14: 9.55 m/px
-      const metersToPixels = [
-        'interpolate', ['exponential', 2], ['zoom'],
-        8, ['/', ['get', 'radius'], 611.5],
-        11, ['/', ['get', 'radius'], 76.44],
-        14, ['/', ['get', 'radius'], 9.55]
-      ];
-
-      // Add fill circle layer (starts transparent)
-      map.addLayer({
-        id: layerId,
-        type: 'circle',
-        source: sourceId,
-        paint: {
-          'circle-radius': metersToPixels,
-          'circle-color': color,
-          'circle-opacity': 0
-        }
-      });
-
-      // Add outline layer
-      map.addLayer({
-        id: layerId + '-outline',
-        type: 'circle',
-        source: sourceId,
-        paint: {
-          'circle-radius': metersToPixels,
-          'circle-color': 'transparent',
-          'circle-stroke-color': color,
-          'circle-stroke-width': 3,
-          'circle-stroke-opacity': 1
-        }
-      });
-
-      // Setup TimeSlider for tornado animation
-      const scaleId = `tornado-point-${eventId.substring(0, 12)}`;
-      const tornadoDate = timestamp
-        ? new Date(timestamp).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
-        : `${scale} Tornado`;
-
-      // Generate timestamps for each second (tornadoes are short events)
-      const timestamps = [];
-      const stepMs = 1000; // 1 second steps
-      for (let t = startMs; t <= endMs; t += stepMs) {
-        timestamps.push(t);
-      }
-
-      if (TimeSlider) {
-        const added = TimeSlider.addScale({
-          id: scaleId,
-          label: `Tornado ${tornadoDate}`,
-          granularity: 'seconds',
-          useTimestamps: true,
-          currentTime: startMs,
-          timeRange: {
-            min: startMs,
-            max: endMs,
-            available: timestamps
-          },
-          mapRenderer: 'tornado-point-animation'
-        });
-
-        if (added) {
-          this.activeTornadoPointScaleId = scaleId;
-          TimeSlider.setActiveScale(scaleId);
-
-          // Enter event animation mode with auto-calculated speed
-          if (TimeSlider.enterEventAnimation) {
-            TimeSlider.enterEventAnimation(startMs, endMs);
-          }
-        }
-      }
-
-      // Store animation state
-      this._tornadoPointAnimState = {
-        sourceId,
-        layerId,
-        startMs,
-        endMs,
-        scaleId,
-        color
-      };
-
-      // Listen for time changes to update opacity
-      this._tornadoPointTimeHandler = (time, source) => {
-        if (!this._tornadoPointAnimState) return;
-
-        const { startMs, endMs, layerId } = this._tornadoPointAnimState;
-        const progress = Math.max(0, Math.min(1, (time - startMs) / (endMs - startMs)));
-
-        // Update fill opacity based on progress (0 -> 0.7 over duration)
-        if (map.getLayer(layerId)) {
-          map.setPaintProperty(layerId, 'circle-opacity', progress * 0.7);
-        }
-      };
-      TimeSlider?.addChangeListener(this._tornadoPointTimeHandler);
-
-      // Add exit button
-      this._addTornadoPointExitButton(() => this._exitTornadoPointAnimation());
-
-      console.log(`OverlayController: Tornado point animation ready, ${durationMinutes} minutes`);
-    }, 1600); // Wait for flyTo to complete
+    runTornadoPointAnimation(this, data, { MapAdapter, TimeSlider });
   },
 
   /**
@@ -1728,76 +987,7 @@ export const OverlayController = {
    * @private
    */
   _exitTornadoPointAnimation() {
-    console.log('OverlayController: Exiting tornado point animation');
-
-    const map = MapAdapter.map;
-
-    // Remove layers
-    if (this._tornadoPointAnimState) {
-      const { sourceId, layerId, scaleId } = this._tornadoPointAnimState;
-
-      if (map.getLayer(layerId)) map.removeLayer(layerId);
-      if (map.getLayer(layerId + '-outline')) map.removeLayer(layerId + '-outline');
-      if (map.getSource(sourceId)) map.removeSource(sourceId);
-
-      // Remove TimeSlider scale
-      if (TimeSlider && scaleId) {
-        TimeSlider.removeScale(scaleId);
-        if (TimeSlider.exitEventAnimation) {
-          TimeSlider.exitEventAnimation();
-        }
-      }
-
-      this._tornadoPointAnimState = null;
-    }
-
-    // Remove time listener
-    if (this._tornadoPointTimeHandler && TimeSlider) {
-      TimeSlider.removeChangeListener(this._tornadoPointTimeHandler);
-      this._tornadoPointTimeHandler = null;
-    }
-
-    // Remove exit button
-    const exitBtn = document.getElementById('tornado-point-exit-btn');
-    if (exitBtn) exitBtn.remove();
-
-    // Recalculate time range
-    this.recalculateTimeRange();
-  },
-
-  /**
-   * Add exit button for tornado point animation.
-   * @private
-   */
-  _addTornadoPointExitButton(onExit) {
-    // Remove existing
-    const existing = document.getElementById('tornado-point-exit-btn');
-    if (existing) existing.remove();
-
-    const btn = document.createElement('button');
-    btn.id = 'tornado-point-exit-btn';
-    btn.textContent = 'Exit Tornado View';
-    btn.style.cssText = `
-      position: fixed;
-      top: 80px;
-      left: 50%;
-      transform: translateX(-50%);
-      padding: 10px 20px;
-      background: #32cd32;
-      color: white;
-      border: none;
-      border-radius: 6px;
-      cursor: pointer;
-      font-size: 14px;
-      font-weight: 500;
-      z-index: 1000;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.3);
-    `;
-    btn.addEventListener('click', onExit);
-    btn.addEventListener('mouseenter', () => { btn.style.background = '#228b22'; });
-    btn.addEventListener('mouseleave', () => { btn.style.background = '#32cd32'; });
-
-    document.body.appendChild(btn);
+    exitTornadoPointAnimation(this, { MapAdapter, TimeSlider });
   },
 
   /**
@@ -1806,191 +996,7 @@ export const OverlayController = {
    * @param {Object} data - { geometry, eventId, durationDays, startTime, endTime, latitude, longitude, eventName }
    */
   handleFloodAnimation(data) {
-    const { geometry, eventId, durationDays, startTime, endTime, latitude, longitude, eventName } = data;
-    console.log(`OverlayController: Starting flood animation for ${eventId} (${durationDays} days)`);
-
-    // Handle both Feature and FeatureCollection formats
-    let geojsonData = geometry;
-    if (!geometry) {
-      console.warn('OverlayController: No geometry data for flood animation');
-      return;
-    }
-
-    // If it's a FeatureCollection, use it directly; if it's a Feature, wrap it
-    if (geometry.type === 'FeatureCollection') {
-      geojsonData = geometry;
-    } else if (geometry.type === 'Feature') {
-      geojsonData = geometry;
-    } else if (geometry.geometry) {
-      // Already a Feature with geometry property
-      geojsonData = geometry;
-    } else {
-      console.warn('OverlayController: Invalid geometry format for flood animation');
-      return;
-    }
-
-    // Calculate time range
-    const startMs = new Date(startTime).getTime();
-    const endMs = new Date(endTime).getTime();
-    const durationMs = endMs - startMs;
-
-    // Hide popup
-    MapAdapter?.hidePopup?.();
-    MapAdapter.popupLocked = false;
-
-    // Hide the flood overlay to focus on this flood
-    this._hideFloodOverlay();
-
-    // Calculate bounds from geometry for proper zoom that shows the whole area
-    let bounds = null;
-
-    // Helper to collect all coordinates from a geometry
-    const collectCoords = (geom) => {
-      const coords = [];
-      if (!geom || !geom.coordinates) return coords;
-      if (geom.type === 'Polygon') {
-        coords.push(...geom.coordinates[0]);
-      } else if (geom.type === 'MultiPolygon') {
-        for (const poly of geom.coordinates) {
-          coords.push(...poly[0]);
-        }
-      }
-      return coords;
-    };
-
-    // Collect all coordinates from geometry
-    let allCoords = [];
-    if (geojsonData.type === 'FeatureCollection' && geojsonData.features) {
-      for (const feature of geojsonData.features) {
-        allCoords.push(...collectCoords(feature.geometry));
-      }
-    } else if (geojsonData.geometry) {
-      allCoords = collectCoords(geojsonData.geometry);
-    }
-
-    // Calculate bounds from coordinates
-    if (allCoords.length > 0) {
-      bounds = this._getBoundsFromCoords(allCoords);
-    }
-
-    // Zoom to flood - use fitBounds if we have geometry, otherwise flyTo center
-    if (bounds) {
-      MapAdapter.map.fitBounds(bounds, {
-        padding: 60,
-        duration: 1500,
-        maxZoom: 11
-      });
-    } else if (longitude && latitude) {
-      MapAdapter.map.flyTo({
-        center: [longitude, latitude],
-        zoom: 8,
-        duration: 1500
-      });
-    }
-
-    // Create flood polygon layer
-    const sourceId = 'flood-anim-polygon';
-    const layerId = 'flood-anim-fill';
-    const strokeId = 'flood-anim-stroke';
-
-    // Remove existing layers
-    if (MapAdapter.map.getLayer(layerId)) MapAdapter.map.removeLayer(layerId);
-    if (MapAdapter.map.getLayer(strokeId)) MapAdapter.map.removeLayer(strokeId);
-    if (MapAdapter.map.getSource(sourceId)) MapAdapter.map.removeSource(sourceId);
-
-    // Add flood source
-    MapAdapter.map.addSource(sourceId, {
-      type: 'geojson',
-      data: geojsonData
-    });
-
-    // Add stroke layer (appears immediately at animation start)
-    MapAdapter.map.addLayer({
-      id: strokeId,
-      type: 'line',
-      source: sourceId,
-      paint: {
-        'line-color': '#0066cc',
-        'line-width': 2,
-        'line-opacity': 0.8
-      }
-    });
-
-    // Add fill layer (starts transparent, fades in over duration)
-    MapAdapter.map.addLayer({
-      id: layerId,
-      type: 'fill',
-      source: sourceId,
-      paint: {
-        'fill-color': '#3399ff',
-        'fill-opacity': 0
-      }
-    });
-
-    // Setup TimeSlider for flood animation
-    const scaleId = `flood-${eventId.substring(0, 12)}`;
-    const floodDate = new Date(startTime).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-
-    // Generate timestamps for each day
-    const timestamps = [];
-    for (let t = startMs; t <= endMs; t += 24 * 60 * 60 * 1000) {
-      timestamps.push(t);
-    }
-
-    if (TimeSlider) {
-      const added = TimeSlider.addScale({
-        id: scaleId,
-        label: eventName ? `${eventName}` : `Flood ${floodDate}`,
-        granularity: 'daily',
-        useTimestamps: true,
-        currentTime: startMs,
-        timeRange: {
-          min: startMs,
-          max: endMs,
-          available: timestamps
-        },
-        mapRenderer: 'flood-animation'
-      });
-
-      if (added) {
-        this.activeFloodScaleId = scaleId;
-        TimeSlider.setActiveScale(scaleId);
-
-        // Enter event animation mode with auto-calculated speed
-        if (TimeSlider.enterEventAnimation) {
-          TimeSlider.enterEventAnimation(startMs, endMs);
-        }
-      }
-    }
-
-    // Store animation state
-    this._floodAnimState = {
-      sourceId,
-      layerId,
-      strokeId,
-      startMs,
-      endMs,
-      scaleId
-    };
-
-    // Listen for time changes to update opacity
-    this._floodTimeHandler = (time, source) => {
-      if (!this._floodAnimState) return;
-
-      const { startMs, endMs, layerId } = this._floodAnimState;
-      const progress = Math.max(0, Math.min(1, (time - startMs) / (endMs - startMs)));
-
-      // Update fill opacity based on progress (0 -> 0.6 over duration)
-      if (MapAdapter.map.getLayer(layerId)) {
-        MapAdapter.map.setPaintProperty(layerId, 'fill-opacity', progress * 0.6);
-      }
-    };
-    TimeSlider?.addChangeListener(this._floodTimeHandler);
-
-    // Add exit button
-    this._addFloodExitButton(() => this._exitFloodAnimation());
-
-    console.log(`OverlayController: Flood animation ready, ${durationDays} days starting ${floodDate}`);
+    runFloodAnimation(this, data, { MapAdapter, TimeSlider, ModelRegistry, dataCache });
   },
 
   /**
@@ -1998,164 +1004,7 @@ export const OverlayController = {
    * Shows felt and damage radii expanding from the volcano center.
    */
   handleVolcanoImpact(data) {
-    const { eventId, volcanoName, latitude, longitude, feltRadius, damageRadius, VEI, timestamp } = data;
-    console.log(`OverlayController: Starting volcano impact animation for ${volcanoName} (VEI ${VEI})`);
-
-    if (!latitude || !longitude) {
-      console.warn('OverlayController: No coordinates for volcano impact animation');
-      return;
-    }
-
-    // Hide popup
-    MapAdapter?.hidePopup?.();
-    MapAdapter.popupLocked = false;
-
-    // Zoom to volcano
-    MapAdapter.map.flyTo({
-      center: [longitude, latitude],
-      zoom: 7,
-      duration: 1500
-    });
-
-    // Create impact circle sources
-    const feltSourceId = 'volcano-felt-radius';
-    const damageSourceId = 'volcano-damage-radius';
-    const feltLayerId = 'volcano-felt-fill';
-    const damageLayerId = 'volcano-damage-fill';
-    const feltStrokeId = 'volcano-felt-stroke';
-    const damageStrokeId = 'volcano-damage-stroke';
-
-    // Remove existing layers
-    [feltLayerId, damageLayerId, feltStrokeId, damageStrokeId].forEach(id => {
-      if (MapAdapter.map.getLayer(id)) MapAdapter.map.removeLayer(id);
-    });
-    [feltSourceId, damageSourceId].forEach(id => {
-      if (MapAdapter.map.getSource(id)) MapAdapter.map.removeSource(id);
-    });
-
-    // Create circle GeoJSON (approximation using turf-style circle)
-    const createCircle = (centerLon, centerLat, radiusKm, steps = 64) => {
-      const coords = [];
-      for (let i = 0; i <= steps; i++) {
-        const angle = (i / steps) * 2 * Math.PI;
-        // Approximate km to degrees (1 degree ~ 111km at equator)
-        const latOffset = (radiusKm / 111) * Math.cos(angle);
-        const lonOffset = (radiusKm / (111 * Math.cos(centerLat * Math.PI / 180))) * Math.sin(angle);
-        coords.push([centerLon + lonOffset, centerLat + latOffset]);
-      }
-      return {
-        type: 'Feature',
-        properties: {},
-        geometry: {
-          type: 'Polygon',
-          coordinates: [coords]
-        }
-      };
-    };
-
-    // Add felt radius source and layers (larger, yellow/orange)
-    if (feltRadius > 0) {
-      MapAdapter.map.addSource(feltSourceId, {
-        type: 'geojson',
-        data: createCircle(longitude, latitude, feltRadius)
-      });
-
-      MapAdapter.map.addLayer({
-        id: feltLayerId,
-        type: 'fill',
-        source: feltSourceId,
-        paint: {
-          'fill-color': '#ffc107',
-          'fill-opacity': 0
-        }
-      });
-
-      MapAdapter.map.addLayer({
-        id: feltStrokeId,
-        type: 'line',
-        source: feltSourceId,
-        paint: {
-          'line-color': '#ff9800',
-          'line-width': 2,
-          'line-opacity': 0
-        }
-      });
-    }
-
-    // Add damage radius source and layers (smaller, red)
-    if (damageRadius > 0) {
-      MapAdapter.map.addSource(damageSourceId, {
-        type: 'geojson',
-        data: createCircle(longitude, latitude, damageRadius)
-      });
-
-      MapAdapter.map.addLayer({
-        id: damageLayerId,
-        type: 'fill',
-        source: damageSourceId,
-        paint: {
-          'fill-color': '#f44336',
-          'fill-opacity': 0
-        }
-      });
-
-      MapAdapter.map.addLayer({
-        id: damageStrokeId,
-        type: 'line',
-        source: damageSourceId,
-        paint: {
-          'line-color': '#d32f2f',
-          'line-width': 3,
-          'line-opacity': 0
-        }
-      });
-    }
-
-    // Animate the radii expanding (3 second animation)
-    const animDuration = 3000;
-    const startTime = performance.now();
-
-    const animate = () => {
-      const elapsed = performance.now() - startTime;
-      const progress = Math.min(1, elapsed / animDuration);
-      const easeProgress = 1 - Math.pow(1 - progress, 3); // Ease out cubic
-
-      // Update felt radius opacity (fade in)
-      if (feltRadius > 0 && MapAdapter.map.getLayer(feltLayerId)) {
-        MapAdapter.map.setPaintProperty(feltLayerId, 'fill-opacity', easeProgress * 0.3);
-        MapAdapter.map.setPaintProperty(feltStrokeId, 'line-opacity', easeProgress * 0.8);
-      }
-
-      // Update damage radius opacity (fade in slightly delayed)
-      if (damageRadius > 0 && MapAdapter.map.getLayer(damageLayerId)) {
-        const damageProgress = Math.max(0, (progress - 0.3) / 0.7); // Start at 30%
-        const easeDamage = 1 - Math.pow(1 - damageProgress, 3);
-        MapAdapter.map.setPaintProperty(damageLayerId, 'fill-opacity', easeDamage * 0.4);
-        MapAdapter.map.setPaintProperty(damageStrokeId, 'line-opacity', easeDamage * 0.9);
-      }
-
-      if (progress < 1) {
-        requestAnimationFrame(animate);
-      }
-    };
-
-    // Start animation after flyTo completes
-    setTimeout(animate, 1600);
-
-    // Store state for cleanup
-    this._volcanoImpactState = {
-      feltSourceId,
-      damageSourceId,
-      feltLayerId,
-      damageLayerId,
-      feltStrokeId,
-      damageStrokeId
-    };
-
-    // Add exit button
-    this._addVolcanoExitButton(() => this._exitVolcanoImpact());
-
-    console.log(`OverlayController: Volcano impact animation started (felt: ${feltRadius}km, damage: ${damageRadius}km)`);
+    runVolcanoImpact(this, data, { MapAdapter });
   },
 
   /**
@@ -2163,59 +1012,7 @@ export const OverlayController = {
    * @private
    */
   _exitVolcanoImpact() {
-    console.log('OverlayController: Exiting volcano impact animation');
-
-    if (this._volcanoImpactState) {
-      const { feltSourceId, damageSourceId, feltLayerId, damageLayerId, feltStrokeId, damageStrokeId } = this._volcanoImpactState;
-
-      // Remove layers
-      [feltLayerId, damageLayerId, feltStrokeId, damageStrokeId].forEach(id => {
-        if (MapAdapter.map.getLayer(id)) MapAdapter.map.removeLayer(id);
-      });
-
-      // Remove sources
-      [feltSourceId, damageSourceId].forEach(id => {
-        if (MapAdapter.map.getSource(id)) MapAdapter.map.removeSource(id);
-      });
-
-      this._volcanoImpactState = null;
-    }
-
-    // Remove exit button
-    const exitBtn = document.getElementById('volcano-exit-btn');
-    if (exitBtn) exitBtn.remove();
-  },
-
-  /**
-   * Add exit button for volcano impact animation.
-   * @private
-   */
-  _addVolcanoExitButton(onExit) {
-    const existing = document.getElementById('volcano-exit-btn');
-    if (existing) existing.remove();
-
-    const btn = document.createElement('button');
-    btn.id = 'volcano-exit-btn';
-    btn.textContent = 'Exit Impact View';
-    btn.style.cssText = `
-      position: fixed;
-      top: 80px;
-      left: 50%;
-      transform: translateX(-50%);
-      padding: 10px 20px;
-      background: #ff5722;
-      color: white;
-      border: none;
-      border-radius: 6px;
-      cursor: pointer;
-      font-size: 14px;
-      font-weight: 500;
-      z-index: 1000;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.3);
-    `;
-
-    btn.addEventListener('click', onExit);
-    document.body.appendChild(btn);
+    exitVolcanoImpact(this, { MapAdapter });
   },
 
   /**
@@ -2223,102 +1020,11 @@ export const OverlayController = {
    * Shows a circle representing the burned area.
    */
   handleWildfireImpact(data) {
-    const { eventId, fireName, latitude, longitude, areaKm2, radiusKm, timestamp } = data;
-    console.log(`OverlayController: Starting wildfire impact animation for ${fireName} (${areaKm2} km2)`);
-
-    if (!latitude || !longitude) {
-      console.warn('OverlayController: No coordinates for wildfire impact animation');
-      return;
-    }
-
-    // Hide popup
-    MapAdapter?.hidePopup?.();
-    MapAdapter.popupLocked = false;
-
-    // Hide other wildfire events to focus on this one
-    this._hideWildfireOverlay();
-
-    // Zoom to fire
-    MapAdapter.map.flyTo({
-      center: [longitude, latitude],
-      zoom: 9,
-      duration: 1500
-    });
-
-    // Create area circle
-    const sourceId = 'wildfire-impact-radius';
-    const fillId = 'wildfire-impact-fill';
-    const strokeId = 'wildfire-impact-stroke';
-
-    // Remove existing
-    if (MapAdapter.map.getLayer(fillId)) MapAdapter.map.removeLayer(fillId);
-    if (MapAdapter.map.getLayer(strokeId)) MapAdapter.map.removeLayer(strokeId);
-    if (MapAdapter.map.getSource(sourceId)) MapAdapter.map.removeSource(sourceId);
-
-    // Create circle GeoJSON
-    const createCircle = (centerLon, centerLat, radiusKm, steps = 64) => {
-      const coords = [];
-      for (let i = 0; i <= steps; i++) {
-        const angle = (i / steps) * 2 * Math.PI;
-        const latOffset = (radiusKm / 111) * Math.cos(angle);
-        const lonOffset = (radiusKm / (111 * Math.cos(centerLat * Math.PI / 180))) * Math.sin(angle);
-        coords.push([centerLon + lonOffset, centerLat + latOffset]);
-      }
-      return {
-        type: 'Feature',
-        properties: {},
-        geometry: { type: 'Polygon', coordinates: [coords] }
-      };
-    };
-
-    MapAdapter.map.addSource(sourceId, {
-      type: 'geojson',
-      data: createCircle(longitude, latitude, radiusKm)
-    });
-
-    MapAdapter.map.addLayer({
-      id: fillId,
-      type: 'fill',
-      source: sourceId,
-      paint: { 'fill-color': '#ff5722', 'fill-opacity': 0 }
-    });
-
-    MapAdapter.map.addLayer({
-      id: strokeId,
-      type: 'line',
-      source: sourceId,
-      paint: { 'line-color': '#d84315', 'line-width': 3, 'line-opacity': 0 }
-    });
-
-    // Animate
-    const animDuration = 2000;
-    const startTime = performance.now();
-    const animate = () => {
-      const progress = Math.min(1, (performance.now() - startTime) / animDuration);
-      const ease = 1 - Math.pow(1 - progress, 3);
-      if (MapAdapter.map.getLayer(fillId)) {
-        MapAdapter.map.setPaintProperty(fillId, 'fill-opacity', ease * 0.4);
-        MapAdapter.map.setPaintProperty(strokeId, 'line-opacity', ease * 0.9);
-      }
-      if (progress < 1) requestAnimationFrame(animate);
-    };
-    setTimeout(animate, 1600);
-
-    this._wildfireImpactState = { sourceId, fillId, strokeId };
-    this._addGenericExitButton('wildfire-exit-btn', 'Exit Fire View', '#ff5722', () => this._exitWildfireImpact());
+    runWildfireImpact(this, data, { MapAdapter, ModelRegistry, dataCache });
   },
 
   _exitWildfireImpact(skipRestore = false) {
-    if (this._wildfireImpactState) {
-      const { sourceId, fillId, strokeId } = this._wildfireImpactState;
-      if (MapAdapter.map.getLayer(fillId)) MapAdapter.map.removeLayer(fillId);
-      if (MapAdapter.map.getLayer(strokeId)) MapAdapter.map.removeLayer(strokeId);
-      if (MapAdapter.map.getSource(sourceId)) MapAdapter.map.removeSource(sourceId);
-      this._wildfireImpactState = null;
-    }
-    document.getElementById('wildfire-exit-btn')?.remove();
-    // Restore wildfire overlay points (unless overlay is being fully disabled)
-    if (!skipRestore) this._restoreWildfireOverlay();
+    exitWildfireImpact(this, { MapAdapter, ModelRegistry, dataCache }, skipRestore);
   },
 
   /**
@@ -2326,118 +1032,11 @@ export const OverlayController = {
    * Shows the fire perimeter polygon fading in.
    */
   handleWildfirePerimeter(data) {
-    const { eventId, fireName, geometry, latitude, longitude, areaKm2, timestamp } = data;
-    console.log(`OverlayController: Starting wildfire perimeter animation for ${fireName}`);
-
-    // Hide popup
-    MapAdapter?.hidePopup?.();
-    MapAdapter.popupLocked = false;
-
-    // Calculate bounds from geometry for proper zoom
-    let bounds = null;
-    if (geometry && geometry.geometry) {
-      const coords = geometry.geometry.coordinates;
-      if (geometry.geometry.type === 'Polygon') {
-        bounds = this._getBoundsFromCoords(coords[0]);
-      } else if (geometry.geometry.type === 'MultiPolygon') {
-        // Flatten all outer rings
-        const allCoords = coords.flatMap(poly => poly[0]);
-        bounds = this._getBoundsFromCoords(allCoords);
-      }
-    }
-
-    // Zoom to fire perimeter
-    if (bounds) {
-      MapAdapter.map.fitBounds(bounds, {
-        padding: 50,
-        duration: 1500,
-        maxZoom: 12
-      });
-    } else if (latitude && longitude) {
-      MapAdapter.map.flyTo({
-        center: [longitude, latitude],
-        zoom: 9,
-        duration: 1500
-      });
-    }
-
-    // Layer IDs
-    const sourceId = 'wildfire-perimeter';
-    const fillId = 'wildfire-perimeter-fill';
-    const strokeId = 'wildfire-perimeter-stroke';
-
-    // Remove existing
-    if (MapAdapter.map.getLayer(fillId)) MapAdapter.map.removeLayer(fillId);
-    if (MapAdapter.map.getLayer(strokeId)) MapAdapter.map.removeLayer(strokeId);
-    if (MapAdapter.map.getSource(sourceId)) MapAdapter.map.removeSource(sourceId);
-
-    // Add the perimeter geometry
-    MapAdapter.map.addSource(sourceId, {
-      type: 'geojson',
-      data: geometry
-    });
-
-    MapAdapter.map.addLayer({
-      id: fillId,
-      type: 'fill',
-      source: sourceId,
-      paint: { 'fill-color': '#ff5722', 'fill-opacity': 0 }
-    });
-
-    MapAdapter.map.addLayer({
-      id: strokeId,
-      type: 'line',
-      source: sourceId,
-      paint: { 'line-color': '#d84315', 'line-width': 2, 'line-opacity': 0 }
-    });
-
-    // Animate fade-in
-    const animDuration = 2500;
-    const startTime = performance.now();
-    const animate = () => {
-      const progress = Math.min(1, (performance.now() - startTime) / animDuration);
-      const ease = 1 - Math.pow(1 - progress, 3);
-      if (MapAdapter.map.getLayer(fillId)) {
-        MapAdapter.map.setPaintProperty(fillId, 'fill-opacity', ease * 0.5);
-        MapAdapter.map.setPaintProperty(strokeId, 'line-opacity', ease * 0.9);
-      }
-      if (progress < 1) requestAnimationFrame(animate);
-    };
-    setTimeout(animate, 1600);
-
-    this._wildfirePerimeterState = { sourceId, fillId, strokeId };
-    this._addGenericExitButton('wildfire-perim-exit-btn', 'Exit Fire View', '#ff5722', () => this._exitWildfirePerimeter());
+    runWildfirePerimeter(this, data, { MapAdapter, ModelRegistry, dataCache });
   },
 
   _exitWildfirePerimeter(skipRestore = false) {
-    if (this._wildfirePerimeterState) {
-      const { sourceId, fillId, strokeId } = this._wildfirePerimeterState;
-      if (MapAdapter.map.getLayer(fillId)) MapAdapter.map.removeLayer(fillId);
-      if (MapAdapter.map.getLayer(strokeId)) MapAdapter.map.removeLayer(strokeId);
-      if (MapAdapter.map.getSource(sourceId)) MapAdapter.map.removeSource(sourceId);
-      this._wildfirePerimeterState = null;
-    }
-    document.getElementById('wildfire-perim-exit-btn')?.remove();
-    // Restore wildfire overlay points (unless overlay is being fully disabled)
-    if (!skipRestore) this._restoreWildfireOverlay();
-  },
-
-  /**
-   * Get bounding box from coordinate array.
-   * @param {Array} coords - Array of [lng, lat] coordinates
-   * @returns {Array} [[minLng, minLat], [maxLng, maxLat]]
-   */
-  _getBoundsFromCoords(coords) {
-    if (!coords || coords.length === 0) return null;
-    let minLng = Infinity, maxLng = -Infinity;
-    let minLat = Infinity, maxLat = -Infinity;
-    for (const [lng, lat] of coords) {
-      if (lng < minLng) minLng = lng;
-      if (lng > maxLng) maxLng = lng;
-      if (lat < minLat) minLat = lat;
-      if (lat > maxLat) maxLat = lat;
-    }
-    return [[minLng, minLat], [maxLng, maxLat]];
+    exitWildfirePerimeter(this, { MapAdapter, ModelRegistry, dataCache }, skipRestore);
   },
 
   /**
@@ -2445,102 +1044,11 @@ export const OverlayController = {
    * Shows a circle representing the flooded area.
    */
   handleFloodImpact(data) {
-    const { eventId, eventName, latitude, longitude, areaKm2, radiusKm, durationDays, timestamp } = data;
-    console.log(`OverlayController: Starting flood impact animation for ${eventName} (${areaKm2} km2)`);
-
-    if (!latitude || !longitude) {
-      console.warn('OverlayController: No coordinates for flood impact animation');
-      return;
-    }
-
-    // Hide popup
-    MapAdapter?.hidePopup?.();
-    MapAdapter.popupLocked = false;
-
-    // Hide other flood events to focus on this one
-    this._hideFloodOverlay();
-
-    // Zoom to flood
-    MapAdapter.map.flyTo({
-      center: [longitude, latitude],
-      zoom: 8,
-      duration: 1500
-    });
-
-    // Create area circle
-    const sourceId = 'flood-impact-radius';
-    const fillId = 'flood-impact-fill';
-    const strokeId = 'flood-impact-stroke';
-
-    // Remove existing
-    if (MapAdapter.map.getLayer(fillId)) MapAdapter.map.removeLayer(fillId);
-    if (MapAdapter.map.getLayer(strokeId)) MapAdapter.map.removeLayer(strokeId);
-    if (MapAdapter.map.getSource(sourceId)) MapAdapter.map.removeSource(sourceId);
-
-    // Create circle GeoJSON
-    const createCircle = (centerLon, centerLat, radiusKm, steps = 64) => {
-      const coords = [];
-      for (let i = 0; i <= steps; i++) {
-        const angle = (i / steps) * 2 * Math.PI;
-        const latOffset = (radiusKm / 111) * Math.cos(angle);
-        const lonOffset = (radiusKm / (111 * Math.cos(centerLat * Math.PI / 180))) * Math.sin(angle);
-        coords.push([centerLon + lonOffset, centerLat + latOffset]);
-      }
-      return {
-        type: 'Feature',
-        properties: {},
-        geometry: { type: 'Polygon', coordinates: [coords] }
-      };
-    };
-
-    MapAdapter.map.addSource(sourceId, {
-      type: 'geojson',
-      data: createCircle(longitude, latitude, radiusKm)
-    });
-
-    MapAdapter.map.addLayer({
-      id: fillId,
-      type: 'fill',
-      source: sourceId,
-      paint: { 'fill-color': '#2196f3', 'fill-opacity': 0 }
-    });
-
-    MapAdapter.map.addLayer({
-      id: strokeId,
-      type: 'line',
-      source: sourceId,
-      paint: { 'line-color': '#1565c0', 'line-width': 3, 'line-opacity': 0 }
-    });
-
-    // Animate
-    const animDuration = 2000;
-    const startTime = performance.now();
-    const animate = () => {
-      const progress = Math.min(1, (performance.now() - startTime) / animDuration);
-      const ease = 1 - Math.pow(1 - progress, 3);
-      if (MapAdapter.map.getLayer(fillId)) {
-        MapAdapter.map.setPaintProperty(fillId, 'fill-opacity', ease * 0.4);
-        MapAdapter.map.setPaintProperty(strokeId, 'line-opacity', ease * 0.9);
-      }
-      if (progress < 1) requestAnimationFrame(animate);
-    };
-    setTimeout(animate, 1600);
-
-    this._floodImpactState = { sourceId, fillId, strokeId };
-    this._addGenericExitButton('flood-impact-exit-btn', 'Exit Flood View', '#2196f3', () => this._exitFloodImpact());
+    runFloodImpact(this, data, { MapAdapter, ModelRegistry, dataCache });
   },
 
   _exitFloodImpact(skipRestore = false) {
-    if (this._floodImpactState) {
-      const { sourceId, fillId, strokeId } = this._floodImpactState;
-      if (MapAdapter.map.getLayer(fillId)) MapAdapter.map.removeLayer(fillId);
-      if (MapAdapter.map.getLayer(strokeId)) MapAdapter.map.removeLayer(strokeId);
-      if (MapAdapter.map.getSource(sourceId)) MapAdapter.map.removeSource(sourceId);
-      this._floodImpactState = null;
-    }
-    document.getElementById('flood-impact-exit-btn')?.remove();
-    // Restore flood overlay points (unless overlay is being fully disabled)
-    if (!skipRestore) this._restoreFloodOverlay();
+    exitFloodImpact(this, { MapAdapter, ModelRegistry, dataCache }, skipRestore);
   },
 
   /**
@@ -2548,18 +1056,7 @@ export const OverlayController = {
    * @private
    */
   _addGenericExitButton(id, text, color, onExit) {
-    document.getElementById(id)?.remove();
-    const btn = document.createElement('button');
-    btn.id = id;
-    btn.textContent = text;
-    btn.style.cssText = `
-      position: fixed; top: 80px; left: 50%; transform: translateX(-50%);
-      padding: 10px 20px; background: ${color}; color: white; border: none;
-      border-radius: 6px; cursor: pointer; font-size: 14px; font-weight: 500;
-      z-index: 1000; box-shadow: 0 2px 8px rgba(0,0,0,0.3);
-    `;
-    btn.addEventListener('click', onExit);
-    document.body.appendChild(btn);
+    addGenericExitButton(id, text, color, onExit);
   },
 
   /**
@@ -2567,107 +1064,7 @@ export const OverlayController = {
    * @private
    */
   _exitFloodAnimation(skipRestore = false) {
-    console.log('OverlayController: Exiting flood animation');
-
-    // Remove layers
-    if (this._floodAnimState) {
-      const { sourceId, layerId, strokeId, scaleId } = this._floodAnimState;
-
-      if (MapAdapter.map.getLayer(layerId)) MapAdapter.map.removeLayer(layerId);
-      if (MapAdapter.map.getLayer(strokeId)) MapAdapter.map.removeLayer(strokeId);
-      if (MapAdapter.map.getSource(sourceId)) MapAdapter.map.removeSource(sourceId);
-
-      // Remove TimeSlider scale
-      if (TimeSlider && scaleId) {
-        TimeSlider.removeScale(scaleId);
-        if (TimeSlider.exitEventAnimation) {
-          TimeSlider.exitEventAnimation();
-        }
-      }
-
-      this._floodAnimState = null;
-    }
-
-    // Remove time listener
-    if (this._floodTimeHandler && TimeSlider) {
-      TimeSlider.removeChangeListener(this._floodTimeHandler);
-      this._floodTimeHandler = null;
-    }
-
-    // Remove exit button
-    const exitBtn = document.getElementById('flood-exit-btn');
-    if (exitBtn) exitBtn.remove();
-
-    // Restore flood overlay (unless overlay is being fully disabled)
-    if (!skipRestore) this._restoreFloodOverlay();
-
-    // Recalculate time range
-    this.recalculateTimeRange();
-  },
-
-  /**
-   * Add exit button for flood animation.
-   * @private
-   */
-  _addFloodExitButton(onExit) {
-    // Remove existing
-    const existing = document.getElementById('flood-exit-btn');
-    if (existing) existing.remove();
-
-    const btn = document.createElement('button');
-    btn.id = 'flood-exit-btn';
-    btn.textContent = 'Exit Flood View';
-    btn.style.cssText = `
-      position: fixed;
-      top: 80px;
-      left: 50%;
-      transform: translateX(-50%);
-      padding: 10px 20px;
-      background: #0066cc;
-      color: white;
-      border: none;
-      border-radius: 6px;
-      cursor: pointer;
-      font-size: 14px;
-      font-weight: 500;
-      z-index: 1000;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.3);
-    `;
-
-    btn.addEventListener('click', onExit);
-    document.body.appendChild(btn);
-  },
-
-  /**
-   * Hide flood overlay to focus on a single flood animation.
-   * @private
-   */
-  _hideFloodOverlay() {
-    // Clear point-radius model (overview points)
-    const model = ModelRegistry?.getModelForType('flood');
-    if (model?.clearType) {
-      model.clearType('flood');
-    } else if (model?.clear) {
-      model.clear();
-    }
-    // Also clear polygon model (split-render polygons)
-    const polygonModel = ModelRegistry?.getModel('polygon');
-    if (polygonModel?.isTypeActive?.('flood')) {
-      polygonModel.clearType('flood');
-    }
-    console.log('OverlayController: Hid flood overlay for animation');
-  },
-
-  /**
-   * Restore flood overlay after exiting flood animation.
-   * @private
-   */
-  _restoreFloodOverlay() {
-    const currentYear = this.getCurrentYear();
-    if (dataCache.floods) {
-      this.renderFilteredData('floods', currentYear);
-      console.log('OverlayController: Restored flood overlay');
-    }
+    exitFloodAnimation(this, { MapAdapter, TimeSlider, ModelRegistry, dataCache }, skipRestore);
   },
 
   /**
@@ -2675,173 +1072,7 @@ export const OverlayController = {
    * Simple Option A: Fade in final perimeter from 0% to 100% over duration_days.
    */
   handleFireAnimation(data) {
-    const { perimeter, eventId, durationDays, startTime, latitude, longitude } = data;
-    console.log(`OverlayController: Starting fire animation for ${eventId} (${durationDays} days)`);
-
-    if (!perimeter || !perimeter.geometry) {
-      console.warn('OverlayController: No perimeter data for fire animation');
-      return;
-    }
-
-    // Calculate time range
-    const startMs = new Date(startTime).getTime();
-    const durationMs = durationDays * 24 * 60 * 60 * 1000;
-    const endMs = startMs + durationMs;
-
-    // Hide popup
-    MapAdapter?.hidePopup?.();
-    MapAdapter.popupLocked = false;
-
-    // Hide the wildfire overlay to focus on this fire
-    this._hideWildfireOverlay();
-
-    // Get perimeter center for zoom (use provided coords or calculate from geometry)
-    let centerLon = longitude || 0;
-    let centerLat = latitude || 0;
-
-    // Calculate center from geometry if not provided
-    if (!longitude || !latitude) {
-      let count = 0;
-      centerLon = 0;
-      centerLat = 0;
-      const coords = perimeter.geometry.coordinates;
-      if (perimeter.geometry.type === 'Polygon') {
-        for (const pt of coords[0]) {
-          centerLon += pt[0];
-          centerLat += pt[1];
-          count++;
-        }
-      } else if (perimeter.geometry.type === 'MultiPolygon') {
-        for (const poly of coords) {
-          for (const pt of poly[0]) {
-            centerLon += pt[0];
-            centerLat += pt[1];
-            count++;
-          }
-        }
-      }
-      if (count > 0) {
-        centerLon /= count;
-        centerLat /= count;
-      }
-    }
-
-    // Add ignition marker at the fire's starting point
-    this._addIgnitionMarker(centerLon, centerLat);
-
-    // Zoom to fire location
-    MapAdapter.map.flyTo({
-      center: [centerLon, centerLat],
-      zoom: 9,
-      duration: 1500
-    });
-
-    // Create fire perimeter layer
-    const sourceId = 'fire-anim-perimeter';
-    const layerId = 'fire-anim-fill';
-    const strokeId = 'fire-anim-stroke';
-
-    // Remove existing layers
-    if (MapAdapter.map.getLayer(layerId)) MapAdapter.map.removeLayer(layerId);
-    if (MapAdapter.map.getLayer(strokeId)) MapAdapter.map.removeLayer(strokeId);
-    if (MapAdapter.map.getSource(sourceId)) MapAdapter.map.removeSource(sourceId);
-
-    // Add perimeter source
-    MapAdapter.map.addSource(sourceId, {
-      type: 'geojson',
-      data: perimeter
-    });
-
-    // Add fill layer (starts transparent)
-    MapAdapter.map.addLayer({
-      id: layerId,
-      type: 'fill',
-      source: sourceId,
-      paint: {
-        'fill-color': '#ff4400',
-        'fill-opacity': 0
-      }
-    });
-
-    // Add stroke layer
-    MapAdapter.map.addLayer({
-      id: strokeId,
-      type: 'line',
-      source: sourceId,
-      paint: {
-        'line-color': '#ff6600',
-        'line-width': 2,
-        'line-opacity': 0
-      }
-    });
-
-    // Setup TimeSlider for fire animation
-    const scaleId = `fire-${eventId.substring(0, 12)}`;
-    const fireDate = new Date(startTime).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-
-    // Generate timestamps for each day
-    const timestamps = [];
-    for (let t = startMs; t <= endMs; t += 24 * 60 * 60 * 1000) {
-      timestamps.push(t);
-    }
-
-    if (TimeSlider) {
-      const added = TimeSlider.addScale({
-        id: scaleId,
-        label: `Fire ${fireDate}`,
-        granularity: 'daily',
-        useTimestamps: true,
-        currentTime: startMs,
-        timeRange: {
-          min: startMs,
-          max: endMs,
-          available: timestamps
-        },
-        mapRenderer: 'fire-animation'
-      });
-
-      if (added) {
-        this.activeFireScaleId = scaleId;
-        TimeSlider.setActiveScale(scaleId);
-
-        // Enter event animation mode with auto-calculated speed
-        if (TimeSlider.enterEventAnimation) {
-          TimeSlider.enterEventAnimation(startMs, endMs);
-        }
-      }
-    }
-
-    // Store animation state
-    this._fireAnimState = {
-      sourceId,
-      layerId,
-      strokeId,
-      startMs,
-      endMs,
-      scaleId
-    };
-
-    // Listen for time changes to update opacity
-    this._fireTimeHandler = (time, source) => {
-      if (!this._fireAnimState) return;
-
-      const { startMs, endMs, layerId, strokeId } = this._fireAnimState;
-      const progress = Math.max(0, Math.min(1, (time - startMs) / (endMs - startMs)));
-
-      // Update fill and stroke opacity based on progress
-      if (MapAdapter.map.getLayer(layerId)) {
-        MapAdapter.map.setPaintProperty(layerId, 'fill-opacity', progress * 0.6);
-      }
-      if (MapAdapter.map.getLayer(strokeId)) {
-        MapAdapter.map.setPaintProperty(strokeId, 'line-opacity', progress * 0.9);
-      }
-    };
-    TimeSlider?.addChangeListener(this._fireTimeHandler);
-
-    // Add exit button
-    this._addFireExitButton(() => this._exitFireAnimation());
-
-    console.log(`OverlayController: Fire animation ready, ${durationDays} days starting ${fireDate}`);
+    runFireAnimation(this, data, { MapAdapter, TimeSlider, ModelRegistry, dataCache });
   },
 
   /**
@@ -2850,268 +1081,7 @@ export const OverlayController = {
    * @param {Object} data - {snapshots, eventId, totalDays, startTime, latitude, longitude}
    */
   handleFireProgression(data) {
-    const { snapshots, eventId, totalDays, startTime, latitude, longitude } = data;
-    console.log(`OverlayController: Starting fire progression for ${eventId} (${totalDays} daily snapshots)`);
-
-    if (!snapshots || snapshots.length === 0) {
-      console.warn('OverlayController: No snapshots for fire progression');
-      return;
-    }
-
-    // Build timestamp -> snapshot lookup
-    const snapshotMap = new Map();
-    const timestamps = [];
-    let minTime = Infinity, maxTime = -Infinity;
-
-    for (const snap of snapshots) {
-      const t = new Date(snap.date + 'T00:00:00Z').getTime();
-      snapshotMap.set(t, snap);
-      timestamps.push(t);
-      if (t < minTime) minTime = t;
-      if (t > maxTime) maxTime = t;
-    }
-    timestamps.sort((a, b) => a - b);
-
-    // Hide popup
-    MapAdapter?.hidePopup?.();
-    MapAdapter.popupLocked = false;
-
-    // Hide the wildfire overlay to focus on this fire
-    this._hideWildfireOverlay();
-
-    // Get first snapshot for initial display
-    const firstSnap = snapshots[0];
-
-    // Get center from first snapshot for zoom (use provided coords or calculate)
-    let centerLon = longitude || 0;
-    let centerLat = latitude || 0;
-
-    if (!longitude || !latitude) {
-      let count = 0;
-      centerLon = 0;
-      centerLat = 0;
-      const geom = firstSnap.geometry;
-      if (geom.type === 'Polygon') {
-        for (const pt of geom.coordinates[0]) {
-          centerLon += pt[0];
-          centerLat += pt[1];
-          count++;
-        }
-      } else if (geom.type === 'MultiPolygon') {
-        for (const poly of geom.coordinates) {
-          for (const pt of poly[0]) {
-            centerLon += pt[0];
-            centerLat += pt[1];
-            count++;
-          }
-        }
-      }
-      if (count > 0) {
-        centerLon /= count;
-        centerLat /= count;
-      }
-    }
-
-    // Add ignition marker at the fire's starting point
-    this._addIgnitionMarker(centerLon, centerLat);
-
-    // Zoom to fire location
-    MapAdapter.map.flyTo({
-      center: [centerLon, centerLat],
-      zoom: 9,
-      duration: 1500
-    });
-
-    // Create two sets of fire perimeter layers for cross-fading
-    // This enables smooth transitions between daily snapshots
-    const sourceIdA = 'fire-prog-perimeter-a';
-    const sourceIdB = 'fire-prog-perimeter-b';
-    const layerIdA = 'fire-prog-fill-a';
-    const layerIdB = 'fire-prog-fill-b';
-    const strokeIdA = 'fire-prog-stroke-a';
-    const strokeIdB = 'fire-prog-stroke-b';
-
-    // Remove existing layers from both sets
-    [layerIdA, layerIdB, strokeIdA, strokeIdB].forEach(id => {
-      if (MapAdapter.map.getLayer(id)) MapAdapter.map.removeLayer(id);
-    });
-    [sourceIdA, sourceIdB].forEach(id => {
-      if (MapAdapter.map.getSource(id)) MapAdapter.map.removeSource(id);
-    });
-
-    // Add two perimeter sources for cross-fading
-    MapAdapter.map.addSource(sourceIdA, {
-      type: 'geojson',
-      data: { type: 'Feature', geometry: firstSnap.geometry, properties: { day: 1 } }
-    });
-    MapAdapter.map.addSource(sourceIdB, {
-      type: 'geojson',
-      data: { type: 'Feature', geometry: firstSnap.geometry, properties: { day: 1 } }
-    });
-
-    // Add fill layers (A starts visible, B starts hidden)
-    MapAdapter.map.addLayer({
-      id: layerIdA,
-      type: 'fill',
-      source: sourceIdA,
-      paint: {
-        'fill-color': '#ff4400',
-        'fill-opacity': 0.5,
-        'fill-opacity-transition': { duration: 300, delay: 0 }
-      }
-    });
-    MapAdapter.map.addLayer({
-      id: layerIdB,
-      type: 'fill',
-      source: sourceIdB,
-      paint: {
-        'fill-color': '#ff4400',
-        'fill-opacity': 0,
-        'fill-opacity-transition': { duration: 300, delay: 0 }
-      }
-    });
-
-    // Add stroke layers (A starts visible, B starts hidden)
-    MapAdapter.map.addLayer({
-      id: strokeIdA,
-      type: 'line',
-      source: sourceIdA,
-      paint: {
-        'line-color': '#ff6600',
-        'line-width': 2,
-        'line-opacity': 0.9,
-        'line-opacity-transition': { duration: 300, delay: 0 }
-      }
-    });
-    MapAdapter.map.addLayer({
-      id: strokeIdB,
-      type: 'line',
-      source: sourceIdB,
-      paint: {
-        'line-color': '#ff6600',
-        'line-width': 2,
-        'line-opacity': 0,
-        'line-opacity-transition': { duration: 300, delay: 0 }
-      }
-    });
-
-    // Legacy variable names for backward compatibility
-    const sourceId = sourceIdA;
-    const layerId = layerIdA;
-    const strokeId = strokeIdA;
-
-    // Setup TimeSlider
-    const scaleId = `fireprog-${eventId.substring(0, 10)}`;
-    const fireDate = new Date(minTime).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-
-    if (TimeSlider) {
-      const added = TimeSlider.addScale({
-        id: scaleId,
-        label: `Fire ${fireDate} (${totalDays}d)`,
-        granularity: 'daily',
-        useTimestamps: true,
-        currentTime: minTime,
-        timeRange: {
-          min: minTime,
-          max: maxTime,
-          available: timestamps
-        },
-        mapRenderer: 'fire-progression'
-      });
-
-      if (added) {
-        this.activeFireScaleId = scaleId;
-        TimeSlider.setActiveScale(scaleId);
-
-        // Enter event animation mode
-        if (TimeSlider.enterEventAnimation) {
-          TimeSlider.enterEventAnimation(minTime, maxTime);
-        }
-      }
-    }
-
-    // Store animation state with both layer sets for cross-fading
-    this._fireAnimState = {
-      sourceId,
-      layerId,
-      strokeId,
-      sourceIdA,
-      sourceIdB,
-      layerIdA,
-      layerIdB,
-      strokeIdA,
-      strokeIdB,
-      startMs: minTime,
-      endMs: maxTime,
-      scaleId,
-      snapshotMap,  // For progression: lookup by timestamp
-      timestamps,   // For progression: sorted list
-      currentLayer: 'A',  // Track which layer is currently visible
-      lastSnapshotTime: minTime  // Track last snapshot to detect changes
-    };
-
-    // Listen for time changes to update geometry with cross-fade
-    this._fireTimeHandler = (time, source) => {
-      if (!this._fireAnimState || !this._fireAnimState.snapshotMap) return;
-
-      const state = this._fireAnimState;
-      const { snapshotMap, timestamps, lastSnapshotTime, currentLayer } = state;
-
-      // Find closest snapshot <= current time
-      let closestTime = timestamps[0];
-      for (const t of timestamps) {
-        if (t <= time) closestTime = t;
-        else break;
-      }
-
-      // If snapshot hasn't changed, no need to update
-      if (closestTime === lastSnapshotTime) return;
-
-      const snap = snapshotMap.get(closestTime);
-      if (!snap) return;
-
-      // Cross-fade: update the hidden layer with new geometry, then swap visibility
-      const newLayer = currentLayer === 'A' ? 'B' : 'A';
-      const newSourceId = newLayer === 'A' ? state.sourceIdA : state.sourceIdB;
-      const newFillId = newLayer === 'A' ? state.layerIdA : state.layerIdB;
-      const newStrokeId = newLayer === 'A' ? state.strokeIdA : state.strokeIdB;
-      const oldFillId = currentLayer === 'A' ? state.layerIdA : state.layerIdB;
-      const oldStrokeId = currentLayer === 'A' ? state.strokeIdA : state.strokeIdB;
-
-      // Update the hidden layer's geometry
-      const newSource = MapAdapter.map.getSource(newSourceId);
-      if (newSource) {
-        newSource.setData({
-          type: 'Feature',
-          geometry: snap.geometry,
-          properties: { day: snap.day_num, area_km2: snap.area_km2, date: snap.date }
-        });
-      }
-
-      // Cross-fade: fade in the new layer, fade out the old
-      if (MapAdapter.map.getLayer(newFillId)) {
-        MapAdapter.map.setPaintProperty(newFillId, 'fill-opacity', 0.5);
-      }
-      if (MapAdapter.map.getLayer(newStrokeId)) {
-        MapAdapter.map.setPaintProperty(newStrokeId, 'line-opacity', 0.9);
-      }
-      if (MapAdapter.map.getLayer(oldFillId)) {
-        MapAdapter.map.setPaintProperty(oldFillId, 'fill-opacity', 0);
-      }
-      if (MapAdapter.map.getLayer(oldStrokeId)) {
-        MapAdapter.map.setPaintProperty(oldStrokeId, 'line-opacity', 0);
-      }
-
-      // Update tracking state
-      state.currentLayer = newLayer;
-      state.lastSnapshotTime = closestTime;
-    };
-    TimeSlider?.addChangeListener(this._fireTimeHandler);
-
-    // Add exit button
-    this._addFireExitButton(() => this._exitFireAnimation());
-
-    console.log(`OverlayController: Fire progression ready, ${totalDays} days starting ${fireDate}`);
+    runFireProgression(this, data, { MapAdapter, TimeSlider, ModelRegistry, dataCache });
   },
 
   /**
@@ -3119,194 +1089,7 @@ export const OverlayController = {
    * @private
    */
   _exitFireAnimation(skipRestore = false) {
-    console.log('OverlayController: Exiting fire animation');
-
-    // Remove layers (both A and B layer sets for cross-fade)
-    if (this._fireAnimState) {
-      const {
-        sourceIdA, sourceIdB,
-        layerIdA, layerIdB,
-        strokeIdA, strokeIdB,
-        scaleId
-      } = this._fireAnimState;
-
-      // Remove all fill and stroke layers
-      [layerIdA, layerIdB, strokeIdA, strokeIdB].forEach(id => {
-        if (id && MapAdapter.map.getLayer(id)) MapAdapter.map.removeLayer(id);
-      });
-
-      // Remove all sources
-      [sourceIdA, sourceIdB].forEach(id => {
-        if (id && MapAdapter.map.getSource(id)) MapAdapter.map.removeSource(id);
-      });
-
-      // Remove TimeSlider scale
-      if (TimeSlider && scaleId) {
-        TimeSlider.removeScale(scaleId);
-        if (TimeSlider.exitEventAnimation) {
-          TimeSlider.exitEventAnimation();
-        }
-      }
-
-      this._fireAnimState = null;
-    }
-
-    // Remove time listener
-    if (this._fireTimeHandler && TimeSlider) {
-      TimeSlider.removeChangeListener(this._fireTimeHandler);
-      this._fireTimeHandler = null;
-    }
-
-    // Remove exit button
-    const exitBtn = document.getElementById('fire-exit-btn');
-    if (exitBtn) exitBtn.remove();
-
-    // Remove ignition marker
-    this._removeIgnitionMarker();
-
-    // Restore wildfire overlay (unless overlay is being fully disabled)
-    if (!skipRestore) this._restoreWildfireOverlay();
-
-    // Recalculate time range
-    this.recalculateTimeRange();
-  },
-
-  /**
-   * Add exit button for fire animation.
-   * @private
-   */
-  _addFireExitButton(onExit) {
-    // Remove existing
-    const existing = document.getElementById('fire-exit-btn');
-    if (existing) existing.remove();
-
-    const btn = document.createElement('button');
-    btn.id = 'fire-exit-btn';
-    btn.textContent = 'Exit Fire View';
-    btn.style.cssText = `
-      position: fixed;
-      top: 80px;
-      left: 50%;
-      transform: translateX(-50%);
-      padding: 10px 20px;
-      background: #ff6600;
-      color: white;
-      border: none;
-      border-radius: 6px;
-      cursor: pointer;
-      font-size: 14px;
-      font-weight: 500;
-      z-index: 1000;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.3);
-    `;
-
-    btn.addEventListener('click', onExit);
-    document.body.appendChild(btn);
-  },
-
-  /**
-   * Hide wildfire overlay to focus on a single fire animation.
-   * Clears the map layers but preserves the cached data.
-   * @private
-   */
-  _hideWildfireOverlay() {
-    // Clear point-radius model (overview points)
-    const model = ModelRegistry?.getModelForType('wildfire');
-    if (model?.clearType) {
-      model.clearType('wildfire');
-    } else if (model?.clear) {
-      model.clear();
-    }
-    // Also clear polygon model (split-render polygons)
-    const polygonModel = ModelRegistry?.getModel('polygon');
-    if (polygonModel?.isTypeActive?.('wildfire')) {
-      polygonModel.clearType('wildfire');
-    }
-    console.log('OverlayController: Hid wildfire overlay for animation');
-  },
-
-  /**
-   * Restore wildfire overlay after exiting fire animation.
-   * @private
-   */
-  _restoreWildfireOverlay() {
-    const currentYear = this.getCurrentYear();
-    if (dataCache.wildfires) {
-      this.renderFilteredData('wildfires', currentYear);
-      console.log('OverlayController: Restored wildfire overlay');
-    }
-  },
-
-  /**
-   * Add ignition marker for wildfire animation.
-   * Shows a fire icon/marker at the ignition point.
-   * @private
-   */
-  _addIgnitionMarker(lon, lat) {
-    if (!MapAdapter?.map) return;
-
-    const map = MapAdapter.map;
-    const sourceId = 'fire-ignition-marker';
-    const layerId = 'fire-ignition-point';
-    const glowId = 'fire-ignition-glow';
-
-    // Remove existing marker
-    this._removeIgnitionMarker();
-
-    // Add marker source
-    map.addSource(sourceId, {
-      type: 'geojson',
-      data: {
-        type: 'Feature',
-        geometry: { type: 'Point', coordinates: [lon, lat] },
-        properties: { type: 'ignition' }
-      }
-    });
-
-    // Add glow effect layer
-    map.addLayer({
-      id: glowId,
-      type: 'circle',
-      source: sourceId,
-      paint: {
-        'circle-radius': 16,
-        'circle-color': '#ff4400',
-        'circle-opacity': 0.4,
-        'circle-blur': 0.8
-      }
-    });
-
-    // Add main marker layer (fire symbol)
-    map.addLayer({
-      id: layerId,
-      type: 'circle',
-      source: sourceId,
-      paint: {
-        'circle-radius': 8,
-        'circle-color': '#ff6600',
-        'circle-stroke-color': '#ffcc00',
-        'circle-stroke-width': 2
-      }
-    });
-
-    console.log(`OverlayController: Added ignition marker at [${lon.toFixed(3)}, ${lat.toFixed(3)}]`);
-  },
-
-  /**
-   * Remove ignition marker.
-   * @private
-   */
-  _removeIgnitionMarker() {
-    if (!MapAdapter?.map) return;
-
-    const map = MapAdapter.map;
-    const sourceId = 'fire-ignition-marker';
-    const layerId = 'fire-ignition-point';
-    const glowId = 'fire-ignition-glow';
-
-    if (map.getLayer(glowId)) map.removeLayer(glowId);
-    if (map.getLayer(layerId)) map.removeLayer(layerId);
-    if (map.getSource(sourceId)) map.removeSource(sourceId);
+    exitFireAnimation(this, { MapAdapter, TimeSlider, ModelRegistry, dataCache }, skipRestore);
   },
 
   /**
@@ -3315,11 +1098,7 @@ export const OverlayController = {
    * @private
    */
   _hideHurricaneOverlay() {
-    const model = ModelRegistry?.getModel('track');
-    if (model?.clear) {
-      model.clear();
-    }
-    console.log('OverlayController: Hid hurricane overlay for track drill-down');
+    hideHurricaneOverlay({ modelRegistry: ModelRegistry });
   },
 
   /**
@@ -3327,11 +1106,7 @@ export const OverlayController = {
    * @private
    */
   _restoreHurricaneOverlay() {
-    const currentYear = this.getCurrentYear();
-    if (dataCache.hurricanes) {
-      this.renderFilteredData('hurricanes', currentYear);
-      console.log('OverlayController: Restored hurricane overlay');
-    }
+    restoreHurricaneOverlay(this, { dataCache });
   },
 
   /**
@@ -3342,77 +1117,15 @@ export const OverlayController = {
    * @param {Object} props - Storm properties
    */
   async handleHurricaneDrillDown(stormId, stormName, props) {
-    console.log(`OverlayController: Starting hurricane drill-down for ${stormName} (${stormId})`);
-
-    // Hide popup
-    MapAdapter?.hidePopup?.();
-    MapAdapter.popupLocked = false;
-
-    // Check cache first - avoids duplicate API calls on rewind/replay
-    // TODO: Consider using loc_id as cache key once unified across event types
-    let data;
-    const cached = DetailedEventCache.get(stormId);
-    if (cached) {
-      console.log(`OverlayController: Using cached track data for ${stormId}`);
-      data = cached.data;
-    } else {
-      // Fetch from API
-      const trackUrl = OVERLAY_ENDPOINTS.hurricanes.trackEndpoint.replace('{storm_id}', stormId);
-      try {
-        data = await fetchMsgpack(trackUrl);
-        // Cache for future use
-        DetailedEventCache.set(stormId, data, 'hurricane');
-      } catch (err) {
-        console.error('OverlayController: Error fetching hurricane track:', err);
-        return;
-      }
-    }
-
-    try {
-      if (!data || (!data.positions && !data.features)) {
-        console.warn('OverlayController: No track data for storm', stormId);
-        return;
-      }
-
-      // Normalize to positions array
-      let positions = data.positions;
-      if (!positions && data.features) {
-        // FeatureCollection format
-        positions = data.features.map(f => ({
-          timestamp: f.properties.timestamp,
-          latitude: f.geometry.coordinates[1],
-          longitude: f.geometry.coordinates[0],
-          wind_kt: f.properties.wind_kt,
-          category: f.properties.category,
-          ...f.properties
-        }));
-      }
-
-      if (!positions || positions.length === 0) {
-        console.warn('OverlayController: Empty track positions for storm', stormId);
-        return;
-      }
-
-      // Hide hurricane overlay to focus on this track
-      this._hideHurricaneOverlay();
-
-      // Use TrackAnimator for proper animation with moving marker and wind radii
-      TrackAnimator.start(stormId, positions, {
-        stormName,
-        onExit: () => {
-          console.log('TrackAnimator: Animation exited');
-          this._restoreHurricaneOverlay();
-          this.recalculateTimeRange();
-        }
-      });
-
-      // Add exit button (TrackAnimator handles its own TimeSlider setup)
-      this._addGenericExitButton('track-exit-btn', 'Exit Track View', '#9c27b0', () => this._exitTrackDrillDown());
-
-      console.log(`OverlayController: Hurricane track animation started (${positions.length} positions)`);
-    } catch (err) {
-      console.error('OverlayController: Error fetching hurricane track:', err);
-    }
+    await runHurricaneDrillDown(this, stormId, stormName, {
+      mapAdapter: MapAdapter,
+      overlayEndpoints: OVERLAY_ENDPOINTS,
+      fetcher: fetchMsgpack,
+      modelRegistry: ModelRegistry,
+      timeSlider: TimeSlider,
+      dataCache,
+      addExitButton: addGenericExitButton
+    });
   },
 
   /**
@@ -3420,7 +1133,7 @@ export const OverlayController = {
    * Note: Rolling mode is deprecated - progressive tracks now handled by filterByLifecycle.
    */
   stopHurricaneRollingAnimation() {
-    MultiTrackAnimator.stopAll();
+    stopRollingHurricanes();
   },
 
   /**
@@ -3428,32 +1141,7 @@ export const OverlayController = {
    * @private
    */
   _exitTrackDrillDown() {
-    console.log('OverlayController: Exiting track drill-down');
-
-    // Stop TrackAnimator (handles all cleanup including TimeSlider scale)
-    if (TrackAnimator.isActive) {
-      TrackAnimator.stop();
-    }
-
-    // Also clear track model layers in case they were used
-    const trackModel = ModelRegistry?.getModel('track');
-    if (trackModel?.clear) {
-      trackModel.clear();
-    }
-
-    // Exit event animation mode
-    if (TimeSlider?.exitEventAnimation) {
-      TimeSlider.exitEventAnimation();
-    }
-
-    // Remove exit button
-    document.getElementById('track-exit-btn')?.remove();
-
-    // Restore hurricane overlay
-    this._restoreHurricaneOverlay();
-
-    // Recalculate time range
-    this.recalculateTimeRange();
+    exitTrackDrillDown(this, { modelRegistry: ModelRegistry, timeSlider: TimeSlider, dataCache });
   },
 
   /**
@@ -3464,188 +1152,17 @@ export const OverlayController = {
    * @param {string|null} eventId - Optional mainshock event_id for accurate aftershock query
    */
   async handleSequenceChange(sequenceId, eventId = null) {
-    console.log('OverlayController.handleSequenceChange called with:', sequenceId, eventId);
-
-    // Stop any active animation
-    if (EventAnimator.getIsActive()) {
-      EventAnimator.stop();
-    }
-
-    // If no sequence selected, restore normal earthquake display and we're done
-    if (!sequenceId && !eventId) {
-      console.log('OverlayController: Cleared aftershock sequence');
-      // Re-render all earthquakes for current year
-      const currentYear = this.getCurrentYear();
-      if (dataCache.earthquakes) {
-        this.renderFilteredData('earthquakes', currentYear);
-      }
-      return;
-    }
-
-    // Fetch full sequence from API (includes ALL aftershocks regardless of magnitude filter)
-    // Use eventId if provided for accurate aftershock query (handles nested sequences)
-    const seqEvents = await this.fetchSequenceData(sequenceId, 'earthquake', eventId);
-
-    if (!seqEvents || seqEvents.length === 0) {
-      console.warn(`OverlayController: No events found for sequence ${sequenceId}`);
-      return;
-    }
-
-    console.log(`OverlayController: Loaded ${seqEvents.length} events for sequence ${sequenceId}`);
-
-    // Find mainshock (largest magnitude or flagged is_mainshock)
-    let mainshock = seqEvents.find(f => f.properties.is_mainshock);
-    if (!mainshock) {
-      // Fallback: largest magnitude
-      mainshock = seqEvents.reduce((max, f) =>
-        (f.properties.magnitude || 0) > (max.properties.magnitude || 0) ? f : max
-      );
-    }
-
-    const mainMag = mainshock.properties.magnitude || 5.5;
-    const mainTime = new Date(mainshock.properties.timestamp || mainshock.properties.time).getTime();
-
-    // Calculate aftershock window end using Gardner-Knopoff
-    const windowDays = gardnerKnopoffTimeWindow(mainMag);
-    const windowMs = windowDays * 24 * 60 * 60 * 1000;
-    const windowEnd = mainTime + windowMs;
-
-    // Find actual min/max timestamps in sequence
-    let minTime = mainTime;
-    let maxTime = mainTime;
-    for (const event of seqEvents) {
-      const t = new Date(event.properties.timestamp || event.properties.time).getTime();
-      if (t < minTime) minTime = t;
-      if (t > maxTime) maxTime = t;
-    }
-
-    // Extend max to theoretical window end if needed
-    maxTime = Math.max(maxTime, windowEnd);
-
-    // Determine granularity based on time range
-    const timeRange = maxTime - minTime;
-    const stepHours = Math.max(1, Math.ceil((timeRange / (60 * 60 * 1000)) / 200));
-    let granularityLabel = '6h';
-    if (stepHours < 2) granularityLabel = '1h';
-    else if (stepHours < 4) granularityLabel = '2h';
-    else if (stepHours < 8) granularityLabel = '6h';
-    else if (stepHours < 16) granularityLabel = '12h';
-    else if (stepHours < 36) granularityLabel = 'daily';
-    else granularityLabel = '2d';
-
-    // Format label
-    const mainDate = new Date(mainTime);
-    const label = `M${mainMag.toFixed(1)} ${mainDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`;
-
-    // Track which overlays are currently active (to restore on exit)
-    const activeOverlays = OverlaySelector?.getActiveOverlays() || [];
-    const overlaysToRestore = activeOverlays.filter(id =>
-      id !== 'demographics' && OVERLAY_ENDPOINTS[id]
-    );
-
-    // Clear normal earthquake display before starting sequence animation
-    const model = ModelRegistry?.getModelForType('earthquake');
-    if (model?.clear) {
-      model.clear();
-    }
-
-    // Start unified EventAnimator with EARTHQUAKE mode
-    EventAnimator.start({
-      id: `seq-${sequenceId.substring(0, 8)}`,
-      label: label,
-      mode: AnimationMode.EARTHQUAKE,
-      events: seqEvents,
-      mainshock: mainshock,
-      eventType: 'earthquake',
-      timeField: 'timestamp',
-      granularity: granularityLabel,
-      renderer: 'point-radius',
-      onExit: () => {
-        console.log('OverlayController: Earthquake sequence exit callback triggered');
-        // Restore TimeSlider range from cached overlay year ranges
-        this.recalculateTimeRange();
-        // Switch back to primary scale if it exists
-        if (TimeSlider) {
-          if (TimeSlider.scales?.find(s => s.id === 'primary')) {
-            TimeSlider.setActiveScale('primary');
-          }
-          // Show TimeSlider if we have year data
-          if (Object.keys(yearRangeCache).length > 0) {
-            TimeSlider.show();
-          }
-        }
-        // Restore all overlays that were active before animation
-        const currentYear = this.getCurrentYear();
-        for (const overlayId of overlaysToRestore) {
-          if (dataCache[overlayId]) {
-            this.renderFilteredData(overlayId, currentYear);
-            console.log(`OverlayController: Restored ${overlayId} overlay`);
-          }
-        }
-      }
+    await runSequenceChange(this, sequenceId, eventId, {
+      EventAnimator,
+      ModelRegistry,
+      OverlaySelector,
+      OVERLAY_ENDPOINTS,
+      TimeSlider,
+      dataCache,
+      yearRangeCache,
+      gardnerKnopoffTimeWindow,
+      fetchMsgpack
     });
-
-    const durationDays = (timeRange / (24 * 60 * 60 * 1000)).toFixed(1);
-    console.log(`OverlayController: Started earthquake sequence ${sequenceId} with ${seqEvents.length} events (${durationDays} days)`);
-  },
-
-  /**
-   * Fetch full sequence data from API.
-   * Returns all events in the sequence regardless of magnitude filter.
-   * Extensible for future cross-event linking (volcanoes, tsunamis, etc.)
-   *
-   * @param {string} sequenceId - Sequence ID to fetch
-   * @param {string} eventType - Event type (default 'earthquake', future: 'volcano', 'tsunami')
-   * @param {string} eventId - Optional event_id for mainshock-based query
-   * @returns {Promise<Array>} Array of GeoJSON features
-   */
-  async fetchSequenceData(sequenceId, eventType = 'earthquake', eventId = null) {
-    try {
-      // Cache key: prefer eventId, fall back to sequenceId
-      // TODO: Consider using loc_id as cache key once unified across event types
-      const cacheKey = eventId || sequenceId;
-
-      // Check cache first - avoids duplicate API calls on rewind/replay
-      const cached = DetailedEventCache.get(cacheKey);
-      if (cached) {
-        console.log(`OverlayController: Using cached sequence data for ${cacheKey}`);
-        return cached.data;
-      }
-
-      // Build API endpoint based on event type
-      let endpoint;
-      if (eventType === 'earthquake') {
-        // Use aftershocks endpoint if eventId is provided (more accurate for nested sequences)
-        // Otherwise fall back to sequence_id query
-        if (eventId) {
-          endpoint = `/api/earthquakes/aftershocks/${encodeURIComponent(eventId)}`;
-        } else {
-          endpoint = `/api/earthquakes/sequence/${encodeURIComponent(sequenceId)}`;
-        }
-      } else {
-        // Future: add endpoints for cross-event sequences
-        // e.g., /api/events/sequence/{id} for cross-type sequences
-        console.warn(`OverlayController: Sequence fetch not yet supported for ${eventType}`);
-        return [];
-      }
-
-      console.log(`OverlayController: Fetching sequence from ${endpoint}`);
-      const data = await fetchMsgpack(endpoint);
-
-      if (!data.features || data.features.length === 0) {
-        console.warn(`OverlayController: No features in sequence response`);
-        return [];
-      }
-
-      // Cache the features array for future use
-      DetailedEventCache.set(cacheKey, data.features, eventType);
-
-      return data.features;
-
-    } catch (error) {
-      console.error('OverlayController: Error fetching sequence data:', error);
-      return [];
-    }
   },
 
   // Track last timestamp for lifecycle filtering (to avoid redundant renders)
@@ -3789,7 +1306,7 @@ export const OverlayController = {
       console.log(`OverlayController: AUTO-FETCHING ${overlayId} for year ${year} (legacy handler)`);
       const yearStart = new Date(year, 0, 1).getTime();
       const yearEnd = new Date(year, 11, 31, 23, 59, 59).getTime();
-      await loadRangeData(overlayId, yearStart, yearEnd);
+      await loadRangeData(overlayId, yearStart, yearEnd, OVERLAY_ENDPOINTS[overlayId]);
     }
 
     // Render the data for this year
@@ -3819,7 +1336,7 @@ export const OverlayController = {
       // Load via the cache system (year boundaries for weather grid)
       const yearStart = new Date(year, 0, 1).getTime();
       const yearEnd = new Date(year, 11, 31, 23, 59, 59).getTime();
-      await loadRangeData(overlayId, yearStart, yearEnd);
+      await loadRangeData(overlayId, yearStart, yearEnd, OVERLAY_ENDPOINTS[overlayId]);
     }
 
     // Get cached data and pass to display model
@@ -3917,7 +1434,7 @@ export const OverlayController = {
     // Load the year data (year boundaries)
     const yearStart = new Date(year, 0, 1).getTime();
     const yearEnd = new Date(year, 11, 31, 23, 59, 59).getTime();
-    const loaded = await loadRangeData(overlayId, yearStart, yearEnd);
+    const loaded = await loadRangeData(overlayId, yearStart, yearEnd, OVERLAY_ENDPOINTS[overlayId]);
 
     // Check if overlay is still active
     const activeOverlays = OverlaySelector?.getActiveOverlays() || [];
@@ -4067,7 +1584,7 @@ export const OverlayController = {
     // Load data via cache system (year boundaries for weather grid)
     const yearStart = new Date(year, 0, 1).getTime();
     const yearEnd = new Date(year, 11, 31, 23, 59, 59).getTime();
-    await loadRangeData(overlayId, yearStart, yearEnd);
+    await loadRangeData(overlayId, yearStart, yearEnd, OVERLAY_ENDPOINTS[overlayId]);
 
     // Get cached data and display (instances are created automatically)
     const cachedData = dataCache[overlayId];
@@ -4159,7 +1676,7 @@ export const OverlayController = {
           const lastEnd = Math.max(...ranges.map(r => r.end));
           if (now > lastEnd) {
             console.log(`OverlayController: ${overlayId} catching up delta in live mode`);
-            loadRangeData(overlayId, lastEnd, now).then(loaded => {
+            loadRangeData(overlayId, lastEnd, now, OVERLAY_ENDPOINTS[overlayId]).then(loaded => {
               if (loaded) this.renderCurrentData(overlayId);
             });
           }
@@ -4187,7 +1704,7 @@ export const OverlayController = {
       console.log(`OverlayController: Loading ${overlayId} (past 30 days)`);
 
       // Load the range data
-      const loaded = await loadRangeData(overlayId, startMs, endMs, abortController.signal);
+      const loaded = await loadRangeData(overlayId, startMs, endMs, endpoint, abortController.signal);
 
       // Check if overlay was disabled while we were fetching
       const activeOverlays = OverlaySelector?.getActiveOverlays() || [];
@@ -4500,51 +2017,10 @@ export const OverlayController = {
    * @private
    */
   _showHurricanePopup(props, coords) {
-    const map = MapAdapter?.map;
-    if (!map) return;
-
-    const stormId = props.storm_id;
-    const stormName = props.name || stormId;
-
-    // Build popup content
-    const lines = [`<strong>${stormName}</strong>`];
-    if (props.year) lines.push(`Year: ${props.year}`);
-    if (props.basin) lines.push(`Basin: ${props.basin}`);
-    if (props.max_category) lines.push(`Max Category: ${props.max_category}`);
-    if (props.max_wind_kt) lines.push(`Max Wind: ${props.max_wind_kt} kt`);
-    if (props.min_pressure_mb) lines.push(`Min Pressure: ${props.min_pressure_mb} mb`);
-    if (props.start_date && props.end_date) {
-      lines.push(`Dates: ${props.start_date.split('T')[0]} to ${props.end_date.split('T')[0]}`);
-    }
-    if (props.made_landfall) lines.push('<em>Made landfall</em>');
-
-    // Add View Track button
-    const buttonId = `view-track-${stormId.replace(/[^a-zA-Z0-9]/g, '-')}`;
-    lines.push(`<br><button id="${buttonId}" style="background:#3b82f6;color:white;border:none;padding:6px 12px;border-radius:4px;cursor:pointer;margin-top:8px;">View Track</button>`);
-
-    // Determine popup position - use center of track if no coords provided
-    let popupCoords = coords;
-    if (!popupCoords) {
-      // Try to get coords from the feature geometry center (approximate)
-      popupCoords = [-80, 25]; // Default to Atlantic
-    }
-
-    // Create popup
-    const popup = new maplibregl.Popup({ closeOnClick: true, maxWidth: '280px' })
-      .setLngLat(popupCoords)
-      .setHTML(lines.join('<br>'))
-      .addTo(map);
-
-    // Setup button click handler after popup is added to DOM
-    setTimeout(() => {
-      const button = document.getElementById(buttonId);
-      if (button) {
-        button.addEventListener('click', () => {
-          popup.remove();
-          this.drillDownHurricane(stormId, stormName);
-        });
-      }
-    }, 0);
+    showHurricanePopup(props, coords, {
+      map: MapAdapter?.map,
+      onViewTrack: (stormId, stormName) => this.drillDownHurricane(stormId, stormName)
+    });
   },
 
   /**
@@ -4555,87 +2031,16 @@ export const OverlayController = {
    */
   async drillDownHurricane(stormId, stormName) {
     try {
-      // Hide the hurricane overlay to focus on this single track
-      this._hideHurricaneOverlay();
-
-      // Check cache first - avoids duplicate API calls on rewind/replay
-      // TODO: Consider using loc_id as cache key once unified across event types
-      let data;
-      const cached = DetailedEventCache.get(stormId);
-      if (cached) {
-        console.log(`OverlayController: Using cached track data for ${stormId}`);
-        data = cached.data;
-      } else {
-        // Fetch from API
-        data = await fetchMsgpack(`/api/storms/${encodeURIComponent(stormId)}/track`);
-        // Cache for future use
-        DetailedEventCache.set(stormId, data, 'hurricane');
-      }
-
-      if (!data.positions || data.positions.length === 0) {
-        console.warn(`OverlayController: No positions found for storm ${stormId}`);
-        return;
-      }
-
-      // Build GeoJSON from positions
-      const features = data.positions.map((pos, idx) => ({
-        type: 'Feature',
-        geometry: {
-          type: 'Point',
-          coordinates: [pos.longitude, pos.latitude]
+      await showHurricaneTrackDetail(stormId, stormName, {
+        fetcher: fetchMsgpack,
+        hideHurricaneOverlay: () => this._hideHurricaneOverlay(),
+        modelRegistry: ModelRegistry,
+        onAddAnimateTrackButton: (nextStormId, nextStormName, positions) => this._addAnimateTrackButton(nextStormId, nextStormName, positions),
+        onSetCurrentTrackData: (trackData) => {
+          this._currentTrackData = trackData;
         },
-        properties: {
-          storm_id: stormId,
-          name: data.name || stormName,
-          timestamp: pos.timestamp,
-          wind_kt: pos.wind_kt,
-          pressure_mb: pos.pressure_mb,
-          category: pos.category,
-          status: pos.status,
-          // Wind radii (may be null for older storms)
-          r34_ne: pos.r34_ne,
-          r34_se: pos.r34_se,
-          r34_sw: pos.r34_sw,
-          r34_nw: pos.r34_nw,
-          r50_ne: pos.r50_ne,
-          r50_se: pos.r50_se,
-          r50_sw: pos.r50_sw,
-          r50_nw: pos.r50_nw,
-          r64_ne: pos.r64_ne,
-          r64_se: pos.r64_se,
-          r64_sw: pos.r64_sw,
-          r64_nw: pos.r64_nw,
-          position_index: idx
-        }
-      }));
-
-      const trackGeojson = {
-        type: 'FeatureCollection',
-        features: features
-      };
-
-      // Get TrackModel and render track
-      const trackModel = ModelRegistry?.getModel('track');
-      if (trackModel) {
-        trackModel.renderTrack(trackGeojson);
-        trackModel.fitBounds(trackGeojson);
-
-        // Store track data for click handling
-        this._currentTrackData = {
-          stormId,
-          stormName,
-          positions: features
-        };
-
-        // Add click handler for track position dots to show wind radii
-        this._setupTrackPositionClickHandler(trackModel);
-      }
-
-      console.log(`OverlayController: Loaded track for ${stormName} (${data.count} positions)`);
-
-      // Add "Animate Track" button for 6-hour animation mode
-      this._addAnimateTrackButton(stormId, stormName, data.positions);
-
+        onSetupTrackPositionClickHandler: (trackModel) => this._setupTrackPositionClickHandler(trackModel)
+      });
     } catch (error) {
       console.error(`OverlayController: Failed to load hurricane track:`, error);
     }
@@ -4647,68 +2052,10 @@ export const OverlayController = {
    * @private
    */
   _addAnimateTrackButton(stormId, stormName, positions) {
-    // Remove existing buttons if any
-    const existing = document.getElementById('track-controls-container');
-    if (existing) existing.remove();
-
-    // Create container for both buttons - positioned at top center
-    const container = document.createElement('div');
-    container.id = 'track-controls-container';
-    container.style.cssText = `
-      position: fixed;
-      top: 80px;
-      left: 50%;
-      transform: translateX(-50%);
-      display: flex;
-      gap: 12px;
-      z-index: 1000;
-    `;
-
-    // Animate Track button
-    const animateBtn = document.createElement('button');
-    animateBtn.id = 'animate-track-btn';
-    animateBtn.textContent = 'Animate Track';
-    animateBtn.style.cssText = `
-      padding: 10px 20px;
-      background: #3b82f6;
-      color: white;
-      border: none;
-      border-radius: 6px;
-      cursor: pointer;
-      font-size: 14px;
-      font-weight: 500;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.3);
-    `;
-
-    animateBtn.addEventListener('click', () => {
-      container.remove();
-      this._startTrackAnimation(stormId, stormName, positions);
+    addHurricaneTrackButton(stormId, stormName, positions, {
+      onExitTrackView: () => this._exitTrackView(),
+      onStartTrackAnimation: (nextStormId, nextStormName, nextPositions) => this._startTrackAnimation(nextStormId, nextStormName, nextPositions)
     });
-
-    // Back to Storms button
-    const backBtn = document.createElement('button');
-    backBtn.id = 'back-to-storms-btn';
-    backBtn.textContent = 'Back to Storms';
-    backBtn.style.cssText = `
-      padding: 10px 20px;
-      background: #6b7280;
-      color: white;
-      border: none;
-      border-radius: 6px;
-      cursor: pointer;
-      font-size: 14px;
-      font-weight: 500;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.3);
-    `;
-
-    backBtn.addEventListener('click', () => {
-      container.remove();
-      this._exitTrackView();
-    });
-
-    container.appendChild(animateBtn);
-    container.appendChild(backBtn);
-    document.body.appendChild(container);
   },
 
   /**
@@ -4716,20 +2063,13 @@ export const OverlayController = {
    * @private
    */
   _exitTrackView() {
-    // Clear track display
-    const trackModel = ModelRegistry?.getModel('track');
-    if (trackModel) {
-      trackModel.clearTrack();
-      trackModel.clearWindRadii();
-    }
-
-    // Clear track data
-    this._currentTrackData = null;
-
-    // Restore hurricane overlay to show yearly overview
-    this._restoreHurricaneOverlay();
-
-    console.log('OverlayController: Returned to storms overview');
+    exitHurricaneTrackView({
+      modelRegistry: ModelRegistry,
+      onRestoreHurricaneOverlay: () => this._restoreHurricaneOverlay(),
+      onSetCurrentTrackData: (trackData) => {
+        this._currentTrackData = trackData;
+      }
+    });
   },
 
   /**
@@ -4737,21 +2077,9 @@ export const OverlayController = {
    * @private
    */
   _startTrackAnimation(stormId, stormName, positions) {
-    // Clear the static track display first
-    const trackModel = ModelRegistry?.getModel('track');
-    if (trackModel) {
-      trackModel.clearTrack();
-      trackModel.clearWindRadii();
-    }
-
-    // Start TrackAnimator
-    TrackAnimator.start(stormId, positions, {
-      stormName,
-      onExit: () => {
-        // When animation exits, reload the static track view
-        console.log('TrackAnimator: Exited, reloading static track');
-        this.drillDownHurricane(stormId, stormName);
-      }
+    startHurricaneTrackAnimation(stormId, stormName, positions, {
+      modelRegistry: ModelRegistry,
+      onReloadTrack: (nextStormId, nextStormName) => this.drillDownHurricane(nextStormId, nextStormName)
     });
   },
 
@@ -4761,69 +2089,12 @@ export const OverlayController = {
    * @private
    */
   _setupTrackPositionClickHandler(trackModel) {
-    const map = MapAdapter?.map;
-    if (!map) return;
-
-    // Remove existing handler if any
-    if (this._trackPositionClickHandler) {
-      map.off('click', CONFIG.layers.hurricaneCircle + '-track-dots', this._trackPositionClickHandler);
-    }
-
-    this._trackPositionClickHandler = (e) => {
-      if (!e.features || e.features.length === 0) return;
-
-      const feature = e.features[0];
-      const props = feature.properties;
-      const coords = feature.geometry.coordinates;
-
-      // Show wind radii if available
-      const hasWindRadii = props.r34_ne || props.r34_se || props.r34_sw || props.r34_nw;
-      if (hasWindRadii) {
-        trackModel.renderWindRadii({
-          longitude: coords[0],
-          latitude: coords[1],
-          properties: props
-        });
-      } else {
-        trackModel.clearWindRadii();
+    bindTrackPositionClickHandler(trackModel, {
+      map: MapAdapter?.map,
+      currentHandler: this._trackPositionClickHandler,
+      onSetHandler: (handler) => {
+        this._trackPositionClickHandler = handler;
       }
-
-      // Build popup content
-      const lines = [`<strong>${props.name || 'Storm Position'}</strong>`];
-      if (props.timestamp) {
-        const date = new Date(props.timestamp);
-        lines.push(date.toLocaleString());
-      }
-      if (props.category) lines.push(`Category: ${props.category}`);
-      if (props.wind_kt) lines.push(`Wind: ${props.wind_kt} kt`);
-      if (props.pressure_mb) lines.push(`Pressure: ${props.pressure_mb} mb`);
-      if (props.status) lines.push(`Status: ${props.status}`);
-
-      // Wind radii info
-      if (hasWindRadii) {
-        lines.push('<br><em>Wind Radii (nm):</em>');
-        if (props.r34_ne) lines.push(`34kt: NE=${props.r34_ne} SE=${props.r34_se} SW=${props.r34_sw} NW=${props.r34_nw}`);
-        if (props.r50_ne) lines.push(`50kt: NE=${props.r50_ne} SE=${props.r50_se} SW=${props.r50_sw} NW=${props.r50_nw}`);
-        if (props.r64_ne) lines.push(`64kt: NE=${props.r64_ne} SE=${props.r64_se} SW=${props.r64_sw} NW=${props.r64_nw}`);
-      } else {
-        lines.push('<em>(No wind radii data for this position)</em>');
-      }
-
-      // Show popup
-      new maplibregl.Popup({ closeOnClick: true })
-        .setLngLat(coords)
-        .setHTML(lines.join('<br>'))
-        .addTo(map);
-    };
-
-    map.on('click', CONFIG.layers.hurricaneCircle + '-track-dots', this._trackPositionClickHandler);
-
-    // Hover cursor
-    map.on('mouseenter', CONFIG.layers.hurricaneCircle + '-track-dots', () => {
-      map.getCanvas().style.cursor = 'pointer';
-    });
-    map.on('mouseleave', CONFIG.layers.hurricaneCircle + '-track-dots', () => {
-      map.getCanvas().style.cursor = '';
     });
   },
 
@@ -4857,7 +2128,7 @@ export const OverlayController = {
    * @returns {Object|null} Cached GeoJSON or null
    */
   getCachedData(overlayId) {
-    return dataCache[overlayId] || null;
+    return getOverlayCachedData(overlayId);
   },
 
   /**
@@ -4887,21 +2158,7 @@ export const OverlayController = {
    * Clear all overlay caches.
    */
   clearCache() {
-    for (const key in dataCache) {
-      delete dataCache[key];
-    }
-    for (const key in loadedYears) {
-      delete loadedYears[key];
-    }
-    for (const key in loadedRanges) {
-      delete loadedRanges[key];
-    }
-    for (const key in yearRangeCache) {
-      delete yearRangeCache[key];
-    }
-    for (const key in loadedFilters) {
-      delete loadedFilters[key];
-    }
+    clearAllOverlayCaches();
   },
 
   /**
@@ -4910,7 +2167,7 @@ export const OverlayController = {
    * @returns {Array} Array of loaded years
    */
   getLoadedYears(overlayId) {
-    return loadedYears[overlayId] ? Array.from(loadedYears[overlayId]).sort((a, b) => a - b) : [];
+    return getLoadedYearsForOverlay(overlayId);
   },
 
   /**
@@ -4921,7 +2178,7 @@ export const OverlayController = {
    * @returns {Object} Filter thresholds used at load time
    */
   getLoadedFilters(overlayId) {
-    return loadedFilters[overlayId] || {};
+    return getLoadedFiltersForOverlay(overlayId);
   },
 
   /**
@@ -4930,87 +2187,7 @@ export const OverlayController = {
    * @returns {Object} Cache statistics
    */
   getCacheStats() {
-    // Get exact size measurements
-    const sizeInfo = calculateCacheSize();
-
-    const stats = {
-      overlays: {},
-      totals: {
-        features: 0,
-        bytes: 0,
-        yearsLoaded: 0,
-        overlaysActive: 0
-      }
-    };
-
-    // Event/overlay data (from OVERLAY_ENDPOINTS)
-    for (const overlayId of Object.keys(OVERLAY_ENDPOINTS)) {
-      const features = dataCache[overlayId]?.features || [];
-      const years = loadedYears[overlayId] ? Array.from(loadedYears[overlayId]).sort((a, b) => a - b) : [];
-      const ranges = (loadedRanges[overlayId] || []).filter(r => !r.loading);
-      const overlaySize = sizeInfo.perOverlay[overlayId] || { features: 0, bytes: 0 };
-
-      if (features.length > 0 || years.length > 0) {
-        // Compute overall time range from loadedRanges
-        let rangeStart = null;
-        let rangeEnd = null;
-        if (ranges.length > 0) {
-          rangeStart = Math.min(...ranges.map(r => r.start));
-          rangeEnd = Math.max(...ranges.map(r => r.end));
-        }
-
-        stats.overlays[overlayId] = {
-          features: features.length,
-          sizeMB: (overlaySize.bytes / (1024 * 1024)).toFixed(2),
-          yearsLoaded: years.length,
-          years: years,
-          yearRange: years.length > 0 ? `${years[0]}-${years[years.length - 1]}` : 'none',
-          ranges: ranges,
-          rangeStart: rangeStart,
-          rangeEnd: rangeEnd,
-          dataType: 'events'
-        };
-
-        stats.totals.features += features.length;
-        stats.totals.bytes += overlaySize.bytes;
-        stats.totals.yearsLoaded += years.length;
-        stats.totals.overlaysActive++;
-      }
-    }
-
-    // Metrics and geometry data (from order system)
-    for (const sourceId of Object.keys(metricCache)) {
-      const cached = metricCache[sourceId];
-      const features = cached?.geojson?.features || [];
-      const overlaySize = sizeInfo.perOverlay[sourceId] || { features: 0, bytes: 0 };
-      const yearRange = cached?.year_range;
-      const isGeometry = cached?.dataType === 'geometry';
-
-      if (features.length > 0) {
-        const years = yearRange?.available_years || [];
-
-        stats.overlays[sourceId] = {
-          features: features.length,
-          sizeMB: (overlaySize.bytes / (1024 * 1024)).toFixed(2),
-          yearsLoaded: years.length,
-          years: years,
-          yearRange: isGeometry ? 'n/a' : (yearRange ? `${yearRange.min}-${yearRange.max}` : 'none'),
-          dataType: cached?.dataType || 'metrics'
-        };
-
-        stats.totals.features += features.length;
-        stats.totals.bytes += overlaySize.bytes;
-        stats.totals.yearsLoaded += years.length;
-        stats.totals.overlaysActive++;
-      }
-    }
-
-    stats.totals.sizeMB = (stats.totals.bytes / (1024 * 1024)).toFixed(2);
-
-    console.table(stats.overlays);
-    console.log(`Total: ${stats.totals.features} features across ${stats.totals.yearsLoaded} year-loads (${stats.totals.sizeMB} MB)`);
-
-    return stats;
+    return getOverlayCacheStats(OVERLAY_ENDPOINTS);
   },
 
   /**
@@ -5020,29 +2197,7 @@ export const OverlayController = {
    * @returns {Object} Current filter settings
    */
   getActiveFilters(overlayId) {
-    const config = OVERLAY_ENDPOINTS[overlayId];
-    if (!config) return {};
-
-    // Start with defaults from config
-    const filters = {};
-
-    // Map API params to user-friendly filter names
-    if (config.params.min_magnitude) {
-      filters.minMagnitude = parseFloat(config.params.min_magnitude);
-    }
-    if (config.params.min_category) {
-      filters.minCategory = config.params.min_category;
-    }
-    if (config.params.min_scale) {
-      filters.minScale = config.params.min_scale;
-    }
-    if (config.params.min_area_km2) {
-      filters.minAreaKm2 = parseFloat(config.params.min_area_km2);
-    }
-
-    // Override with active filter settings (from chat-based changes)
-    const overrides = activeFilters[overlayId] || {};
-    return { ...filters, ...overrides };
+    return getActiveFiltersForOverlay(overlayId, OVERLAY_ENDPOINTS);
   },
 
   /**
@@ -5052,18 +2207,7 @@ export const OverlayController = {
    * @param {Object} newFilters - New filter values to apply
    */
   updateFilters(overlayId, newFilters) {
-    if (!OVERLAY_ENDPOINTS[overlayId]) {
-      console.warn(`Unknown overlay: ${overlayId}`);
-      return;
-    }
-
-    // Merge with existing overrides
-    activeFilters[overlayId] = {
-      ...(activeFilters[overlayId] || {}),
-      ...newFilters
-    };
-
-    console.log(`OverlayController: Updated filters for ${overlayId}:`, activeFilters[overlayId]);
+    updateOverlayFilters(overlayId, newFilters, OVERLAY_ENDPOINTS);
   },
 
   /**
@@ -5071,8 +2215,7 @@ export const OverlayController = {
    * @param {string} overlayId - Overlay ID
    */
   clearFilters(overlayId) {
-    delete activeFilters[overlayId];
-    console.log(`OverlayController: Cleared filters for ${overlayId}`);
+    clearOverlayFilters(overlayId);
   },
 
   /**
@@ -5089,10 +2232,7 @@ export const OverlayController = {
     console.log(`OverlayController: Reloading ${overlayId} with filters:`, this.getActiveFilters(overlayId));
 
     // Clear cache for this overlay
-    delete dataCache[overlayId];
-    delete loadedYears[overlayId];
-    delete loadedRanges[overlayId];
-    delete yearRangeCache[overlayId];
+    clearOverlayData(overlayId);
 
     // Check if overlay is currently active
     const isActive = OverlaySelector?.getActiveOverlays()?.includes(overlayId);
@@ -5137,7 +2277,7 @@ export const OverlayController = {
       console.log(`OverlayController: Refreshing ${overlayId} delta (${new Date(lastEnd).toISOString()} to ${new Date(now).toISOString()})`);
 
       try {
-        const loaded = await loadRangeData(overlayId, lastEnd, now);
+        const loaded = await loadRangeData(overlayId, lastEnd, now, endpoint);
         if (loaded !== false) {
           this.renderCurrentData(overlayId);
         }
@@ -5223,24 +2363,7 @@ export const OverlayController = {
    * @param {Object} yearRange - Optional year range metadata {min, max, available_years}
    */
   ingestMetricData(sourceId, geojson, yearData = null, yearRange = null) {
-    if (!geojson?.features) {
-      console.warn(`OverlayController: Cannot ingest metrics - invalid data for source: ${sourceId}`);
-      return;
-    }
-
-    // Store in metrics cache
-    metricCache[sourceId] = {
-      geojson: geojson,
-      year_data: yearData || {},
-      year_range: yearRange,
-      loadedAt: Date.now()
-    };
-
-    console.log(`OverlayController: Ingested ${geojson.features.length} ${sourceId} features into metrics cache`);
-
-    // Update cache size and notify listeners
-    const cacheSize = calculateCacheSize();
-    window.dispatchEvent(new CustomEvent('overlayCacheUpdated', { detail: cacheSize }));
+    ingestOverlayMetricData(sourceId, geojson, yearData, yearRange);
   },
 
   /**
@@ -5249,7 +2372,7 @@ export const OverlayController = {
    * @returns {Object|null} Cached data or null if not cached
    */
   getCachedMetricData(sourceId) {
-    return metricCache[sourceId] || null;
+    return getOverlayCachedMetricData(sourceId);
   },
 
   /**
@@ -5257,12 +2380,7 @@ export const OverlayController = {
    * @param {string} sourceId - Source ID to clear
    */
   clearMetricCache(sourceId) {
-    if (metricCache[sourceId]) {
-      delete metricCache[sourceId];
-      const cacheSize = calculateCacheSize();
-      window.dispatchEvent(new CustomEvent('overlayCacheUpdated', { detail: cacheSize }));
-      console.log(`OverlayController: Cleared metrics cache for ${sourceId}`);
-    }
+    clearMetricCacheEntry(sourceId);
   },
 
   // -------------------------------------------------------------------------
@@ -5283,37 +2401,7 @@ export const OverlayController = {
    * @returns {number} Number of features rendered
    */
   renderGeometryData(sourceId, geojson, geometryType = 'zcta', options = {}) {
-    if (!geojson?.features) {
-      console.warn(`OverlayController: Cannot render geometry - invalid data for source: ${sourceId}`);
-      return 0;
-    }
-
-    // Accumulate in metricCache for Loaded tab tracking (keyed by sourceId)
-    // Backend deduplicates, so we accumulate new features from each response
-    const existing = metricCache[sourceId];
-    if (existing?.geojson?.features) {
-      // Merge new features with existing (dedup by loc_id)
-      const existingLocIds = new Set(existing.geojson.features.map(f => f.properties?.loc_id));
-      const newFeatures = geojson.features.filter(f => !existingLocIds.has(f.properties?.loc_id));
-      existing.geojson.features = existing.geojson.features.concat(newFeatures);
-      existing.loadedAt = Date.now();
-      console.log(`OverlayController: Accumulated ${newFeatures.length} new ${geometryType} features (total: ${existing.geojson.features.length})`);
-    } else {
-      // First load for this source
-      metricCache[sourceId] = {
-        geojson: geojson,
-        year_data: {},
-        year_range: null,
-        dataType: 'geometry',
-        loadedAt: Date.now()
-      };
-    }
-
-    // Notify Loaded tab to update
-    window.dispatchEvent(new CustomEvent('overlayCacheUpdated'));
-
-    console.log(`OverlayController: Stored ${metricCache[sourceId].geojson.features.length} ${geometryType} features in cache`);
-    return metricCache[sourceId].geojson.features.length;
+    return renderOverlayGeometryData(sourceId, geojson, geometryType, options);
   },
 
   /**
@@ -5321,26 +2409,7 @@ export const OverlayController = {
    * Called when overlay is turned on or when new data arrives while overlay is already on.
    */
   refreshGeometryFromCache() {
-    const sourceIdToType = {
-      'geometry_zcta': 'zcta',
-      'geometry_tribal': 'tribal',
-      'geometry_watershed': 'watershed',
-      'geometry_park': 'park'
-    };
-
-    let totalFeatures = 0;
-    for (const [sourceId, typeId] of Object.entries(sourceIdToType)) {
-      const cached = metricCache[sourceId];
-      if (cached?.geojson?.features?.length > 0) {
-        GeometryModel.render(cached.geojson, typeId, { showLabels: false });
-        totalFeatures += cached.geojson.features.length;
-        console.log(`OverlayController: Rendered ${cached.geojson.features.length} ${typeId} features from cache`);
-      }
-    }
-
-    if (totalFeatures > 0) {
-      console.log(`OverlayController: Refreshed ${totalFeatures} total geometry features from cache`);
-    }
+    refreshCachedGeometry();
   },
 
   /**
@@ -5357,52 +2426,7 @@ export const OverlayController = {
    * @returns {Object} { removed: number, remaining: number }
    */
   removeGeometryData(sourceId, criteria, geometryType = 'zcta') {
-    const cached = metricCache[sourceId];
-    if (!cached?.geojson?.features) {
-      console.warn(`OverlayController: No cached geometry for source: ${sourceId}`);
-      return { removed: 0, remaining: 0 };
-    }
-
-    const originalCount = cached.geojson.features.length;
-    const { loc_ids, regions } = criteria;
-
-    if (loc_ids && loc_ids.length > 0) {
-      // Backend-driven: remove exact loc_ids (preferred - keeps caches in sync)
-      const locIdSet = new Set(loc_ids);
-      cached.geojson.features = cached.geojson.features.filter(f => {
-        const locId = f.properties?.loc_id;
-        return !locIdSet.has(locId);
-      });
-      console.log(`OverlayController: Removed ${loc_ids.length} features by loc_id from ${sourceId}`);
-    } else if (regions && regions.length > 0) {
-      // Fallback: region-based prefix matching
-      const prefixes = regions.map(r => `${r}-`);
-      const regionSet = new Set(regions);
-      cached.geojson.features = cached.geojson.features.filter(f => {
-        const parentId = f.properties?.parent_id || '';
-        const matchesPrefix = prefixes.some(p => parentId.startsWith(p));
-        const matchesExact = regionSet.has(parentId);
-        return !matchesPrefix && !matchesExact;
-      });
-      console.log(`OverlayController: Removed features matching regions: ${regions.join(', ')}`);
-    } else {
-      console.warn(`OverlayController: removeGeometryData called without loc_ids or regions`);
-      return { removed: 0, remaining: originalCount };
-    }
-
-    const removedCount = originalCount - cached.geojson.features.length;
-    cached.loadedAt = Date.now();
-
-    // If no features left, remove from cache
-    if (cached.geojson.features.length === 0) {
-      delete metricCache[sourceId];
-    }
-
-    // Notify Loaded tab to update
-    window.dispatchEvent(new CustomEvent('overlayCacheUpdated'));
-
-    console.log(`OverlayController: Removal complete - removed ${removedCount}, remaining ${cached.geojson?.features?.length || 0}`);
-    return { removed: removedCount, remaining: cached.geojson?.features?.length || 0 };
+    return removeOverlayGeometryData(sourceId, criteria, geometryType);
   },
 
   /**
@@ -5416,53 +2440,7 @@ export const OverlayController = {
    * @returns {Object} { removed: number, remaining: number }
    */
   removeEventData(sourceId, criteria) {
-    const cached = metricCache[sourceId];
-    if (!cached?.geojson?.features) {
-      console.warn(`OverlayController: No cached events for source: ${sourceId}`);
-      return { removed: 0, remaining: 0 };
-    }
-
-    const originalCount = cached.geojson.features.length;
-    const { event_ids, regions } = criteria;
-
-    if (event_ids && event_ids.length > 0) {
-      // Backend-driven: remove exact event_ids
-      const eventIdSet = new Set(event_ids);
-      cached.geojson.features = cached.geojson.features.filter(f => {
-        const eventId = f.properties?.event_id || f.id;
-        return !eventIdSet.has(eventId);
-      });
-      console.log(`OverlayController: Removed ${event_ids.length} events by event_id from ${sourceId}`);
-    } else if (regions && regions.length > 0) {
-      // Fallback: region-based prefix matching on loc_id
-      const prefixes = regions.map(r => `${r}-`);
-      const regionSet = new Set(regions);
-      cached.geojson.features = cached.geojson.features.filter(f => {
-        const locId = f.properties?.loc_id || '';
-        const matchesPrefix = prefixes.some(p => locId.startsWith(p));
-        const matchesExact = regionSet.has(locId);
-        return !matchesPrefix && !matchesExact;
-      });
-      console.log(`OverlayController: Removed events matching regions: ${regions.join(', ')}`);
-    } else {
-      console.warn(`OverlayController: removeEventData called without event_ids or regions`);
-      return { removed: 0, remaining: originalCount };
-    }
-
-    const removedCount = originalCount - cached.geojson.features.length;
-    cached.loadedAt = Date.now();
-
-    // Re-render remaining events or clear if none left
-    if (cached.geojson.features.length > 0) {
-      // TODO: Re-render event layer with remaining features
-      // EventModel.render(cached.geojson, sourceId);
-    } else {
-      delete metricCache[sourceId];
-    }
-
-    window.dispatchEvent(new CustomEvent('overlayCacheUpdated'));
-    console.log(`OverlayController: Event removal complete - removed ${removedCount}, remaining ${cached.geojson?.features?.length || 0}`);
-    return { removed: removedCount, remaining: cached.geojson?.features?.length || 0 };
+    return removeOverlayEventData(sourceId, criteria);
   },
 
   /**
@@ -5477,67 +2455,7 @@ export const OverlayController = {
    * @returns {Object} { removed: number, remaining: number }
    */
   removeMetricData(sourceId, criteria) {
-    const cached = metricCache[sourceId];
-    if (!cached) {
-      console.warn(`OverlayController: No cached metrics for source: ${sourceId}`);
-      return { removed: 0, remaining: 0 };
-    }
-
-    const { loc_ids, years, metric } = criteria;
-    let removedCount = 0;
-
-    // Remove from year_data (the main data store)
-    if (cached.year_data && metric) {
-      const locIdSet = loc_ids?.length > 0 ? new Set(loc_ids) : null;
-      const yearSet = years?.length > 0 ? new Set(years.map(String)) : null;
-
-      for (const [yearStr, locData] of Object.entries(cached.year_data)) {
-        // Skip if year filter doesn't match
-        if (yearSet && !yearSet.has(yearStr)) continue;
-
-        for (const [locId, metrics] of Object.entries(locData)) {
-          // Skip if loc_id filter doesn't match
-          if (locIdSet && !locIdSet.has(locId)) continue;
-
-          // Delete the metric column
-          if (metrics[metric] !== undefined) {
-            delete metrics[metric];
-            removedCount++;
-          }
-        }
-      }
-      console.log(`OverlayController: Removed ${removedCount} metric values for '${metric}' from ${sourceId}`);
-    }
-
-    // Also remove from features if geojson has properties with this metric
-    if (cached.geojson?.features && metric) {
-      const locIdSet = loc_ids?.length > 0 ? new Set(loc_ids) : null;
-      for (const feature of cached.geojson.features) {
-        if (locIdSet && !locIdSet.has(feature.properties?.loc_id)) continue;
-        if (feature.properties?.[metric] !== undefined) {
-          delete feature.properties[metric];
-        }
-      }
-    }
-
-    cached.loadedAt = Date.now();
-
-    // Check if source has any data left
-    const hasYearData = cached.year_data && Object.keys(cached.year_data).length > 0;
-    const hasFeatures = cached.geojson?.features?.length > 0;
-
-    if (!hasYearData && !hasFeatures) {
-      delete metricCache[sourceId];
-    }
-
-    // Notify for UI updates
-    window.dispatchEvent(new CustomEvent('overlayCacheUpdated'));
-
-    // TODO: Trigger choropleth re-render if needed
-    // ChoroplethManager.refresh();
-
-    console.log(`OverlayController: Metric removal complete - removed ${removedCount} cells`);
-    return { removed: removedCount, remaining: hasYearData ? Object.keys(cached.year_data).length : 0 };
+    return removeOverlayMetricData(sourceId, criteria);
   },
 
   /**

@@ -313,3 +313,62 @@ async def get_related_tsunamis_for_earthquake(event_id: str):
     except Exception as e:
         logger.error(f"Error fetching related tsunamis for earthquake {event_id}: {e}")
         return msgpack_error(str(e), 500)
+
+
+@router.get("/api/events/nearby-earthquakes")
+async def get_nearby_earthquakes(
+    lat: float,
+    lon: float,
+    timestamp: str = None,
+    year: int = None,
+    radius_km: float = 150.0,
+    days_before: int = 30,
+    days_after: int = 60,
+    min_magnitude: float = 3.0,
+):
+    """Find earthquakes near a location within a time window."""
+    try:
+        events_path = GLOBAL_DIR / "disasters/earthquakes/events.parquet"
+        if not events_path.exists():
+            return msgpack_error("Earthquake data not available", 404)
+
+        df = pd.read_parquet(events_path)
+        df = filter_by_proximity(df, lat, lon, radius_km)
+
+        if timestamp:
+            df = filter_by_time_window(df, timestamp, days_before, days_after)
+        elif year:
+            df = ensure_year_column(df)
+            df = df[df["year"] == year]
+
+        df = df[df["magnitude"] >= min_magnitude]
+        if len(df) == 0:
+            return msgpack_response(
+                {
+                    "type": "FeatureCollection",
+                    "features": [],
+                    "count": 0,
+                    "search_params": {"lat": lat, "lon": lon, "radius_km": radius_km},
+                }
+            )
+
+        df = ensure_year_column(df)
+        features = build_geojson_features(df, get_earthquake_property_builders())
+        logger.info(f"Found {len(features)} earthquakes within {radius_km}km of ({lat}, {lon})")
+        return msgpack_response(
+            {
+                "type": "FeatureCollection",
+                "features": features,
+                "count": len(features),
+                "search_params": {
+                    "lat": lat,
+                    "lon": lon,
+                    "radius_km": radius_km,
+                    "days_after": days_after,
+                    "min_magnitude": min_magnitude,
+                },
+            }
+        )
+    except Exception as e:
+        logger.error(f"Error finding nearby earthquakes: {e}")
+        return msgpack_error(str(e), 500)

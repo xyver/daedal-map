@@ -13,6 +13,14 @@ from .helpers import filter_by_time_range, msgpack_error, msgpack_response
 router = APIRouter()
 
 
+def _resolve_first_existing(*paths):
+    """Return the first existing path from a set of data-layout candidates."""
+    for path in paths:
+        if path.exists():
+            return path
+    return paths[0] if paths else None
+
+
 def list_wildfire_year_files():
     """Return available yearly wildfire parquet files (year, path), sorted by year."""
     files = []
@@ -70,8 +78,14 @@ async def get_wildfires_geojson(
         min_year = get_default_min_year("wildfires", fallback=2010)
 
     try:
-        usa_fires_path = COUNTRIES_DIR / "USA/wildfires/fires_enriched.parquet"
-        can_fires_path = COUNTRIES_DIR / "CAN/cnfdb/fires_enriched.parquet"
+        usa_fires_path = _resolve_first_existing(
+            COUNTRIES_DIR / "USA/disasters/wildfires/fires_enriched.parquet",
+            COUNTRIES_DIR / "USA/wildfires/fires_enriched.parquet",
+        )
+        can_fires_path = _resolve_first_existing(
+            COUNTRIES_DIR / "CAN/wildfires/fires_enriched.parquet",
+            COUNTRIES_DIR / "CAN/cnfdb/fires_enriched.parquet",
+        )
         global_by_year_path = GLOBAL_DIR / "disasters/wildfires/by_year_enriched"
         if not global_by_year_path.exists():
             global_by_year_path = GLOBAL_DIR / "disasters/wildfires/by_year"
@@ -347,14 +361,25 @@ async def get_wildfire_perimeter(event_id: str, year: int = None):
         matches = []
         for year_file in candidate_files:
             try:
-                table = pq.read_table(year_file, columns=["event_id", "perimeter"], filters=[("event_id", "=", event_id)])
+                if duckdb_available():
+                    df = select_rows(
+                        year_file,
+                        columns=["event_id", "perimeter"],
+                        exact_filters={"event_id": event_id},
+                    )
+                    if df.empty:
+                        continue
+                    perimeter_str = df.iloc[0].get("perimeter")
+                else:
+                    table = pq.read_table(year_file, columns=["event_id", "perimeter"], filters=[("event_id", "=", event_id)])
+                    if table.num_rows == 0:
+                        continue
+                    perimeter_str = table.column("perimeter")[0].as_py()
             except Exception:
                 continue
-            if table.num_rows > 0:
-                perimeter_str = table.column("perimeter")[0].as_py()
-                if perimeter_str:
-                    perimeter = json_lib.loads(perimeter_str) if isinstance(perimeter_str, str) else perimeter_str
-                    matches.append((wildfire_year_from_path(year_file), perimeter))
+            if perimeter_str:
+                perimeter = json_lib.loads(perimeter_str) if isinstance(perimeter_str, str) else perimeter_str
+                matches.append((wildfire_year_from_path(year_file), perimeter))
 
         if len(matches) > 1 and year is None:
             years = [y for y, _ in matches if y is not None]
@@ -374,11 +399,20 @@ async def get_wildfire_perimeter(event_id: str, year: int = None):
             return msgpack_response({"type": "Feature", "geometry": perimeter, "properties": props})
 
         if main_path.exists():
-            table = pq.read_table(main_path, columns=["event_id", "perimeter"], filters=[("event_id", "=", event_id)])
-            if table.num_rows == 0:
-                return msgpack_error(f"Fire {event_id} not found", 404)
-
-            perimeter_str = table.column("perimeter")[0].as_py()
+            if duckdb_available():
+                df = select_rows(
+                    main_path,
+                    columns=["event_id", "perimeter"],
+                    exact_filters={"event_id": event_id},
+                )
+                if df.empty:
+                    return msgpack_error(f"Fire {event_id} not found", 404)
+                perimeter_str = df.iloc[0].get("perimeter")
+            else:
+                table = pq.read_table(main_path, columns=["event_id", "perimeter"], filters=[("event_id", "=", event_id)])
+                if table.num_rows == 0:
+                    return msgpack_error(f"Fire {event_id} not found", 404)
+                perimeter_str = table.column("perimeter")[0].as_py()
             if perimeter_str is None:
                 return msgpack_error("No perimeter data for this fire", 404)
 
@@ -422,9 +456,17 @@ async def get_wildfire_progression(event_id: str, year: int = None):
         for prog_file in candidate_files:
             if not prog_file.exists():
                 continue
-            current = pq.read_table(prog_file, filters=[("event_id", "=", str(event_id))])
-            if current.num_rows > 0:
-                matches.append((wildfire_year_from_path(prog_file), current))
+            if duckdb_available():
+                current_df = select_rows(
+                    prog_file,
+                    exact_filters={"event_id": str(event_id)},
+                )
+                if not current_df.empty:
+                    matches.append((wildfire_year_from_path(prog_file), current_df))
+            else:
+                current = pq.read_table(prog_file, filters=[("event_id", "=", str(event_id))])
+                if current.num_rows > 0:
+                    matches.append((wildfire_year_from_path(prog_file), current.to_pandas()))
 
         if len(matches) > 1 and year is None:
             years = [y for y, _ in matches if y is not None]
@@ -449,9 +491,8 @@ async def get_wildfire_progression(event_id: str, year: int = None):
                     },
                 }
             )
-        matched_year, table = matches[0]
-
-        df = table.to_pandas().sort_values("day_num")
+        matched_year, df = matches[0]
+        df = df.sort_values("day_num")
         features = []
         for _, row in df.iterrows():
             perimeter = json_lib.loads(row["perimeter"]) if isinstance(row["perimeter"], str) else row["perimeter"]
