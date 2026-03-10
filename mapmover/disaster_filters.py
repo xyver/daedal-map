@@ -24,6 +24,7 @@ import json
 import pandas as pd
 from pathlib import Path
 from . import GLOBAL_DIR
+from .duckdb_helpers import select_distinct_event_loc_ids
 
 # Metadata cache
 _DISASTER_METADATA = None
@@ -116,11 +117,12 @@ def apply_location_filters(
         areas_path = GLOBAL_DIR / "disasters/event_areas" / f"{disaster_type}.parquet"
         if areas_path.exists():
             try:
-                areas_df = pd.read_parquet(areas_path)
-                # Find events that affected this location (prefix match for flexibility)
-                affected_events = areas_df[
-                    areas_df['affected_loc_id'].str.startswith(affected_loc_id, na=False)
-                ]['event_loc_id'].unique()
+                affected_events = select_distinct_event_loc_ids(areas_path, affected_loc_id)
+                if not affected_events:
+                    areas_df = pd.read_parquet(areas_path)
+                    affected_events = areas_df[
+                        areas_df['affected_loc_id'].str.startswith(affected_loc_id, na=False)
+                    ]['event_loc_id'].unique()
                 df = df[df[event_id_col].isin(affected_events)]
             except Exception:
                 # If event_areas fails, return unfiltered (graceful degradation)
@@ -148,10 +150,12 @@ def get_affected_event_ids(
         return set()
 
     try:
-        areas_df = pd.read_parquet(areas_path)
-        affected = areas_df[
-            areas_df['affected_loc_id'].str.startswith(affected_loc_id, na=False)
-        ]['event_loc_id'].unique()
+        affected = select_distinct_event_loc_ids(areas_path, affected_loc_id)
+        if not affected:
+            areas_df = pd.read_parquet(areas_path)
+            affected = areas_df[
+                areas_df['affected_loc_id'].str.startswith(affected_loc_id, na=False)
+            ]['event_loc_id'].unique()
         return set(affected)
     except Exception:
         return set()
@@ -178,16 +182,19 @@ def get_events_for_location(
         return {"count": 0, "event_ids": []}
 
     try:
-        areas_df = pd.read_parquet(areas_path)
-
-        if include_children:
-            # Prefix match - includes all child regions
-            mask = areas_df['affected_loc_id'].str.startswith(loc_id, na=False)
-        else:
-            # Exact match only
-            mask = areas_df['affected_loc_id'] == loc_id
-
-        affected_events = areas_df[mask]['event_loc_id'].unique()
+        affected_events = select_distinct_event_loc_ids(
+            areas_path,
+            loc_id,
+            exact=not include_children,
+            limit=100,
+        )
+        if not affected_events:
+            areas_df = pd.read_parquet(areas_path)
+            if include_children:
+                mask = areas_df['affected_loc_id'].str.startswith(loc_id, na=False)
+            else:
+                mask = areas_df['affected_loc_id'] == loc_id
+            affected_events = areas_df[mask]['event_loc_id'].unique()
 
         return {
             "count": len(affected_events),

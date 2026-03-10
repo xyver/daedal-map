@@ -27,6 +27,7 @@ from pathlib import Path
 import pandas as pd
 from typing import Optional, Dict, List, Any
 
+from ...duckdb_helpers import duckdb_available, select_columns_from_parquet
 
 class LocationLookup:
     """
@@ -53,7 +54,24 @@ class LocationLookup:
         """Load crosswalk data lazily."""
         crosswalk_path = self.reference_dir / "zcta_crosswalk.parquet"
         if crosswalk_path.exists():
-            self._zcta_df = pd.read_parquet(crosswalk_path)
+            if duckdb_available():
+                self._zcta_df = select_columns_from_parquet(
+                    crosswalk_path,
+                    [
+                        "zcta",
+                        "zcta_loc_id",
+                        "primary_county_loc_id",
+                        "primary_county_name",
+                        "state_abbrev",
+                        "state_loc_id",
+                        "all_counties_json",
+                        "county_count",
+                    ],
+                )
+                if self._zcta_df.empty:
+                    self._zcta_df = pd.read_parquet(crosswalk_path)
+            else:
+                self._zcta_df = pd.read_parquet(crosswalk_path)
             # Create lookup dict for fast access
             self._zcta_dict = self._zcta_df.set_index('zcta').to_dict('index')
         else:

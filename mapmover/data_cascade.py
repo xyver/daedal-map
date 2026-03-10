@@ -20,6 +20,7 @@ import pandas as pd
 from pathlib import Path
 from typing import Optional, Dict, List, Any, Union
 
+from .duckdb_helpers import duckdb_available, select_columns_from_parquet
 from .paths import GEOMETRY_DIR
 
 # Paths
@@ -50,7 +51,13 @@ def load_geometry(iso3: str) -> Optional[pd.DataFrame]:
     if not parquet_file.exists():
         return None
 
-    df = pd.read_parquet(parquet_file)
+    columns = ["loc_id", "parent_id", "admin_level"]
+    if duckdb_available():
+        df = select_columns_from_parquet(parquet_file, columns)
+        if df.empty:
+            df = pd.read_parquet(parquet_file, columns=columns)
+    else:
+        df = pd.read_parquet(parquet_file, columns=columns)
     _geometry_cache[iso3] = df
     return df
 

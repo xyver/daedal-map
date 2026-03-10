@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Set
 from rapidfuzz import fuzz, process
 
+from .duckdb_helpers import duckdb_available, select_columns_from_parquet
 from .paths import GEOMETRY_DIR
 
 
@@ -543,7 +544,13 @@ class NameStandardizer:
             return None
 
         try:
-            df = pd.read_parquet(parquet_file)
+            columns = ["loc_id", "name", "admin_level"]
+            if duckdb_available():
+                df = select_columns_from_parquet(parquet_file, columns)
+                if df.empty:
+                    df = pd.read_parquet(parquet_file, columns=columns)
+            else:
+                df = pd.read_parquet(parquet_file, columns=columns)
 
             # Filter by admin level if specified
             if admin_level is not None:

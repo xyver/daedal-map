@@ -3,6 +3,7 @@
 from fastapi import APIRouter
 
 from mapmover.disaster_filters import apply_location_filters, get_default_min_year
+from mapmover.duckdb_helpers import duckdb_available, select_filtered_event_rows, select_rows_by_exact_value
 from mapmover.logging_analytics import logger
 from mapmover.paths import GLOBAL_DIR
 
@@ -46,14 +47,26 @@ async def get_tornadoes_geojson(
         if not events_path.exists():
             return msgpack_error("Tornado data not available", 404)
 
-        df = pd.read_parquet(events_path)
+        use_duckdb = duckdb_available()
+        if use_duckdb:
+            min_filters = {"year": min_year} if year is None and (start is None and end is None) and min_year is not None else None
+            df = select_filtered_event_rows(
+                events_path,
+                year=year,
+                start=start,
+                end=end,
+                min_value_filters=min_filters,
+            )
+        else:
+            df = pd.read_parquet(events_path)
 
-        if year is not None and "year" in df.columns:
-            df = df[df["year"] == year]
-        elif start is not None or end is not None:
-            df = filter_by_time_range(df, start, end)
-        elif min_year is not None and "year" in df.columns:
-            df = df[df["year"] >= min_year]
+        if not use_duckdb:
+            if year is not None and "year" in df.columns:
+                df = df[df["year"] == year]
+            elif start is not None or end is not None:
+                df = filter_by_time_range(df, start, end)
+            elif min_year is not None and "year" in df.columns:
+                df = df[df["year"] >= min_year]
 
         if min_scale is not None and "tornado_scale" in df.columns:
             df["_scale_num"] = df["tornado_scale"].apply(parse_scale)
@@ -129,8 +142,11 @@ async def get_tornado_detail(event_id: str):
         if not events_path.exists():
             return msgpack_error("Tornado data not available", 404)
 
-        df = pd.read_parquet(events_path)
-        tornado = df[df["event_id"].astype(str) == str(event_id)]
+        if duckdb_available():
+            tornado = select_rows_by_exact_value(events_path, "event_id", str(event_id))
+        else:
+            df = pd.read_parquet(events_path)
+            tornado = df[df["event_id"].astype(str) == str(event_id)]
         if len(tornado) == 0:
             return msgpack_error("Tornado not found", 404)
 
@@ -208,8 +224,12 @@ async def get_tornado_sequence(event_id: str):
         if not events_path.exists():
             return msgpack_error("Tornado data not available", 404)
 
-        df = pd.read_parquet(events_path)
-        seed = df[df["event_id"].astype(str) == str(event_id)]
+        use_duckdb = duckdb_available()
+        if use_duckdb:
+            seed = select_rows_by_exact_value(events_path, "event_id", str(event_id))
+        else:
+            df = pd.read_parquet(events_path)
+            seed = df[df["event_id"].astype(str) == str(event_id)]
         if len(seed) == 0:
             return msgpack_error("Tornado not found", 404)
 
@@ -218,7 +238,10 @@ async def get_tornado_sequence(event_id: str):
         if pd.isna(sequence_id) or sequence_id is None:
             sequence_df = seed.copy()
         else:
-            sequence_df = df[df["sequence_id"] == sequence_id].copy()
+            if use_duckdb:
+                sequence_df = select_rows_by_exact_value(events_path, "sequence_id", sequence_id, order_by="sequence_position")
+            else:
+                sequence_df = df[df["sequence_id"] == sequence_id].copy()
 
         if "sequence_position" in sequence_df.columns and sequence_df["sequence_position"].notna().any():
             sequence_df = sequence_df.sort_values("sequence_position")

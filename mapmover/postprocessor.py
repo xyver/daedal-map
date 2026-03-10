@@ -418,13 +418,14 @@ def expand_all_derived_fields(items: list) -> list:
 
 # Source IDs that support event mode (individual events vs aggregates)
 EVENT_SOURCES = {
-    "usgs_earthquakes": "events",
-    "canada_earthquakes": "events",
-    "smithsonian_volcanoes": "events",
-    "mtbs_wildfires": "fires",
-    "ibtracs": "positions",
-    "hurdat2": "positions",
-    "noaa_tsunamis": "events",
+    "earthquakes": "events",
+    "floods": "events",
+    "hurricanes": "storms",
+    "landslides": "events",
+    "tornadoes": "events",
+    "tsunamis": "events",
+    "volcanoes": "events",
+    "wildfires": "fires",
 }
 
 

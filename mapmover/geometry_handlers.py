@@ -26,6 +26,7 @@ except ImportError:
         return json.loads(s)
 
 from .paths import GEOMETRY_DIR, DATA_ROOT
+from .duckdb_helpers import select_rows
 
 logger = logging.getLogger("mapmover")
 
@@ -135,10 +136,15 @@ def load_country_parquet(iso3: str, admin_level: int = None):
     try:
         # Use predicate pushdown if admin_level specified
         if admin_level is not None:
-            df = pd.read_parquet(
+            df = select_rows(
                 parquet_file,
-                filters=[('admin_level', '==', admin_level)]
+                exact_filters={"admin_level": admin_level},
             )
+            if df.empty:
+                df = pd.read_parquet(
+                    parquet_file,
+                    filters=[('admin_level', '==', admin_level)]
+                )
         else:
             df = pd.read_parquet(parquet_file)
 
@@ -824,7 +830,9 @@ def load_subcounty_geometry(iso3: str, admin_level: int, state_abbrev: str = Non
             return None
 
         try:
-            df = pd.read_parquet(file_path)
+            df = select_rows(file_path)
+            if df.empty:
+                df = pd.read_parquet(file_path)
             _subcounty_geometry_cache[cache_key] = df
             logger.debug(f"Loaded {len(df)} features from {file_path}")
             return df
@@ -850,7 +858,9 @@ def load_subcounty_geometry(iso3: str, admin_level: int, state_abbrev: str = Non
             return None
 
         try:
-            df = pd.read_parquet(file_path)
+            df = select_rows(file_path)
+            if df.empty:
+                df = pd.read_parquet(file_path)
             _subcounty_geometry_cache[cache_key] = df
             logger.debug(f"Loaded {len(df)} features for {state_abbrev} level {admin_level}")
             return df

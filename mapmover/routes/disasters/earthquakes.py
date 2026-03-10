@@ -1,8 +1,10 @@
 """Earthquake disaster endpoints."""
 
 from fastapi import APIRouter
+import pandas as pd
 
-from mapmover.disaster_filters import apply_location_filters
+from mapmover.disaster_filters import apply_location_filters, get_affected_event_ids
+from mapmover.duckdb_helpers import duckdb_available, run_df, select_filtered_event_rows, select_linked_loc_ids
 from mapmover.logging_analytics import logger
 from mapmover.paths import GLOBAL_DIR
 
@@ -41,6 +43,69 @@ def get_earthquake_property_builders():
     }
 
 
+def _load_earthquakes_duckdb(
+    *,
+    year: int = None,
+    start: str = None,
+    end: str = None,
+    min_magnitude: float = None,
+    limit: int = None,
+    loc_prefix: str = None,
+    affected_loc_id: str = None,
+    sequence_id: str = None,
+    event_id: str = None,
+    mainshock_id: str = None,
+) -> pd.DataFrame:
+    """Load filtered earthquake rows via DuckDB."""
+    events_path = GLOBAL_DIR / "disasters/earthquakes/events.parquet"
+    if not duckdb_available() or not events_path.exists():
+        return pd.DataFrame()
+    where = []
+    params = [str(events_path)]
+
+    if year is not None:
+        where.append('"year" = ?')
+        params.append(year)
+    if start is not None:
+        where.append('"timestamp" >= CAST(? AS TIMESTAMP)')
+        params.append(start)
+    if end is not None:
+        where.append('"timestamp" <= CAST(? AS TIMESTAMP)')
+        params.append(end)
+    if min_magnitude is not None:
+        where.append('"magnitude" >= ?')
+        params.append(min_magnitude)
+    if loc_prefix is not None:
+        where.append('"loc_id" LIKE ?')
+        params.append(f"{loc_prefix}%")
+    if sequence_id is not None:
+        where.append('"sequence_id" = ?')
+        params.append(sequence_id)
+    if event_id is not None:
+        where.append('"event_id" = ?')
+        params.append(event_id)
+    if mainshock_id is not None:
+        where.append('"mainshock_id" = ?')
+        params.append(mainshock_id)
+    if affected_loc_id is not None:
+        affected_ids = sorted(get_affected_event_ids("earthquakes", affected_loc_id))
+        if not affected_ids:
+            return pd.DataFrame()
+        placeholders = ", ".join("?" for _ in affected_ids)
+        where.append(f'"event_id" IN ({placeholders})')
+        params.extend(affected_ids)
+
+    sql = "SELECT * FROM read_parquet(?)"
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+
+    if limit is not None and limit > 0:
+        sql += ' ORDER BY "magnitude" DESC NULLS LAST LIMIT ?'
+        params.append(limit)
+
+    return run_df(sql, params)
+
+
 @router.get("/api/earthquakes/geojson")
 async def get_earthquakes_geojson(
     year: int = None,
@@ -52,32 +117,40 @@ async def get_earthquakes_geojson(
     affected_loc_id: str = None,
 ):
     """Get earthquakes as GeoJSON points for map display."""
-    import pandas as pd
-
     try:
         events_path = GLOBAL_DIR / "disasters/earthquakes/events.parquet"
         if not events_path.exists():
             return msgpack_error("Earthquake data not available", 404)
 
-        df = pd.read_parquet(events_path)
-        df = ensure_year_column(df)
-
-        if year is not None and "year" in df.columns:
-            df = df[df["year"] == year]
-        elif start is not None or end is not None:
-            df = filter_by_time_range(df, start, end)
-        if min_magnitude is not None:
-            df = df[df["magnitude"] >= min_magnitude]
-
-        df = apply_location_filters(
-            df,
-            "earthquakes",
+        df = _load_earthquakes_duckdb(
+            year=year,
+            start=start,
+            end=end,
+            min_magnitude=min_magnitude,
+            limit=limit,
             loc_prefix=loc_prefix,
             affected_loc_id=affected_loc_id,
         )
+        if df.empty and not duckdb_available():
+            df = pd.read_parquet(events_path)
+            df = ensure_year_column(df)
 
-        if limit is not None and limit > 0:
-            df = df.nlargest(limit, "magnitude")
+            if year is not None and "year" in df.columns:
+                df = df[df["year"] == year]
+            elif start is not None or end is not None:
+                df = filter_by_time_range(df, start, end)
+            if min_magnitude is not None:
+                df = df[df["magnitude"] >= min_magnitude]
+
+            df = apply_location_filters(
+                df,
+                "earthquakes",
+                loc_prefix=loc_prefix,
+                affected_loc_id=affected_loc_id,
+            )
+
+            if limit is not None and limit > 0:
+                df = df.nlargest(limit, "magnitude")
 
         features = build_geojson_features(df, get_earthquake_property_builders())
         return msgpack_response({"type": "FeatureCollection", "features": features})
@@ -90,21 +163,20 @@ async def get_earthquakes_geojson(
 @router.get("/api/earthquakes/sequence/{sequence_id}")
 async def get_earthquake_sequence(sequence_id: str, min_magnitude: float = None):
     """Get all earthquakes in a specific aftershock sequence."""
-    import pandas as pd
-
     try:
         events_path = GLOBAL_DIR / "disasters/earthquakes/events.parquet"
         if not events_path.exists():
             return msgpack_error("Earthquake data not available", 404)
 
-        df = pd.read_parquet(events_path)
-        df = df[df["sequence_id"] == sequence_id]
+        df = _load_earthquakes_duckdb(sequence_id=sequence_id, min_magnitude=min_magnitude)
+        if df.empty and not duckdb_available():
+            df = pd.read_parquet(events_path)
+            df = df[df["sequence_id"] == sequence_id]
+            if min_magnitude is not None:
+                df = df[df["magnitude"] >= min_magnitude]
 
         if len(df) == 0:
             return msgpack_error(f"Sequence {sequence_id} not found", 404)
-
-        if min_magnitude is not None:
-            df = df[df["magnitude"] >= min_magnitude]
 
         df = ensure_year_column(df)
         features = build_geojson_features(df, get_earthquake_property_builders())
@@ -126,24 +198,34 @@ async def get_earthquake_sequence(sequence_id: str, min_magnitude: float = None)
 @router.get("/api/earthquakes/aftershocks/{event_id}")
 async def get_earthquake_aftershocks(event_id: str, min_magnitude: float = None):
     """Get mainshock + aftershocks for a specific event ID."""
-    import pandas as pd
-
     try:
         events_path = GLOBAL_DIR / "disasters/earthquakes/events.parquet"
         if not events_path.exists():
             return msgpack_error("Earthquake data not available", 404)
 
-        df = pd.read_parquet(events_path)
+        if duckdb_available():
+            mainshock_df = _load_earthquakes_duckdb(event_id=event_id)
+            if len(mainshock_df) == 0:
+                return msgpack_error(f"Event {event_id} not found", 404)
+            aftershocks_df = _load_earthquakes_duckdb(mainshock_id=event_id, min_magnitude=min_magnitude)
+            result_df = pd.concat([mainshock_df, aftershocks_df], ignore_index=True)
+            if min_magnitude is not None:
+                result_df = result_df[(result_df["event_id"] == event_id) | (result_df["magnitude"] >= min_magnitude)]
+        else:
+            df = pd.read_parquet(events_path)
 
-        mainshock_df = df[df["event_id"] == event_id]
+            mainshock_df = df[df["event_id"] == event_id]
+            if len(mainshock_df) == 0:
+                return msgpack_error(f"Event {event_id} not found", 404)
+
+            aftershocks_df = df[df["mainshock_id"] == event_id]
+            result_df = pd.concat([mainshock_df, aftershocks_df], ignore_index=True)
+
+            if min_magnitude is not None:
+                result_df = result_df[result_df["magnitude"] >= min_magnitude]
+
         if len(mainshock_df) == 0:
             return msgpack_error(f"Event {event_id} not found", 404)
-
-        aftershocks_df = df[df["mainshock_id"] == event_id]
-        result_df = pd.concat([mainshock_df, aftershocks_df], ignore_index=True)
-
-        if min_magnitude is not None:
-            result_df = result_df[result_df["magnitude"] >= min_magnitude]
 
         result_df = ensure_year_column(result_df)
         features = build_geojson_features(result_df, get_earthquake_property_builders())
@@ -166,3 +248,68 @@ async def get_earthquake_aftershocks(event_id: str, min_magnitude: float = None)
         logger.error(f"Error fetching aftershocks for {event_id}: {e}")
         return msgpack_error(str(e), 500)
 
+
+@router.get("/api/earthquakes/{event_id}/related-tsunamis")
+async def get_related_tsunamis_for_earthquake(event_id: str):
+    """Return tsunami events linked to an earthquake through links.parquet."""
+    try:
+        events_path = GLOBAL_DIR / "disasters/earthquakes/events.parquet"
+        tsunami_path = GLOBAL_DIR / "disasters/tsunamis/events.parquet"
+        links_path = GLOBAL_DIR / "disasters/links.parquet"
+        if not events_path.exists() or not tsunami_path.exists() or not links_path.exists():
+            return msgpack_error("Linked disaster data not available", 404)
+
+        eq_df = _load_earthquakes_duckdb(event_id=event_id)
+        if eq_df.empty and not duckdb_available():
+            eq_df = pd.read_parquet(events_path)
+            eq_df = eq_df[eq_df["event_id"] == event_id]
+        if eq_df.empty:
+            return msgpack_error(f"Earthquake event {event_id} not found", 404)
+
+        event_row = eq_df.iloc[0]
+        source_loc_id = event_row.get("loc_id")
+        if not source_loc_id:
+            return msgpack_response({"event_id": event_id, "related_tsunamis": [], "count": 0})
+
+        target_loc_ids = select_linked_loc_ids(
+            links_path,
+            source_column="parent_loc_id",
+            source_loc_id=source_loc_id,
+            target_column="child_loc_id",
+            link_type="triggered",
+        )
+        if not target_loc_ids:
+            return msgpack_response({"event_id": event_id, "related_tsunamis": [], "count": 0})
+
+        ts_df = select_filtered_event_rows(
+            tsunami_path,
+            in_filters={"loc_id": target_loc_ids},
+            order_by_desc="year",
+        )
+        if ts_df.empty and not duckdb_available():
+            ts_df = pd.read_parquet(tsunami_path)
+            ts_df = ts_df[ts_df["loc_id"].isin(target_loc_ids)]
+
+        related = []
+        for _, row in ts_df.iterrows():
+            related.append(
+                {
+                    "event_id": row.get("event_id"),
+                    "loc_id": row.get("loc_id"),
+                    "year": safe_int(row, "year"),
+                    "cause": row.get("cause"),
+                    "max_water_height_m": safe_float(row, "max_water_height_m"),
+                }
+            )
+
+        return msgpack_response(
+            {
+                "event_id": event_id,
+                "earthquake_loc_id": source_loc_id,
+                "related_tsunamis": related,
+                "count": len(related),
+            }
+        )
+    except Exception as e:
+        logger.error(f"Error fetching related tsunamis for earthquake {event_id}: {e}")
+        return msgpack_error(str(e), 500)

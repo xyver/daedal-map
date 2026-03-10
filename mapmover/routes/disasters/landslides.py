@@ -2,6 +2,7 @@
 
 from fastapi import APIRouter
 
+from mapmover.duckdb_helpers import duckdb_available, select_filtered_event_rows
 from mapmover.logging_analytics import logger
 from mapmover.paths import GLOBAL_DIR
 
@@ -60,17 +61,29 @@ async def get_landslides_geojson(
         if not events_path.exists():
             return msgpack_error("Landslide data not available", 404)
 
-        df = pd.read_parquet(events_path)
+        use_duckdb = duckdb_available()
+        if use_duckdb:
+            min_filters = {"deaths": min_deaths} if min_deaths > 0 else None
+            df = select_filtered_event_rows(
+                events_path,
+                year=year,
+                start=start,
+                end=end,
+                min_value_filters=min_filters,
+            )
+        else:
+            df = pd.read_parquet(events_path)
 
         if require_coords:
             df = df[df["latitude"].notna() & df["longitude"].notna()]
 
-        if year is not None:
-            df = df[df["year"] == year]
-        elif start is not None or end is not None:
-            df = filter_by_time_range(df, start, end)
+        if not use_duckdb:
+            if year is not None:
+                df = df[df["year"] == year]
+            elif start is not None or end is not None:
+                df = filter_by_time_range(df, start, end)
 
-        if min_deaths > 0:
+        if min_deaths > 0 and not use_duckdb:
             df["deaths_val"] = df["deaths"].fillna(0)
             df = df[df["deaths_val"] >= min_deaths]
             df = df.drop(columns=["deaths_val"])
@@ -91,4 +104,3 @@ async def get_landslides_geojson(
     except Exception as e:
         logger.error(f"Error fetching landslides GeoJSON: {e}")
         return msgpack_error(str(e), 500)
-

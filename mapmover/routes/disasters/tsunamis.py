@@ -3,6 +3,12 @@
 from fastapi import APIRouter
 
 from mapmover.disaster_filters import apply_location_filters, get_default_min_year
+from mapmover.duckdb_helpers import (
+    duckdb_available,
+    select_filtered_event_rows,
+    select_linked_loc_ids,
+    select_rows_by_exact_value,
+)
 from mapmover.logging_analytics import logger
 from mapmover.paths import GLOBAL_DIR
 
@@ -67,14 +73,26 @@ async def get_tsunamis_geojson(
         if not events_path.exists():
             return msgpack_error("Tsunami data not available", 404)
 
-        df = pd.read_parquet(events_path)
+        use_duckdb = duckdb_available()
+        if use_duckdb:
+            min_filters = {"year": min_year} if year is None and (start is None and end is None) and min_year is not None else None
+            df = select_filtered_event_rows(
+                events_path,
+                year=year,
+                start=start,
+                end=end,
+                min_value_filters=min_filters,
+            )
+        else:
+            df = pd.read_parquet(events_path)
 
-        if year is not None:
-            df = df[df["year"] == year]
-        elif start is not None or end is not None:
-            df = filter_by_time_range(df, start, end)
-        elif min_year is not None:
-            df = df[df["year"] >= min_year]
+        if not use_duckdb:
+            if year is not None:
+                df = df[df["year"] == year]
+            elif start is not None or end is not None:
+                df = filter_by_time_range(df, start, end)
+            elif min_year is not None:
+                df = df[df["year"] >= min_year]
         if cause is not None:
             df = df[df["cause"].str.lower() == cause.lower()]
 
@@ -113,15 +131,21 @@ async def get_tsunami_runups(event_id: str):
         if not runups_path.exists():
             return msgpack_error("Runup data not available", 404)
 
-        runups_df = pd.read_parquet(runups_path)
-        runups_df = runups_df[runups_df["event_id"] == event_id]
+        if duckdb_available():
+            runups_df = select_rows_by_exact_value(runups_path, "event_id", event_id)
+        else:
+            runups_df = pd.read_parquet(runups_path)
+            runups_df = runups_df[runups_df["event_id"] == event_id]
         if len(runups_df) == 0:
             return msgpack_error(f"No runups found for event {event_id}", 404)
 
         source_event = None
         if events_path.exists():
-            events_df = pd.read_parquet(events_path)
-            event_row = events_df[events_df["event_id"] == event_id]
+            if duckdb_available():
+                event_row = select_rows_by_exact_value(events_path, "event_id", event_id)
+            else:
+                events_df = pd.read_parquet(events_path)
+                event_row = events_df[events_df["event_id"] == event_id]
             if len(event_row) > 0:
                 row = event_row.iloc[0]
                 source_event = {
@@ -192,8 +216,11 @@ async def get_tsunami_animation_data(event_id: str):
         if not events_path.exists() or not runups_path.exists():
             return msgpack_error("Tsunami data not available", 404)
 
-        events_df = pd.read_parquet(events_path)
-        event_row = events_df[events_df["event_id"] == event_id]
+        if duckdb_available():
+            event_row = select_rows_by_exact_value(events_path, "event_id", event_id)
+        else:
+            events_df = pd.read_parquet(events_path)
+            event_row = events_df[events_df["event_id"] == event_id]
         if len(event_row) == 0:
             return msgpack_error(f"Event {event_id} not found", 404)
         row = event_row.iloc[0]
@@ -215,8 +242,11 @@ async def get_tsunami_animation_data(event_id: str):
             }
         ]
 
-        runups_df = pd.read_parquet(runups_path)
-        runups_df = runups_df[runups_df["event_id"] == event_id]
+        if duckdb_available():
+            runups_df = select_rows_by_exact_value(runups_path, "event_id", event_id)
+        else:
+            runups_df = pd.read_parquet(runups_path)
+            runups_df = runups_df[runups_df["event_id"] == event_id]
         for _, rrow in runups_df.iterrows():
             if pd.isna(rrow["latitude"]) or pd.isna(rrow["longitude"]):
                 continue
@@ -276,7 +306,19 @@ async def get_nearby_tsunamis(
         if not tsunamis_path.exists():
             return msgpack_error("Tsunami data not available", 404)
 
-        df = pd.read_parquet(tsunamis_path)
+        if timestamp:
+            df = select_filtered_event_rows(tsunamis_path, start=timestamp)
+            if df.empty and not duckdb_available():
+                df = pd.read_parquet(tsunamis_path)
+        elif year:
+            df = select_filtered_event_rows(tsunamis_path, year=year)
+            if df.empty and not duckdb_available():
+                df = pd.read_parquet(tsunamis_path)
+        else:
+            df = select_filtered_event_rows(tsunamis_path)
+            if df.empty and not duckdb_available():
+                df = pd.read_parquet(tsunamis_path)
+
         df = filter_by_proximity(df, lat, lon, radius_km)
 
         if timestamp:
@@ -315,3 +357,70 @@ async def get_nearby_tsunamis(
         logger.error(f"Error finding nearby tsunamis: {e}")
         return msgpack_error(str(e), 500)
 
+
+@router.get("/api/tsunamis/{event_id}/related-earthquakes")
+async def get_related_earthquakes_for_tsunami(event_id: str):
+    """Return earthquake events linked to a tsunami through links.parquet."""
+    import pandas as pd
+
+    try:
+        tsunami_path = GLOBAL_DIR / "disasters/tsunamis/events.parquet"
+        eq_path = GLOBAL_DIR / "disasters/earthquakes/events.parquet"
+        links_path = GLOBAL_DIR / "disasters/links.parquet"
+        if not tsunami_path.exists() or not eq_path.exists() or not links_path.exists():
+            return msgpack_error("Linked disaster data not available", 404)
+
+        tsunami_df = select_rows_by_exact_value(tsunami_path, "event_id", event_id)
+        if tsunami_df.empty and not duckdb_available():
+            tsunami_df = pd.read_parquet(tsunami_path)
+            tsunami_df = tsunami_df[tsunami_df["event_id"] == event_id]
+        if tsunami_df.empty:
+            return msgpack_error(f"Tsunami event {event_id} not found", 404)
+
+        event_row = tsunami_df.iloc[0]
+        source_loc_id = event_row.get("loc_id")
+        if not source_loc_id:
+            return msgpack_response({"event_id": event_id, "related_earthquakes": [], "count": 0})
+
+        target_loc_ids = select_linked_loc_ids(
+            links_path,
+            source_column="child_loc_id",
+            source_loc_id=source_loc_id,
+            target_column="parent_loc_id",
+            link_type="triggered",
+        )
+        if not target_loc_ids:
+            return msgpack_response({"event_id": event_id, "related_earthquakes": [], "count": 0})
+
+        eq_df = select_filtered_event_rows(
+            eq_path,
+            in_filters={"loc_id": target_loc_ids},
+            order_by_desc="magnitude",
+        )
+        if eq_df.empty and not duckdb_available():
+            eq_df = pd.read_parquet(eq_path)
+            eq_df = eq_df[eq_df["loc_id"].isin(target_loc_ids)]
+
+        related = []
+        for _, row in eq_df.iterrows():
+            related.append(
+                {
+                    "event_id": row.get("event_id"),
+                    "loc_id": row.get("loc_id"),
+                    "year": safe_int(row, "year"),
+                    "magnitude": safe_float(row, "magnitude"),
+                    "place": row.get("place"),
+                }
+            )
+
+        return msgpack_response(
+            {
+                "event_id": event_id,
+                "tsunami_loc_id": source_loc_id,
+                "related_earthquakes": related,
+                "count": len(related),
+            }
+        )
+    except Exception as e:
+        logger.error(f"Error fetching related earthquakes for tsunami {event_id}: {e}")
+        return msgpack_error(str(e), 500)

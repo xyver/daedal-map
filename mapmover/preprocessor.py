@@ -292,8 +292,15 @@ def load_parquet_names(iso3: str) -> dict:
 
     try:
         import pandas as pd
+        from .duckdb_helpers import duckdb_available, select_columns_from_parquet
         # Only load name columns, not geometry (much faster)
-        df = pd.read_parquet(parquet_file, columns=['loc_id', 'name', 'parent_id', 'admin_level'])
+        columns = ['loc_id', 'name', 'parent_id', 'admin_level']
+        if duckdb_available():
+            df = select_columns_from_parquet(parquet_file, columns)
+            if df.empty:
+                df = pd.read_parquet(parquet_file, columns=columns)
+        else:
+            df = pd.read_parquet(parquet_file, columns=columns)
 
         names_dict = {}
         for _, row in df.iterrows():
@@ -1147,6 +1154,16 @@ def detect_reference_lookup(query: str) -> Optional[dict]:
     """
     query_lower = query.lower()
 
+    # Currency analytics should route to data orders, not reference lookup.
+    currency_analytics_terms = [
+        "against usd", "vs usd", "drop", "depreciat", "appreciat", "volatility",
+        "single year", "over the last", "trend", "time series", "change", "percent",
+        "over time", "since ", "between ", "compare"
+    ]
+    is_currency_analytics = ("currency" in query_lower or "fx" in query_lower or "exchange rate" in query_lower) and any(
+        term in query_lower for term in currency_analytics_terms
+    )
+
     # System help pattern - "how do you work?", "what can you do?", "help", etc.
     help_keywords = [
         "how do you work", "how does this work", "what can you do",
@@ -1217,7 +1234,7 @@ def detect_reference_lookup(query: str) -> Optional[dict]:
         return result
 
     # Currency pattern - use scraped World Factbook data
-    if any(kw in query_lower for kw in ["currency", "money in", "monetary unit"]):
+    if any(kw in query_lower for kw in ["currency", "money in", "monetary unit"]) and not is_currency_analytics:
         result = {
             "type": "currency",
             "file": str(REFERENCE_DIR / "currencies_scraped.json"),
@@ -1916,6 +1933,16 @@ def detect_intent_candidates(query: str, source_candidates: dict, location_candi
 
     # Check for reference lookup (capital, currency, language, etc.)
     ref_score = 0.0
+    # Don't classify analytical FX/currency requests as reference lookup.
+    currency_analytics_terms = [
+        "against usd", "vs usd", "drop", "depreciat", "appreciat", "volatility",
+        "single year", "over the last", "trend", "time series", "change", "percent",
+        "over time", "since ", "between ", "compare"
+    ]
+    is_currency_analytics = ("currency" in query_lower or "fx" in query_lower or "exchange rate" in query_lower) and any(
+        term in query_lower for term in currency_analytics_terms
+    )
+
     ref_patterns = [
         (r"capital of", 0.9),
         (r"what.+capital", 0.9),
@@ -1926,6 +1953,8 @@ def detect_intent_candidates(query: str, source_candidates: dict, location_candi
         (r"goal\s*\d+", 0.8),
     ]
     for pattern, score in ref_patterns:
+        if pattern == r"currency" and is_currency_analytics:
+            continue
         if re.search(pattern, query_lower):
             ref_score = max(ref_score, score)
 

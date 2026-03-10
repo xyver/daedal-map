@@ -6,6 +6,7 @@ from pathlib import Path
 
 from fastapi import APIRouter
 
+from mapmover.duckdb_helpers import duckdb_available, select_columns_from_parquet
 from mapmover.logging_analytics import logger
 from mapmover.paths import GLOBAL_DIR
 from mapmover.routes.disasters.helpers import msgpack_error, msgpack_response
@@ -104,7 +105,13 @@ async def get_weather_grid(tier: str, variables: str, year: int = None):
 
         for filepath in files:
             try:
-                df = pd.read_parquet(filepath, columns=columns_to_read)
+                parquet_path = Path(filepath)
+                if duckdb_available():
+                    df = select_columns_from_parquet(parquet_path, columns_to_read)
+                    if df.empty:
+                        df = pd.read_parquet(filepath, columns=columns_to_read)
+                else:
+                    df = pd.read_parquet(filepath, columns=columns_to_read)
 
                 path_parts = Path(filepath).parts
                 if actual_tier == "monthly":

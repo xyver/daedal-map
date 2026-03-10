@@ -10,6 +10,7 @@ This replaces the old multi-LLM chat system with a simpler "Fast Food Kiosk" mod
 """
 
 import json
+from datetime import datetime
 from pathlib import Path
 from anthropic import Anthropic
 from dotenv import load_dotenv
@@ -134,11 +135,19 @@ def build_system_prompt(catalog: dict, conversions: dict) -> str:
 
     # Group sources by scope
     sources_by_scope = {}
+    chat_first_sources = []
+    hybrid_sources = []
     for src in catalog["sources"]:
         scope = src.get("scope", "global")
         if scope not in sources_by_scope:
             sources_by_scope[scope] = []
         sources_by_scope[scope].append(src)
+
+        interaction_mode = src.get("interaction_mode", "order_first")
+        if interaction_mode == "chat_first":
+            chat_first_sources.append(src.get("source_id"))
+        elif interaction_mode == "hybrid":
+            hybrid_sources.append(src.get("source_id"))
 
     # Build sources text with grouping of related sources
     sources_text = ""
@@ -253,6 +262,14 @@ WHEN USER ASKS about a specific source ("what's in X?" or "show me metrics"):
 - If there are more than 10, say "There are X metrics available, here are the key ones:" and show 5-8
 - Mention the year range available
 - Say "I can get them all" or "I can show any of these" (never mention "*" or wildcards to the user)
+
+INTERACTION POLICY:
+- Default for all sources: order_first.
+- If a source has interaction_mode="chat_first", prefer conversational/reference response unless user explicitly asks to map/query metrics.
+- If a source has interaction_mode="hybrid", use judgment between chat and order.
+- For source-backed analytical questions, prefer returning type="order" over type="chat".
+- chat_first sources: {", ".join(sorted(chat_first_sources)) if chat_first_sources else "(none)"}
+- hybrid sources: {", ".join(sorted(hybrid_sources)) if hybrid_sources else "(none)"}
 
 ORDER FORMAT (JSON when user requests data):
 ```json
@@ -493,6 +510,7 @@ def validate_order_item(item: dict) -> dict:
     Validate an order item against actual source metadata.
     Returns item with validation info added.
     """
+    _normalize_item_year_fields(item)
     source_id = item.get("source_id")
     metric = item.get("metric")
     year = item.get("year")
@@ -557,8 +575,8 @@ def validate_order_item(item: dict) -> dict:
 
     # Check year is in range
     temp = metadata.get("temporal_coverage", {})
-    start_year = temp.get("start")
-    end_year = temp.get("end")
+    start_year = _coerce_year(temp.get("start"))
+    end_year = _coerce_year(temp.get("end"))
 
     # Handle single year
     if year and start_year and end_year:
@@ -626,6 +644,102 @@ def validate_order(order: dict) -> dict:
     order["items"] = validated_items
     order["_all_valid"] = all_valid
     return order
+
+
+def _coerce_year(value):
+    """Best-effort conversion for LLM year values (e.g., '2020', 2020.0, '2020-01-01')."""
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        return int(float(text))
+    except (TypeError, ValueError):
+        if len(text) >= 4 and text[:4].isdigit():
+            return int(text[:4])
+        return None
+
+
+def _normalize_item_year_fields(item: dict) -> None:
+    """Normalize year fields on order item in place."""
+    year = _coerce_year(item.get("year"))
+    year_start = _coerce_year(item.get("year_start"))
+    year_end = _coerce_year(item.get("year_end"))
+
+    if year is not None:
+        item["year"] = year
+    if year_start is not None:
+        item["year_start"] = year_start
+    if year_end is not None:
+        item["year_end"] = year_end
+
+
+def _build_currency_fallback_order(hints: dict | None) -> dict | None:
+    """
+    Build a narrow fallback FX order when LLM returns chat for an analytical currency query.
+    This is intentionally constrained to avoid hijacking genuine conversational asks.
+    """
+    if not hints:
+        return None
+
+    query = str(hints.get("original_query") or "").strip()
+    if not query:
+        return None
+
+    query_lower = query.lower()
+    currency_terms = ("currency", "fx", "exchange rate", "usd", "yen", "lira", "peso")
+    analytics_terms = (
+        "compare", "vs", "against", "drop", "depreciat", "appreciat",
+        "volatility", "trend", "moved", "move", "above", "below", "over the last"
+    )
+    fact_lookup_terms = ("what currency", "currency of", "uses which currency", "monetary unit")
+
+    if not any(t in query_lower for t in currency_terms):
+        return None
+    if any(t in query_lower for t in fact_lookup_terms) and not any(t in query_lower for t in analytics_terms):
+        return None
+    if not any(t in query_lower for t in analytics_terms):
+        return None
+
+    item = {
+        "source_id": "fx_usd_historical",
+        "metric": "local_per_usd",
+        "metric_label": "Local currency per USD",
+        "region": None,
+    }
+
+    location = hints.get("location") or {}
+    iso3 = location.get("iso3")
+    if iso3:
+        item["region"] = iso3
+
+    time_hint = hints.get("time") or {}
+    year = _coerce_year(time_hint.get("year"))
+    year_start = _coerce_year(time_hint.get("year_start"))
+    year_end = _coerce_year(time_hint.get("year_end"))
+
+    if year_start is not None and year_end is not None:
+        item["year_start"] = year_start
+        item["year_end"] = year_end
+    elif year is not None:
+        item["year"] = year
+    elif "last decade" in query_lower or "10-year" in query_lower or "10 year" in query_lower:
+        current_year = datetime.utcnow().year
+        item["year_start"] = current_year - 10
+        item["year_end"] = current_year
+
+    order = {
+        "items": [item],
+        "summary": "FX trend analysis request",
+    }
+    return validate_order(order)
 
 
 def parse_llm_response(content: str, hints: dict = None) -> dict:
@@ -705,6 +819,13 @@ def parse_llm_response(content: str, hints: dict = None) -> dict:
 
         elif response_type == "chat":
             # General chat response
+            fallback_order = _build_currency_fallback_order(hints)
+            if fallback_order:
+                return {
+                    "type": "order",
+                    "order": fallback_order,
+                    "summary": fallback_order.get("summary", "FX trend analysis request"),
+                }
             return {
                 "type": "chat",
                 "message": parsed_json.get("message", "")
@@ -731,6 +852,13 @@ def parse_llm_response(content: str, hints: dict = None) -> dict:
         return {"type": "clarify", "message": message}
 
     # Otherwise it's a chat response
+    fallback_order = _build_currency_fallback_order(hints)
+    if fallback_order:
+        return {
+            "type": "order",
+            "order": fallback_order,
+            "summary": fallback_order.get("summary", "FX trend analysis request"),
+        }
     return {"type": "chat", "message": content}
 
 

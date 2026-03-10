@@ -40,6 +40,8 @@ async def chat_endpoint(req: Request):
                 order_str = json.dumps(confirmed_order, sort_keys=True)
                 request_key = hashlib.md5(order_str.encode()).hexdigest()[:16]
                 result = execute_order(confirmed_order)
+                if result.get("type") == "error":
+                    return msgpack_response({"type": "error", "message": result.get("message", "Order execution failed.")}, status_code=400)
 
                 if result.get("action") == "remove":
                     logger.info(f"Removal order executed: {result.get('count')} items from {result.get('source_id')}")
@@ -114,7 +116,7 @@ async def chat_endpoint(req: Request):
                     "data_type": result.get("data_type"),
                     "source_id": result.get("source_id"),
                     "geojson": filtered_geojson,
-                    "summary": result["summary"],
+                    "summary": result.get("summary", ""),
                     "count": delta_count,
                     "sources": result.get("sources", []),
                 }
@@ -232,6 +234,7 @@ async def chat_endpoint(req: Request):
         result = interpret_request(query, chat_history, hints=hints)
 
         if result["type"] == "order":
+            result_summary = result.get("summary") or result.get("order", {}).get("summary") or "Data request"
             processed = postprocess_order(result["order"], hints)
             if processed.get("metric_warning") and not body.get("force_metrics"):
                 display_items = get_display_items(processed.get("items", []), processed.get("derived_specs", []))
@@ -243,7 +246,7 @@ async def chat_endpoint(req: Request):
                         "metric_count": processed["metric_warning"]["count"],
                         "pending_order": full_order,
                         "full_order": processed,
-                        "summary": result.get("summary"),
+                        "summary": result_summary,
                     }
                 )
 
@@ -253,7 +256,7 @@ async def chat_endpoint(req: Request):
                     "type": "order",
                     "order": {**result["order"], "items": display_items, "derived_specs": processed.get("derived_specs", [])},
                     "full_order": processed,
-                    "summary": result["summary"],
+                    "summary": result_summary,
                     "validation_summary": processed.get("validation_summary"),
                     "all_valid": processed.get("all_valid", True),
                 }
@@ -470,13 +473,14 @@ async def chat_stream_endpoint(req: Request):
             if result["type"] == "order":
                 yield f"data: {json.dumps({'stage': 'preparing', 'message': 'Preparing your order...'})}\n\n"
                 await asyncio.sleep(0)
+                result_summary = result.get("summary") or result.get("order", {}).get("summary") or "Data request"
                 processed = postprocess_order(result["order"], hints)
                 display_items = get_display_items(processed.get("items", []), processed.get("derived_specs", []))
                 final_result = {
                     "type": "order",
                     "order": {**result["order"], "items": display_items, "derived_specs": processed.get("derived_specs", [])},
                     "full_order": processed,
-                    "summary": result["summary"],
+                    "summary": result_summary,
                     "validation_summary": processed.get("validation_summary"),
                     "all_valid": processed.get("all_valid", True),
                 }

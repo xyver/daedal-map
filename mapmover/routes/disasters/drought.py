@@ -2,6 +2,7 @@
 
 from fastapi import APIRouter
 
+from mapmover.duckdb_helpers import duckdb_available, select_filtered_event_rows
 from mapmover.logging_analytics import logger
 from mapmover.paths import COUNTRIES_DIR
 
@@ -35,21 +36,34 @@ async def get_drought_geojson(
         if not data_path.exists():
             return msgpack_error("Drought data not available", 404)
 
-        df = pd.read_parquet(data_path)
-
-        if year is not None:
-            df = df[df["year"] == year]
-        elif start is not None or end is not None:
-            df = filter_by_time_range(df, start, end)
-        else:
-            if min_year:
-                df = df[df["year"] >= min_year]
-            if max_year:
+        use_duckdb = duckdb_available()
+        if use_duckdb:
+            df = select_filtered_event_rows(
+                data_path,
+                year=year,
+                start=start,
+                end=end,
+                min_value_filters={"year": min_year} if year is None and start is None and end is None and min_year else None,
+                exact_filters={"severity": severity.upper()} if severity else None,
+            )
+            if max_year and "year" in df.columns:
                 df = df[df["year"] <= max_year]
+        else:
+            df = pd.read_parquet(data_path)
+
+            if year is not None:
+                df = df[df["year"] == year]
+            elif start is not None or end is not None:
+                df = filter_by_time_range(df, start, end)
+            else:
+                if min_year:
+                    df = df[df["year"] >= min_year]
+                if max_year:
+                    df = df[df["year"] <= max_year]
 
         if month is not None:
             df = df[df["month"] == month]
-        if severity:
+        if severity and not use_duckdb:
             df = df[df["severity"] == severity.upper()]
 
         df = df.sort_values("severity_code")

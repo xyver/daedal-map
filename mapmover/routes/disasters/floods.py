@@ -3,6 +3,7 @@
 from fastapi import APIRouter
 
 from mapmover.disaster_filters import apply_location_filters, get_default_min_year
+from mapmover.duckdb_helpers import duckdb_available, select_filtered_event_rows
 from mapmover.logging_analytics import logger
 from mapmover.paths import GLOBAL_DIR
 
@@ -37,17 +38,30 @@ async def get_floods_geojson(
         if not events_path.exists():
             return msgpack_error("Flood data not available", 404)
 
-        df = pd.read_parquet(events_path)
-
-        if year is not None:
-            df = df[df["year"] == year]
-        elif start is not None or end is not None:
-            df = filter_by_time_range(df, start, end)
+        use_duckdb = duckdb_available()
+        if use_duckdb:
+            if year is not None:
+                df = select_filtered_event_rows(events_path, year=year)
+            elif start is not None or end is not None:
+                df = select_filtered_event_rows(events_path, start=start, end=end)
+            else:
+                df = select_filtered_event_rows(
+                    events_path,
+                    min_value_filters={"year": min_year} if min_year is not None else None,
+                )
+                if max_year is not None and "year" in df.columns:
+                    df = df[df["year"] <= max_year]
         else:
-            if min_year:
-                df = df[df["year"] >= min_year]
-            if max_year:
-                df = df[df["year"] <= max_year]
+            df = pd.read_parquet(events_path)
+            if year is not None:
+                df = df[df["year"] == year]
+            elif start is not None or end is not None:
+                df = filter_by_time_range(df, start, end)
+            else:
+                if min_year:
+                    df = df[df["year"] >= min_year]
+                if max_year:
+                    df = df[df["year"] <= max_year]
 
         df = apply_location_filters(
             df,

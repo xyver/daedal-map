@@ -26,6 +26,17 @@ from .geometry_handlers import (
 from .paths import DATA_ROOT, CATALOG_PATH
 from .data_loading import load_source_metadata
 from .aggregation_system import build_aggregation_spec, apply_temporal_aggregation
+from .duckdb_helpers import (
+    can_query_event_source,
+    parquet_columns,
+    quote_ident,
+    resolve_event_parquet_path,
+    run_df,
+    select_columns_from_parquet,
+    select_event_ids_by_regions,
+    select_peak_positions_by_storm_ids,
+    select_rows,
+)
 
 CONVERSIONS_PATH = Path(__file__).parent / "conversions.json"
 REFERENCE_DIR = Path(__file__).parent / "reference"
@@ -35,6 +46,45 @@ _conversions_cache = None
 _iso_codes_cache = None
 _usa_admin_cache = None
 _catalog_cache = None
+
+
+def _coerce_year(value) -> Optional[int]:
+    """Best-effort year coercion for LLM-generated order fields."""
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        return int(float(text))
+    except (TypeError, ValueError):
+        # Accept ISO-ish strings like "2015-01-01" by reading first 4 digits.
+        if len(text) >= 4 and text[:4].isdigit():
+            return int(text[:4])
+        return None
+
+
+def _normalize_year_filters(item: dict) -> tuple[Optional[int], Optional[int], Optional[int]]:
+    """Normalize year/year_start/year_end in-place and return coerced values."""
+    year = _coerce_year(item.get("year"))
+    year_start = _coerce_year(item.get("year_start"))
+    year_end = _coerce_year(item.get("year_end"))
+
+    if year is not None:
+        item["year"] = year
+    if year_start is not None:
+        item["year_start"] = year_start
+    if year_end is not None:
+        item["year_end"] = year_end
+
+    return year, year_start, year_end
 
 
 def _load_catalog() -> dict:
@@ -142,7 +192,10 @@ def _load_geometry_from_source(source_info: dict, filter_regions: set = None) ->
     logger.info(f"Loading geometry from dual source: {parquet_path}")
 
     try:
-        df = pd.read_parquet(parquet_path)
+        columns = ["loc_id", "name", "geometry", "parent_id"]
+        df = select_columns_from_parquet(parquet_path, columns)
+        if df.empty:
+            df = pd.read_parquet(parquet_path, columns=columns)
 
         # Filter by parent region if specified (e.g., filter_region = "USA-FL" for Florida ZIPs)
         # parent_id is at county level (USA-FL-12001), so use prefix matching
@@ -208,7 +261,10 @@ def execute_geometry_overlay(geometry_overlay: dict, filter_loc_ids: list = None
     logger.info(f"Loading geometry overlay from {parquet_path}")
 
     try:
-        df = pd.read_parquet(parquet_path)
+        columns = ["loc_id", "name", "geometry", "parent_id"]
+        df = select_columns_from_parquet(parquet_path, columns)
+        if df.empty:
+            df = pd.read_parquet(parquet_path, columns=columns)
         logger.info(f"Loaded {len(df)} features from {parquet_path}")
 
         # Filter by region if specified
@@ -393,7 +449,9 @@ def load_source_data(source_id: str) -> tuple:
             parquet_path = candidate
             break
 
-    df = pd.read_parquet(parquet_path)
+    df = select_rows(parquet_path)
+    if df.empty:
+        df = pd.read_parquet(parquet_path)
 
     # Load metadata
     meta_path = source_dir / "metadata.json"
@@ -426,12 +484,29 @@ def load_event_data(source_id: str, event_file_key: str = "events") -> tuple:
 
     if not file_info:
         # Try common event file names as fallback
-        fallback_names = ["events.parquet", "fires.parquet", "positions.parquet"]
+        fallback_names = [
+            f"{event_file_key}.parquet",
+            "events.parquet",
+            "fires.parquet",
+            "positions.parquet",
+            "storms.parquet",
+        ]
         for name in fallback_names:
             candidate = source_dir / name
             if candidate.exists():
-                df = pd.read_parquet(candidate)
+                df = select_rows(candidate)
+                if df.empty:
+                    df = pd.read_parquet(candidate)
                 return df, metadata
+        # Last-resort fallback: use any parquet in source dir (excluding obvious aggregate tables).
+        parquet_candidates = sorted(source_dir.glob("*.parquet"))
+        for candidate in parquet_candidates:
+            if candidate.name in ("all_countries.parquet", "all_regions.parquet"):
+                continue
+            df = select_rows(candidate)
+            if df.empty:
+                df = pd.read_parquet(candidate)
+            return df, metadata
         raise ValueError(f"No event file '{event_file_key}' found in {source_id}")
 
     # Get filename - handle both 'name' and 'filename' keys
@@ -443,7 +518,103 @@ def load_event_data(source_id: str, event_file_key: str = "events") -> tuple:
     if not parquet_path.exists():
         raise ValueError(f"Event file not found: {parquet_path}")
 
-    df = pd.read_parquet(parquet_path)
+    df = select_rows(parquet_path)
+    if df.empty:
+        df = pd.read_parquet(parquet_path)
+    return df, metadata
+
+
+def _resolve_event_parquet_path(source_id: str, event_file_key: str = "events") -> tuple[Path, dict]:
+    """Resolve event parquet path from source metadata without loading the full dataframe."""
+    source_dir = _get_source_path(source_id)
+    return resolve_event_parquet_path(source_dir, event_file_key)
+
+
+def _duckdb_can_query_events(source_id: str) -> bool:
+    return can_query_event_source(source_id)
+
+
+def _load_event_data_duckdb(source_id: str, item: dict, event_file_key: str = "events") -> tuple[pd.DataFrame, dict]:
+    """
+    Load and filter event data with DuckDB for first-pass migration sources.
+
+    This keeps the response-building contract unchanged while moving the heavy
+    parquet scan/filter work into DuckDB.
+    """
+    parquet_path, metadata = _resolve_event_parquet_path(source_id, event_file_key)
+
+    available_cols = parquet_columns(parquet_path)
+
+    region = item.get("region")
+    year, year_start, year_end = _normalize_year_filters(item)
+    filters = item.get("filters", {}) or {}
+    requested_limit = item.get("limit")
+    time_col = "year" if "year" in available_cols else ("timestamp" if "timestamp" in available_cols else None)
+    loc_id_col = "loc_id" if "loc_id" in available_cols else None
+
+    where_clauses = []
+    params = [str(parquet_path)]
+
+    if year_start is not None and year_end is not None:
+        if time_col == "year":
+            where_clauses.append('"year" BETWEEN ? AND ?')
+            params.extend([year_start, year_end])
+        elif time_col:
+            where_clauses.append(f"year({quote_ident(time_col)}) BETWEEN ? AND ?")
+            params.extend([year_start, year_end])
+    elif year is not None:
+        if time_col == "year":
+            where_clauses.append('"year" = ?')
+            params.append(year)
+        elif time_col:
+            where_clauses.append(f"year({quote_ident(time_col)}) = ?")
+            params.append(year)
+
+    region_codes = expand_region(region)
+    if region_codes and loc_id_col:
+        us_state_prefixes = sorted(c for c in region_codes if c.startswith("USA-"))
+        country_codes = sorted(c for c in region_codes if not c.startswith("USA-"))
+        region_parts = []
+
+        for prefix in us_state_prefixes:
+            region_parts.append(f"{quote_ident(loc_id_col)} LIKE ?")
+            params.append(f"{prefix}%")
+
+        if country_codes:
+            placeholders = ", ".join("?" for _ in country_codes)
+            region_parts.append(f"split_part({quote_ident(loc_id_col)}, '-', 1) IN ({placeholders})")
+            params.extend(country_codes)
+
+        if region_parts:
+            where_clauses.append("(" + " OR ".join(region_parts) + ")")
+
+    for field, value in filters.items():
+        if field.endswith("_min"):
+            col = field[:-4]
+            if col in available_cols:
+                where_clauses.append(f"{quote_ident(col)} >= ?")
+                params.append(value)
+        elif field.endswith("_max"):
+            col = field[:-4]
+            if col in available_cols:
+                where_clauses.append(f"{quote_ident(col)} <= ?")
+                params.append(value)
+        elif field in available_cols:
+            where_clauses.append(f"{quote_ident(field)} = ?")
+            params.append(value)
+
+    sql = "SELECT * FROM read_parquet(?)"
+    if where_clauses:
+        sql += " WHERE " + " AND ".join(where_clauses)
+
+    limit = min(requested_limit or DEFAULT_EVENT_LIMIT, MAX_EVENT_LIMIT)
+    sig_col = metadata.get("significance_column")
+    if sig_col and sig_col in available_cols:
+        sql += f" ORDER BY {quote_ident(sig_col)} DESC NULLS LAST"
+    sql += " LIMIT ?"
+    params.append(limit)
+
+    df = run_df(sql, params)
     return df, metadata
 
 
@@ -562,18 +733,16 @@ def _extract_date_window(item: dict) -> tuple[Optional[pd.Timestamp], Optional[p
     date_start = pd.to_datetime(item.get("date_start"), errors="coerce")
     date_end = pd.to_datetime(item.get("date_end"), errors="coerce")
 
-    year = item.get("year")
-    year_start = item.get("year_start")
-    year_end = item.get("year_end")
+    year, year_start, year_end = _normalize_year_filters(item)
 
     if pd.isna(date_start) and year_start:
-        date_start = pd.Timestamp(int(year_start), 1, 1)
+        date_start = pd.Timestamp(year_start, 1, 1)
     if pd.isna(date_end) and year_end:
-        date_end = pd.Timestamp(int(year_end), 12, 31)
+        date_end = pd.Timestamp(year_end, 12, 31)
     if pd.isna(date_start) and year:
-        date_start = pd.Timestamp(int(year), 1, 1)
+        date_start = pd.Timestamp(year, 1, 1)
     if pd.isna(date_end) and year:
-        date_end = pd.Timestamp(int(year), 12, 31)
+        date_end = pd.Timestamp(year, 12, 31)
 
     return (None if pd.isna(date_start) else date_start, None if pd.isna(date_end) else date_end)
 
@@ -614,7 +783,9 @@ def _load_fx_with_aggregation(source_id: str, item: dict, metadata: dict) -> tup
         return None, trace
 
     try:
-        fx = pd.read_parquet(daily_path, columns=["date", "loc_id", "local_per_usd"])
+        fx = select_columns_from_parquet(daily_path, ["date", "loc_id", "local_per_usd"])
+        if fx.empty:
+            fx = pd.read_parquet(daily_path, columns=["date", "loc_id", "local_per_usd"])
     except Exception as e:
         trace["applied"] = {"path": "all_countries.parquet", "mode": "fallback_read_error", "error": str(e)}
         return None, trace
@@ -866,15 +1037,16 @@ def execute_event_order(order: dict) -> dict:
     source_id = item.get("source_id")
     event_file_key = item.get("event_file", "events")
     region = item.get("region")
-    year_start = item.get("year_start")
-    year_end = item.get("year_end")
-    year = item.get("year")
+    year, year_start, year_end = _normalize_year_filters(item)
     filters = item.get("filters", {})
     requested_limit = item.get("limit")
 
     # Load event data
     try:
-        df, metadata = load_event_data(source_id, event_file_key)
+        if _duckdb_can_query_events(source_id):
+            df, metadata = _load_event_data_duckdb(source_id, item, event_file_key)
+        else:
+            df, metadata = load_event_data(source_id, event_file_key)
     except Exception as e:
         return {
             "type": "error",
@@ -885,6 +1057,21 @@ def execute_event_order(order: dict) -> dict:
 
     event_type = _detect_event_type(source_id)
     print(f"Event mode: {source_id} -> {event_type}, {len(df)} raw events")
+
+    if (
+        source_id == "hurricanes"
+        and event_file_key == "storms"
+        and ("latitude" not in df.columns or "longitude" not in df.columns)
+    ):
+        positions_path, _ = _resolve_event_parquet_path(source_id, "positions")
+        peak_positions = select_peak_positions_by_storm_ids(positions_path, df.get("storm_id", []).tolist())
+        if not peak_positions.empty:
+            df = df.merge(
+                peak_positions[["storm_id", "latitude", "longitude"]],
+                on="storm_id",
+                how="left",
+                suffixes=("", "_pos"),
+            )
 
     # Find coordinate columns
     lat_col, lon_col = _get_coordinate_columns(df)
@@ -902,61 +1089,64 @@ def execute_event_order(order: dict) -> dict:
     # Find ID column
     id_col = _get_id_column(df, event_type)
 
-    # Apply year filter
-    if year_start and year_end:
-        if "year" in df.columns:
-            df = df[(df["year"] >= year_start) & (df["year"] <= year_end)]
-        elif time_col:
-            # Extract year from timestamp
-            df["_year"] = pd.to_datetime(df[time_col]).dt.year
-            df = df[(df["_year"] >= year_start) & (df["_year"] <= year_end)]
-    elif year:
-        if "year" in df.columns:
-            df = df[df["year"] == year]
-        elif time_col:
-            df["_year"] = pd.to_datetime(df[time_col]).dt.year
-            df = df[df["_year"] == year]
+    if not _duckdb_can_query_events(source_id):
+        # Apply year filter
+        if year_start and year_end:
+            if "year" in df.columns:
+                df = df[(df["year"] >= year_start) & (df["year"] <= year_end)]
+            elif time_col:
+                # Extract year from timestamp
+                df["_year"] = pd.to_datetime(df[time_col]).dt.year
+                df = df[(df["_year"] >= year_start) & (df["_year"] <= year_end)]
+        elif year:
+            if "year" in df.columns:
+                df = df[df["year"] == year]
+            elif time_col:
+                df["_year"] = pd.to_datetime(df[time_col]).dt.year
+                df = df[df["_year"] == year]
 
-    # Apply region filter
-    region_codes = expand_region(region)
-    if region_codes and "loc_id" in df.columns:
-        # Check for US state filtering
-        us_state_prefixes = [c for c in region_codes if c.startswith("USA-")]
-        country_codes = [c for c in region_codes if not c.startswith("USA-")]
+        # Apply region filter
+        region_codes = expand_region(region)
+        if region_codes and "loc_id" in df.columns:
+            # Check for US state filtering
+            us_state_prefixes = [c for c in region_codes if c.startswith("USA-")]
+            country_codes = [c for c in region_codes if not c.startswith("USA-")]
 
-        if us_state_prefixes:
-            mask = df["loc_id"].str.startswith(tuple(us_state_prefixes), na=False)
-            df = df[mask]
-        elif country_codes:
-            df["_country"] = df["loc_id"].str.split("-").str[0]
-            df = df[df["_country"].isin(country_codes)]
+            if us_state_prefixes:
+                mask = df["loc_id"].str.startswith(tuple(us_state_prefixes), na=False)
+                df = df[mask]
+            elif country_codes:
+                df["_country"] = df["loc_id"].str.split("-").str[0]
+                df = df[df["_country"].isin(country_codes)]
 
-    # Apply filters (e.g., magnitude_min, category)
-    for field, value in filters.items():
-        if field.endswith("_min"):
-            col = field[:-4]
-            if col in df.columns:
-                df = df[df[col] >= value]
-        elif field.endswith("_max"):
-            col = field[:-4]
-            if col in df.columns:
-                df = df[df[col] <= value]
-        elif field in df.columns:
-            df = df[df[field] == value]
+        # Apply filters (e.g., magnitude_min, category)
+        for field, value in filters.items():
+            if field.endswith("_min"):
+                col = field[:-4]
+                if col in df.columns:
+                    df = df[df[col] >= value]
+            elif field.endswith("_max"):
+                col = field[:-4]
+                if col in df.columns:
+                    df = df[df[col] <= value]
+            elif field in df.columns:
+                df = df[df[field] == value]
 
-    print(f"  After filters: {len(df)} events")
+        print(f"  After filters: {len(df)} events")
 
-    # Apply limit (use requested limit, capped at max)
-    limit = min(requested_limit or DEFAULT_EVENT_LIMIT, MAX_EVENT_LIMIT)
+        # Apply limit (use requested limit, capped at max)
+        limit = min(requested_limit or DEFAULT_EVENT_LIMIT, MAX_EVENT_LIMIT)
 
-    if len(df) > limit:
-        # Sort by significance column from metadata and take top N
-        sig_col = _get_significance_column(source_id)
-        if sig_col and sig_col in df.columns:
-            df = df.nlargest(limit, sig_col)
-        else:
-            df = df.head(limit)
-        print(f"  Limited to {limit} events (sorted by {sig_col or 'order'})")
+        if len(df) > limit:
+            # Sort by significance column from metadata and take top N
+            sig_col = _get_significance_column(source_id)
+            if sig_col and sig_col in df.columns:
+                df = df.nlargest(limit, sig_col)
+            else:
+                df = df.head(limit)
+            print(f"  Limited to {limit} events (sorted by {sig_col or 'order'})")
+    else:
+        print(f"  DuckDB filtered to {len(df)} events")
 
     # Build GeoJSON features
     features = []
@@ -1076,10 +1266,13 @@ def _execute_removal_order(order: dict, items: list, source_id: str) -> dict:
     for item in items:
         if item.get("metric"):
             metric_to_remove = item.get("metric")
-        if item.get("year"):
-            years_to_remove.append(item.get("year"))
-        if item.get("year_start") and item.get("year_end"):
-            years_to_remove.extend(range(item["year_start"], item["year_end"] + 1))
+        item_year = _coerce_year(item.get("year"))
+        item_year_start = _coerce_year(item.get("year_start"))
+        item_year_end = _coerce_year(item.get("year_end"))
+        if item_year is not None:
+            years_to_remove.append(item_year)
+        if item_year_start is not None and item_year_end is not None:
+            years_to_remove.extend(range(item_year_start, item_year_end + 1))
     years_to_remove = list(set(years_to_remove))
 
     # Get session cache
@@ -1158,7 +1351,15 @@ def _get_event_ids_by_region(source_id: str, regions: list) -> list:
         if not parquet_files:
             return []
 
-        df = pd.read_parquet(parquet_files[0])
+        if _duckdb_can_query_events(source_id):
+            event_ids = select_event_ids_by_regions(parquet_files[0], regions)
+            logger.info(f"Found {len(event_ids)} event_ids matching regions {regions} in {source_id} via DuckDB")
+            return event_ids
+
+        columns = ["loc_id", "parent_id"]
+        df = select_columns_from_parquet(parquet_files[0], columns)
+        if df.empty:
+            df = pd.read_parquet(parquet_files[0], columns=columns)
 
         if "event_id" not in df.columns:
             return []
@@ -1200,8 +1401,11 @@ def _get_loc_ids_by_region(source_id: str, regions: list) -> list:
             logger.warning(f"No parquet files found for source: {source_id}")
             return []
 
-        # Load and filter by parent_id
-        df = pd.read_parquet(parquet_files[0])
+        # Load only needed columns for region matching
+        columns = ["loc_id", "parent_id"]
+        df = select_columns_from_parquet(parquet_files[0], columns)
+        if df.empty:
+            df = pd.read_parquet(parquet_files[0], columns=columns)
 
         if "parent_id" not in df.columns:
             logger.warning(f"No parent_id column in {source_id}")
@@ -1370,12 +1574,15 @@ def execute_order(order: dict) -> dict:
         source_id = item.get("source_id")
         return _get_source_data_type(source_id) == "events" if source_id else False
 
-    # If any item is events type, route entire order to event pipeline
-    # (mixed orders with events+metrics should be split by chat before sending)
-    if any(is_event_item(item) for item in items):
-        result = execute_event_order(order)
+    # If any item is events type, route to event pipeline.
+    # For mixed event+metric orders, execute only the event subset here
+    # to avoid trying to load metric sources as event files.
+    event_items = [it for it in items if is_event_item(it)]
+    if event_items:
+        event_order = {**order, "items": event_items}
+        result = execute_event_order(event_order)
         result["data_type"] = "events"
-        result["source_id"] = primary_source_id
+        result["source_id"] = event_items[0].get("source_id")
         return result
 
     # Note: Geometry orders (dual sources like ZCTA) go through metrics pipeline
@@ -1427,9 +1634,7 @@ def execute_order(order: dict) -> dict:
         source_id = item.get("source_id")
         metric = item.get("metric")
         region = item.get("region")
-        year = item.get("year")
-        year_start = item.get("year_start")
-        year_end = item.get("year_end")
+        year, year_start, year_end = _normalize_year_filters(item)
         sort_spec = item.get("sort")
 
         # Track requested range for comparison with actual data

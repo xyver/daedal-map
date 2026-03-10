@@ -3,6 +3,7 @@
 from fastapi import APIRouter
 
 from mapmover.disaster_filters import apply_location_filters, get_default_min_year
+from mapmover.duckdb_helpers import duckdb_available, select_filtered_partitioned_rows, select_rows
 from mapmover.logging_analytics import logger
 from mapmover.paths import COUNTRIES_DIR, GLOBAL_DIR
 
@@ -63,7 +64,6 @@ async def get_wildfires_geojson(
     """Get wildfires as GeoJSON for map display."""
     import json as json_lib
     import pandas as pd
-    import pyarrow as pa
     import pyarrow.parquet as pq
 
     if min_year is None:
@@ -118,7 +118,9 @@ async def get_wildfires_geojson(
 
         if loc_prefix is None or loc_prefix.startswith("USA"):
             if usa_fires_path.exists():
-                usa_df = pd.read_parquet(usa_fires_path)
+                usa_df = select_rows(usa_fires_path)
+                if usa_df.empty:
+                    usa_df = pd.read_parquet(usa_fires_path)
                 usa_df["timestamp"] = pd.to_datetime(usa_df["timestamp"], errors="coerce")
                 usa_df["year"] = usa_df["timestamp"].dt.year
                 if year is not None:
@@ -148,7 +150,9 @@ async def get_wildfires_geojson(
 
         if loc_prefix is None or loc_prefix.startswith("CAN"):
             if can_fires_path.exists():
-                can_df = pd.read_parquet(can_fires_path)
+                can_df = select_rows(can_fires_path)
+                if can_df.empty:
+                    can_df = pd.read_parquet(can_fires_path)
                 can_df["timestamp"] = pd.to_datetime(can_df["timestamp"], errors="coerce")
                 can_df["year"] = can_df["timestamp"].dt.year
                 if year is not None:
@@ -170,35 +174,48 @@ async def get_wildfires_geojson(
 
         if loc_prefix is None or (not loc_prefix.startswith("USA") and not loc_prefix.startswith("CAN")):
             if global_by_year_path.exists():
-                columns = base_columns + (["land_cover"] if "land_cover" not in base_columns else [])
-                if include_perimeter:
-                    columns.append("perimeter")
-
-                all_tables = []
+                year_files = []
                 for yr in years_to_load:
                     year_file = global_by_year_path / f"fires_{yr}_enriched.parquet"
                     if not year_file.exists():
                         year_file = global_by_year_path / f"fires_{yr}.parquet"
-                    if not year_file.exists():
-                        continue
+                    if year_file.exists():
+                        year_files.append(year_file)
 
-                    filters = [("area_km2", ">=", min_area_km2)] if min_area_km2 is not None else None
-                    try:
-                        table = pq.read_table(
-                            year_file,
-                            columns=[c for c in columns if c != "land_cover"],
-                            filters=filters,
-                        )
-                        if table.num_rows > 0:
-                            all_tables.append(table)
-                    except Exception:
-                        table = pq.read_table(year_file, filters=filters)
-                        if table.num_rows > 0:
-                            all_tables.append(table)
+                global_df = pd.DataFrame()
+                if year_files and duckdb_available():
+                    global_df = select_filtered_partitioned_rows(
+                        year_files,
+                        min_value_filters={"area_km2": min_area_km2} if min_area_km2 is not None else None,
+                    )
 
-                if all_tables:
-                    combined = pa.concat_tables(all_tables)
-                    global_df = combined.to_pandas()
+                if global_df.empty and year_files:
+                    all_tables = []
+                    columns = base_columns + (["land_cover"] if "land_cover" not in base_columns else [])
+                    if include_perimeter:
+                        columns.append("perimeter")
+                    for year_file in year_files:
+                        filters = [("area_km2", ">=", min_area_km2)] if min_area_km2 is not None else None
+                        try:
+                            table = pq.read_table(
+                                year_file,
+                                columns=[c for c in columns if c != "land_cover"],
+                                filters=filters,
+                            )
+                            if table.num_rows > 0:
+                                all_tables.append(table)
+                        except Exception:
+                            table = pq.read_table(year_file, filters=filters)
+                            if table.num_rows > 0:
+                                all_tables.append(table)
+
+                    if all_tables:
+                        import pyarrow as pa
+
+                        combined = pa.concat_tables(all_tables)
+                        global_df = combined.to_pandas()
+
+                if not global_df.empty:
                     global_df["timestamp"] = pd.to_datetime(global_df["timestamp"], errors="coerce")
                     global_df["year"] = global_df["timestamp"].dt.year
 

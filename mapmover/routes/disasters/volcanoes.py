@@ -1,8 +1,10 @@
 """Volcano and eruption disaster endpoints."""
 
 from fastapi import APIRouter
+import pandas as pd
 
 from mapmover.disaster_filters import apply_location_filters
+from mapmover.duckdb_helpers import duckdb_available, select_filtered_event_rows, select_rows
 from mapmover.logging_analytics import logger
 from mapmover.paths import GLOBAL_DIR
 
@@ -62,14 +64,14 @@ def get_volcano_catalog_property_builders():
 @router.get("/api/volcanoes/geojson")
 async def get_volcanoes_geojson(active_only: bool = None):
     """Get volcanoes as GeoJSON points for map display."""
-    import pandas as pd
-
     try:
         volcanoes_path = GLOBAL_DIR / "disasters/volcanoes/volcanoes.parquet"
         if not volcanoes_path.exists():
             return msgpack_error("Volcano data not available", 404)
 
-        df = pd.read_parquet(volcanoes_path)
+        df = select_rows(volcanoes_path)
+        if df.empty:
+            df = pd.read_parquet(volcanoes_path)
         features = build_geojson_features(df, get_volcano_catalog_property_builders())
 
         return msgpack_response({"type": "FeatureCollection", "features": features})
@@ -90,33 +92,52 @@ async def get_eruptions_geojson(
     affected_loc_id: str = None,
 ):
     """Get volcanic eruptions as GeoJSON points for map display."""
-    import pandas as pd
-
     try:
         eruptions_path = GLOBAL_DIR / "disasters/volcanoes/events.parquet"
         if not eruptions_path.exists():
             return msgpack_error("Eruption data not available", 404)
 
-        df = pd.read_parquet(eruptions_path)
-        df = ensure_year_column(df)
-
-        if year is not None and "year" in df.columns:
-            df = df[df["year"] == year]
-        elif start is not None or end is not None:
-            df = filter_by_time_range(df, start, end)
-        elif min_year is not None and "year" in df.columns:
-            df = df[df["year"] >= min_year]
-        if min_vei is not None and "vei" in df.columns:
-            df = df[df["vei"] >= min_vei]
-        if exclude_ongoing and "is_ongoing" in df.columns:
-            df = df[df["is_ongoing"] != True]
-
-        df = apply_location_filters(
-            df,
-            "volcanoes",
-            loc_prefix=loc_prefix,
-            affected_loc_id=affected_loc_id,
+        df = select_filtered_event_rows(
+            eruptions_path,
+            year=year,
+            start=start,
+            end=end,
+            min_value_filters={"VEI": min_vei},
+            like_filters={"loc_id": f"{loc_prefix}%"} if loc_prefix else None,
         )
+        if df.empty and not duckdb_available():
+            df = pd.read_parquet(eruptions_path)
+            df = ensure_year_column(df)
+
+            if year is not None and "year" in df.columns:
+                df = df[df["year"] == year]
+            elif start is not None or end is not None:
+                df = filter_by_time_range(df, start, end)
+            elif min_year is not None and "year" in df.columns:
+                df = df[df["year"] >= min_year]
+            if min_vei is not None and "VEI" in df.columns:
+                df = df[df["VEI"] >= min_vei]
+            if exclude_ongoing and "is_ongoing" in df.columns:
+                df = df[df["is_ongoing"] != True]
+
+            df = apply_location_filters(
+                df,
+                "volcanoes",
+                loc_prefix=loc_prefix,
+                affected_loc_id=affected_loc_id,
+            )
+        else:
+            if min_year is not None and "year" in df.columns:
+                df = df[df["year"] >= min_year]
+            if exclude_ongoing and "is_ongoing" in df.columns:
+                df = df[df["is_ongoing"] != True]
+            if affected_loc_id is not None and not df.empty:
+                df = apply_location_filters(
+                    df,
+                    "volcanoes",
+                    loc_prefix=None,
+                    affected_loc_id=affected_loc_id,
+                )
 
         features = build_geojson_features(df, get_eruption_property_builders())
         return msgpack_response({"type": "FeatureCollection", "features": features})
@@ -137,14 +158,23 @@ async def get_nearby_volcanoes(
     min_vei: int = None,
 ):
     """Find volcanic eruptions near a location within a time window."""
-    import pandas as pd
-
     try:
         eruptions_path = GLOBAL_DIR / "disasters/volcanoes/events.parquet"
         if not eruptions_path.exists():
             return msgpack_error("Volcano data not available", 404)
 
-        df = pd.read_parquet(eruptions_path)
+        if timestamp:
+            df = select_filtered_event_rows(eruptions_path, start=timestamp)
+            if df.empty and not duckdb_available():
+                df = pd.read_parquet(eruptions_path)
+        elif year:
+            df = select_filtered_event_rows(eruptions_path, year=year)
+            if df.empty and not duckdb_available():
+                df = pd.read_parquet(eruptions_path)
+        else:
+            df = select_filtered_event_rows(eruptions_path)
+            if df.empty and not duckdb_available():
+                df = pd.read_parquet(eruptions_path)
         df = filter_by_proximity(df, lat, lon, radius_km)
 
         if timestamp:
@@ -190,3 +220,42 @@ async def get_nearby_volcanoes(
         logger.error(f"Error finding nearby volcanoes: {e}")
         return msgpack_error(str(e), 500)
 
+
+@router.get("/api/volcanoes/{event_id}/related-earthquakes")
+async def get_related_earthquakes_for_volcano(event_id: str):
+    """Return linked earthquake event IDs stored on a volcano eruption event."""
+    try:
+        eruptions_path = GLOBAL_DIR / "disasters/volcanoes/events.parquet"
+        if not eruptions_path.exists():
+            return msgpack_error("Volcano data not available", 404)
+
+        df = select_filtered_event_rows(
+            eruptions_path,
+            exact_filters={"event_id": event_id},
+            limit=1,
+        )
+        if df.empty:
+            df = pd.read_parquet(eruptions_path)
+            df = df[df["event_id"] == event_id].head(1)
+
+        if df.empty:
+            return msgpack_error(f"Volcano event {event_id} not found", 404)
+
+        row = df.iloc[0]
+        raw_ids = row.get("earthquake_event_ids")
+        if raw_ids is None or (hasattr(pd, "isna") and pd.isna(raw_ids)):
+            earthquake_ids = []
+        else:
+            earthquake_ids = [s.strip() for s in str(raw_ids).split(",") if s and s.strip()]
+
+        return msgpack_response(
+            {
+                "event_id": event_id,
+                "volcano_name": row.get("volcano_name"),
+                "earthquake_event_ids": earthquake_ids,
+                "count": len(earthquake_ids),
+            }
+        )
+    except Exception as e:
+        logger.error(f"Error fetching related earthquakes for volcano {event_id}: {e}")
+        return msgpack_error(str(e), 500)

@@ -36,6 +36,7 @@ import logging
 from pathlib import Path
 
 from .paths import DATA_ROOT, CATALOG_PATH, GEOMETRY_DIR, COUNTRIES_DIR
+from .duckdb_helpers import select_rows
 
 logger = logging.getLogger("mapmover")
 
@@ -230,7 +231,9 @@ def load_geometry_for_country(iso3: str):
         country_geom_path = countries_folder / iso3 / "geometry.parquet"
         if country_geom_path.exists():
             try:
-                gdf = pd.read_parquet(country_geom_path)
+                gdf = select_rows(country_geom_path)
+                if gdf.empty:
+                    gdf = pd.read_parquet(country_geom_path)
                 logger.debug(f"Loaded {len(gdf)} features from {country_geom_path}")
                 return gdf, None
             except Exception as e:
@@ -254,7 +257,9 @@ def load_geometry_for_country(iso3: str):
         gadm_path = geometry_folder / f"{iso3}.parquet"
         if gadm_path.exists():
             try:
-                gdf = pd.read_parquet(gadm_path)
+                gdf = select_rows(gadm_path)
+                if gdf.empty:
+                    gdf = pd.read_parquet(gadm_path)
                 logger.debug(f"Loaded {len(gdf)} features from GADM {gadm_path}")
                 return gdf, crosswalk
             except Exception as e:
@@ -294,15 +299,55 @@ def fetch_geometries_by_loc_ids(loc_ids: list) -> dict:
     all_features = []
 
     for country, lids in country_loc_ids.items():
-        # Load geometry using 3-tier fallback
-        gdf, crosswalk = load_geometry_for_country(country)
+        countries_folder = get_countries_folder()
+        geometry_folder = get_geometry_folder()
+        country_geom_path = countries_folder / country / "geometry.parquet" if countries_folder else None
+        crosswalk_path = countries_folder / country / "crosswalk.json" if countries_folder else None
+        fallback_geom_path = geometry_folder / f"{country}.parquet" if geometry_folder else None
 
-        if gdf is None:
+        parquet_path = None
+        crosswalk = None
+        uses_crosswalk = False
+        if country_geom_path and country_geom_path.exists():
+            parquet_path = country_geom_path
+        elif crosswalk_path and crosswalk_path.exists() and fallback_geom_path and fallback_geom_path.exists():
+            parquet_path = fallback_geom_path
+            uses_crosswalk = True
+            try:
+                with open(crosswalk_path, "r", encoding="utf-8") as f:
+                    crosswalk = json_module.load(f)
+            except Exception as e:
+                logger.warning(f"Error loading crosswalk {crosswalk_path}: {e}")
+        elif fallback_geom_path and fallback_geom_path.exists():
+            parquet_path = fallback_geom_path
+
+        if parquet_path is None:
             logger.warning(f"No geometry found for {country}")
             continue
 
-        # Build lookup set for requested loc_ids
         remaining_lids = set(lids)
+        requested_ids = set(remaining_lids)
+        if uses_crosswalk and crosswalk:
+            mappings = crosswalk.get("mappings", {})
+            requested_ids.update(mappings.get(loc_id) for loc_id in remaining_lids if mappings.get(loc_id))
+
+        gdf = select_rows(
+            parquet_path,
+            columns=["loc_id", "name", "admin_level", "parent_id", "geometry"],
+            in_filters={"loc_id": sorted(requested_ids)},
+        )
+        if gdf.empty:
+            # Fall back to the old whole-file load path if the selective read fails.
+            gdf, crosswalk = load_geometry_for_country(country)
+        elif uses_crosswalk and crosswalk:
+            mappings = crosswalk.get("mappings", {})
+            reverse_map = {v: k for k, v in mappings.items()}
+            gdf["local_loc_id"] = gdf["loc_id"].map(reverse_map)
+
+        if gdf is None or len(gdf) == 0:
+            logger.warning(f"No geometry rows found for {country}")
+            continue
+
         found_lids = set()
 
         try:

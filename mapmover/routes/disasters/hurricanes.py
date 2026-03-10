@@ -3,6 +3,7 @@
 from fastapi import APIRouter
 
 from mapmover.disaster_filters import apply_location_filters, get_default_min_year
+from mapmover.duckdb_helpers import duckdb_available, select_filtered_event_rows, select_rows_by_exact_value
 from mapmover.logging_analytics import logger
 from mapmover.paths import GLOBAL_DIR
 
@@ -10,6 +11,27 @@ from .helpers import filter_by_time_range, msgpack_error, msgpack_response
 
 
 router = APIRouter()
+
+
+CAT_ORDER = {"TD": 0, "TS": 1, "Cat1": 2, "Cat2": 3, "Cat3": 4, "Cat4": 5, "Cat5": 6}
+
+
+def _apply_storm_filters_pandas(storms_df, *, year=None, start=None, end=None, min_year=None, basin=None, min_category=None):
+    if year is not None:
+        storms_df = storms_df[storms_df["year"] == year]
+    elif start is not None or end is not None:
+        storms_df = filter_by_time_range(storms_df, start, end, time_col="start_date")
+    elif min_year is not None:
+        storms_df = storms_df[storms_df["year"] >= min_year]
+
+    if basin is not None:
+        storms_df = storms_df[storms_df["basin"] == basin.upper()]
+
+    if min_category is not None:
+        min_cat_val = CAT_ORDER.get(min_category, 0)
+        storms_df = storms_df[storms_df["max_category"].map(lambda x: CAT_ORDER.get(x, 0) >= min_cat_val)]
+
+    return storms_df
 
 
 @router.get("/api/storms/geojson")
@@ -36,23 +58,30 @@ async def get_storms_geojson(
         if not storms_path.exists():
             return msgpack_error("Storm data not available", 404)
 
-        storms_df = pd.read_parquet(storms_path)
-        positions_df = pd.read_parquet(positions_path)
-
-        if year is not None:
-            storms_df = storms_df[storms_df["year"] == year]
-        elif start is not None or end is not None:
-            storms_df = filter_by_time_range(storms_df, start, end, time_col="start_date")
-        elif min_year is not None:
-            storms_df = storms_df[storms_df["year"] >= min_year]
-
-        if basin is not None:
-            storms_df = storms_df[storms_df["basin"] == basin.upper()]
-
-        if min_category is not None:
-            cat_order = {"TD": 0, "TS": 1, "Cat1": 2, "Cat2": 3, "Cat3": 4, "Cat4": 5, "Cat5": 6}
-            min_cat_val = cat_order.get(min_category, 0)
-            storms_df = storms_df[storms_df["max_category"].map(lambda x: cat_order.get(x, 0) >= min_cat_val)]
+        use_duckdb = duckdb_available()
+        if use_duckdb:
+            storms_df = select_filtered_event_rows(
+                storms_path,
+                year=year,
+                start=start,
+                end=end,
+                min_value_filters={"year": min_year} if year is None and start is None and end is None and min_year is not None else None,
+                exact_filters={"basin": basin.upper()} if basin is not None else None,
+            )
+            if min_category is not None and "max_category" in storms_df.columns:
+                min_cat_val = CAT_ORDER.get(min_category, 0)
+                storms_df = storms_df[storms_df["max_category"].map(lambda x: CAT_ORDER.get(x, 0) >= min_cat_val)]
+        else:
+            storms_df = pd.read_parquet(storms_path)
+            storms_df = _apply_storm_filters_pandas(
+                storms_df,
+                year=year,
+                start=start,
+                end=end,
+                min_year=min_year,
+                basin=basin,
+                min_category=min_category,
+            )
 
         storms_df = apply_location_filters(
             storms_df,
@@ -64,7 +93,14 @@ async def get_storms_geojson(
         )
 
         storm_ids = storms_df["storm_id"].tolist()
-        positions_subset = positions_df[positions_df["storm_id"].isin(storm_ids)].copy()
+        if use_duckdb:
+            positions_subset = select_filtered_event_rows(
+                positions_path,
+                in_filters={"storm_id": storm_ids},
+            )
+        else:
+            positions_df = pd.read_parquet(positions_path)
+            positions_subset = positions_df[positions_df["storm_id"].isin(storm_ids)].copy()
         positions_subset = positions_subset.dropna(subset=["latitude", "longitude"])
         if positions_subset.empty:
             return msgpack_response({"type": "FeatureCollection", "features": [], "count": 0})
@@ -129,13 +165,19 @@ async def get_storm_track(storm_id: str):
         if not positions_path.exists():
             return msgpack_error("Storm data not available", 404)
 
-        positions_df = pd.read_parquet(positions_path)
-        storm_positions = positions_df[positions_df["storm_id"] == storm_id].sort_values("timestamp")
+        if duckdb_available():
+            storm_positions = select_rows_by_exact_value(positions_path, "storm_id", storm_id, order_by="timestamp")
+        else:
+            positions_df = pd.read_parquet(positions_path)
+            storm_positions = positions_df[positions_df["storm_id"] == storm_id].sort_values("timestamp")
         if len(storm_positions) == 0:
             return msgpack_error(f"Storm {storm_id} not found", 404)
 
-        storms_df = pd.read_parquet(storms_path)
-        storm_meta = storms_df[storms_df["storm_id"] == storm_id]
+        if duckdb_available():
+            storm_meta = select_rows_by_exact_value(storms_path, "storm_id", storm_id)
+        else:
+            storms_df = pd.read_parquet(storms_path)
+            storm_meta = storms_df[storms_df["storm_id"] == storm_id]
         storm_name = storm_meta.iloc[0]["name"] if len(storm_meta) > 0 and pd.notna(storm_meta.iloc[0]["name"]) else storm_id
 
         positions = []
@@ -192,30 +234,44 @@ async def get_storm_tracks_geojson(
         if not storms_path.exists():
             return msgpack_error("Storm data not available", 404)
 
-        storms_df = pd.read_parquet(storms_path)
-        positions_df = pd.read_parquet(positions_path)
-
-        if year is not None:
-            storms_df = storms_df[storms_df["year"] == year]
-        elif start is not None or end is not None:
-            storms_df = filter_by_time_range(storms_df, start, end, time_col="start_date")
-        elif min_year is not None:
-            storms_df = storms_df[storms_df["year"] >= min_year]
-
-        if basin is not None:
-            storms_df = storms_df[storms_df["basin"] == basin.upper()]
-
-        if min_category is not None:
-            cat_order = {"TD": 0, "TS": 1, "Cat1": 2, "Cat2": 3, "Cat3": 4, "Cat4": 5, "Cat5": 6}
-            min_cat_val = cat_order.get(min_category, 0)
-            storms_df["cat_val"] = storms_df["max_category"].map(lambda x: cat_order.get(x, 0))
-            storms_df = storms_df[storms_df["cat_val"] >= min_cat_val]
-            storms_df = storms_df.drop(columns=["cat_val"])
+        use_duckdb = duckdb_available()
+        if use_duckdb:
+            storms_df = select_filtered_event_rows(
+                storms_path,
+                year=year,
+                start=start,
+                end=end,
+                min_value_filters={"year": min_year} if year is None and start is None and end is None and min_year is not None else None,
+                exact_filters={"basin": basin.upper()} if basin is not None else None,
+            )
+            if min_category is not None:
+                min_cat_val = CAT_ORDER.get(min_category, 0)
+                storms_df["cat_val"] = storms_df["max_category"].map(lambda x: CAT_ORDER.get(x, 0))
+                storms_df = storms_df[storms_df["cat_val"] >= min_cat_val]
+                storms_df = storms_df.drop(columns=["cat_val"])
+        else:
+            storms_df = pd.read_parquet(storms_path)
+            storms_df = _apply_storm_filters_pandas(
+                storms_df,
+                year=year,
+                start=start,
+                end=end,
+                min_year=min_year,
+                basin=basin,
+                min_category=min_category,
+            )
 
         storms_df = storms_df.set_index("storm_id")
         storm_ids_set = set(storms_df.index.tolist())
 
-        positions_subset = positions_df[positions_df["storm_id"].isin(storm_ids_set)].copy()
+        if use_duckdb:
+            positions_subset = select_filtered_event_rows(
+                positions_path,
+                in_filters={"storm_id": sorted(storm_ids_set)},
+            )
+        else:
+            positions_df = pd.read_parquet(positions_path)
+            positions_subset = positions_df[positions_df["storm_id"].isin(storm_ids_set)].copy()
         positions_subset = positions_subset.dropna(subset=["latitude", "longitude"])
         positions_subset = positions_subset.sort_values(["storm_id", "timestamp"])
 
@@ -270,19 +326,26 @@ async def get_storms_list(year: int = None, min_year: int = None, basin: str = N
         if not storms_path.exists():
             return msgpack_error("Storm data not available", 404)
 
-        storms_df = pd.read_parquet(storms_path)
-
-        if year is not None:
-            storms_df = storms_df[storms_df["year"] == year]
-        elif min_year is not None:
-            storms_df = storms_df[storms_df["year"] >= min_year]
-
-        if basin is not None:
-            storms_df = storms_df[storms_df["basin"] == basin.upper()]
-
-        storms_df = storms_df.sort_values("max_wind_kt", ascending=False)
-        if limit is not None and limit > 0:
-            storms_df = storms_df.head(limit)
+        if duckdb_available():
+            storms_df = select_filtered_event_rows(
+                storms_path,
+                year=year,
+                min_value_filters={"year": min_year} if year is None and min_year is not None else None,
+                exact_filters={"basin": basin.upper()} if basin is not None else None,
+                order_by_desc="max_wind_kt",
+                limit=limit,
+            )
+        else:
+            storms_df = pd.read_parquet(storms_path)
+            storms_df = _apply_storm_filters_pandas(
+                storms_df,
+                year=year,
+                min_year=min_year,
+                basin=basin,
+            )
+            storms_df = storms_df.sort_values("max_wind_kt", ascending=False)
+            if limit is not None and limit > 0:
+                storms_df = storms_df.head(limit)
 
         storms = []
         for _, storm in storms_df.iterrows():
