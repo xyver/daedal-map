@@ -6,6 +6,7 @@
  */
 
 import { postMsgpack } from '../utils/fetch.js';
+import { getAccessToken } from '../auth.js';
 
 /**
  * Get the appropriate API URL, respecting API_BASE_URL if set.
@@ -38,10 +39,14 @@ export async function sendChatRequest(payload) {
  */
 export async function sendStreamingRequest(payload, onProgress) {
   const url = getApiUrl('/chat/stream');
+  const token = getAccessToken();
 
   const response = await fetch(url, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {})
+    },
     body: JSON.stringify(payload)
   });
 

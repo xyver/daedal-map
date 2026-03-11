@@ -8,6 +8,7 @@ import msgpack
 from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
 
+from mapmover.auth_context import build_session_cache_key, get_authenticated_user
 from mapmover import logger, session_manager
 from mapmover.order_executor import execute_order
 from mapmover.order_taker import interpret_request
@@ -31,7 +32,9 @@ async def chat_endpoint(req: Request):
     try:
         body = await decode_request_body(req)
 
-        session_id = body.get("sessionId", "anonymous")
+        frontend_session_id = body.get("sessionId", "anonymous")
+        auth_user = get_authenticated_user(req)
+        session_id = build_session_cache_key(frontend_session_id, auth_user)
         cache = session_manager.get_or_create(session_id)
 
         if body.get("confirmed_order"):
@@ -326,6 +329,7 @@ async def chat_endpoint(req: Request):
                 "type": "chat",
                 "message": result.get("message", "I'm not sure how to help with that."),
                 "geojson": {"type": "FeatureCollection", "features": []},
+                "auth_user": {"id": auth_user.get("id"), "email": auth_user.get("email")} if auth_user else None,
                 "needsMoreInfo": False,
             }
         )
@@ -360,6 +364,11 @@ async def chat_stream_endpoint(req: Request):
 
     async def generate_events():
         try:
+            frontend_session_id = body.get("sessionId", "anonymous")
+            auth_user = get_authenticated_user(req)
+            session_id = build_session_cache_key(frontend_session_id, auth_user)
+            session_manager.get_or_create(session_id)
+
             if body.get("confirmed_order"):
                 yield f"data: {json.dumps({'stage': 'fetching', 'message': 'Fetching data...'})}\n\n"
                 try:

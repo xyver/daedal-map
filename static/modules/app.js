@@ -21,6 +21,7 @@ import { ModelRegistry } from './models/model-registry.js';
 import { OverlayController, setDependencies as setOverlayControllerDeps } from './overlay-controller.js';
 import { DisasterPopup, setDependencies as setDisasterPopupDeps } from './disaster-popup.js';
 import { GeometryModel, setDependencies as setGeometryDeps } from './models/model-geometry.js';
+import { AuthManager } from './auth.js';
 
 // ============================================================================
 // APP - Main application controller
@@ -122,6 +123,8 @@ export const App = {
     setOverlayControllerDeps({ MapAdapter, ModelRegistry, OverlaySelector, TimeSlider });
     setDisasterPopupDeps({ MapAdapter });
     setGeometryDeps({ MapAdapter });
+
+    await AuthManager.init();
 
     // Initialize components
     ChatManager.init();

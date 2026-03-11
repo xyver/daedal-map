@@ -475,6 +475,163 @@ class SupabaseClient:
         """Get list of regions that failed lookup. Wrapper for backwards compatibility."""
         return self.get_data_quality_issues(issue_type="missing_region", limit=limit)
 
+    # --- Control Plane: Plans ---
+
+    def get_plan(self, plan_id: str) -> Optional[Dict]:
+        """Get a plan record by id."""
+        try:
+            result = self.client.table("plans").select("*").eq("id", plan_id).execute()
+            return result.data[0] if result.data else None
+        except Exception as e:
+            print(f"Failed to get plan: {e}")
+            return None
+
+    def get_all_plans(self) -> List[Dict]:
+        """Get all active plans."""
+        try:
+            result = self.client.table("plans").select("*").eq("is_active", True).execute()
+            return result.data if result.data else []
+        except Exception as e:
+            print(f"Failed to get plans: {e}")
+            return []
+
+    # --- Control Plane: Orgs ---
+
+    def get_org(self, org_id: str) -> Optional[Dict]:
+        """Get an org by id."""
+        try:
+            result = self.client.table("orgs").select("*").eq("id", org_id).execute()
+            return result.data[0] if result.data else None
+        except Exception as e:
+            print(f"Failed to get org: {e}")
+            return None
+
+    def create_org(self, name: str, slug: str, plan_id: str = "free") -> Optional[Dict]:
+        """Create a new org."""
+        try:
+            result = self.client.table("orgs").insert({
+                "name": name,
+                "slug": slug,
+                "plan_id": plan_id,
+            }).execute()
+            return result.data[0] if result.data else None
+        except Exception as e:
+            print(f"Failed to create org: {e}")
+            return None
+
+    # --- Control Plane: Profiles ---
+
+    def get_profile(self, user_id: str) -> Optional[Dict]:
+        """Get a user profile by user_id."""
+        try:
+            result = self.client.table("profiles").select("*").eq("id", user_id).execute()
+            return result.data[0] if result.data else None
+        except Exception as e:
+            print(f"Failed to get profile: {e}")
+            return None
+
+    def upsert_profile(self, user_id: str, updates: Dict[str, Any]) -> Optional[Dict]:
+        """Update a user profile. Only call with service key."""
+        try:
+            data = {"id": user_id, **updates, "updated_at": datetime.utcnow().isoformat()}
+            result = self.client.table("profiles").upsert(data, on_conflict="id").execute()
+            return result.data[0] if result.data else None
+        except Exception as e:
+            print(f"Failed to upsert profile: {e}")
+            return None
+
+    def set_user_plan(self, user_id: str, plan_id: str) -> Optional[Dict]:
+        """Set the plan for a user. Requires service key."""
+        return self.upsert_profile(user_id, {"plan_id": plan_id})
+
+    # --- Control Plane: Memberships ---
+
+    def get_user_memberships(self, user_id: str) -> List[Dict]:
+        """Get all org memberships for a user."""
+        try:
+            result = self.client.table("memberships").select("*, orgs(*)").eq("user_id", user_id).execute()
+            return result.data if result.data else []
+        except Exception as e:
+            print(f"Failed to get memberships: {e}")
+            return []
+
+    def add_membership(self, user_id: str, org_id: str, role: str = "member") -> Optional[Dict]:
+        """Add a user to an org. Requires service key."""
+        try:
+            result = self.client.table("memberships").upsert({
+                "user_id": user_id,
+                "org_id": org_id,
+                "role": role,
+            }, on_conflict="user_id,org_id").execute()
+            return result.data[0] if result.data else None
+        except Exception as e:
+            print(f"Failed to add membership: {e}")
+            return None
+
+    # --- Control Plane: Pack Entitlements ---
+
+    def get_user_pack_entitlements(self, user_id: str) -> List[Dict]:
+        """Get all active pack entitlements for a user (direct + org-level)."""
+        try:
+            # Direct user entitlements
+            user_result = self.client.table("pack_entitlements").select("*").eq("user_id", user_id).execute()
+            user_packs = user_result.data or []
+
+            # Org-level entitlements via memberships
+            memberships = self.get_user_memberships(user_id)
+            org_packs = []
+            for m in memberships:
+                org_id = m.get("org_id")
+                if org_id:
+                    org_result = self.client.table("pack_entitlements").select("*").eq("org_id", org_id).execute()
+                    org_packs.extend(org_result.data or [])
+
+            return user_packs + org_packs
+        except Exception as e:
+            print(f"Failed to get pack entitlements: {e}")
+            return []
+
+    def grant_pack(self, pack_id: str, user_id: Optional[str] = None, org_id: Optional[str] = None,
+                   granted_by: str = "manual", expires_at: Optional[str] = None) -> Optional[Dict]:
+        """Grant a pack to a user or org. Requires service key."""
+        if not user_id and not org_id:
+            raise ValueError("user_id or org_id required")
+        try:
+            data: Dict[str, Any] = {
+                "pack_id": pack_id,
+                "granted_by": granted_by,
+            }
+            if user_id:
+                data["user_id"] = user_id
+            if org_id:
+                data["org_id"] = org_id
+            if expires_at:
+                data["expires_at"] = expires_at
+
+            conflict_col = "user_id,pack_id" if user_id else "org_id,pack_id"
+            result = self.client.table("pack_entitlements").upsert(data, on_conflict=conflict_col).execute()
+            return result.data[0] if result.data else None
+        except Exception as e:
+            print(f"Failed to grant pack: {e}")
+            return None
+
+    def get_user_entitlement_context(self, user_id: str) -> Optional[Dict]:
+        """
+        Get full entitlement context for a user: plan, shells, packs.
+        Uses the get_user_entitlement_context() Postgres function.
+        Requires service key.
+
+        Returns dict with:
+            user_id, email, plan_id, is_admin, org_id, org_ids,
+            enabled_shells, max_packs, user_packs, org_packs, org_plan_id
+        """
+        try:
+            result = self.client.rpc("get_user_entitlement_context", {"p_user_id": user_id}).execute()
+            return result.data if result.data else None
+        except Exception as e:
+            print(f"Failed to get entitlement context: {e}")
+            return None
+
     # --- Dataset Metadata ---
 
     def sync_metadata(self, filename: str, metadata: Dict[str, Any]) -> Optional[Dict]:
@@ -537,7 +694,10 @@ class SupabaseClient:
             # Try to query each table
             tables = {}
 
-            for table in ["conversation_sessions", "error_logs", "dataset_metadata", "data_quality_issues"]:
+            for table in [
+            "conversation_sessions", "error_logs", "dataset_metadata", "data_quality_issues",
+            "plans", "orgs", "profiles", "memberships", "pack_entitlements",
+        ]:
                 try:
                     result = self.client.table(table).select("id", count="exact").limit(1).execute()
                     tables[table] = {
@@ -578,6 +738,8 @@ def get_supabase_client() -> Optional[SupabaseClient]:
 
 
 # SQL to create tables (run once in Supabase SQL Editor)
+# Full schema including control-plane tables is in:
+#   county-map-private/build/supabase/control_plane_schema.sql
 CREATE_TABLES_SQL = """
 -- Conversation sessions table (primary logging - one row per user session)
 CREATE TABLE IF NOT EXISTS conversation_sessions (

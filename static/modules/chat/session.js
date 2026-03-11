@@ -4,14 +4,17 @@
  * Reusable across map app and admin dashboard.
  */
 
+import { getSessionMaxAgeMs, getStorageNamespace, isAuthenticated } from '../auth.js';
+
 // Storage keys
 const SESSION_ID_KEY = 'countymap_session_id';
 const SESSION_TIMESTAMP_KEY = 'countymap_session_timestamp';
 const CHAT_HISTORY_KEY = 'countymap_chat_history';
 const CHAT_MESSAGES_KEY = 'countymap_chat_messages';
 
-// Session expires after 24 hours of inactivity
-const MAX_AGE_MS = 24 * 60 * 60 * 1000;
+function namespacedKey(baseKey) {
+  return `${baseKey}:${getStorageNamespace()}`;
+}
 
 /**
  * Get existing session ID from localStorage or create a new one.
@@ -19,23 +22,26 @@ const MAX_AGE_MS = 24 * 60 * 60 * 1000;
  * @returns {string} Session ID
  */
 export function getOrCreateSessionId() {
-  let sessionId = localStorage.getItem(SESSION_ID_KEY);
-  const timestamp = localStorage.getItem(SESSION_TIMESTAMP_KEY);
+  const sessionKey = namespacedKey(SESSION_ID_KEY);
+  const timestampKey = namespacedKey(SESSION_TIMESTAMP_KEY);
+  let sessionId = localStorage.getItem(sessionKey);
+  const timestamp = localStorage.getItem(timestampKey);
 
   // Check if session is expired
-  const isExpired = timestamp && (Date.now() - parseInt(timestamp, 10)) > MAX_AGE_MS;
+  const isExpired = timestamp && (Date.now() - parseInt(timestamp, 10)) > getSessionMaxAgeMs();
 
   if (sessionId && !isExpired) {
     // Update timestamp on reuse
-    localStorage.setItem(SESSION_TIMESTAMP_KEY, Date.now().toString());
+    localStorage.setItem(timestampKey, Date.now().toString());
     console.log('[Session] Restored session:', sessionId);
     return sessionId;
   }
 
   // Create new session
-  sessionId = 'sess_' + Date.now() + '_' + Math.random().toString(36).substring(2, 11);
-  localStorage.setItem(SESSION_ID_KEY, sessionId);
-  localStorage.setItem(SESSION_TIMESTAMP_KEY, Date.now().toString());
+  const prefix = isAuthenticated() ? 'authsess_' : 'sess_';
+  sessionId = prefix + Date.now() + '_' + Math.random().toString(36).substring(2, 11);
+  localStorage.setItem(sessionKey, sessionId);
+  localStorage.setItem(timestampKey, Date.now().toString());
   console.log('[Session] Created new session:', sessionId);
   return sessionId;
 }
@@ -45,8 +51,8 @@ export function getOrCreateSessionId() {
  * @returns {string} New session ID (auto-created)
  */
 export function resetSessionId() {
-  localStorage.removeItem(SESSION_ID_KEY);
-  localStorage.removeItem(SESSION_TIMESTAMP_KEY);
+  localStorage.removeItem(namespacedKey(SESSION_ID_KEY));
+  localStorage.removeItem(namespacedKey(SESSION_TIMESTAMP_KEY));
   return getOrCreateSessionId();
 }
 
@@ -57,9 +63,9 @@ export function resetSessionId() {
  */
 export function saveChatState(history, messagesHtml) {
   try {
-    localStorage.setItem(CHAT_HISTORY_KEY, JSON.stringify(history));
+    localStorage.setItem(namespacedKey(CHAT_HISTORY_KEY), JSON.stringify(history));
     if (messagesHtml) {
-      localStorage.setItem(CHAT_MESSAGES_KEY, messagesHtml);
+      localStorage.setItem(namespacedKey(CHAT_MESSAGES_KEY), messagesHtml);
     }
   } catch (e) {
     console.warn('[Session] Could not save chat state:', e.message);
@@ -72,8 +78,8 @@ export function saveChatState(history, messagesHtml) {
  */
 export function restoreChatState() {
   try {
-    const historyJson = localStorage.getItem(CHAT_HISTORY_KEY);
-    const messagesHtml = localStorage.getItem(CHAT_MESSAGES_KEY);
+    const historyJson = localStorage.getItem(namespacedKey(CHAT_HISTORY_KEY));
+    const messagesHtml = localStorage.getItem(namespacedKey(CHAT_MESSAGES_KEY));
 
     if (historyJson || messagesHtml) {
       const history = historyJson ? JSON.parse(historyJson) : [];
@@ -90,6 +96,6 @@ export function restoreChatState() {
  * Clear all chat state from localStorage.
  */
 export function clearChatStorage() {
-  localStorage.removeItem(CHAT_HISTORY_KEY);
-  localStorage.removeItem(CHAT_MESSAGES_KEY);
+  localStorage.removeItem(namespacedKey(CHAT_HISTORY_KEY));
+  localStorage.removeItem(namespacedKey(CHAT_MESSAGES_KEY));
 }

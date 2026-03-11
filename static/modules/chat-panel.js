@@ -24,6 +24,7 @@ import { sendStreamingRequest, sendChatRequest } from './chat/api.js';
 import { OrderPanel } from './order/manager.js';
 import { OrderTracker as OrderTrackerClass } from './order/tracker.js';
 import * as SavedOrders from './order/saved.js';
+import { onAuthChanged } from './auth.js';
 
 // Dependencies set via setDependencies to avoid circular imports
 let MapAdapter = null;
@@ -263,6 +264,10 @@ export const ChatManager = {
 
     // Initialize order panel and tracker
     this.initOrderPanel();
+
+    onAuthChanged(() => {
+      window.location.reload();
+    });
   },
 
   /**

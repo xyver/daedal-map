@@ -5,6 +5,8 @@
  * MessagePack library loaded via CDN, available as window.MessagePack
  */
 
+import { getAccessToken, getStorageNamespace } from '../auth.js';
+
 // Get MessagePack from global scope (loaded via CDN)
 const msgpack = window.MessagePack || {};
 
@@ -26,6 +28,15 @@ const TRACKED_API_PATTERNS = [
   '/api/climate/'
 ];
 
+function namespacedKey(baseKey) {
+  return `${baseKey}:${getStorageNamespace()}`;
+}
+
+function buildAuthHeaders() {
+  const token = getAccessToken();
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
 /**
  * Check if a URL should be tracked for session recovery.
  */
@@ -38,11 +49,11 @@ function shouldTrackCall(url) {
  */
 function logApiCall(url) {
   try {
-    const calls = JSON.parse(localStorage.getItem(API_CALLS_KEY) || '[]');
+    const calls = JSON.parse(localStorage.getItem(namespacedKey(API_CALLS_KEY)) || '[]');
     // Avoid duplicates
     if (!calls.includes(url)) {
       calls.push(url);
-      localStorage.setItem(API_CALLS_KEY, JSON.stringify(calls));
+      localStorage.setItem(namespacedKey(API_CALLS_KEY), JSON.stringify(calls));
     }
   } catch (e) {
     // localStorage not available
@@ -54,7 +65,7 @@ function logApiCall(url) {
  */
 export function getApiCallsForRecovery() {
   try {
-    return JSON.parse(localStorage.getItem(API_CALLS_KEY) || '[]');
+    return JSON.parse(localStorage.getItem(namespacedKey(API_CALLS_KEY)) || '[]');
   } catch (e) {
     return [];
   }
@@ -65,7 +76,7 @@ export function getApiCallsForRecovery() {
  */
 export function clearApiCalls() {
   try {
-    localStorage.removeItem(API_CALLS_KEY);
+    localStorage.removeItem(namespacedKey(API_CALLS_KEY));
   } catch (e) {
     // Ignore
   }
@@ -78,7 +89,7 @@ export function clearApiCalls() {
  */
 export function logExecutedOrder(order) {
   try {
-    const orders = JSON.parse(localStorage.getItem(ORDERS_KEY) || '[]');
+    const orders = JSON.parse(localStorage.getItem(namespacedKey(ORDERS_KEY)) || '[]');
     // Store with timestamp and summary for display
     const record = {
       order: order,
@@ -90,7 +101,7 @@ export function logExecutedOrder(order) {
     if (orders.length > 10) {
       orders.shift();
     }
-    localStorage.setItem(ORDERS_KEY, JSON.stringify(orders));
+    localStorage.setItem(namespacedKey(ORDERS_KEY), JSON.stringify(orders));
   } catch (e) {
     console.warn('Failed to log executed order:', e);
   }
@@ -102,7 +113,7 @@ export function logExecutedOrder(order) {
  */
 export function getExecutedOrdersForRecovery() {
   try {
-    return JSON.parse(localStorage.getItem(ORDERS_KEY) || '[]');
+    return JSON.parse(localStorage.getItem(namespacedKey(ORDERS_KEY)) || '[]');
   } catch (e) {
     return [];
   }
@@ -113,7 +124,7 @@ export function getExecutedOrdersForRecovery() {
  */
 export function clearExecutedOrders() {
   try {
-    localStorage.removeItem(ORDERS_KEY);
+    localStorage.removeItem(namespacedKey(ORDERS_KEY));
   } catch (e) {
     // Ignore
   }
@@ -135,6 +146,7 @@ export async function fetchMsgpack(url, options = {}) {
     ...options,
     headers: {
       'Accept': 'application/msgpack',
+      ...buildAuthHeaders(),
       ...options.headers,
     }
   });
@@ -166,6 +178,7 @@ export async function postMsgpack(url, data) {
     method: 'POST',
     headers: {
       'Content-Type': 'application/msgpack',
+      ...buildAuthHeaders(),
     },
     body: msgpack.encode(data)
   });

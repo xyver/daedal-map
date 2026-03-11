@@ -3,12 +3,14 @@
 import csv
 import io
 import json
+import os
 from pathlib import Path
 
 import msgpack
 from fastapi import APIRouter, Request, Response
 from fastapi.responses import HTMLResponse
 
+from mapmover.auth_context import build_session_cache_key, get_authenticated_user
 from mapmover import CacheSignature, logger, session_manager
 from mapmover.order_queue import order_queue
 from mapmover.routes.disasters.helpers import msgpack_error, msgpack_response
@@ -76,6 +78,72 @@ async def get_settings():
     except Exception as e:
         logger.error(f"Error getting settings: {e}")
         return msgpack_error(str(e), 500)
+
+
+@router.get("/api/auth/config")
+async def get_auth_config():
+    """Return safe public auth configuration for the frontend."""
+    return {
+        "enabled": bool(os.getenv("SUPABASE_URL") and os.getenv("SUPABASE_ANON_KEY")),
+        "supabase_url": os.getenv("SUPABASE_URL", ""),
+        "supabase_anon_key": os.getenv("SUPABASE_ANON_KEY", ""),
+    }
+
+
+@router.get("/api/auth/me")
+async def get_auth_me(req: Request):
+    """
+    Return the current user's identity and plan info.
+
+    - Unauthenticated: returns guest defaults
+    - Authenticated without service key: returns basic identity from token
+    - Authenticated with service key: returns full profile and plan from Supabase
+    """
+    auth_user = get_authenticated_user(req)
+
+    if not auth_user:
+        return msgpack_response({
+            "authenticated": False,
+            "plan_id": "free",
+            "enabled_shells": ["simple"],
+            "max_packs": 2,
+        })
+
+    user_id = auth_user.get("id")
+    email = auth_user.get("email")
+
+    # Try to load full profile via service key
+    service_key = os.getenv("SUPABASE_SERVICE_KEY", "").strip()
+    if service_key:
+        try:
+            from supabase_client import SupabaseClient
+            supa = SupabaseClient()
+            context = supa.get_user_entitlement_context(user_id)
+            if context and not context.get("error"):
+                return msgpack_response({
+                    "authenticated": True,
+                    "user_id": user_id,
+                    "email": email,
+                    "plan_id": context.get("plan_id", "free"),
+                    "is_admin": context.get("is_admin", False),
+                    "enabled_shells": context.get("enabled_shells", ["simple"]),
+                    "max_packs": context.get("max_packs", 2),
+                    "org_id": context.get("org_id"),
+                    "user_packs": context.get("user_packs", []),
+                    "org_packs": context.get("org_packs", []),
+                })
+        except Exception as exc:
+            logger.warning(f"Failed to load entitlement context: {exc}")
+
+    # Fallback: identity from token only, default to free plan
+    return msgpack_response({
+        "authenticated": True,
+        "user_id": user_id,
+        "email": email,
+        "plan_id": "free",
+        "enabled_shells": ["simple"],
+        "max_packs": 2,
+    })
 
 
 @router.post("/settings")
@@ -202,15 +270,17 @@ async def clear_session_endpoint(req: Request):
     """Clear session cache for a chat session."""
     try:
         body = await decode_request_body(req)
-        session_id = body.get("sessionId")
-        if not session_id:
+        frontend_session_id = body.get("sessionId")
+        if not frontend_session_id:
             return msgpack_error("sessionId required", 400)
+        auth_user = get_authenticated_user(req)
+        session_id = build_session_cache_key(frontend_session_id, auth_user)
 
         cleared = session_manager.clear_session(session_id)
         if cleared:
             logger.info(f"Cleared session cache: {session_id}")
-            return msgpack_response({"status": "cleared", "sessionId": session_id})
-        return msgpack_response({"status": "not_found", "sessionId": session_id})
+            return msgpack_response({"status": "cleared", "sessionId": frontend_session_id})
+        return msgpack_response({"status": "not_found", "sessionId": frontend_session_id})
     except Exception as e:
         logger.error(f"Error clearing session: {e}")
         return msgpack_error(str(e), 500)
@@ -221,14 +291,16 @@ async def clear_session_source_endpoint(req: Request):
     """Clear a specific source from session cache."""
     try:
         body = await decode_request_body(req)
-        session_id = body.get("sessionId")
+        frontend_session_id = body.get("sessionId")
         source_id = body.get("sourceId")
-        if not session_id or not source_id:
+        if not frontend_session_id or not source_id:
             return msgpack_error("sessionId and sourceId required", 400)
+        auth_user = get_authenticated_user(req)
+        session_id = build_session_cache_key(frontend_session_id, auth_user)
 
         cache = session_manager.get(session_id)
         if not cache:
-            return msgpack_response({"status": "not_found", "sessionId": session_id})
+            return msgpack_response({"status": "not_found", "sessionId": frontend_session_id})
 
         removed = cache.clear_source(source_id)
         logger.info(f"Cleared source '{source_id}' from session {session_id}: {removed} keys removed")
