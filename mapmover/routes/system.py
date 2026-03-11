@@ -50,6 +50,34 @@ async def debug_cache():
     }
 
 
+@router.get("/debug/s3")
+async def debug_s3():
+    """Test DuckDB S3/httpfs connectivity against a known small file in R2."""
+    import traceback
+    from mapmover.duckdb_helpers import is_s3_mode, _make_connection, path_to_uri
+    from mapmover.paths import DATA_ROOT
+
+    if not is_s3_mode():
+        return {"s3_mode": False, "error": "Not in S3 mode"}
+
+    # Use a small known file: global/un_sdg/06/all_countries.parquet
+    test_path = DATA_ROOT / "global" / "un_sdg" / "06" / "all_countries.parquet"
+    uri = path_to_uri(test_path)
+
+    result = {"s3_mode": True, "uri": uri}
+    try:
+        con = _make_connection()
+        rows = con.execute("SELECT COUNT(*) FROM read_parquet(?)", [uri]).fetchone()
+        con.close()
+        result["row_count"] = rows[0] if rows else 0
+        result["ok"] = True
+    except Exception as e:
+        result["ok"] = False
+        result["error"] = str(e)
+        result["traceback"] = traceback.format_exc()
+    return result
+
+
 @router.get("/api/catalog/overlays")
 async def get_catalog_overlays():
     """Get overlay tree from the catalog for the frontend layer panel."""

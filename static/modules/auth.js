@@ -15,6 +15,7 @@ let currentSession = null;
 let currentProfile = null;
 let initialized = false;
 let currentTab = 'signin';
+let _lastAuthUserId = null;
 
 async function fetchProfile() {
   try {
@@ -271,16 +272,26 @@ export const AuthManager = {
       authConfig = await loadConfig();
       if (authConfig.enabled) {
         const supabase = getBrowserSupabase();
-        authClient = supabase.createClient(authConfig.supabase_url, authConfig.supabase_anon_key);
+        authClient = supabase.createClient(authConfig.supabase_url, authConfig.supabase_anon_key, {
+          auth: {
+            persistSession: true,
+            autoRefreshToken: true,
+            storageKey: 'countymap-auth',
+            storage: window.localStorage
+          }
+        });
         const { data, error } = await authClient.auth.getSession();
         if (!error) {
           currentSession = data.session;
         }
         authClient.auth.onAuthStateChange(async (_event, session) => {
+          const newUserId = session?.user?.id ?? null;
+          const userChanged = newUserId !== _lastAuthUserId;
+          _lastAuthUserId = newUserId;
           currentSession = session;
           await fetchProfile();
           updateDom();
-          if (_event === 'SIGNED_IN' || _event === 'SIGNED_OUT') {
+          if (userChanged && (_event === 'SIGNED_IN' || _event === 'SIGNED_OUT')) {
             emitAuthChanged();
           }
         });
