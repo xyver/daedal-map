@@ -234,6 +234,16 @@ function bindModalEvents() {
       closeModal();
     }
   });
+
+  document.querySelectorAll('.auth-pw-toggle').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const target = document.getElementById(btn.dataset.target);
+      if (!target) return;
+      const hidden = target.type === 'password';
+      target.type = hidden ? 'text' : 'password';
+      btn.textContent = hidden ? 'hide' : 'show';
+    });
+  });
 }
 
 async function handleAuthClick() {

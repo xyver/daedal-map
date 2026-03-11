@@ -28,6 +28,7 @@ from .data_loading import load_source_metadata
 from .aggregation_system import build_aggregation_spec, apply_temporal_aggregation
 from .duckdb_helpers import (
     can_query_event_source,
+    is_s3_mode,
     parquet_columns,
     quote_ident,
     resolve_event_parquet_path,
@@ -436,27 +437,44 @@ def load_source_data(source_id: str) -> tuple:
     """
     source_dir = _get_source_path(source_id)
 
-    # Find parquet file - prefer all_countries.parquet or USA.parquet
-    parquet_files = list(source_dir.glob("*.parquet"))
-    if not parquet_files:
-        raise ValueError(f"No parquet file found for {source_id} in {source_dir}")
-
-    # Prefer specific files over generic names
-    parquet_path = parquet_files[0]
-    for name in ["all_countries.parquet", "USA.parquet"]:
-        candidate = source_dir / name
-        if candidate.exists():
-            parquet_path = candidate
-            break
-
-    df = select_rows(parquet_path)
-    if df.empty:
-        df = pd.read_parquet(parquet_path)
-
-    # Load metadata
+    # Load metadata (always available locally - small files are synced on startup)
     meta_path = source_dir / "metadata.json"
     with open(meta_path, encoding='utf-8') as f:
         metadata = json.load(f)
+
+    if is_s3_mode():
+        # In S3 mode, no local parquet files exist - pick preferred filename and let
+        # select_rows() fetch from R2 via DuckDB httpfs (path_to_uri handles the s3:// conversion).
+        parquet_path = None
+        for name in ["all_countries.parquet", "USA.parquet"]:
+            parquet_path = source_dir / name
+            break  # use first preferred name; DuckDB will error if missing on R2
+        if parquet_path is None:
+            # Fall back to filename from metadata files section
+            for _key, info in metadata.get("files", {}).items():
+                fname = (info.get("name") or info.get("filename")) if isinstance(info, dict) else None
+                if fname and fname.endswith(".parquet"):
+                    parquet_path = source_dir / fname
+                    break
+        if parquet_path is None:
+            raise ValueError(f"Cannot determine parquet path for {source_id} in S3 mode")
+        df = select_rows(parquet_path)
+    else:
+        # Local mode: glob for parquet files on disk
+        parquet_files = list(source_dir.glob("*.parquet"))
+        if not parquet_files:
+            raise ValueError(f"No parquet file found for {source_id} in {source_dir}")
+
+        parquet_path = parquet_files[0]
+        for name in ["all_countries.parquet", "USA.parquet"]:
+            candidate = source_dir / name
+            if candidate.exists():
+                parquet_path = candidate
+                break
+
+        df = select_rows(parquet_path)
+        if df.empty:
+            df = pd.read_parquet(parquet_path)
 
     return df, metadata
 
@@ -493,20 +511,21 @@ def load_event_data(source_id: str, event_file_key: str = "events") -> tuple:
         ]
         for name in fallback_names:
             candidate = source_dir / name
-            if candidate.exists():
+            if is_s3_mode() or candidate.exists():
+                df = select_rows(candidate)
+                if df.empty and not is_s3_mode():
+                    df = pd.read_parquet(candidate)
+                return df, metadata
+        if not is_s3_mode():
+            # Last-resort fallback: use any parquet in source dir (local mode only)
+            parquet_candidates = sorted(source_dir.glob("*.parquet"))
+            for candidate in parquet_candidates:
+                if candidate.name in ("all_countries.parquet", "all_regions.parquet"):
+                    continue
                 df = select_rows(candidate)
                 if df.empty:
                     df = pd.read_parquet(candidate)
                 return df, metadata
-        # Last-resort fallback: use any parquet in source dir (excluding obvious aggregate tables).
-        parquet_candidates = sorted(source_dir.glob("*.parquet"))
-        for candidate in parquet_candidates:
-            if candidate.name in ("all_countries.parquet", "all_regions.parquet"):
-                continue
-            df = select_rows(candidate)
-            if df.empty:
-                df = pd.read_parquet(candidate)
-            return df, metadata
         raise ValueError(f"No event file '{event_file_key}' found in {source_id}")
 
     # Get filename - handle both 'name' and 'filename' keys

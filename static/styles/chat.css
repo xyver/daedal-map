@@ -308,6 +308,34 @@
   background: #29405a;
 }
 
+.auth-input-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.auth-input-wrap .auth-input {
+  flex: 1;
+  padding-right: 50px;
+}
+
+.auth-pw-toggle {
+  position: absolute;
+  right: 8px;
+  background: none;
+  border: none;
+  color: #6a9bbf;
+  font-size: 12px;
+  cursor: pointer;
+  padding: 4px 2px;
+  user-select: none;
+  letter-spacing: 0.02em;
+}
+
+.auth-pw-toggle:hover {
+  color: #a8ccec;
+}
+
 #closeSidebar {
   background: none;
   border: none;

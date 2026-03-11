@@ -254,7 +254,10 @@
         <input id="signInEmail" class="auth-input" type="email" autocomplete="email" required>
 
         <label class="auth-label" for="signInPassword">Password</label>
-        <input id="signInPassword" class="auth-input" type="password" autocomplete="current-password" required>
+        <div class="auth-input-wrap">
+          <input id="signInPassword" class="auth-input" type="password" autocomplete="current-password" required>
+          <button type="button" class="auth-pw-toggle" data-target="signInPassword">show</button>
+        </div>
 
         <button id="signInSubmit" class="auth-primary-btn" type="submit">Sign In</button>
         <button id="magicLinkBtn" class="auth-secondary-btn" type="button">Email Magic Link Instead</button>
@@ -265,10 +268,16 @@
         <input id="signUpEmail" class="auth-input" type="email" autocomplete="email" required>
 
         <label class="auth-label" for="signUpPassword">Password</label>
-        <input id="signUpPassword" class="auth-input" type="password" autocomplete="new-password" minlength="8" required>
+        <div class="auth-input-wrap">
+          <input id="signUpPassword" class="auth-input" type="password" autocomplete="new-password" minlength="8" required>
+          <button type="button" class="auth-pw-toggle" data-target="signUpPassword">show</button>
+        </div>
 
         <label class="auth-label" for="signUpPasswordConfirm">Confirm Password</label>
-        <input id="signUpPasswordConfirm" class="auth-input" type="password" autocomplete="new-password" minlength="8" required>
+        <div class="auth-input-wrap">
+          <input id="signUpPasswordConfirm" class="auth-input" type="password" autocomplete="new-password" minlength="8" required>
+          <button type="button" class="auth-pw-toggle" data-target="signUpPasswordConfirm">show</button>
+        </div>
 
         <button id="signUpSubmit" class="auth-primary-btn" type="submit">Create Account</button>
       </form>
