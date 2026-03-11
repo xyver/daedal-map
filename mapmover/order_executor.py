@@ -30,6 +30,7 @@ from .duckdb_helpers import (
     can_query_event_source,
     is_s3_mode,
     parquet_columns,
+    path_to_uri,
     quote_ident,
     resolve_event_parquet_path,
     run_df,
@@ -458,7 +459,10 @@ def load_source_data(source_id: str) -> tuple:
                     break
         if parquet_path is None:
             raise ValueError(f"Cannot determine parquet path for {source_id} in S3 mode")
+        uri = path_to_uri(parquet_path)
+        logger.info(f"[S3] load_source_data({source_id}): uri={uri}")
         df = select_rows(parquet_path)
+        logger.info(f"[S3] load_source_data({source_id}): rows={len(df)}")
     else:
         # Local mode: glob for parquet files on disk
         parquet_files = list(source_dir.glob("*.parquet"))
@@ -1667,7 +1671,7 @@ def execute_order(order: dict) -> dict:
         try:
             df, metadata = load_source_data(source_id)
         except Exception as e:
-            print(f"Error loading {source_id}: {e}")
+            logger.error(f"Error loading {source_id}: {e}", exc_info=True)
             continue
 
         # Apply shared aggregation contract for FX temporal requests.
