@@ -270,7 +270,9 @@ export const AuthManager = {
           currentSession = session;
           await fetchProfile();
           updateDom();
-          emitAuthChanged();
+          if (_event !== 'INITIAL_SESSION') {
+            emitAuthChanged();
+          }
         });
       }
     } catch (error) {
