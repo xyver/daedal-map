@@ -4,7 +4,7 @@ from fastapi import APIRouter
 import pandas as pd
 
 from mapmover.disaster_filters import apply_location_filters
-from mapmover.duckdb_helpers import duckdb_available, select_filtered_event_rows, select_rows
+from mapmover.duckdb_helpers import duckdb_available, parquet_available, select_filtered_event_rows, select_rows
 from mapmover.logging_analytics import logger
 from mapmover.paths import GLOBAL_DIR
 
@@ -66,7 +66,7 @@ async def get_volcanoes_geojson(active_only: bool = None):
     """Get volcanoes as GeoJSON points for map display."""
     try:
         volcanoes_path = GLOBAL_DIR / "disasters/volcanoes/volcanoes.parquet"
-        if not volcanoes_path.exists():
+        if not parquet_available(volcanoes_path):
             return msgpack_error("Volcano data not available", 404)
 
         df = select_rows(volcanoes_path)
@@ -94,7 +94,7 @@ async def get_eruptions_geojson(
     """Get volcanic eruptions as GeoJSON points for map display."""
     try:
         eruptions_path = GLOBAL_DIR / "disasters/volcanoes/events.parquet"
-        if not eruptions_path.exists():
+        if not parquet_available(eruptions_path):
             return msgpack_error("Eruption data not available", 404)
 
         df = select_filtered_event_rows(
@@ -160,7 +160,7 @@ async def get_nearby_volcanoes(
     """Find volcanic eruptions near a location within a time window."""
     try:
         eruptions_path = GLOBAL_DIR / "disasters/volcanoes/events.parquet"
-        if not eruptions_path.exists():
+        if not parquet_available(eruptions_path):
             return msgpack_error("Volcano data not available", 404)
 
         if timestamp:
@@ -226,7 +226,7 @@ async def get_related_earthquakes_for_volcano(event_id: str):
     """Return linked earthquake event IDs stored on a volcano eruption event."""
     try:
         eruptions_path = GLOBAL_DIR / "disasters/volcanoes/events.parquet"
-        if not eruptions_path.exists():
+        if not parquet_available(eruptions_path):
             return msgpack_error("Volcano data not available", 404)
 
         df = select_filtered_event_rows(

@@ -3,7 +3,7 @@
 from fastapi import APIRouter
 
 from mapmover.disaster_filters import apply_location_filters, get_default_min_year
-from mapmover.duckdb_helpers import duckdb_available, select_filtered_event_rows, select_rows_by_exact_value
+from mapmover.duckdb_helpers import duckdb_available, parquet_available, select_filtered_event_rows, select_rows_by_exact_value
 from mapmover.logging_analytics import logger
 from mapmover.paths import GLOBAL_DIR
 
@@ -55,7 +55,7 @@ async def get_storms_geojson(
         storms_path = GLOBAL_DIR / "disasters/hurricanes/storms.parquet"
         positions_path = GLOBAL_DIR / "disasters/hurricanes/positions.parquet"
 
-        if not storms_path.exists():
+        if not parquet_available(storms_path):
             return msgpack_error("Storm data not available", 404)
 
         use_duckdb = duckdb_available()
@@ -162,7 +162,7 @@ async def get_storm_track(storm_id: str):
         positions_path = GLOBAL_DIR / "disasters/hurricanes/positions.parquet"
         storms_path = GLOBAL_DIR / "disasters/hurricanes/storms.parquet"
 
-        if not positions_path.exists():
+        if not parquet_available(positions_path):
             return msgpack_error("Storm data not available", 404)
 
         if duckdb_available():
@@ -231,7 +231,7 @@ async def get_storm_tracks_geojson(
         storms_path = GLOBAL_DIR / "disasters/hurricanes/storms.parquet"
         positions_path = GLOBAL_DIR / "disasters/hurricanes/positions.parquet"
 
-        if not storms_path.exists():
+        if not parquet_available(storms_path):
             return msgpack_error("Storm data not available", 404)
 
         use_duckdb = duckdb_available()
@@ -323,7 +323,7 @@ async def get_storms_list(year: int = None, min_year: int = None, basin: str = N
             min_year = get_default_min_year("hurricanes", fallback=1950)
 
         storms_path = GLOBAL_DIR / "disasters/hurricanes/storms.parquet"
-        if not storms_path.exists():
+        if not parquet_available(storms_path):
             return msgpack_error("Storm data not available", 404)
 
         if duckdb_available():

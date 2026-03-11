@@ -3,7 +3,7 @@
 from fastapi import APIRouter
 
 from mapmover.disaster_filters import apply_location_filters, get_default_min_year
-from mapmover.duckdb_helpers import duckdb_available, select_filtered_event_rows
+from mapmover.duckdb_helpers import duckdb_available, is_s3_mode, parquet_available, select_filtered_event_rows
 from mapmover.logging_analytics import logger
 from mapmover.paths import GLOBAL_DIR
 
@@ -33,9 +33,9 @@ async def get_floods_geojson(
 
     try:
         events_path = GLOBAL_DIR / "disasters/floods/events_enriched.parquet"
-        if not events_path.exists():
+        if not is_s3_mode() and not events_path.exists():
             events_path = GLOBAL_DIR / "disasters/floods/events.parquet"
-        if not events_path.exists():
+        if not parquet_available(events_path):
             return msgpack_error("Flood data not available", 404)
 
         use_duckdb = duckdb_available()

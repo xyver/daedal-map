@@ -3,7 +3,7 @@
 from fastapi import APIRouter
 
 from mapmover.disaster_filters import apply_location_filters, get_default_min_year
-from mapmover.duckdb_helpers import duckdb_available, select_filtered_event_rows, select_rows_by_exact_value
+from mapmover.duckdb_helpers import duckdb_available, parquet_available, select_filtered_event_rows, select_rows_by_exact_value
 from mapmover.logging_analytics import logger
 from mapmover.paths import GLOBAL_DIR
 
@@ -44,7 +44,7 @@ async def get_tornadoes_geojson(
 
     try:
         events_path = GLOBAL_DIR / "disasters/tornadoes/events.parquet"
-        if not events_path.exists():
+        if not parquet_available(events_path):
             return msgpack_error("Tornado data not available", 404)
 
         use_duckdb = duckdb_available()
@@ -139,7 +139,7 @@ async def get_tornado_detail(event_id: str):
 
     try:
         events_path = GLOBAL_DIR / "disasters/tornadoes/events.parquet"
-        if not events_path.exists():
+        if not parquet_available(events_path):
             return msgpack_error("Tornado data not available", 404)
 
         if duckdb_available():
@@ -221,7 +221,7 @@ async def get_tornado_sequence(event_id: str):
 
     try:
         events_path = GLOBAL_DIR / "disasters/tornadoes/events.parquet"
-        if not events_path.exists():
+        if not parquet_available(events_path):
             return msgpack_error("Tornado data not available", 404)
 
         use_duckdb = duckdb_available()

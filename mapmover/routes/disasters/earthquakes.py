@@ -4,7 +4,7 @@ from fastapi import APIRouter
 import pandas as pd
 
 from mapmover.disaster_filters import apply_location_filters, get_affected_event_ids
-from mapmover.duckdb_helpers import duckdb_available, run_df, select_filtered_event_rows, select_linked_loc_ids
+from mapmover.duckdb_helpers import duckdb_available, parquet_available, path_to_uri, run_df, select_filtered_event_rows, select_linked_loc_ids
 from mapmover.logging_analytics import logger
 from mapmover.paths import GLOBAL_DIR
 
@@ -58,10 +58,10 @@ def _load_earthquakes_duckdb(
 ) -> pd.DataFrame:
     """Load filtered earthquake rows via DuckDB."""
     events_path = GLOBAL_DIR / "disasters/earthquakes/events.parquet"
-    if not duckdb_available() or not events_path.exists():
+    if not duckdb_available() or not parquet_available(events_path):
         return pd.DataFrame()
     where = []
-    params = [str(events_path)]
+    params = [path_to_uri(events_path)]
 
     if year is not None:
         where.append('"year" = ?')
@@ -119,7 +119,7 @@ async def get_earthquakes_geojson(
     """Get earthquakes as GeoJSON points for map display."""
     try:
         events_path = GLOBAL_DIR / "disasters/earthquakes/events.parquet"
-        if not events_path.exists():
+        if not parquet_available(events_path):
             return msgpack_error("Earthquake data not available", 404)
 
         df = _load_earthquakes_duckdb(
@@ -165,7 +165,7 @@ async def get_earthquake_sequence(sequence_id: str, min_magnitude: float = None)
     """Get all earthquakes in a specific aftershock sequence."""
     try:
         events_path = GLOBAL_DIR / "disasters/earthquakes/events.parquet"
-        if not events_path.exists():
+        if not parquet_available(events_path):
             return msgpack_error("Earthquake data not available", 404)
 
         df = _load_earthquakes_duckdb(sequence_id=sequence_id, min_magnitude=min_magnitude)
@@ -200,7 +200,7 @@ async def get_earthquake_aftershocks(event_id: str, min_magnitude: float = None)
     """Get mainshock + aftershocks for a specific event ID."""
     try:
         events_path = GLOBAL_DIR / "disasters/earthquakes/events.parquet"
-        if not events_path.exists():
+        if not parquet_available(events_path):
             return msgpack_error("Earthquake data not available", 404)
 
         if duckdb_available():
@@ -256,7 +256,7 @@ async def get_related_tsunamis_for_earthquake(event_id: str):
         events_path = GLOBAL_DIR / "disasters/earthquakes/events.parquet"
         tsunami_path = GLOBAL_DIR / "disasters/tsunamis/events.parquet"
         links_path = GLOBAL_DIR / "disasters/links.parquet"
-        if not events_path.exists() or not tsunami_path.exists() or not links_path.exists():
+        if not parquet_available(events_path) or not parquet_available(tsunami_path) or not parquet_available(links_path):
             return msgpack_error("Linked disaster data not available", 404)
 
         eq_df = _load_earthquakes_duckdb(event_id=event_id)
@@ -329,7 +329,7 @@ async def get_nearby_earthquakes(
     """Find earthquakes near a location within a time window."""
     try:
         events_path = GLOBAL_DIR / "disasters/earthquakes/events.parquet"
-        if not events_path.exists():
+        if not parquet_available(events_path):
             return msgpack_error("Earthquake data not available", 404)
 
         df = pd.read_parquet(events_path)

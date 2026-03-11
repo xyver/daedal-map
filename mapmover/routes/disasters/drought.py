@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter
 
-from mapmover.duckdb_helpers import duckdb_available, select_filtered_event_rows
+from mapmover.duckdb_helpers import duckdb_available, parquet_available, select_filtered_event_rows
 from mapmover.logging_analytics import logger
 from mapmover.paths import COUNTRIES_DIR
 
@@ -33,7 +33,7 @@ async def get_drought_geojson(
         else:
             return msgpack_error(f"Drought data not available for country: {country}", 404)
 
-        if not data_path.exists():
+        if not parquet_available(data_path):
             return msgpack_error("Drought data not available", 404)
 
         use_duckdb = duckdb_available()

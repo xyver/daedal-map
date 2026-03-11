@@ -4,12 +4,19 @@ Storage-mode helpers for local folders vs S3-backed local cache.
 The runtime still expects real filesystem paths for DATA_ROOT. To support object
 storage without rewriting the rest of the app, S3 mode hydrates a local mirror
 cache and returns that cache path as DATA_ROOT.
+
+Startup sync is two-phase:
+  Phase 1 (blocking): sync non-parquet files only (catalog.json, index.json, etc.)
+                      These are small and needed immediately for catalog init.
+  Phase 2 (background thread): sync remaining parquet files.
+                      These are only needed when queries come in.
 """
 
 from __future__ import annotations
 
 import logging
 import os
+import threading
 from pathlib import Path
 
 try:
@@ -19,6 +26,9 @@ except ImportError:
 
 
 logger = logging.getLogger("mapmover")
+
+# Extensions synced synchronously at startup (small, needed for catalog init)
+_EAGER_EXTENSIONS = {".json", ".csv", ".txt", ".md"}
 
 
 def get_storage_mode() -> str:
@@ -68,9 +78,47 @@ def _should_download(local_path: Path, remote_size: int, remote_mtime: float) ->
         return True
 
 
+def _download_object(client, bucket: str, key: str, local_path: Path, remote_mtime: float) -> None:
+    local_path.parent.mkdir(parents=True, exist_ok=True)
+    client.download_file(bucket, key, str(local_path))
+    if remote_mtime:
+        os.utime(local_path, (remote_mtime, remote_mtime))
+
+
+def _sync_objects(client, bucket: str, prefix: str, cache_root: Path, objects: list[dict]) -> tuple[int, int]:
+    """Download a list of objects into cache_root. Returns (synced, downloaded)."""
+    synced = 0
+    downloaded = 0
+    for obj in objects:
+        key = obj["key"]
+        local_path = obj["local_path"]
+        remote_size = obj["remote_size"]
+        remote_mtime = obj["remote_mtime"]
+        if _should_download(local_path, remote_size, remote_mtime):
+            try:
+                _download_object(client, bucket, key, local_path, remote_mtime)
+                downloaded += 1
+            except Exception as exc:
+                logger.warning("S3 download failed for %s: %s", key, exc)
+        synced += 1
+    return synced, downloaded
+
+
+def _background_sync(client, bucket: str, deferred: list[dict]) -> None:
+    """Background thread: sync deferred (parquet) files into cache."""
+    if not deferred:
+        return
+    logger.info("S3 background sync started: %d parquet files to check", len(deferred))
+    synced, downloaded = _sync_objects(client, bucket, "", Path("/"), deferred)
+    logger.info("S3 background sync complete: files=%d downloaded=%d", synced, downloaded)
+
+
 def ensure_s3_data_root(cache_root: Path) -> Path:
     """
     Sync the configured S3 prefix into a local cache folder and return it.
+
+    Phase 1 (blocking): syncs non-parquet files (.json, .csv, etc.) needed at startup.
+    Phase 2 (background): syncs parquet files without blocking app startup.
 
     Required environment variables in S3 mode:
     - `S3_BUCKET`
@@ -90,8 +138,8 @@ def ensure_s3_data_root(cache_root: Path) -> Path:
     client = _build_s3_client()
     paginator = client.get_paginator("list_objects_v2")
 
-    synced_files = 0
-    downloaded_files = 0
+    eager = []
+    deferred = []
 
     for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
         for obj in page.get("Contents", []):
@@ -104,20 +152,35 @@ def ensure_s3_data_root(cache_root: Path) -> Path:
             remote_size = int(obj.get("Size", 0))
             remote_mtime = obj["LastModified"].timestamp() if obj.get("LastModified") else 0.0
 
-            if _should_download(local_path, remote_size, remote_mtime):
-                local_path.parent.mkdir(parents=True, exist_ok=True)
-                client.download_file(bucket, key, str(local_path))
-                if remote_mtime:
-                    os.utime(local_path, (remote_mtime, remote_mtime))
-                downloaded_files += 1
-            synced_files += 1
+            entry = {
+                "key": key,
+                "local_path": local_path,
+                "remote_size": remote_size,
+                "remote_mtime": remote_mtime,
+            }
 
+            ext = Path(relative_key).suffix.lower()
+            if ext in _EAGER_EXTENSIONS:
+                eager.append(entry)
+            else:
+                deferred.append(entry)
+
+    # Phase 1: sync catalog/index/metadata files now (blocking)
+    synced1, downloaded1 = _sync_objects(client, bucket, prefix, cache_root, eager)
     logger.info(
-        "S3 data root synced to local cache: bucket=%s prefix=%s files=%s downloaded=%s cache=%s",
+        "S3 eager sync complete: bucket=%s prefix=%s files=%d downloaded=%d cache=%s",
         bucket,
         prefix or "(root)",
-        synced_files,
-        downloaded_files,
+        synced1,
+        downloaded1,
         cache_root,
     )
+
+    # Parquet files are NOT synced - DuckDB queries them directly from R2 via httpfs.
+    if deferred:
+        logger.info(
+            "S3 mode: %d parquet files will be queried directly from R2 via DuckDB httpfs (not synced locally)",
+            len(deferred),
+        )
+
     return cache_root

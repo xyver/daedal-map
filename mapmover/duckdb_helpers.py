@@ -1,8 +1,15 @@
-"""Reusable DuckDB helpers for parquet-backed runtime queries."""
+"""Reusable DuckDB helpers for parquet-backed runtime queries.
+
+In local mode, all functions accept Path objects pointing to local parquet files.
+In S3 mode (STORAGE_MODE=s3), path_to_uri() converts local cache paths to s3://
+URIs and the DuckDB connection is configured with httpfs + R2 credentials.
+DuckDB fetches only the row groups it needs via HTTP range requests.
+"""
 
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Iterable, Optional
 
@@ -33,10 +40,96 @@ def can_query_event_source(source_id: str) -> bool:
     return duckdb_available() and source_id in DUCKDB_EVENT_SOURCES
 
 
+# ---------------------------------------------------------------------------
+# S3 / httpfs helpers
+# ---------------------------------------------------------------------------
+
+def is_s3_mode() -> bool:
+    return os.environ.get("STORAGE_MODE", "local").strip().lower() == "s3"
+
+
+def _get_s3_endpoint() -> str:
+    """Return the R2/S3 endpoint without https:// prefix (as DuckDB expects)."""
+    url = os.environ.get("S3_ENDPOINT_URL", "").strip()
+    if url.startswith("https://"):
+        url = url[len("https://"):]
+    elif url.startswith("http://"):
+        url = url[len("http://"):]
+    return url.rstrip("/")
+
+
+def _get_cache_root() -> Path | None:
+    env = os.environ.get("S3_LOCAL_CACHE", "").strip()
+    if env:
+        return Path(env)
+    return None
+
+
+def path_to_uri(local_path: Path) -> str:
+    """Convert a local cache path to an s3:// URI in S3 mode, or a local path string in local mode."""
+    if not is_s3_mode():
+        return str(local_path)
+
+    bucket = os.environ.get("S3_BUCKET", "").strip()
+    prefix = os.environ.get("S3_PREFIX", "").strip().strip("/")
+    prefix = f"{prefix}/" if prefix else ""
+    cache_root = _get_cache_root()
+
+    if cache_root:
+        try:
+            rel = local_path.relative_to(cache_root)
+            return f"s3://{bucket}/{prefix}{rel.as_posix()}"
+        except ValueError:
+            pass
+
+    # Fallback: use the path as-is (shouldn't normally happen)
+    return str(local_path)
+
+
+def parquet_available(path: Path) -> bool:
+    """Return True if the parquet file is accessible.
+    In S3 mode, always returns True (DuckDB will raise if the file is missing on R2).
+    In local mode, checks if the file exists on disk.
+    """
+    if is_s3_mode():
+        return True
+    return path.exists()
+
+
+def _configure_httpfs(con) -> None:
+    """Configure a DuckDB connection for R2/S3 access via httpfs."""
+    con.execute("INSTALL httpfs")
+    con.execute("LOAD httpfs")
+    endpoint = _get_s3_endpoint()
+    if endpoint:
+        con.execute(f"SET s3_endpoint='{endpoint}'")
+    key = os.environ.get("AWS_ACCESS_KEY_ID", "").strip()
+    secret = os.environ.get("AWS_SECRET_ACCESS_KEY", "").strip()
+    region = os.environ.get("AWS_DEFAULT_REGION", "auto").strip() or "auto"
+    if key:
+        con.execute(f"SET s3_access_key_id='{key}'")
+    if secret:
+        con.execute(f"SET s3_secret_access_key='{secret}'")
+    con.execute(f"SET s3_region='{region}'")
+    con.execute("SET s3_url_style='path'")
+
+
+def _make_connection():
+    """Create a DuckDB connection, configured for S3 if in S3 mode."""
+    con = duckdb.connect()
+    if is_s3_mode():
+        _configure_httpfs(con)
+    return con
+
+
+# ---------------------------------------------------------------------------
+# Core query runners
+# ---------------------------------------------------------------------------
+
 def run_df(sql: str, params: list) -> pd.DataFrame:
     if duckdb is None:
         return pd.DataFrame()
-    con = duckdb.connect()
+    con = _make_connection()
     try:
         return con.execute(sql, params).df()
     finally:
@@ -46,7 +139,7 @@ def run_df(sql: str, params: list) -> pd.DataFrame:
 def run_rows(sql: str, params: list) -> list[tuple]:
     if duckdb is None:
         return []
-    con = duckdb.connect()
+    con = _make_connection()
     try:
         return con.execute(sql, params).fetchall()
     finally:
@@ -54,15 +147,22 @@ def run_rows(sql: str, params: list) -> list[tuple]:
 
 
 def parquet_columns(parquet_path: Path) -> set[str]:
-    if duckdb is None or not parquet_path.exists():
+    if duckdb is None:
         return set()
-    rows = run_rows("DESCRIBE SELECT * FROM read_parquet(?)", [str(parquet_path)])
+    if not is_s3_mode() and not parquet_path.exists():
+        return set()
+    uri = path_to_uri(parquet_path)
+    rows = run_rows("DESCRIBE SELECT * FROM read_parquet(?)", [uri])
     return {row[0] for row in rows}
 
 
 def quote_ident(name: str) -> str:
     return '"' + str(name).replace('"', '""') + '"'
 
+
+# ---------------------------------------------------------------------------
+# Path resolution
+# ---------------------------------------------------------------------------
 
 def resolve_event_parquet_path(source_dir: Path, event_file_key: str = "events") -> tuple[Path, dict]:
     meta_path = source_dir / "metadata.json"
@@ -82,13 +182,14 @@ def resolve_event_parquet_path(source_dir: Path, event_file_key: str = "events")
         ]
         for name in fallback_names:
             candidate = source_dir / name
-            if candidate.exists():
+            if is_s3_mode() or candidate.exists():
                 return candidate, metadata
-        parquet_candidates = sorted(source_dir.glob("*.parquet"))
-        for candidate in parquet_candidates:
-            if candidate.name in ("all_countries.parquet", "all_regions.parquet"):
-                continue
-            return candidate, metadata
+        if not is_s3_mode():
+            parquet_candidates = sorted(source_dir.glob("*.parquet"))
+            for candidate in parquet_candidates:
+                if candidate.name in ("all_countries.parquet", "all_regions.parquet"):
+                    continue
+                return candidate, metadata
         raise ValueError(f"No event file '{event_file_key}' found in {source_dir}")
 
     filename = file_info.get("name") or file_info.get("filename")
@@ -96,14 +197,19 @@ def resolve_event_parquet_path(source_dir: Path, event_file_key: str = "events")
         raise ValueError(f"No filename specified for '{event_file_key}' in {source_dir}")
 
     parquet_path = source_dir / filename
-    if not parquet_path.exists():
+    if not is_s3_mode() and not parquet_path.exists():
         raise ValueError(f"Event file not found: {parquet_path}")
     return parquet_path, metadata
 
 
+# ---------------------------------------------------------------------------
+# Query functions (all accept Path objects; path_to_uri is applied internally)
+# ---------------------------------------------------------------------------
+
 def select_distinct_event_loc_ids(areas_path: Path, affected_loc_id: str, exact: bool = False, limit: int | None = None) -> list[str]:
-    if duckdb is None or not areas_path.exists():
+    if duckdb is None or not parquet_available(areas_path):
         return []
+    uri = path_to_uri(areas_path)
     comparator = "=" if exact else "LIKE"
     value = affected_loc_id if exact else f"{affected_loc_id}%"
     sql = (
@@ -112,7 +218,7 @@ def select_distinct_event_loc_ids(areas_path: Path, affected_loc_id: str, exact:
         f"WHERE affected_loc_id {comparator} ? "
         "ORDER BY event_loc_id"
     )
-    params: list = [str(areas_path), value]
+    params: list = [uri, value]
     if limit is not None:
         sql += " LIMIT ?"
         params.append(limit)
@@ -121,11 +227,12 @@ def select_distinct_event_loc_ids(areas_path: Path, affected_loc_id: str, exact:
 
 
 def select_event_ids_by_regions(parquet_path: Path, regions: Iterable[str]) -> list[str]:
-    if duckdb is None or not parquet_path.exists():
+    if duckdb is None or not parquet_available(parquet_path):
         return []
+    uri = path_to_uri(parquet_path)
     regions = list(regions)
     sql = "SELECT event_id FROM read_parquet(?)"
-    params: list = [str(parquet_path)]
+    params: list = [uri]
     if regions:
         prefixes = [f"{r}%" for r in regions]
         exacts = list(regions)
@@ -150,12 +257,13 @@ def select_filtered_event_rows(
     order_by_desc: str | None = None,
     limit: int | None = None,
 ) -> pd.DataFrame:
-    if duckdb is None or not parquet_path.exists():
+    if duckdb is None or not parquet_available(parquet_path):
         return pd.DataFrame()
 
+    uri = path_to_uri(parquet_path)
     available_cols = parquet_columns(parquet_path)
     where: list[str] = []
-    params: list = [str(parquet_path)]
+    params: list = [uri]
 
     if year is not None and "year" in available_cols:
         where.append('"year" = ?')
@@ -208,17 +316,16 @@ def select_rows_by_exact_value(
     *,
     order_by: str | None = None,
 ) -> pd.DataFrame:
-    if duckdb is None or not parquet_path.exists():
+    if duckdb is None or not parquet_available(parquet_path):
         return pd.DataFrame()
 
+    uri = path_to_uri(parquet_path)
     available_cols = parquet_columns(parquet_path)
     if column not in available_cols:
         return pd.DataFrame()
 
-    sql = (
-        f"SELECT * FROM read_parquet(?) WHERE {quote_ident(column)} = ?"
-    )
-    params: list = [str(parquet_path), value]
+    sql = f"SELECT * FROM read_parquet(?) WHERE {quote_ident(column)} = ?"
+    params: list = [uri, value]
     if order_by and order_by in available_cols:
         sql += f" ORDER BY {quote_ident(order_by)} ASC NULLS LAST"
     return run_df(sql, params)
@@ -232,15 +339,16 @@ def select_rows(
     in_filters: dict | None = None,
     order_by: str | None = None,
 ) -> pd.DataFrame:
-    if duckdb is None or not parquet_path.exists():
+    if duckdb is None or not parquet_available(parquet_path):
         return pd.DataFrame()
 
+    uri = path_to_uri(parquet_path)
     available_cols = parquet_columns(parquet_path)
     selected = [c for c in (columns or []) if c in available_cols]
     select_expr = ", ".join(quote_ident(c) for c in selected) if selected else "*"
 
     where: list[str] = []
-    params: list = [str(parquet_path)]
+    params: list = [uri]
 
     for col, value in (exact_filters or {}).items():
         if col in available_cols and value is not None:
@@ -270,9 +378,10 @@ def select_linked_loc_ids(
     target_column: str,
     link_type: str | None = None,
 ) -> list[str]:
-    if duckdb is None or not links_path.exists():
+    if duckdb is None or not parquet_available(links_path):
         return []
 
+    uri = path_to_uri(links_path)
     available_cols = parquet_columns(links_path)
     if source_column not in available_cols or target_column not in available_cols:
         return []
@@ -282,7 +391,7 @@ def select_linked_loc_ids(
         f"FROM read_parquet(?) "
         f"WHERE {quote_ident(source_column)} = ?"
     )
-    params: list = [str(links_path), source_loc_id]
+    params: list = [uri, source_loc_id]
     if link_type is not None and "link_type" in available_cols:
         sql += ' AND "link_type" = ?'
         params.append(link_type)
@@ -292,7 +401,7 @@ def select_linked_loc_ids(
 
 
 def select_peak_positions_by_storm_ids(positions_path: Path, storm_ids: Iterable[str]) -> pd.DataFrame:
-    if duckdb is None or not positions_path.exists():
+    if duckdb is None or not parquet_available(positions_path):
         return pd.DataFrame()
 
     storm_ids = [s for s in storm_ids if s]
@@ -335,15 +444,29 @@ def select_filtered_partitioned_rows(
     if duckdb is None:
         return pd.DataFrame()
 
-    paths = [str(Path(p)) for p in parquet_paths if Path(p).exists()]
-    if not paths:
+    if is_s3_mode():
+        # In S3 mode, convert paths to s3:// URIs - skip local exists check
+        uris = [path_to_uri(Path(p)) for p in parquet_paths]
+    else:
+        uris = [str(Path(p)) for p in parquet_paths if Path(p).exists()]
+
+    if not uris:
         return pd.DataFrame()
 
-    placeholders = ", ".join("?" for _ in paths)
+    placeholders = ", ".join("?" for _ in uris)
     sql = f"SELECT * FROM read_parquet([{placeholders}])"
-    params: list = list(paths)
+    params: list = list(uris)
 
-    available_cols = parquet_columns(Path(paths[0]))
+    # Get columns from first file to build WHERE clause
+    available_cols = parquet_columns(Path(uris[0]) if not is_s3_mode() else Path(uris[0].replace("s3://", "")))
+    if is_s3_mode():
+        # Re-derive columns via DuckDB in S3 mode
+        try:
+            rows = run_rows("DESCRIBE SELECT * FROM read_parquet(?)", [uris[0]])
+            available_cols = {row[0] for row in rows}
+        except Exception:
+            available_cols = set()
+
     where: list[str] = []
 
     if year is not None and "year" in available_cols:
@@ -374,8 +497,8 @@ def select_filtered_partitioned_rows(
     for col, values in (in_filters or {}).items():
         values = list(values or [])
         if col in available_cols and values:
-            placeholders = ", ".join("?" for _ in values)
-            where.append(f"{quote_ident(col)} IN ({placeholders})")
+            placeholders_w = ", ".join("?" for _ in values)
+            where.append(f"{quote_ident(col)} IN ({placeholders_w})")
             params.extend(values)
 
     if where:
@@ -385,13 +508,14 @@ def select_filtered_partitioned_rows(
 
 
 def select_columns_from_parquet(parquet_path: Path, columns: Iterable[str]) -> pd.DataFrame:
-    if duckdb is None or not parquet_path.exists():
+    if duckdb is None or not parquet_available(parquet_path):
         return pd.DataFrame()
 
+    uri = path_to_uri(parquet_path)
     available_cols = parquet_columns(parquet_path)
     selected = [c for c in columns if c in available_cols]
     if not selected:
         return pd.DataFrame()
 
     sql = "SELECT " + ", ".join(quote_ident(c) for c in selected) + " FROM read_parquet(?)"
-    return run_df(sql, [str(parquet_path)])
+    return run_df(sql, [uri])

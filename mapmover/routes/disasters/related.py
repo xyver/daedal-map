@@ -4,6 +4,7 @@ import pandas as pd
 from fastapi import APIRouter
 
 from mapmover import logger
+from mapmover.duckdb_helpers import parquet_available
 from mapmover.paths import GLOBAL_DIR
 
 from .helpers import msgpack_error, msgpack_response
@@ -45,10 +46,12 @@ async def get_related_events(loc_id: str):
     """Get related disaster events for a given event loc_id."""
     try:
         links_path = GLOBAL_DIR / "disasters/links.parquet"
-        if not links_path.exists():
+        if not parquet_available(links_path):
             return msgpack_response({"event_id": loc_id, "related": [], "message": "Links data not available"})
 
-        links_df = pd.read_parquet(links_path)
+        from mapmover.duckdb_helpers import run_df, path_to_uri
+        uri = path_to_uri(links_path)
+        links_df = run_df("SELECT * FROM read_parquet(?)", [uri])
 
         children = links_df[links_df["parent_loc_id"] == loc_id].copy()
         children["direction"] = "triggered"

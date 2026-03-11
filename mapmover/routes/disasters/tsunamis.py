@@ -5,6 +5,7 @@ from fastapi import APIRouter
 from mapmover.disaster_filters import apply_location_filters, get_default_min_year
 from mapmover.duckdb_helpers import (
     duckdb_available,
+    parquet_available,
     select_filtered_event_rows,
     select_linked_loc_ids,
     select_rows_by_exact_value,
@@ -70,7 +71,7 @@ async def get_tsunamis_geojson(
 
     try:
         events_path = GLOBAL_DIR / "disasters/tsunamis/events.parquet"
-        if not events_path.exists():
+        if not parquet_available(events_path):
             return msgpack_error("Tsunami data not available", 404)
 
         use_duckdb = duckdb_available()
@@ -128,7 +129,7 @@ async def get_tsunami_runups(event_id: str):
         runups_path = GLOBAL_DIR / "disasters/tsunamis/runups.parquet"
         events_path = GLOBAL_DIR / "disasters/tsunamis/events.parquet"
 
-        if not runups_path.exists():
+        if not parquet_available(runups_path):
             return msgpack_error("Runup data not available", 404)
 
         if duckdb_available():
@@ -140,7 +141,7 @@ async def get_tsunami_runups(event_id: str):
             return msgpack_error(f"No runups found for event {event_id}", 404)
 
         source_event = None
-        if events_path.exists():
+        if parquet_available(events_path):
             if duckdb_available():
                 event_row = select_rows_by_exact_value(events_path, "event_id", event_id)
             else:
@@ -213,7 +214,7 @@ async def get_tsunami_animation_data(event_id: str):
     try:
         runups_path = GLOBAL_DIR / "disasters/tsunamis/runups.parquet"
         events_path = GLOBAL_DIR / "disasters/tsunamis/events.parquet"
-        if not events_path.exists() or not runups_path.exists():
+        if not parquet_available(events_path) or not parquet_available(runups_path):
             return msgpack_error("Tsunami data not available", 404)
 
         if duckdb_available():
@@ -303,7 +304,7 @@ async def get_nearby_tsunamis(
 
     try:
         tsunamis_path = GLOBAL_DIR / "disasters/tsunamis/events.parquet"
-        if not tsunamis_path.exists():
+        if not parquet_available(tsunamis_path):
             return msgpack_error("Tsunami data not available", 404)
 
         if timestamp:
@@ -367,7 +368,7 @@ async def get_related_earthquakes_for_tsunami(event_id: str):
         tsunami_path = GLOBAL_DIR / "disasters/tsunamis/events.parquet"
         eq_path = GLOBAL_DIR / "disasters/earthquakes/events.parquet"
         links_path = GLOBAL_DIR / "disasters/links.parquet"
-        if not tsunami_path.exists() or not eq_path.exists() or not links_path.exists():
+        if not parquet_available(tsunami_path) or not parquet_available(eq_path) or not parquet_available(links_path):
             return msgpack_error("Linked disaster data not available", 404)
 
         tsunami_df = select_rows_by_exact_value(tsunami_path, "event_id", event_id)

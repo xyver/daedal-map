@@ -3,7 +3,7 @@
 from fastapi import APIRouter
 
 from mapmover.disaster_filters import apply_location_filters, get_default_min_year
-from mapmover.duckdb_helpers import duckdb_available, select_filtered_partitioned_rows, select_rows
+from mapmover.duckdb_helpers import duckdb_available, is_s3_mode, parquet_available, path_to_uri, select_filtered_partitioned_rows, select_rows
 from mapmover.logging_analytics import logger
 from mapmover.paths import COUNTRIES_DIR, GLOBAL_DIR
 
@@ -15,6 +15,8 @@ router = APIRouter()
 
 def _resolve_first_existing(*paths):
     """Return the first existing path from a set of data-layout candidates."""
+    if is_s3_mode():
+        return paths[0] if paths else None
     for path in paths:
         if path.exists():
             return path
@@ -23,6 +25,16 @@ def _resolve_first_existing(*paths):
 
 def list_wildfire_year_files():
     """Return available yearly wildfire parquet files (year, path), sorted by year."""
+    if is_s3_mode():
+        # In S3 mode, generate expected year paths (2000-2024) without local disk check.
+        # DuckDB will handle missing files gracefully per query.
+        files = []
+        base = GLOBAL_DIR / "disasters/wildfires/by_year_enriched"
+        for yr in range(2000, 2025):
+            path = base / f"fires_{yr}_enriched.parquet"
+            files.append((yr, path))
+        return files
+
     files = []
     for base, suffix in [
         (GLOBAL_DIR / "disasters/wildfires/by_year_enriched", "_enriched.parquet"),
@@ -32,7 +44,6 @@ def list_wildfire_year_files():
             continue
         for path in base.glob(f"fires_*{suffix}"):
             stem = path.stem
-            # fires_2018_enriched -> 2018, fires_2018 -> 2018
             parts = stem.split("_")
             if len(parts) < 2:
                 continue
@@ -87,7 +98,7 @@ async def get_wildfires_geojson(
             COUNTRIES_DIR / "CAN/cnfdb/fires_enriched.parquet",
         )
         global_by_year_path = GLOBAL_DIR / "disasters/wildfires/by_year_enriched"
-        if not global_by_year_path.exists():
+        if not is_s3_mode() and not global_by_year_path.exists():
             global_by_year_path = GLOBAL_DIR / "disasters/wildfires/by_year"
 
         base_columns = [
@@ -131,7 +142,7 @@ async def get_wildfires_geojson(
         source_used = []
 
         if loc_prefix is None or loc_prefix.startswith("USA"):
-            if usa_fires_path.exists():
+            if parquet_available(usa_fires_path):
                 usa_df = select_rows(usa_fires_path)
                 if usa_df.empty:
                     usa_df = pd.read_parquet(usa_fires_path)
@@ -163,7 +174,7 @@ async def get_wildfires_geojson(
                     source_used.append("USA")
 
         if loc_prefix is None or loc_prefix.startswith("CAN"):
-            if can_fires_path.exists():
+            if parquet_available(can_fires_path):
                 can_df = select_rows(can_fires_path)
                 if can_df.empty:
                     can_df = pd.read_parquet(can_fires_path)
@@ -187,14 +198,17 @@ async def get_wildfires_geojson(
                     source_used.append("CAN")
 
         if loc_prefix is None or (not loc_prefix.startswith("USA") and not loc_prefix.startswith("CAN")):
-            if global_by_year_path.exists():
+            if parquet_available(global_by_year_path) or is_s3_mode():
                 year_files = []
                 for yr in years_to_load:
                     year_file = global_by_year_path / f"fires_{yr}_enriched.parquet"
-                    if not year_file.exists():
-                        year_file = global_by_year_path / f"fires_{yr}.parquet"
-                    if year_file.exists():
+                    if is_s3_mode():
                         year_files.append(year_file)
+                    else:
+                        if not year_file.exists():
+                            year_file = global_by_year_path / f"fires_{yr}.parquet"
+                        if year_file.exists():
+                            year_files.append(year_file)
 
                 global_df = pd.DataFrame()
                 if year_files and duckdb_available():
@@ -398,7 +412,7 @@ async def get_wildfire_perimeter(event_id: str, year: int = None):
                 props["year"] = matched_year
             return msgpack_response({"type": "Feature", "geometry": perimeter, "properties": props})
 
-        if main_path.exists():
+        if parquet_available(main_path):
             if duckdb_available():
                 df = select_rows(
                     main_path,
@@ -433,7 +447,7 @@ async def get_wildfire_progression(event_id: str, year: int = None):
 
     try:
         progression_path = GLOBAL_DIR / "disasters/wildfires"
-        if not progression_path.exists():
+        if not is_s3_mode() and not progression_path.exists():
             return msgpack_response(
                 {
                     "type": "FeatureCollection",
@@ -454,7 +468,7 @@ async def get_wildfire_progression(event_id: str, year: int = None):
 
         matches = []
         for prog_file in candidate_files:
-            if not prog_file.exists():
+            if not is_s3_mode() and not prog_file.exists():
                 continue
             if duckdb_available():
                 current_df = select_rows(

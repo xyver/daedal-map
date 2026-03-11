@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter
 
-from mapmover.duckdb_helpers import duckdb_available, select_filtered_event_rows
+from mapmover.duckdb_helpers import duckdb_available, parquet_available, select_filtered_event_rows
 from mapmover.logging_analytics import logger
 from mapmover.paths import GLOBAL_DIR
 
@@ -58,7 +58,7 @@ async def get_landslides_geojson(
 
     try:
         events_path = GLOBAL_DIR / "disasters/landslides/events.parquet"
-        if not events_path.exists():
+        if not parquet_available(events_path):
             return msgpack_error("Landslide data not available", 404)
 
         use_duckdb = duckdb_available()
