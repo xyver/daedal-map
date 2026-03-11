@@ -150,6 +150,22 @@ def run_rows(sql: str, params: list) -> list[tuple]:
         con.close()
 
 
+def _normalize_ts_for_duckdb(val: str | None) -> str | None:
+    """Convert a ms-epoch timestamp string to an ISO datetime string for DuckDB.
+
+    DuckDB's CAST(? AS TIMESTAMP) rejects raw millisecond integers like
+    '1735718400000'. Detect them (>10 digits, all numeric) and convert to
+    'YYYY-MM-DD HH:MM:SS' in UTC which DuckDB handles fine.
+    """
+    if val is None:
+        return None
+    s = str(val).strip()
+    if s.lstrip("-").isdigit() and len(s) > 10:
+        from datetime import datetime, timezone
+        return datetime.fromtimestamp(int(s) / 1000.0, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    return val
+
+
 def parquet_columns(parquet_path: Path) -> set[str]:
     if duckdb is None:
         return set()
@@ -274,10 +290,10 @@ def select_filtered_event_rows(
         params.append(year)
     if start is not None and "timestamp" in available_cols:
         where.append('"timestamp" >= CAST(? AS TIMESTAMP)')
-        params.append(start)
+        params.append(_normalize_ts_for_duckdb(start))
     if end is not None and "timestamp" in available_cols:
         where.append('"timestamp" <= CAST(? AS TIMESTAMP)')
-        params.append(end)
+        params.append(_normalize_ts_for_duckdb(end))
 
     for col, value in (min_value_filters or {}).items():
         if col in available_cols and value is not None:
@@ -457,58 +473,75 @@ def select_filtered_partitioned_rows(
     if not uris:
         return pd.DataFrame()
 
-    placeholders = ", ".join("?" for _ in uris)
-    sql = f"SELECT * FROM read_parquet([{placeholders}])"
-    params: list = list(uris)
-
-    # Get columns from first file to build WHERE clause
-    available_cols = parquet_columns(Path(uris[0]) if not is_s3_mode() else Path(uris[0].replace("s3://", "")))
+    # Get columns from first reachable file to build WHERE clause
+    available_cols: set[str] = set()
     if is_s3_mode():
-        # Re-derive columns via DuckDB in S3 mode
-        try:
-            rows = run_rows("DESCRIBE SELECT * FROM read_parquet(?)", [uris[0]])
-            available_cols = {row[0] for row in rows}
-        except Exception:
-            available_cols = set()
+        for uri in uris:
+            try:
+                rows = run_rows("DESCRIBE SELECT * FROM read_parquet(?)", [uri])
+                available_cols = {row[0] for row in rows}
+                break
+            except Exception:
+                continue
+    else:
+        available_cols = parquet_columns(Path(uris[0]))
 
+    # Build WHERE clause and filter params (not including the URI placeholder)
     where: list[str] = []
+    filter_params: list = []
 
     if year is not None and "year" in available_cols:
         where.append('"year" = ?')
-        params.append(year)
+        filter_params.append(year)
     if start is not None and "timestamp" in available_cols:
         where.append('"timestamp" >= CAST(? AS TIMESTAMP)')
-        params.append(start)
+        filter_params.append(_normalize_ts_for_duckdb(start))
     if end is not None and "timestamp" in available_cols:
         where.append('"timestamp" <= CAST(? AS TIMESTAMP)')
-        params.append(end)
+        filter_params.append(_normalize_ts_for_duckdb(end))
 
     for col, value in (min_value_filters or {}).items():
         if col in available_cols and value is not None:
             where.append(f"{quote_ident(col)} >= ?")
-            params.append(value)
+            filter_params.append(value)
 
     for col, value in (exact_filters or {}).items():
         if col in available_cols and value is not None:
             where.append(f"{quote_ident(col)} = ?")
-            params.append(value)
+            filter_params.append(value)
 
     for col, value in (like_filters or {}).items():
         if col in available_cols and value is not None:
             where.append(f"{quote_ident(col)} LIKE ?")
-            params.append(value)
+            filter_params.append(value)
 
     for col, values in (in_filters or {}).items():
         values = list(values or [])
         if col in available_cols and values:
             placeholders_w = ", ".join("?" for _ in values)
             where.append(f"{quote_ident(col)} IN ({placeholders_w})")
-            params.extend(values)
+            filter_params.extend(values)
 
-    if where:
-        sql += " WHERE " + " AND ".join(where)
+    where_clause = " WHERE " + " AND ".join(where) if where else ""
 
-    return run_df(sql, params)
+    if is_s3_mode():
+        # Query each file individually so missing S3 files are silently skipped
+        dfs = []
+        for uri in uris:
+            try:
+                df = run_df(f"SELECT * FROM read_parquet(?){where_clause}", [uri] + filter_params)
+                if not df.empty:
+                    dfs.append(df)
+            except Exception as e:
+                err = str(e)
+                if "No files found" in err or "404" in err or "HTTP" in err:
+                    continue
+                raise
+        return pd.concat(dfs, ignore_index=True) if dfs else pd.DataFrame()
+    else:
+        placeholders = ", ".join("?" for _ in uris)
+        sql = f"SELECT * FROM read_parquet([{placeholders}]){where_clause}"
+        return run_df(sql, list(uris) + filter_params)
 
 
 def select_columns_from_parquet(parquet_path: Path, columns: Iterable[str]) -> pd.DataFrame:

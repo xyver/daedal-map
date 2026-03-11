@@ -26,7 +26,7 @@ except ImportError:
         return json.loads(s)
 
 from .paths import GEOMETRY_DIR, DATA_ROOT
-from .duckdb_helpers import select_rows
+from .duckdb_helpers import select_rows, is_s3_mode, parquet_columns
 
 logger = logging.getLogger("mapmover")
 
@@ -41,6 +41,17 @@ _country_bounds_cache = None
 
 # Cache for admin level names from reference/admin_levels.json
 _admin_levels_cache = None
+
+
+def _parquet_accessible(path: Path) -> bool:
+    """Returns True if a parquet file exists locally or is accessible via S3/DuckDB."""
+    if not is_s3_mode():
+        return path.exists()
+    try:
+        cols = parquet_columns(path)
+        return bool(cols)
+    except Exception:
+        return False
 
 
 def get_geometry_path():
@@ -113,11 +124,11 @@ def load_country_parquet(iso3: str, admin_level: int = None):
     parquet_file = None
     crosswalk_data = None
 
-    if country_geom_file.exists():
+    if _parquet_accessible(country_geom_file):
         parquet_file = country_geom_file
         logger.debug(f"Using country-specific geometry: {country_geom_file}")
-    elif crosswalk_file.exists() and global_geom_file.exists():
-        # Load crosswalk for later translation
+    elif crosswalk_file.exists() and _parquet_accessible(global_geom_file):
+        # Load crosswalk for later translation (crosswalk.json is synced locally in S3 mode)
         try:
             with open(crosswalk_file, 'r') as f:
                 crosswalk_data = json.load(f)
@@ -126,7 +137,7 @@ def load_country_parquet(iso3: str, admin_level: int = None):
         except Exception as e:
             logger.warning(f"Error loading crosswalk {crosswalk_file}: {e}")
             parquet_file = global_geom_file
-    elif global_geom_file.exists():
+    elif _parquet_accessible(global_geom_file):
         parquet_file = global_geom_file
         logger.debug(f"Using global geometry fallback: {global_geom_file}")
     else:
@@ -140,13 +151,16 @@ def load_country_parquet(iso3: str, admin_level: int = None):
                 parquet_file,
                 exact_filters={"admin_level": admin_level},
             )
-            if df.empty:
+            if df.empty and not is_s3_mode():
                 df = pd.read_parquet(
                     parquet_file,
                     filters=[('admin_level', '==', admin_level)]
                 )
         else:
-            df = pd.read_parquet(parquet_file)
+            if is_s3_mode():
+                df = select_rows(parquet_file)
+            else:
+                df = pd.read_parquet(parquet_file)
 
         # If crosswalk exists, add reverse mapping for lookup
         # This allows data with local loc_ids to find GADM geometry

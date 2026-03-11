@@ -33,7 +33,7 @@ async def get_floods_geojson(
 
     try:
         events_path = GLOBAL_DIR / "disasters/floods/events_enriched.parquet"
-        if not is_s3_mode() and not events_path.exists():
+        if not events_path.exists():
             events_path = GLOBAL_DIR / "disasters/floods/events.parquet"
         if not parquet_available(events_path):
             return msgpack_error("Flood data not available", 404)

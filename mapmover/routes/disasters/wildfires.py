@@ -132,7 +132,7 @@ async def get_wildfires_geojson(
             years_to_load = [year]
         elif start_ts_parsed is not None or end_ts_parsed is not None:
             s_year = start_ts_parsed.year if start_ts_parsed else min_year
-            e_year = end_ts_parsed.year if end_ts_parsed else (max_year or 2026)
+            e_year = end_ts_parsed.year if end_ts_parsed else (max_year or 2025)
             years_to_load = list(range(s_year, e_year + 1))
         else:
             end_year = max_year if max_year else 2024
