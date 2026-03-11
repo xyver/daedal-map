@@ -46,17 +46,17 @@ export const ViewportLoader = {
   // Navigation layers (contiguous, smooth zoom):
   //   0: Countries, 1: States, 2: Counties, 3: Tracts, 4: Block Groups, 5: Blocks
   //
-  // Note: GADM admin_level=3 (cities/places) is fragmented/non-contiguous.
-  // Use it as an overlay via chat queries, not in navigation zoom.
+  // Note: admin_level=3+ is USA-only via Census geometry (tracts, blockgroups, blocks).
+  // Other countries fall back gracefully to their deepest available geoBoundaries level.
   // Census tracts provide smooth contiguous coverage at the sub-county level.
   areaThresholds: {
     level0: 3000,   // > 3000 sq deg = countries (world/continent view, zoom ~2-4)
     level1: 300,    // > 300 sq deg = states (large country view, zoom ~4-6)
-    level2: 30,     // > 30 sq deg = counties (state view, zoom ~6-8)
-    level3: 3,      // > 3 sq deg = census tracts (county view, zoom ~8-10)
-    level4: 0.3,    // > 0.3 sq deg = block groups (city view, zoom ~10-12)
-    level5: 0.03    // > 0.03 sq deg = blocks (neighborhood, zoom ~12-14)
-                    // < 0.03 sq deg = (reserved for future deeper levels)
+    level2: 30,     // > 30 sq deg = counties (state/region view, zoom ~6-8)
+    level3: 0.5,    // > 0.5 sq deg = census tracts (single county view, zoom ~8)
+    level4: 0.1,    // > 0.1 sq deg = block groups (city/district view, zoom ~11-13)
+    level5: 0.01    // > 0.01 sq deg = blocks (neighborhood, zoom ~13-15)
+                    // < 0.01 sq deg = (reserved for future deeper levels)
   },
 
   /**

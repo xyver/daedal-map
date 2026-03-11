@@ -144,6 +144,13 @@ export const App = {
     // Initialize map
     await MapAdapter.init();
 
+    // Replay any overlays that were restored from localStorage before the map was ready.
+    // OverlaySelector.init() restores saved state before MapAdapter.init() runs, so any
+    // active overlays fire into a map that doesn't exist yet. Re-trigger them now.
+    for (const overlayId of OverlaySelector.activeOverlays) {
+      OverlayController.handleOverlayChange(overlayId, true);
+    }
+
     // Load reference data for popups (non-blocking)
     PopupBuilder.loadAdminLevels();
 

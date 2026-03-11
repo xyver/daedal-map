@@ -25,7 +25,7 @@ except ImportError:
     def fast_json_loads(s):
         return json.loads(s)
 
-from .paths import GEOMETRY_DIR, DATA_ROOT
+from .paths import GEOMETRY_DIR, DATA_ROOT, COUNTRIES_DIR
 from .duckdb_helpers import select_rows, is_s3_mode, parquet_columns
 
 logger = logging.getLogger("mapmover")
@@ -96,8 +96,8 @@ def load_country_parquet(iso3: str, admin_level: int = None):
 
     Priority order (3-tier fallback):
     1. countries/{ISO3}/geometry.parquet - Country-specific geometry (NUTS, ABS LGA, etc.)
-    2. countries/{ISO3}/crosswalk.json + geometry/{ISO3}.parquet - Crosswalk translation to GADM
-    3. geometry/{ISO3}.parquet - Global GADM geometry (fallback)
+    2. countries/{ISO3}/crosswalk.json + geometry/{ISO3}.parquet - Crosswalk translation to geoBoundaries
+    3. geometry/{ISO3}.parquet - Global geoBoundaries geometry (fallback)
 
     If admin_level is specified, uses predicate pushdown for efficiency.
     """
@@ -133,7 +133,7 @@ def load_country_parquet(iso3: str, admin_level: int = None):
             with open(crosswalk_file, 'r') as f:
                 crosswalk_data = json.load(f)
             parquet_file = global_geom_file
-            logger.debug(f"Using crosswalk + GADM geometry: {crosswalk_file}")
+            logger.debug(f"Using crosswalk + geoBoundaries geometry: {crosswalk_file}")
         except Exception as e:
             logger.warning(f"Error loading crosswalk {crosswalk_file}: {e}")
             parquet_file = global_geom_file
@@ -1094,15 +1094,64 @@ def _filter_df_by_bbox(df, buffered_bbox):
     return df
 
 
+_crosswalk_reverse_cache: dict = {}
+
+
+def _get_crosswalk_reverse(iso3: str) -> dict:
+    """
+    Load crosswalk.json for iso3 and return a reverse map:
+      geo_loc_id -> local_abbrev  (e.g. "USA-G109436" -> "NY")
+
+    Result is cached in memory. Returns empty dict if no crosswalk exists.
+    """
+    if iso3 in _crosswalk_reverse_cache:
+        return _crosswalk_reverse_cache[iso3]
+
+    crosswalk_path = COUNTRIES_DIR / iso3 / "crosswalk.json"
+    if not crosswalk_path.exists():
+        _crosswalk_reverse_cache[iso3] = {}
+        return {}
+
+    try:
+        with open(crosswalk_path, encoding="utf-8") as f:
+            cw = json.load(f)
+        mappings = cw.get("mappings", {})
+        # mappings: "USA-NY" -> "USA-G109436"
+        # reverse:  "USA-G109436" -> "NY"
+        reverse = {}
+        for local_loc_id, geo_loc_id in mappings.items():
+            # Extract the local abbreviation from "USA-NY" -> "NY"
+            parts = local_loc_id.split("-", 1)
+            if len(parts) == 2:
+                reverse[geo_loc_id] = parts[1]
+        _crosswalk_reverse_cache[iso3] = reverse
+        return reverse
+    except Exception as e:
+        logger.warning(f"Failed to load crosswalk for {iso3}: {e}")
+        _crosswalk_reverse_cache[iso3] = {}
+        return {}
+
+
 def get_regions_in_bbox(iso3: str, min_lon: float, min_lat: float, max_lon: float, max_lat: float):
     """
-    Return region/state codes whose bounds intersect the query bbox.
-    Uses the country's geometry.parquet to find admin_level=1 regions.
+    Return local region/state codes whose bounds intersect the query bbox.
+    Uses the country's geometry.parquet to find admin_level=1 regions, then
+    resolves geo loc_ids back to local codes via the crosswalk reverse map.
     """
     df = load_country_parquet(iso3, admin_level=1)
     if df is None or len(df) == 0:
         logger.debug(f"No admin_level=1 data found for {iso3}")
         return []
+
+    crosswalk_reverse = _get_crosswalk_reverse(iso3)
+
+    def resolve_region_code(loc_id: str) -> str:
+        """Convert a geo loc_id to a local region code via crosswalk, or fall back to raw segment."""
+        if loc_id in crosswalk_reverse:
+            return crosswalk_reverse[loc_id]
+        # No crosswalk entry - extract second segment as-is
+        parts = loc_id.split("-", 1)
+        return parts[1] if len(parts) == 2 else loc_id
 
     result = []
     has_bbox = 'bbox_min_lon' in df.columns
@@ -1110,12 +1159,10 @@ def get_regions_in_bbox(iso3: str, min_lon: float, min_lat: float, max_lon: floa
 
     if not has_bbox and not has_centroid:
         logger.warning(f"No bbox or centroid columns in {iso3} admin_level=1 parquet")
-        # Fallback: return all regions (let the sub-county loader filter by bbox)
         for _, row in df.iterrows():
             loc_id = row.get('loc_id', '')
-            if '-' in loc_id:
-                region_code = loc_id.split('-')[1]
-                result.append(region_code)
+            if loc_id:
+                result.append(resolve_region_code(loc_id))
         logger.debug(f"Returning all {len(result)} regions for {iso3} (no spatial filter)")
         return result
 
@@ -1132,7 +1179,6 @@ def get_regions_in_bbox(iso3: str, min_lon: float, min_lat: float, max_lon: floa
                 intersects = (c_max_lon >= min_lon and c_min_lon <= max_lon and
                               c_max_lat >= min_lat and c_min_lat <= max_lat)
         elif has_centroid:
-            # Fallback to centroid check (less accurate but better than nothing)
             c_lon = row.get('centroid_lon')
             c_lat = row.get('centroid_lat')
             if pd.notna(c_lon) and pd.notna(c_lat):
@@ -1141,9 +1187,8 @@ def get_regions_in_bbox(iso3: str, min_lon: float, min_lat: float, max_lon: floa
 
         if intersects:
             loc_id = row.get('loc_id', '')
-            if '-' in loc_id:
-                region_code = loc_id.split('-')[1]
-                result.append(region_code)
+            if loc_id:
+                result.append(resolve_region_code(loc_id))
 
     logger.debug(f"Found {len(result)} regions in bbox for {iso3}: {result}")
     return result
@@ -1164,12 +1209,22 @@ def get_viewport_geometry(admin_level: int, bbox: tuple, debug: bool = False):
     """
     min_lon, min_lat, max_lon, max_lat = bbox
 
-    # Add buffer for smooth panning - proportional to viewport size (2x total preload)
-    # 50% buffer on each side = 2x the viewport area total
+    # Buffer for smooth panning - proportional to viewport size.
+    # Cloud/S3 mode: all levels at 1% to keep feature caps focused on visible area.
+    # Local mode (restore when switching back): smart scaling by level:
+    #   level 0-1: 0.50  (world/country - few large shapes, prefetch aggressively)
+    #   level 2:   0.30  (county/district view)
+    #   level 3+:  0.15  (tracts/blocks - many small shapes, tight budget)
+    if admin_level >= 3:
+        buffer_factor = 0.01
+    elif admin_level == 2:
+        buffer_factor = 0.01
+    else:
+        buffer_factor = 0.01
     viewport_width = max_lon - min_lon
     viewport_height = max_lat - min_lat
-    buffer_lon = viewport_width * 0.5
-    buffer_lat = viewport_height * 0.5
+    buffer_lon = viewport_width * buffer_factor
+    buffer_lat = viewport_height * buffer_factor
     buffered_bbox = (
         min_lon - buffer_lon,
         min_lat - buffer_lat,
@@ -1291,9 +1346,17 @@ def get_viewport_geometry(admin_level: int, bbox: tuple, debug: bool = False):
 
         all_features.extend(geojson.get("features", []))
 
-    # Safety limit to prevent browser memory issues
-    # Sort by distance from viewport center so edges get trimmed naturally
-    MAX_FEATURES = 10000
+    # Per-level feature cap to limit browser memory and S3 transfer volume.
+    # Tighter caps at deep zoom where shapes are small and viewport covers fewer.
+    MAX_FEATURES_BY_LEVEL = {
+        0: 300,   # Countries - global.csv is local anyway
+        1: 500,   # States / provinces
+        2: 1000,  # Counties / districts
+        3: 500,   # Tracts / ZCTAs
+        4: 300,   # Block groups
+        5: 200,   # Blocks
+    }
+    MAX_FEATURES = MAX_FEATURES_BY_LEVEL.get(admin_level, 200)
     truncated = False
     if len(all_features) > MAX_FEATURES:
         logger.warning(f"Truncating {len(all_features)} features to {MAX_FEATURES} for admin level {admin_level}")

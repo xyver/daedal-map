@@ -13,6 +13,8 @@ import sys
 from pathlib import Path
 
 from dotenv import load_dotenv
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -46,10 +48,31 @@ load_dotenv()
 BASE_DIR = Path(__file__).resolve().parent
 
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Initialize data catalog, conversions, and order processor on startup."""
+    logger.info("Starting county-map API...")
+    load_conversions()
+    initialize_catalog()
+
+    async def async_execute_order(items, hints):
+        import asyncio
+        loop = asyncio.get_event_loop()
+        order = {"items": items, "summary": hints.get("summary", "")}
+        return await loop.run_in_executor(None, execute_order, order)
+
+    order_processor.set_executor(async_execute_order)
+    await order_processor.start()
+    logger.info("Startup complete - data catalog and order processor initialized")
+
+    yield
+
+
 app = FastAPI(
     title="County Map API",
     description="Geographic data exploration API",
     version="2.0.0",
+    lifespan=lifespan,
 )
 
 app.add_middleware(
@@ -76,25 +99,6 @@ app.include_router(wildfires_router)
 app.include_router(weather_router)
 app.include_router(chat_router)
 
-
-@app.on_event("startup")
-async def startup_event():
-    """Initialize data catalog, conversions, and order processor on startup."""
-    logger.info("Starting county-map API...")
-    load_conversions()
-    initialize_catalog()
-
-    async def async_execute_order(items, hints):
-        """Async wrapper for synchronous execute_order."""
-        import asyncio
-
-        loop = asyncio.get_event_loop()
-        order = {"items": items, "summary": hints.get("summary", "")}
-        return await loop.run_in_executor(None, execute_order, order)
-
-    order_processor.set_executor(async_execute_order)
-    await order_processor.start()
-    logger.info("Startup complete - data catalog and order processor initialized")
 
 
 if __name__ == "__main__":
