@@ -33,6 +33,23 @@ async def health_check():
     return {"status": "healthy", "service": "county-map-api"}
 
 
+@router.get("/debug/cache")
+async def debug_cache():
+    """List files in the S3 local cache directory (S3 mode only)."""
+    from mapmover.duckdb_helpers import is_s3_mode
+    from mapmover.paths import DATA_ROOT
+    cache_dir = DATA_ROOT
+    if not cache_dir.exists():
+        return {"error": f"cache dir does not exist: {cache_dir}"}
+    files = sorted(str(p.relative_to(cache_dir)) for p in cache_dir.rglob("*") if p.is_file())
+    return {
+        "s3_mode": is_s3_mode(),
+        "cache_dir": str(cache_dir),
+        "file_count": len(files),
+        "files": files,
+    }
+
+
 @router.get("/api/catalog/overlays")
 async def get_catalog_overlays():
     """Get overlay tree from the catalog for the frontend layer panel."""

@@ -1818,9 +1818,12 @@ def execute_order(order: dict) -> dict:
 
     elif primary_level == "country":
         geometry_df = load_global_countries()
+        logger.info(f"[DEBUG] load_global_countries returned: {len(geometry_df) if geometry_df is not None else None} rows")
+        logger.info(f"[DEBUG] all_region_codes sample: {list(all_region_codes)[:5]}, year_data years: {list(year_data.keys())[:3] if year_data else []}")
         # Filter to requested region if specified (so all region countries appear, with or without data)
-        if all_region_codes and "loc_id" in geometry_df.columns:
+        if all_region_codes and geometry_df is not None and "loc_id" in geometry_df.columns:
             geometry_df = geometry_df[geometry_df["loc_id"].isin(all_region_codes)]
+            logger.info(f"[DEBUG] After region filter: {len(geometry_df)} rows")
     else:
         # Standard admin levels (admin_1, admin_2) - load from country parquet files
         iso3_codes = set()

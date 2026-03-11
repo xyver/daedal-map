@@ -183,4 +183,8 @@ def ensure_s3_data_root(cache_root: Path) -> Path:
             len(deferred),
         )
 
+    # Log all eagerly-synced files so we can verify what landed in cache
+    synced_paths = sorted(str(obj["local_path"]) for obj in eager)
+    logger.info("S3 cache contents (%d files):\n%s", len(synced_paths), "\n".join(synced_paths))
+
     return cache_root
