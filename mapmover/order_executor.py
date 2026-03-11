@@ -17,6 +17,8 @@ import json
 from pathlib import Path
 from typing import Optional
 
+logger = logging.getLogger("mapmover")
+
 from .geometry_handlers import (
     load_global_countries,
     load_country_parquet,

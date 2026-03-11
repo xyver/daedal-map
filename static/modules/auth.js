@@ -280,7 +280,7 @@ export const AuthManager = {
           currentSession = session;
           await fetchProfile();
           updateDom();
-          if (_event !== 'INITIAL_SESSION') {
+          if (_event === 'SIGNED_IN' || _event === 'SIGNED_OUT') {
             emitAuthChanged();
           }
         });
