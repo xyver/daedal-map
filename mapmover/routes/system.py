@@ -78,6 +78,51 @@ async def debug_s3():
     return result
 
 
+@router.get("/debug/geometry")
+async def debug_geometry():
+    """Test geometry loading and SDG order pipeline."""
+    import traceback
+    import pandas as pd
+    from mapmover.paths import DATA_ROOT, GEOMETRY_DIR
+    from mapmover.geometry_handlers import load_global_countries, get_geometry_path
+
+    result = {
+        "DATA_ROOT": str(DATA_ROOT),
+        "GEOMETRY_DIR": str(GEOMETRY_DIR),
+        "geometry_dir_exists": GEOMETRY_DIR.exists(),
+    }
+
+    global_csv = GEOMETRY_DIR / "global.csv"
+    result["global_csv_path"] = str(global_csv)
+    result["global_csv_exists"] = global_csv.exists()
+
+    try:
+        geom_path = get_geometry_path()
+        result["get_geometry_path"] = str(geom_path) if geom_path else None
+    except Exception as e:
+        result["get_geometry_path_error"] = str(e)
+
+    try:
+        df = load_global_countries()
+        if df is None:
+            result["load_global_countries"] = None
+        else:
+            result["load_global_countries_rows"] = len(df)
+            result["load_global_countries_cols"] = list(df.columns)
+            has_geom = "geometry" in df.columns
+            result["has_geometry_col"] = has_geom
+            if has_geom:
+                non_null = df["geometry"].notna().sum()
+                result["non_null_geometry"] = int(non_null)
+                sample = df[df["geometry"].notna()]["geometry"].iloc[0][:80] if non_null > 0 else None
+                result["geometry_sample"] = sample
+    except Exception as e:
+        result["load_global_countries_error"] = str(e)
+        result["traceback"] = traceback.format_exc()
+
+    return result
+
+
 @router.get("/api/catalog/overlays")
 async def get_catalog_overlays():
     """Get overlay tree from the catalog for the frontend layer panel."""
