@@ -28,8 +28,10 @@ supabase>=2.0.0
 # Admin dashboard (local only, not deployed to Railway)
 streamlit>=1.30.0
 
+# Required for country bounds bbox intersection (viewport geometry loading):
+shapely>=2.0.0
+
 # Legacy/Archive tools (not required for main app):
 # geopandas>=0.14.0
-# shapely>=2.0.0
 # pyproj>=3.6.0
 # pyogrio>=0.7.0

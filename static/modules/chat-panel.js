@@ -500,16 +500,19 @@ export const ChatManager = {
         this.elements.messages.querySelectorAll('.loading-indicator, .typing-indicator').forEach(el => el.remove());
         this.elements.messages.scrollTop = this.elements.messages.scrollHeight;
       }
-    }
 
-    // Only show recovery prompt if the user actually used chat in the previous session
-    const hadChatSession = this.history.some(m => m.role === 'user');
-    if (hadChatSession) {
-      const apiCalls = getApiCallsForRecovery();
-      const executedOrders = getExecutedOrdersForRecovery();
-      if (apiCalls.length > 0 || executedOrders.length > 0) {
-        this.showRecoveryPrompt(apiCalls.length, executedOrders.length);
+      // Only show recovery prompt if the user actually used chat in the previous session
+      const hadChatSession = this.history.some(m => m.role === 'user');
+      if (hadChatSession) {
+        const apiCalls = getApiCallsForRecovery();
+        const executedOrders = getExecutedOrdersForRecovery();
+        if (apiCalls.length > 0 || executedOrders.length > 0) {
+          this.showRecoveryPrompt(apiCalls.length, executedOrders.length);
+        }
       }
+    } else {
+      // No saved session - show welcome message
+      this.addMessage(WELCOME_MESSAGE, 'assistant', { html: true });
     }
   },
 
