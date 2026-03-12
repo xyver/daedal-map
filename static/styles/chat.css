@@ -536,6 +536,23 @@ body.mobile-limited #mobileMapNotice {
   background: #546e7a;
 }
 
+/* Spinner for chat action buttons */
+.btn-spinner {
+  display: inline-block;
+  width: 11px;
+  height: 11px;
+  border: 2px solid rgba(255,255,255,0.3);
+  border-top-color: white;
+  border-radius: 50%;
+  animation: btn-spin 0.7s linear infinite;
+  vertical-align: middle;
+  margin-right: 2px;
+}
+
+@keyframes btn-spin {
+  to { transform: rotate(360deg); }
+}
+
 /* Chat action buttons (preload, quick-load, etc.) */
 .chat-action-btn {
   margin-top: 8px;

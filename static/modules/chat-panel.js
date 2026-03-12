@@ -776,7 +776,7 @@ export const ChatManager = {
    */
   async handlePreloadDisasters2020(btn) {
     btn.disabled = true;
-    btn.textContent = 'Loading...';
+    btn.innerHTML = '<span class="btn-spinner"></span> Loading...';
     try {
       const disasterIds = ['earthquakes', 'hurricanes', 'volcanoes', 'wildfires', 'tsunamis', 'tornadoes'];
 
@@ -790,8 +790,10 @@ export const ChatManager = {
       // Move trim handles to 2020-2025 (overall range stays at default 2000-present)
       window.TimeSlider?.setTrimBounds(2020, 2025);
 
-      // Preload all data into browser cache
-      const summary = await window.OverlayController?.preloadDisasters2020to2025();
+      // Preload sequentially, updating button after each dataset
+      const summary = await window.OverlayController?.preloadDisasters2020to2025((done, total, id) => {
+        btn.innerHTML = `<span class="btn-spinner"></span> Loading ${id}... (${done}/${total})`;
+      });
       const loaded = summary ? Object.values(summary).filter(r => r.loaded).length : 0;
       btn.textContent = `Loaded (${loaded}/6 datasets)`;
     } catch (e) {

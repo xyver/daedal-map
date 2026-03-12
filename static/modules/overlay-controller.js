@@ -2474,22 +2474,24 @@ export const OverlayController = {
    * Floods are skipped (data ends 2019).
    * @returns {Promise<Object>} Results per overlay id: { loaded: boolean }
    */
-  async preloadDisasters2020to2025() {
+  async preloadDisasters2020to2025(onProgress = null) {
     const startMs = new Date(2020, 0, 1).getTime();
     const endMs = new Date(2025, 11, 31, 23, 59, 59).getTime();
     const disasterIds = ['earthquakes', 'hurricanes', 'volcanoes', 'wildfires', 'tsunamis', 'tornadoes'];
 
     console.log('OverlayController: Preloading disasters 2020-2025...');
 
-    const results = await Promise.allSettled(
-      disasterIds.map(id => loadRangeData(id, startMs, endMs, OVERLAY_ENDPOINTS[id]))
-    );
-
     const summary = {};
-    disasterIds.forEach((id, i) => {
-      const r = results[i];
-      summary[id] = r.status === 'fulfilled' ? { loaded: r.value !== false } : { loaded: false, error: r.reason?.message };
-    });
+    for (let i = 0; i < disasterIds.length; i++) {
+      const id = disasterIds[i];
+      try {
+        const result = await loadRangeData(id, startMs, endMs, OVERLAY_ENDPOINTS[id]);
+        summary[id] = { loaded: result !== false };
+      } catch (e) {
+        summary[id] = { loaded: false, error: e.message };
+      }
+      if (onProgress) onProgress(i + 1, disasterIds.length, id);
+    }
 
     console.log('OverlayController: Preload complete:', summary);
     return summary;
