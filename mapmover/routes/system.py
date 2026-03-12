@@ -33,6 +33,46 @@ async def health_check():
     return {"status": "healthy", "service": "county-map-api"}
 
 
+@router.post("/api/feedback")
+async def submit_feedback(request: Request):
+    """Accept anonymous feedback and write it to the Supabase feedback table."""
+    try:
+        body = await decode_request_body(request)
+    except Exception:
+        return msgpack_error("Invalid request body", 400)
+
+    message = (body.get("message") or "").strip()
+    if not message:
+        return msgpack_error("Message is required", 400)
+    if len(message) > 2000:
+        return msgpack_error("Message too long (max 2000 chars)", 400)
+
+    # Derive source from Origin header (daedalmap.io vs daedalmap.com vs local)
+    origin = request.headers.get("origin", "") or request.headers.get("referer", "")
+    if "daedalmap.io" in origin:
+        source = "daedalmap.io"
+    elif "daedalmap.com" in origin:
+        source = "daedalmap.com"
+    else:
+        source = "local"
+
+    try:
+        from supabase_client import get_supabase_client
+        sb = get_supabase_client()
+        if sb:
+            sb.client.table("feedback").insert({
+                "message": message,
+                "source": source,
+            }).execute()
+        else:
+            logger.warning("Feedback received but Supabase not configured: %s", message[:80])
+    except Exception as exc:
+        logger.error("Failed to save feedback: %s", exc)
+        return msgpack_error("Could not save feedback right now", 500)
+
+    return msgpack_response({"ok": True})
+
+
 @router.get("/debug/cache")
 async def debug_cache():
     """List files in the S3 local cache directory (S3 mode only)."""
