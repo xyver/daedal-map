@@ -85,6 +85,20 @@ body.settings-page-body {
   line-height: 1.6;
 }
 
+.settings-link-panel {
+  margin-top: 22px;
+  padding-top: 20px;
+  border-top: 1px solid rgba(105, 147, 196, 0.18);
+}
+
+.settings-link-panel h3 {
+  margin: 0 0 14px;
+  font-size: 15px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #cfe3f8;
+}
+
 .settings-unlocked.hidden,
 .settings-lock-state.hidden {
   display: none;
@@ -158,6 +172,51 @@ body.settings-page-body {
   flex-wrap: wrap;
   gap: 12px;
   margin-top: 18px;
+}
+
+.settings-link-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 12px;
+}
+
+.settings-doc-link {
+  display: block;
+  padding: 15px 16px;
+  border-radius: 16px;
+  border: 1px solid rgba(110, 196, 255, 0.34);
+  background:
+    linear-gradient(135deg, rgba(11, 82, 138, 0.96), rgba(8, 47, 89, 0.92));
+  color: #f4faff;
+  text-decoration: none;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 10px 28px rgba(0, 0, 0, 0.22);
+  transition: border-color 160ms ease, transform 160ms ease, box-shadow 160ms ease, background 160ms ease;
+}
+
+.settings-doc-link:hover {
+  transform: translateY(-2px);
+  border-color: rgba(145, 220, 255, 0.52);
+  background:
+    linear-gradient(135deg, rgba(14, 102, 171, 0.98), rgba(9, 58, 108, 0.95));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.1),
+    0 14px 32px rgba(0, 0, 0, 0.28);
+}
+
+.settings-doc-link strong {
+  display: block;
+  margin-bottom: 5px;
+  font-size: 14px;
+  letter-spacing: 0.03em;
+}
+
+.settings-doc-link span {
+  display: block;
+  color: rgba(228, 242, 255, 0.82);
+  font-size: 13px;
+  line-height: 1.45;
 }
 
 .settings-btn {

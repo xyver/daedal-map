@@ -31,6 +31,16 @@
           <h2>Sign in required</h2>
           <p>This page is for account-backed settings, sticky workspace state, and plan-aware access.</p>
           <button id="settingsLoginBtn" class="settings-cta-btn">Sign In to Continue</button>
+
+          <div class="settings-link-panel">
+            <h3>Learn more</h3>
+            <div class="settings-link-grid">
+              <a class="settings-doc-link" href="https://daedalmap.com/docs/packs" target="_blank" rel="noreferrer">Packs</a>
+              <a class="settings-doc-link" href="https://daedalmap.com/docs/source-map" target="_blank" rel="noreferrer">Source Map</a>
+              <a class="settings-doc-link" href="https://daedalmap.com/docs/accounts" target="_blank" rel="noreferrer">Accounts</a>
+              <a class="settings-doc-link" href="https://daedalmap.com/docs/self-host" target="_blank" rel="noreferrer">Self-Host</a>
+            </div>
+          </div>
         </div>
 
         <div id="settingsUnlocked" class="settings-unlocked hidden">
@@ -46,26 +56,11 @@
 
           <section class="settings-section">
             <h2>Workspace Settings</h2>
-            <p class="settings-intro">These settings now live on a dedicated page instead of inside the sidebar. Logged-in users can treat this as the home for persistent workspace behavior.</p>
-
-            <label for="backupPathInput" class="settings-label">Backup Folder Path</label>
-            <input type="text" id="backupPathInput" class="settings-input"
-                   placeholder="e.g., D:\county-map-data or /home/user/county-map-data">
-
-            <div class="folder-structure">
-              Folder structure:<br>
-              [backup_path]/<br>
-              &nbsp;&nbsp;geometry/&nbsp;&nbsp;&nbsp;-- admin boundaries<br>
-              &nbsp;&nbsp;data/&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;-- indicator and event datasets<br>
-              &nbsp;&nbsp;metadata/&nbsp;&nbsp;&nbsp;-- catalog and index files
-            </div>
-
-            <div class="settings-actions">
-              <button type="button" id="saveSettingsBtn" class="settings-btn primary">Save Settings</button>
-              <button type="button" id="initFoldersBtn" class="settings-btn secondary">Initialize Folders</button>
-            </div>
-
-            <div id="settingsStatus" class="settings-status"></div>
+            <p class="settings-intro">Use this page to manage account-backed workspace settings, storage paths, display preferences, and the persistent behavior tied to your signed-in map session.</p>
+            <p class="settings-intro">
+              This page is focused on account-backed workspace behavior. Local deployment paths and filesystem setup are
+              better handled through the self-host and local deployment guidance rather than exposed directly here.
+            </p>
           </section>
 
           <section class="settings-section">
@@ -87,8 +82,34 @@
           </section>
 
           <section class="settings-section">
-            <h2>Current Configuration</h2>
-            <div id="currentConfig" class="settings-config">Loading...</div>
+            <h2>Related Guides</h2>
+            <p class="settings-intro">Use these direct links when you want the public explanation behind a specific part of the app or runtime model.</p>
+            <div class="settings-link-grid">
+              <a class="settings-doc-link" href="https://daedalmap.com/docs/packs" target="_blank" rel="noreferrer">
+                <strong>Packs</strong>
+                <span>How packs are structured and released.</span>
+              </a>
+              <a class="settings-doc-link" href="https://daedalmap.com/docs/source-data" target="_blank" rel="noreferrer">
+                <strong>Source Data</strong>
+                <span>What each pack should disclose publicly.</span>
+              </a>
+              <a class="settings-doc-link" href="https://daedalmap.com/docs/source-map" target="_blank" rel="noreferrer">
+                <strong>Source Map</strong>
+                <span>What source families are currently in play.</span>
+              </a>
+              <a class="settings-doc-link" href="https://daedalmap.com/docs/accounts" target="_blank" rel="noreferrer">
+                <strong>Accounts</strong>
+                <span>Guest versus logged-in workspace behavior.</span>
+              </a>
+              <a class="settings-doc-link" href="https://daedalmap.com/docs/hosted-vs-local" target="_blank" rel="noreferrer">
+                <strong>Hosted vs Local</strong>
+                <span>How delivery and control differ by mode.</span>
+              </a>
+              <a class="settings-doc-link" href="https://daedalmap.com/docs/self-host" target="_blank" rel="noreferrer">
+                <strong>Self-Host</strong>
+                <span>Run your own deployment from the open repo.</span>
+              </a>
+            </div>
           </section>
         </div>
       </section>
