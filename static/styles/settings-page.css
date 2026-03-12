@@ -1,0 +1,192 @@
+body.settings-page-body {
+  margin: 0;
+  min-height: 100vh;
+  background:
+    radial-gradient(circle at top, rgba(18, 102, 173, 0.18), transparent 32%),
+    linear-gradient(180deg, #030913 0%, #07111f 45%, #0a1627 100%);
+  color: #d9e5f3;
+  font-family: "Segoe UI", Tahoma, sans-serif;
+}
+
+.settings-shell {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 32px 24px 48px;
+}
+
+.settings-topbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 24px;
+  margin-bottom: 18px;
+}
+
+.settings-eyebrow {
+  margin: 0 0 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  font-size: 11px;
+  color: #63b9ff;
+}
+
+.settings-topbar h1 {
+  margin: 0;
+  font-size: 34px;
+  line-height: 1.1;
+}
+
+.settings-topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.settings-nav-link,
+.settings-auth-btn,
+.settings-cta-btn {
+  border: 1px solid rgba(110, 196, 255, 0.3);
+  background: rgba(5, 18, 34, 0.72);
+  color: #e2f1ff;
+  text-decoration: none;
+  padding: 10px 16px;
+  border-radius: 999px;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.settings-auth-status {
+  margin-bottom: 24px;
+  border-radius: 14px;
+}
+
+.settings-layout {
+  display: block;
+}
+
+.settings-main-card {
+  border: 1px solid rgba(89, 173, 231, 0.22);
+  background: rgba(7, 16, 30, 0.84);
+  box-shadow: 0 20px 80px rgba(0, 0, 0, 0.35);
+  border-radius: 24px;
+  padding: 28px;
+}
+
+.settings-lock-state h2,
+.settings-section h2 {
+  margin: 0 0 10px;
+  font-size: 22px;
+}
+
+.settings-lock-state p,
+.settings-intro {
+  margin: 0 0 18px;
+  color: #97afc8;
+  line-height: 1.6;
+}
+
+.settings-unlocked.hidden,
+.settings-lock-state.hidden {
+  display: none;
+}
+
+.settings-section + .settings-section {
+  margin-top: 28px;
+  padding-top: 24px;
+  border-top: 1px solid rgba(105, 147, 196, 0.18);
+}
+
+.account-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 14px;
+}
+
+.summary-card {
+  border: 1px solid rgba(92, 160, 220, 0.2);
+  background: rgba(11, 24, 44, 0.75);
+  border-radius: 16px;
+  padding: 16px;
+}
+
+.summary-label {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: #7fa6c7;
+}
+
+.summary-card strong {
+  font-size: 18px;
+  color: #eff8ff;
+}
+
+.settings-label {
+  display: block;
+  margin-bottom: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #cfe3f8;
+}
+
+.settings-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 12px 14px;
+  background: rgba(3, 11, 22, 0.9);
+  color: #f4faff;
+  border: 1px solid rgba(91, 155, 214, 0.3);
+  border-radius: 12px;
+}
+
+.folder-structure,
+.settings-config {
+  margin-top: 14px;
+  padding: 14px 16px;
+  border-radius: 14px;
+  background: rgba(3, 10, 20, 0.78);
+  border: 1px solid rgba(86, 132, 177, 0.22);
+  color: #9db6d1;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.settings-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 18px;
+}
+
+.settings-btn {
+  border: 1px solid rgba(104, 182, 244, 0.28);
+  border-radius: 12px;
+  padding: 11px 16px;
+  cursor: pointer;
+}
+
+.settings-btn.primary {
+  background: linear-gradient(135deg, #0b6ec1 0%, #0b8ae6 100%);
+  color: #f7fbff;
+}
+
+.settings-btn.secondary {
+  background: rgba(6, 18, 34, 0.78);
+  color: #d5e8fb;
+}
+
+@media (max-width: 720px) {
+  .settings-topbar {
+    flex-direction: column;
+  }
+
+  .settings-shell {
+    padding: 20px 16px 32px;
+  }
+
+  .settings-main-card {
+    padding: 20px;
+  }
+}

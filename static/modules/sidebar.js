@@ -240,6 +240,10 @@ export const SettingsManager = {
       timezoneSelect: document.getElementById('timezoneSelect')
     };
 
+    if (this.elements.settingsLink) {
+      this.elements.settingsLink.setAttribute('href', '/settings');
+    }
+
     this.setupEventListeners();
     this.loadSettings();
     this.loadTimezoneSettings();
@@ -252,24 +256,21 @@ export const SettingsManager = {
     const { settingsLink, backToChat, saveBtn, initFoldersBtn } = this.elements;
 
     // Toggle to settings view
-    settingsLink.addEventListener('click', (e) => {
-      e.preventDefault();
-      this.showSettings();
-    });
+    settingsLink?.addEventListener('click', () => {});
 
     // Back to chat
-    backToChat.addEventListener('click', (e) => {
+    backToChat?.addEventListener('click', (e) => {
       e.preventDefault();
       this.hideSettings();
     });
 
     // Save settings
-    saveBtn.addEventListener('click', () => {
+    saveBtn?.addEventListener('click', () => {
       this.saveSettings();
     });
 
     // Initialize folders
-    initFoldersBtn.addEventListener('click', () => {
+    initFoldersBtn?.addEventListener('click', () => {
       this.initializeFolders();
     });
   },
@@ -302,7 +303,7 @@ export const SettingsManager = {
    */
   async loadSettings() {
     try {
-      const settings = await fetchMsgpack('/settings');
+      const settings = await fetchMsgpack('/api/settings');
       this.elements.backupPathInput.value = settings.backup_path || '';
       this.updateConfigDisplay(settings);
     } catch (error) {
@@ -318,7 +319,7 @@ export const SettingsManager = {
     const backupPath = this.elements.backupPathInput.value.trim();
 
     try {
-      const result = await postMsgpack('/settings', { backup_path: backupPath });
+      const result = await postMsgpack('/api/settings', { backup_path: backupPath });
       if (result.success) {
         this.showStatus('Settings saved successfully!', 'success');
         this.updateConfigDisplay(result.settings || { backup_path: backupPath });
@@ -342,7 +343,7 @@ export const SettingsManager = {
     }
 
     try {
-      const result = await postMsgpack('/settings/init-folders', { backup_path: backupPath });
+      const result = await postMsgpack('/api/settings/init-folders', { backup_path: backupPath });
       if (result.success) {
         this.showStatus('Folders initialized: ' + result.folders.join(', '), 'success');
         this.loadSettings();

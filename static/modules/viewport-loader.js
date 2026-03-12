@@ -53,10 +53,10 @@ export const ViewportLoader = {
     level0: 3000,   // > 3000 sq deg = countries (world/continent view, zoom ~2-4)
     level1: 300,    // > 300 sq deg = states (large country view, zoom ~4-6)
     level2: 30,     // > 30 sq deg = counties (state/region view, zoom ~6-8)
-    level3: 0.5,    // > 0.5 sq deg = census tracts (single county view, zoom ~8)
-    level4: 0.1,    // > 0.1 sq deg = block groups (city/district view, zoom ~11-13)
-    level5: 0.01    // > 0.01 sq deg = blocks (neighborhood, zoom ~13-15)
-                    // < 0.01 sq deg = (reserved for future deeper levels)
+    level3: 0.25,   // > 0.25 sq deg = census tracts (single county view, zoom ~9)
+    level4: 0.01,   // > 0.01 sq deg = block groups (city/district view, zoom ~12-13)
+    level5: 0.001   // > 0.001 sq deg = blocks (neighborhood, zoom ~14-15)
+                    // < 0.001 sq deg = (reserved for future deeper levels)
   },
 
   /**

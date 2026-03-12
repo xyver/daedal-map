@@ -578,7 +578,7 @@ def _load_event_data_duckdb(source_id: str, item: dict, event_file_key: str = "e
     loc_id_col = "loc_id" if "loc_id" in available_cols else None
 
     where_clauses = []
-    params = [str(parquet_path)]
+    params = [path_to_uri(parquet_path)]
 
     if year_start is not None and year_end is not None:
         if time_col == "year":

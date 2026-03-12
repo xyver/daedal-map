@@ -151,6 +151,21 @@ export const App = {
       OverlayController.handleOverlayChange(overlayId, true);
     }
 
+    // Shift the map's logical center to account for the sidebar width.
+    // The map container covers the full viewport but the sidebar overlays it on the left,
+    // so without padding the "center" is visually offset. MapLibre's padding option
+    // moves the optical center so features like flyTo and fitBounds land in the visible area.
+    const sidebarEl = document.getElementById('sidebar');
+    const applyMapPadding = () => {
+      const leftPad = sidebarEl.classList.contains('collapsed') ? 0 : sidebarEl.offsetWidth;
+      MapAdapter.map.easeTo({ padding: { left: leftPad }, duration: 300 });
+    };
+    applyMapPadding();
+    new MutationObserver(() => applyMapPadding()).observe(sidebarEl, {
+      attributes: true,
+      attributeFilter: ['class', 'style']
+    });
+
     // Load reference data for popups (non-blocking)
     PopupBuilder.loadAdminLevels();
 

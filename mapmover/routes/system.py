@@ -144,6 +144,13 @@ async def serve_index():
     return template_path.read_text(encoding="utf-8")
 
 
+@router.get("/settings", response_class=HTMLResponse)
+async def serve_settings_page():
+    """Serve the standalone settings/account page."""
+    template_path = BASE_DIR / "templates" / "settings.html"
+    return template_path.read_text(encoding="utf-8")
+
+
 @router.get("/reference/admin-levels")
 async def get_admin_levels():
     """Get admin level names for all countries."""
@@ -160,7 +167,7 @@ async def get_admin_levels():
         return msgpack_error(str(e), 500)
 
 
-@router.get("/settings")
+@router.get("/api/settings")
 async def get_settings():
     """Get current application settings."""
     try:
@@ -236,7 +243,7 @@ async def get_auth_me(req: Request):
     })
 
 
-@router.post("/settings")
+@router.post("/api/settings")
 async def update_settings(req: Request):
     """Update application settings."""
     try:
@@ -252,7 +259,7 @@ async def update_settings(req: Request):
         return msgpack_error(str(e), 500)
 
 
-@router.post("/settings/init-folders")
+@router.post("/api/settings/init-folders")
 async def initialize_folders(req: Request):
     """Initialize the backup folder structure."""
     try:

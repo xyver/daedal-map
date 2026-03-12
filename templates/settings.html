@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>County Map Settings</title>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+  <link rel="stylesheet" href="/static/styles/chat.css">
+  <link rel="stylesheet" href="/static/styles/settings-page.css">
+</head>
+<body class="settings-page-body">
+  <div class="settings-shell">
+    <header class="settings-topbar">
+      <div>
+        <p class="settings-eyebrow">County Map</p>
+        <h1>Account Settings</h1>
+      </div>
+      <div class="settings-topbar-actions">
+        <a class="settings-nav-link" href="/">Back to Map</a>
+        <button id="authBtn" class="settings-auth-btn" title="Sign in or out">Login</button>
+      </div>
+    </header>
+
+    <div id="authStatusBar" class="auth-status-bar settings-auth-status">
+      <span id="authStatusText">Guest mode: local-only workspace and cache.</span>
+    </div>
+
+    <main class="settings-layout">
+      <section class="settings-main-card">
+        <div id="settingsLocked" class="settings-lock-state">
+          <h2>Sign in required</h2>
+          <p>This page is for account-backed settings, sticky workspace state, and plan-aware access.</p>
+          <button id="settingsLoginBtn" class="settings-cta-btn">Sign In to Continue</button>
+        </div>
+
+        <div id="settingsUnlocked" class="settings-unlocked hidden">
+          <section class="settings-section">
+            <h2>Account Access</h2>
+            <div id="accountSummary" class="account-summary-grid">
+              <div class="summary-card"><span class="summary-label">Plan</span><strong id="summaryPlan">free</strong></div>
+              <div class="summary-card"><span class="summary-label">Shells</span><strong id="summaryShells">simple</strong></div>
+              <div class="summary-card"><span class="summary-label">Pack Limit</span><strong id="summaryPackLimit">2</strong></div>
+              <div class="summary-card"><span class="summary-label">Entitled Packs</span><strong id="summaryPackCount">0</strong></div>
+            </div>
+          </section>
+
+          <section class="settings-section">
+            <h2>Workspace Settings</h2>
+            <p class="settings-intro">These settings now live on a dedicated page instead of inside the sidebar. Logged-in users can treat this as the home for persistent workspace behavior.</p>
+
+            <label for="backupPathInput" class="settings-label">Backup Folder Path</label>
+            <input type="text" id="backupPathInput" class="settings-input"
+                   placeholder="e.g., D:\county-map-data or /home/user/county-map-data">
+
+            <div class="folder-structure">
+              Folder structure:<br>
+              [backup_path]/<br>
+              &nbsp;&nbsp;geometry/&nbsp;&nbsp;&nbsp;-- admin boundaries<br>
+              &nbsp;&nbsp;data/&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;-- indicator and event datasets<br>
+              &nbsp;&nbsp;metadata/&nbsp;&nbsp;&nbsp;-- catalog and index files
+            </div>
+
+            <div class="settings-actions">
+              <button type="button" id="saveSettingsBtn" class="settings-btn primary">Save Settings</button>
+              <button type="button" id="initFoldersBtn" class="settings-btn secondary">Initialize Folders</button>
+            </div>
+
+            <div id="settingsStatus" class="settings-status"></div>
+          </section>
+
+          <section class="settings-section">
+            <h2>Display Settings</h2>
+            <label for="timezoneSelect" class="settings-label">Clock Timezone (live mode)</label>
+            <select id="timezoneSelect" class="settings-input">
+              <option value="local">Local (auto-detect)</option>
+              <option value="UTC">UTC</option>
+              <option value="America/Los_Angeles">Pacific (PST/PDT)</option>
+              <option value="America/Denver">Mountain (MST/MDT)</option>
+              <option value="America/Chicago">Central (CST/CDT)</option>
+              <option value="America/New_York">Eastern (EST/EDT)</option>
+              <option value="Europe/London">London (GMT/BST)</option>
+              <option value="Europe/Paris">Paris (CET/CEST)</option>
+              <option value="Asia/Tokyo">Tokyo (JST)</option>
+              <option value="Asia/Shanghai">Shanghai (CST)</option>
+              <option value="Australia/Sydney">Sydney (AEST/AEDT)</option>
+            </select>
+          </section>
+
+          <section class="settings-section">
+            <h2>Current Configuration</h2>
+            <div id="currentConfig" class="settings-config">Loading...</div>
+          </section>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div id="authModal" class="auth-modal hidden" aria-hidden="true">
+    <div id="authModalBackdrop" class="auth-modal-backdrop"></div>
+    <div class="auth-modal-panel" role="dialog" aria-modal="true" aria-labelledby="authModalTitle">
+      <button id="authModalClose" class="auth-modal-close" title="Close">&times;</button>
+      <div class="auth-modal-header">
+        <h3 id="authModalTitle">Account Access</h3>
+        <p>Sign in to unlock account settings and persistent workspace behavior.</p>
+      </div>
+
+      <div class="auth-modal-tabs">
+        <button id="authTabSignIn" class="auth-modal-tab active" data-auth-tab="signin">Sign In</button>
+        <button id="authTabSignUp" class="auth-modal-tab" data-auth-tab="signup">Create Account</button>
+      </div>
+
+      <div id="authMessage" class="auth-message" aria-live="polite"></div>
+
+      <form id="signInForm" class="auth-form active">
+        <label class="auth-label" for="signInEmail">Email</label>
+        <input id="signInEmail" class="auth-input" type="email" autocomplete="email" required>
+
+        <label class="auth-label" for="signInPassword">Password</label>
+        <div class="auth-input-wrap">
+          <input id="signInPassword" class="auth-input" type="password" autocomplete="current-password" required>
+          <button type="button" class="auth-pw-toggle" data-target="signInPassword">show</button>
+        </div>
+
+        <button id="signInSubmit" class="auth-primary-btn" type="submit">Sign In</button>
+        <button id="magicLinkBtn" class="auth-secondary-btn" type="button">Email Magic Link Instead</button>
+      </form>
+
+      <form id="signUpForm" class="auth-form">
+        <label class="auth-label" for="signUpEmail">Email</label>
+        <input id="signUpEmail" class="auth-input" type="email" autocomplete="email" required>
+
+        <label class="auth-label" for="signUpPassword">Password</label>
+        <div class="auth-input-wrap">
+          <input id="signUpPassword" class="auth-input" type="password" autocomplete="new-password" minlength="8" required>
+          <button type="button" class="auth-pw-toggle" data-target="signUpPassword">show</button>
+        </div>
+
+        <label class="auth-label" for="signUpPasswordConfirm">Confirm Password</label>
+        <div class="auth-input-wrap">
+          <input id="signUpPasswordConfirm" class="auth-input" type="password" autocomplete="new-password" minlength="8" required>
+          <button type="button" class="auth-pw-toggle" data-target="signUpPasswordConfirm">show</button>
+        </div>
+
+        <button id="signUpSubmit" class="auth-primary-btn" type="submit">Create Account</button>
+      </form>
+    </div>
+  </div>
+
+  <script src="https://unpkg.com/@msgpack/msgpack@3.0.0-beta2/dist.es5+umd/msgpack.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script type="module" src="/static/modules/settings-page.js"></script>
+</body>
+</html>

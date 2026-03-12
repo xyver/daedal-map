@@ -129,15 +129,19 @@ function updateDom() {
 
   if (isAuthenticated()) {
     const email = getCurrentUser()?.email || 'Signed in';
+    const planId = getUserPlanId();
+    const maxPacks = currentProfile?.max_packs;
+    const shells = getEnabledShells();
+    const packText = maxPacks == null ? 'unlimited packs' : `${maxPacks} pack${maxPacks === 1 ? '' : 's'}`;
     btn.textContent = 'Logout';
     btn.disabled = false;
     btn.classList.add('logged-in');
-    status.textContent = `${email}: persistent chat memory enabled.`;
+    status.textContent = `${email}: ${planId} plan, ${packText}, shells ${shells.join(', ')}.`;
   } else {
     btn.textContent = 'Login';
     btn.disabled = false;
     btn.classList.remove('logged-in');
-    status.textContent = 'Guest mode: local chat cache only.';
+    status.textContent = 'Guest mode: local-only workspace and cache.';
   }
 }
 
@@ -283,6 +287,8 @@ export const AuthManager = {
         const { data, error } = await authClient.auth.getSession();
         if (!error) {
           currentSession = data.session;
+          _lastAuthUserId = data.session?.user?.id ?? null;
+          await fetchProfile();
         }
         authClient.auth.onAuthStateChange(async (_event, session) => {
           const newUserId = session?.user?.id ?? null;
