@@ -593,6 +593,66 @@ async def export_cache_endpoint(req: Request):
         return msgpack_error(str(e), 500)
 
 
+@router.get("/debug/memory")
+async def debug_memory():
+    """Show what is in the in-memory caches and estimated RAM usage."""
+    import time
+    from mapmover.duckdb_helpers import _CACHE, _CACHE_LOCK, DEFAULT_CACHE_TTL
+    from mapmover.geometry_handlers import _country_parquet_cache, _country_parquet_cache_lock
+
+    now = time.monotonic()
+
+    # Disaster DataFrame cache
+    with _CACHE_LOCK:
+        cache_snapshot = list(_CACHE.items())
+
+    disaster_entries = []
+    for key, (df, expires_at) in cache_snapshot:
+        ttl_remaining = max(0, expires_at - now)
+        mem_mb = df.memory_usage(deep=True).sum() / (1024 * 1024)
+        disaster_entries.append({
+            "key": key,
+            "rows": len(df),
+            "cols": len(df.columns),
+            "mem_mb": round(mem_mb, 2),
+            "ttl_remaining_s": round(ttl_remaining),
+            "expired": ttl_remaining == 0,
+        })
+    disaster_entries.sort(key=lambda x: x["mem_mb"], reverse=True)
+    disaster_total_mb = sum(e["mem_mb"] for e in disaster_entries)
+
+    # Geometry parquet cache (permanent, no TTL)
+    with _country_parquet_cache_lock:
+        geom_snapshot = list(_country_parquet_cache.items())
+
+    geom_entries = []
+    for key, df in geom_snapshot:
+        mem_mb = df.memory_usage(deep=True).sum() / (1024 * 1024)
+        geom_entries.append({
+            "key": str(key),
+            "rows": len(df),
+            "mem_mb": round(mem_mb, 2),
+        })
+    geom_entries.sort(key=lambda x: x["mem_mb"], reverse=True)
+    geom_total_mb = sum(e["mem_mb"] for e in geom_entries)
+
+    return {
+        "disaster_cache": {
+            "entry_count": len(disaster_entries),
+            "total_mb": round(disaster_total_mb, 2),
+            "default_ttl_s": DEFAULT_CACHE_TTL,
+            "entries": disaster_entries,
+        },
+        "geometry_cache": {
+            "entry_count": len(geom_entries),
+            "total_mb": round(geom_total_mb, 2),
+            "note": "permanent, no TTL",
+            "entries": geom_entries,
+        },
+        "combined_cache_mb": round(disaster_total_mb + geom_total_mb, 2),
+    }
+
+
 @router.get("/api/orders/stats")
 async def get_queue_stats_endpoint():
     """Get queue statistics for monitoring/debugging."""

@@ -3,7 +3,7 @@
 from fastapi import APIRouter
 
 from mapmover.disaster_filters import apply_location_filters, get_default_min_year
-from mapmover.duckdb_helpers import duckdb_available, parquet_available, select_filtered_event_rows, select_rows_by_exact_value
+from mapmover.duckdb_helpers import cache_get, cache_set, duckdb_available, make_cache_key, parquet_available, select_filtered_event_rows, select_rows_by_exact_value
 from mapmover.logging_analytics import logger
 from mapmover.paths import GLOBAL_DIR
 
@@ -51,12 +51,48 @@ async def get_storms_geojson(
     if min_year is None:
         min_year = get_default_min_year("hurricanes", fallback=1950)
 
+    # Cache for simple year queries with no loc filter
+    _simple_cache = (
+        year is not None
+        and start is None
+        and end is None
+        and loc_prefix is None
+        and affected_loc_id is None
+    )
+    _cache_key = make_cache_key("hurricanes", year=year, min_category=min_category) if _simple_cache else None
+
     try:
         storms_path = GLOBAL_DIR / "disasters/hurricanes/storms.parquet"
         positions_path = GLOBAL_DIR / "disasters/hurricanes/positions.parquet"
 
         if not parquet_available(storms_path):
             return msgpack_error("Storm data not available", 404)
+
+        if _cache_key is not None:
+            cached_df = cache_get(_cache_key)
+            if cached_df is not None:
+                valid_mask = cached_df["latitude"].notna() & cached_df["longitude"].notna()
+                records = cached_df[valid_mask].to_dict("records")
+                features = [{
+                    "type": "Feature",
+                    "geometry": {"type": "Point", "coordinates": [float(s["longitude"]), float(s["latitude"])]},
+                    "properties": {
+                        "storm_id": s["storm_id"],
+                        "name": s.get("name") if pd.notna(s.get("name")) else None,
+                        "year": int(s["year"]),
+                        "basin": s["basin"],
+                        "max_wind_kt": int(s["max_wind_kt"]) if pd.notna(s.get("max_wind_kt")) else None,
+                        "min_pressure_mb": int(s["min_pressure_mb"]) if pd.notna(s.get("min_pressure_mb")) else None,
+                        "max_category": s["max_category"],
+                        "num_positions": int(s["num_positions"]),
+                        "start_date": str(s["start_date"]) if pd.notna(s.get("start_date")) else None,
+                        "end_date": str(s["end_date"]) if pd.notna(s.get("end_date")) else None,
+                        "made_landfall": bool(s.get("made_landfall", False)),
+                        "latitude": float(s["latitude"]),
+                        "longitude": float(s["longitude"]),
+                    },
+                } for s in records]
+                return msgpack_response({"type": "FeatureCollection", "features": features, "count": len(features)})
 
         use_duckdb = duckdb_available()
         if use_duckdb:
@@ -114,6 +150,9 @@ async def get_storms_geojson(
             how="inner",
             suffixes=("", "_pos"),
         )
+
+        if _cache_key is not None and not storms_with_pos.empty:
+            cache_set(_cache_key, storms_with_pos)
 
         valid_mask = storms_with_pos["latitude"].notna() & storms_with_pos["longitude"].notna()
         records = storms_with_pos[valid_mask].to_dict("records")

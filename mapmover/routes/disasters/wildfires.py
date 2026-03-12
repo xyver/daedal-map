@@ -3,7 +3,7 @@
 from fastapi import APIRouter
 
 from mapmover.disaster_filters import apply_location_filters, get_default_min_year
-from mapmover.duckdb_helpers import duckdb_available, is_s3_mode, parquet_available, path_to_uri, select_filtered_partitioned_rows, select_rows
+from mapmover.duckdb_helpers import cache_get, cache_set, duckdb_available, is_s3_mode, make_cache_key, parquet_available, path_to_uri, select_filtered_partitioned_rows, select_rows
 from mapmover.logging_analytics import logger
 from mapmover.paths import COUNTRIES_DIR, GLOBAL_DIR
 
@@ -91,7 +91,52 @@ async def get_wildfires_geojson(
     if min_year is None:
         min_year = get_default_min_year("wildfires", fallback=2010)
 
+    # Cache key for simple year+area queries (no loc filter, no date range)
+    _simple_cache = (
+        year is not None
+        and start is None
+        and end is None
+        and loc_prefix is None
+        and affected_loc_id is None
+        and not include_perimeter
+    )
+    _cache_key = make_cache_key("wildfires", year=year, min_area_km2=min_area_km2) if _simple_cache else None
+
     try:
+        if _cache_key is not None:
+            cached_df = cache_get(_cache_key)
+            if cached_df is not None:
+                valid_mask = cached_df["latitude"].notna() & cached_df["longitude"].notna()
+                records = cached_df[valid_mask].to_dict("records")
+                features = []
+                for row in records:
+                    ts = row.get("timestamp")
+                    ts_str = ts.isoformat() if ts is not None and pd.notna(ts) and hasattr(ts, "isoformat") else (str(ts) if pd.notna(ts) else None)
+                    features.append({
+                        "type": "Feature",
+                        "geometry": {"type": "Point", "coordinates": [float(row["longitude"]), float(row["latitude"])]},
+                        "properties": {
+                            "event_id": row.get("event_id", ""),
+                            "area_km2": float(row["area_km2"]) if pd.notna(row.get("area_km2")) else None,
+                            "burned_acres": float(row["burned_acres"]) if pd.notna(row.get("burned_acres")) else None,
+                            "duration_days": int(row["duration_days"]) if pd.notna(row.get("duration_days")) else None,
+                            "year": int(row["year"]) if pd.notna(row.get("year")) else None,
+                            "timestamp": ts_str,
+                            "land_cover": row.get("land_cover", ""),
+                            "source": row.get("source", ""),
+                            "latitude": float(row["latitude"]),
+                            "longitude": float(row["longitude"]),
+                            "has_progression": bool(row.get("has_progression", False)),
+                            "loc_id": row.get("loc_id", ""),
+                            "iso3": row.get("iso3", ""),
+                        },
+                    })
+                return msgpack_response({
+                    "type": "FeatureCollection",
+                    "features": features,
+                    "metadata": {"count": len(features), "min_area_km2": min_area_km2, "cached": True},
+                })
+
         usa_fires_path = _resolve_first_existing(
             COUNTRIES_DIR / "USA/disasters/wildfires/fires_enriched.parquet",
             COUNTRIES_DIR / "USA/wildfires/fires_enriched.parquet",
@@ -294,6 +339,9 @@ async def get_wildfires_geojson(
                 df = df[df["timestamp"] <= end_ts_parsed]
 
         df = apply_location_filters(df, "wildfires", loc_prefix=loc_prefix, affected_loc_id=affected_loc_id)
+
+        if _cache_key is not None and not df.empty:
+            cache_set(_cache_key, df)
 
         valid_mask = df["latitude"].notna() & df["longitude"].notna()
         records = df[valid_mask].to_dict("records")

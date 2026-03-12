@@ -1438,56 +1438,27 @@ def clear_cache():
 
 
 def prewarm_geometry() -> None:
-    """Pre-warm the geometry cache for the most commonly accessed countries.
+    """Pre-warm the global countries CSV into memory.
 
-    Call this in a background thread from the app lifespan. In S3 mode this
-    populates _country_parquet_cache for the top countries so the first viewport
-    request does not cold-hit R2 for every visible country.
-
-    Only runs in S3 mode. Local mode reads directly from disk and is fast enough
-    that pre-warming adds no benefit.
+    All deeper geometry (country level 1/2/3) is loaded on demand as users zoom.
+    Only the global CSV (country outlines at admin level 0) is pre-warmed since
+    it is needed on every page load.
     """
     import time as _time
 
     if not is_s3_mode():
         return
 
-    # Countries to pre-warm: covers the typical default landing view (North America,
-    # Europe, East Asia) and the most-accessed individual country drill-downs.
-    # admin_level=1 (states/provinces) is the first drill-down level, and the one
-    # the viewport loads automatically as users pan around the map.
-    priority_countries = [
-        "USA", "CAN", "MEX",  # North America
-        "GBR", "DEU", "FRA", "ITA", "ESP", "NLD", "POL",  # Europe
-        "JPN", "CHN", "IND", "AUS", "BRA", "ZAF",  # Rest of world
-    ]
-
-    logger.info("Geometry pre-warmer starting: %d priority countries", len(priority_countries))
-
-    for iso3 in priority_countries:
-        if (iso3, 1) in _country_parquet_cache:
-            continue  # already cached
-        t0 = _time.monotonic()
-        try:
-            df = load_country_parquet(iso3, admin_level=1)
-            elapsed = _time.monotonic() - t0
-            if df is not None and not df.empty:
-                logger.info("prewarm geometry %s level=1: %d rows in %.1fs", iso3, len(df), elapsed)
-            else:
-                logger.warning("prewarm geometry %s level=1: empty result in %.1fs", iso3, elapsed)
-        except Exception as exc:
-            logger.warning("prewarm geometry %s failed: %s", iso3, exc)
-
-    # Also pre-warm level 2 (counties) for USA since it is the most zoomed-into country
-    if (("USA", 2) not in _country_parquet_cache):
-        t0 = _time.monotonic()
-        try:
-            df = load_country_parquet("USA", admin_level=2)
-            elapsed = _time.monotonic() - t0
-            if df is not None and not df.empty:
-                logger.info("prewarm geometry USA level=2: %d rows in %.1fs", len(df), elapsed)
-        except Exception as exc:
-            logger.warning("prewarm geometry USA level=2 failed: %s", exc)
+    t0 = _time.monotonic()
+    try:
+        df = load_global_countries()
+        elapsed = _time.monotonic() - t0
+        if df is not None and not df.empty:
+            logger.info("prewarm geometry global CSV: %d rows in %.1fs", len(df), elapsed)
+        else:
+            logger.warning("prewarm geometry global CSV: empty result in %.1fs", elapsed)
+    except Exception as exc:
+        logger.warning("prewarm geometry global CSV failed: %s", exc)
 
     logger.info("Geometry pre-warmer complete")
 
