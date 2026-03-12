@@ -593,6 +593,65 @@ async def export_cache_endpoint(req: Request):
         return msgpack_error(str(e), 500)
 
 
+@router.get("/debug/process")
+async def debug_process():
+    """Show process-level memory usage broken down by component."""
+    import gc
+    import sys
+    import tracemalloc
+
+    result = {}
+
+    # RSS from /proc/self/status (Linux only - works on Railway)
+    try:
+        with open("/proc/self/status") as f:
+            for line in f:
+                if line.startswith("VmRSS:"):
+                    result["rss_mb"] = round(int(line.split()[1]) / 1024, 1)
+                elif line.startswith("VmPeak:"):
+                    result["peak_mb"] = round(int(line.split()[1]) / 1024, 1)
+                elif line.startswith("VmSize:"):
+                    result["vms_mb"] = round(int(line.split()[1]) / 1024, 1)
+    except Exception as e:
+        result["proc_error"] = str(e)
+
+    # Python object counts by type (top 20 by count)
+    gc.collect()
+    type_counts = {}
+    for obj in gc.get_objects():
+        t = type(obj).__name__
+        type_counts[t] = type_counts.get(t, 0) + 1
+    top_types = sorted(type_counts.items(), key=lambda x: x[1], reverse=True)[:20]
+    result["top_object_types"] = [{"type": t, "count": c} for t, c in top_types]
+
+    # Top modules by their attribute sizes (approximation of import footprint)
+    module_sizes = {}
+    for name, mod in list(sys.modules.items()):
+        if mod is None:
+            continue
+        try:
+            sz = sys.getsizeof(mod)
+            module_sizes[name.split(".")[0]] = module_sizes.get(name.split(".")[0], 0) + sz
+        except Exception:
+            pass
+    top_modules = sorted(module_sizes.items(), key=lambda x: x[1], reverse=True)[:15]
+    result["top_modules_kb"] = [{"module": m, "kb": round(s / 1024, 1)} for m, s in top_modules]
+
+    # tracemalloc snapshot - top 10 allocations by file
+    if not tracemalloc.is_tracing():
+        tracemalloc.start()
+        result["tracemalloc"] = "just started - re-hit this endpoint in 30s for useful data"
+    else:
+        snapshot = tracemalloc.take_snapshot()
+        stats = snapshot.statistics("filename")[:10]
+        result["tracemalloc_top_mb"] = [
+            {"file": str(s.traceback).split("/")[-1], "mb": round(s.size / (1024 * 1024), 2), "count": s.count}
+            for s in stats
+        ]
+
+    return result
+
+
 @router.get("/debug/memory")
 async def debug_memory():
     """Show what is in the in-memory caches and estimated RAM usage."""
