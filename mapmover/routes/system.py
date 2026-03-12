@@ -667,15 +667,17 @@ async def debug_memory():
 
     disaster_entries = []
     for key, (df, expires_at) in cache_snapshot:
-        ttl_remaining = max(0, expires_at - now)
+        permanent = expires_at == float("inf")
+        ttl_remaining = None if permanent else max(0, expires_at - now)
         mem_mb = df.memory_usage(deep=True).sum() / (1024 * 1024)
         disaster_entries.append({
             "key": key,
             "rows": len(df),
             "cols": len(df.columns),
             "mem_mb": round(mem_mb, 2),
-            "ttl_remaining_s": round(ttl_remaining),
-            "expired": ttl_remaining == 0,
+            "permanent": permanent,
+            "ttl_remaining_s": None if permanent else round(ttl_remaining),
+            "expired": False if permanent else ttl_remaining == 0,
         })
     disaster_entries.sort(key=lambda x: x["mem_mb"], reverse=True)
     disaster_total_mb = sum(e["mem_mb"] for e in disaster_entries)

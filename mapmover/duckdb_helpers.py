@@ -122,6 +122,10 @@ def _configure_httpfs(con) -> None:
     # repeated HTTP HEAD+range requests for the same files on each new connection.
     con.execute("SET enable_http_metadata_cache=true")
     con.execute("SET http_keep_alive=true")
+    # Cap DuckDB's internal buffer pool so it doesn't grow unbounded under load.
+    # Adjust DUCKDB_MEMORY_LIMIT env var to tune (default: 512MB).
+    mem_limit = os.environ.get("DUCKDB_MEMORY_LIMIT", "512MB")
+    con.execute(f"SET memory_limit='{mem_limit}'")
 
 
 def _make_connection():
@@ -577,23 +581,33 @@ DEFAULT_CACHE_TTL = int(os.environ.get("DUCKDB_CACHE_TTL", "300"))  # seconds
 
 
 def cache_get(key: str) -> pd.DataFrame | None:
-    """Return cached DataFrame if still valid, else None."""
+    """Return cached DataFrame if still valid, else None.
+
+    Non-permanent entries get a sliding TTL: each hit extends expiry by DEFAULT_CACHE_TTL.
+    Permanent entries (expires_at == inf) are never expired or extended.
+    """
+    now = time.monotonic()
     with _CACHE_LOCK:
         entry = _CACHE.get(key)
-    if entry is None:
-        return None
-    df, expires_at = entry
-    if time.monotonic() > expires_at:
-        with _CACHE_LOCK:
+        if entry is None:
+            return None
+        df, expires_at = entry
+        if now > expires_at:
             _CACHE.pop(key, None)
-        return None
+            return None
+        # Slide expiry window on access for non-permanent entries
+        if expires_at != float("inf"):
+            _CACHE[key] = (df, now + DEFAULT_CACHE_TTL)
     return df
 
 
-def cache_set(key: str, df: pd.DataFrame, ttl: int | None = None) -> None:
-    """Store a DataFrame in the cache with a TTL (default DEFAULT_CACHE_TTL)."""
-    ttl = ttl if ttl is not None else DEFAULT_CACHE_TTL
-    expires_at = time.monotonic() + ttl
+def cache_set(key: str, df: pd.DataFrame, ttl: int | None = None, permanent: bool = False) -> None:
+    """Store a DataFrame in the cache.
+
+    permanent=True: entry never expires (used for prewarmed base data).
+    ttl: seconds until expiry; defaults to DEFAULT_CACHE_TTL if not permanent.
+    """
+    expires_at = float("inf") if permanent else time.monotonic() + (ttl if ttl is not None else DEFAULT_CACHE_TTL)
     with _CACHE_LOCK:
         _CACHE[key] = (df, expires_at)
 
@@ -704,7 +718,7 @@ def prewarm_disaster_sources(global_dir: Path) -> None:
                 t0 = time.monotonic()
                 df = select_filtered_event_rows(eq_path, year=yr, min_value_filters={"magnitude": 5.5})
                 if not df.empty:
-                    cache_set(ck, df)
+                    cache_set(ck, df, permanent=True)
                 log.info("prewarm earthquakes year=%d: %d rows in %.1fs", yr, len(df), time.monotonic() - t0)
             except Exception as exc:
                 log.warning("prewarm earthquakes year=%d failed: %s", yr, exc)
@@ -718,7 +732,7 @@ def prewarm_disaster_sources(global_dir: Path) -> None:
                 t0 = time.monotonic()
                 df = select_filtered_event_rows(ts_path, year=yr)
                 if not df.empty:
-                    cache_set(ck, df)
+                    cache_set(ck, df, permanent=True)
                 log.info("prewarm tsunamis year=%d: %d rows in %.1fs", yr, len(df), time.monotonic() - t0)
             except Exception as exc:
                 log.warning("prewarm tsunamis year=%d failed: %s", yr, exc)
@@ -734,7 +748,7 @@ def prewarm_disaster_sources(global_dir: Path) -> None:
                 t0 = time.monotonic()
                 df = select_filtered_event_rows(fl_path, year=yr)
                 if not df.empty:
-                    cache_set(ck, df)
+                    cache_set(ck, df, permanent=True)
                 log.info("prewarm floods year=%d: %d rows in %.1fs", yr, len(df), time.monotonic() - t0)
             except Exception as exc:
                 log.warning("prewarm floods year=%d failed: %s", yr, exc)
@@ -748,7 +762,7 @@ def prewarm_disaster_sources(global_dir: Path) -> None:
                 t0 = time.monotonic()
                 df = select_filtered_event_rows(vol_path, year=yr)
                 if not df.empty:
-                    cache_set(ck, df)
+                    cache_set(ck, df, permanent=True)
                 log.info("prewarm volcanoes year=%d: %d rows in %.1fs", yr, len(df), time.monotonic() - t0)
             except Exception as exc:
                 log.warning("prewarm volcanoes year=%d failed: %s", yr, exc)
@@ -762,7 +776,7 @@ def prewarm_disaster_sources(global_dir: Path) -> None:
                 t0 = time.monotonic()
                 df = select_filtered_event_rows(tor_path, year=yr)
                 if not df.empty:
-                    cache_set(ck, df)
+                    cache_set(ck, df, permanent=True)
                 log.info("prewarm tornadoes year=%d: %d rows in %.1fs", yr, len(df), time.monotonic() - t0)
             except Exception as exc:
                 log.warning("prewarm tornadoes year=%d failed: %s", yr, exc)
@@ -790,7 +804,7 @@ def prewarm_disaster_sources(global_dir: Path) -> None:
                             max_pos = pos_df.loc[pos_df.groupby("storm_id")["wind_sort"].idxmax()]
                             joined = storms_df.merge(max_pos[["storm_id", "latitude", "longitude"]], on="storm_id", how="inner", suffixes=("", "_pos"))
                             if not joined.empty:
-                                cache_set(ck, joined)
+                                cache_set(ck, joined, permanent=True)
                 log.info("prewarm hurricanes year=%d: %d storms in %.1fs", yr, len(storms_df), time.monotonic() - t0)
             except Exception as exc:
                 log.warning("prewarm hurricanes year=%d failed: %s", yr, exc)
@@ -815,7 +829,7 @@ def prewarm_disaster_sources(global_dir: Path) -> None:
                     if "land_cover" not in df.columns:
                         df["land_cover"] = ""
                     if not df.empty:
-                        cache_set(ck, df)
+                        cache_set(ck, df, permanent=True)
                 log.info("prewarm wildfires year=%d: %d rows in %.1fs", yr, len(df), time.monotonic() - t0)
             except Exception as exc:
                 log.warning("prewarm wildfires year=%d failed: %s", yr, exc)
