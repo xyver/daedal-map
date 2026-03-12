@@ -5,8 +5,10 @@ from fastapi import APIRouter
 from mapmover.disaster_filters import apply_location_filters, get_default_min_year
 from mapmover.duckdb_helpers import (
     duckdb_available,
+    make_cache_key,
     parquet_available,
     select_filtered_event_rows,
+    select_filtered_event_rows_cached,
     select_linked_loc_ids,
     select_rows_by_exact_value,
 )
@@ -76,14 +78,21 @@ async def get_tsunamis_geojson(
 
         use_duckdb = duckdb_available()
         if use_duckdb:
-            min_filters = {"year": min_year} if year is None and (start is None and end is None) and min_year is not None else None
-            df = select_filtered_event_rows(
-                events_path,
-                year=year,
-                start=start,
-                end=end,
-                min_value_filters=min_filters,
-            )
+            if year is not None:
+                df = select_filtered_event_rows_cached(
+                    events_path,
+                    cache_key=make_cache_key("tsunamis", year=year),
+                    year=year,
+                )
+            elif start is not None or end is not None:
+                df = select_filtered_event_rows(events_path, start=start, end=end)
+            else:
+                min_filters = {"year": min_year} if min_year is not None else None
+                df = select_filtered_event_rows_cached(
+                    events_path,
+                    cache_key=make_cache_key("tsunamis", min_year=min_year),
+                    min_value_filters=min_filters,
+                )
         else:
             df = pd.read_parquet(events_path)
 

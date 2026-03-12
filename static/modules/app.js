@@ -31,6 +31,7 @@ export const App = {
   currentData: null,
   debugMode: false,  // Toggle with 'D' key - shows hierarchy depth colors
   geometryOverlayActive: false,  // True when geometry overlay (ZCTA, tribal, etc.) is displayed
+  mobileNoticeMql: null,
 
   /**
    * Merge new multi-year data into existing data (same source).
@@ -125,6 +126,7 @@ export const App = {
     setGeometryDeps({ MapAdapter });
 
     await AuthManager.init();
+    this.setupMobileExperienceNotice();
 
     // Initialize components
     ChatManager.init();
@@ -192,6 +194,31 @@ export const App = {
 
     console.log('Map Explorer ready');
     console.log('Press D to toggle debug mode (hierarchy depth colors)');
+  },
+
+  setupMobileExperienceNotice() {
+    const noticeEl = document.getElementById('mobileMapNotice');
+    if (!noticeEl) return;
+
+    const applyMobileState = () => {
+      const isNarrow = window.innerWidth <= 820;
+      const hasTouchLikePointer = window.matchMedia('(pointer: coarse)').matches;
+      const isMobileUA = /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent || '');
+      const limitedMobile = isNarrow && (hasTouchLikePointer || isMobileUA);
+
+      document.body.classList.toggle('mobile-limited', limitedMobile);
+      noticeEl.hidden = !limitedMobile;
+    };
+
+    this.mobileNoticeMql = window.matchMedia('(pointer: coarse)');
+    if (typeof this.mobileNoticeMql.addEventListener === 'function') {
+      this.mobileNoticeMql.addEventListener('change', applyMobileState);
+    } else if (typeof this.mobileNoticeMql.addListener === 'function') {
+      this.mobileNoticeMql.addListener(applyMobileState);
+    }
+
+    window.addEventListener('resize', applyMobileState);
+    applyMobileState();
   },
 
   /**

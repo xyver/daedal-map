@@ -2465,5 +2465,33 @@ export const OverlayController = {
   clearGeometryDisplay(geometryType = 'zcta') {
     GeometryModel.clearType(geometryType);
     console.log(`OverlayController: Cleared ${geometryType} geometry display`);
+  },
+
+  /**
+   * Preload disaster data for 2020-2025 into the browser cache.
+   * Makes one ranged API call per disaster type using the same filters
+   * the overlay controller normally uses during animation.
+   * Floods are skipped (data ends 2019).
+   * @returns {Promise<Object>} Results per overlay id: { loaded: boolean }
+   */
+  async preloadDisasters2020to2025() {
+    const startMs = new Date(2020, 0, 1).getTime();
+    const endMs = new Date(2025, 11, 31, 23, 59, 59).getTime();
+    const disasterIds = ['earthquakes', 'hurricanes', 'volcanoes', 'wildfires', 'tsunamis', 'tornadoes'];
+
+    console.log('OverlayController: Preloading disasters 2020-2025...');
+
+    const results = await Promise.allSettled(
+      disasterIds.map(id => loadRangeData(id, startMs, endMs, OVERLAY_ENDPOINTS[id]))
+    );
+
+    const summary = {};
+    disasterIds.forEach((id, i) => {
+      const r = results[i];
+      summary[id] = r.status === 'fulfilled' ? { loaded: r.value !== false } : { loaded: false, error: r.reason?.message };
+    });
+
+    console.log('OverlayController: Preload complete:', summary);
+    return summary;
   }
 };

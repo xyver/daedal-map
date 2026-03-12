@@ -6,7 +6,10 @@ import pandas as pd
 from mapmover.disaster_filters import apply_location_filters, get_affected_event_ids
 from mapmover.duckdb_helpers import (
     _normalize_ts_for_duckdb,
+    cache_get,
+    cache_set,
     duckdb_available,
+    make_cache_key,
     parquet_available,
     path_to_uri,
     run_df,
@@ -130,15 +133,32 @@ async def get_earthquakes_geojson(
         if not parquet_available(events_path):
             return msgpack_error("Earthquake data not available", 404)
 
-        df = _load_earthquakes_duckdb(
-            year=year,
-            start=start,
-            end=end,
-            min_magnitude=min_magnitude,
-            limit=limit,
-            loc_prefix=loc_prefix,
-            affected_loc_id=affected_loc_id,
-        )
+        # Check the pre-warmer cache for the common animation case:
+        # year + min_magnitude with no loc or limit filters.
+        ck = None
+        if (year is not None and start is None and end is None
+                and loc_prefix is None and affected_loc_id is None and limit is None):
+            ck = make_cache_key("earthquakes", year=year, min_magnitude=min_magnitude)
+            cached_df = cache_get(ck)
+            if cached_df is not None:
+                df = cached_df
+            else:
+                df = _load_earthquakes_duckdb(
+                    year=year, start=start, end=end, min_magnitude=min_magnitude,
+                    limit=limit, loc_prefix=loc_prefix, affected_loc_id=affected_loc_id,
+                )
+                if not df.empty:
+                    cache_set(ck, df)
+        else:
+            df = _load_earthquakes_duckdb(
+                year=year,
+                start=start,
+                end=end,
+                min_magnitude=min_magnitude,
+                limit=limit,
+                loc_prefix=loc_prefix,
+                affected_loc_id=affected_loc_id,
+            )
         if df.empty and not duckdb_available():
             df = pd.read_parquet(events_path)
             df = ensure_year_column(df)

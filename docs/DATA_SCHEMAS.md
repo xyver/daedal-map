@@ -1,263 +1,401 @@
 # Data Schemas
 
-This document defines the data formats used by county-map. Follow these schemas when creating your own data converters.
+This is the simplified schema guide for DaedalMap data.
+
+Use it when you are:
+- trying to understand how the app expects data to be shaped
+- building a new converter
+- preparing a source pack for local use or hosted release
+
+This is not the full internal pipeline spec. It is the practical public version.
 
 ---
 
-## Core Concepts
+## Core Idea
 
-### Location ID (loc_id)
+DaedalMap works because different datasets can meet on the same geography.
 
-Every location has a unique `loc_id` that identifies it across all datasets:
+The main join key is:
 
-```
+`loc_id`
+
+And for time-based aggregate data, the main join is:
+
+`(loc_id, year)`
+
+That rule is what lets the app combine:
+- geometry
+- country and subnational indicators
+- event overlays
+- pack metadata
+
+---
+
+## `loc_id`
+
+`loc_id` is the canonical location identifier used across the system.
+
+Basic pattern:
+
+```text
 {country}[-{admin1}[-{admin2}[-{admin3}...]]]
 ```
 
-| Level | Example | Description |
-|-------|---------|-------------|
-| Country | `USA` | ISO 3166-1 alpha-3 |
-| State/Province | `USA-CA` | Country + admin1 code |
-| County/District | `USA-CA-6037` | Country + admin1 + admin2 |
+Examples:
 
-**Key rules:**
-- Country codes are ISO 3166-1 alpha-3 (uppercase): `USA`, `GBR`, `DEU`
-- US FIPS codes have NO leading zeros: `USA-CA-6037` not `USA-CA-06037`
-- Canada uses 2-letter province codes: `CAN-BC`, `CAN-ON`
+| Level | Example | Meaning |
+|-------|---------|---------|
+| Country | `USA` | United States |
+| State / province | `USA-CA` | California |
+| County / district | `USA-CA-6037` | Los Angeles County |
+| Canada province | `CAN-BC` | British Columbia |
+| Europe region | `DEU-DE11` | NUTS region |
 
-### Universal Join Key
+Rules:
+- country codes are ISO 3166-1 alpha-3, uppercase
+- `loc_id` must match the geometry files
+- do not invent extra location name columns if `loc_id` already identifies the place
 
-All data joins on `(loc_id, year)`. This enables:
-- Merging any datasets together
-- Time slider functionality
-- Location hierarchy queries
-
----
-
-## Indicator Data Schema
-
-For aggregate statistics (population, GDP, risk scores, etc.):
-
-```
-| loc_id      | year | metric1 | metric2 | metric3 |
-|-------------|------|---------|---------|---------|
-| USA         | 2020 | 5000    | 15.2    | 800     |
-| USA-CA      | 2020 | 400     | 10.1    | 50      |
-| USA-CA-6037 | 2020 | 25      | 8.5     | 12      |
-```
-
-**Required columns:**
-- `loc_id` - Location identifier (string)
-- `year` - Integer year
-
-**Do NOT include:**
-- Redundant location columns (state, county, name, FIPS)
-- These are derivable from loc_id or geometry lookup
-
-**File format:** Parquet, stored as `{source}/aggregates.parquet`
+For most app behavior, `loc_id` is the shared language between data and map layers.
 
 ---
 
-## Event Data Schema
+## Main Dataset Types
 
-For individual events (earthquakes, hurricanes, wildfires):
+DaedalMap uses a small number of recurring schema shapes.
 
-```
-| event_id | timestamp           | latitude | longitude | magnitude | loc_id  |
-|----------|---------------------|----------|-----------|-----------|---------|
-| eq_001   | 2024-01-15T08:30:00 | 34.05    | -118.24   | 5.2       | USA-CA  |
-| eq_002   | 2024-01-16T12:45:00 | 35.68    | -121.89   | 4.1       | USA-CA  |
-```
+### 1. Aggregate Data
 
-**Required columns:**
-- `event_id` - Unique event identifier (string)
-- `timestamp` - ISO 8601 datetime
-- `latitude`, `longitude` - Decimal degrees (WGS84)
+This is the standard format for indicators such as:
+- population
+- GDP
+- risk scores
+- emissions
+- health measures
 
-**Common optional columns:**
-- `magnitude` - Event magnitude/intensity
-- `loc_id` - Resolved location (for filtering)
-- `name` - Event name (hurricanes, named storms)
-- `status` - Current status (active, historical)
+Typical shape:
 
-**File format:** Parquet, stored as `{source}/events.parquet`
+| loc_id | year | metric_a | metric_b |
+|--------|------|----------|----------|
+| USA | 2020 | ... | ... |
+| USA-CA | 2020 | ... | ... |
+| USA-CA-6037 | 2020 | ... | ... |
+
+Required columns:
+- `loc_id`
+- `year`
+
+Recommended:
+- one or more numeric metric columns
+
+Avoid:
+- redundant name columns like `state_name`, `county_name`, `region_name`
+- duplicate ID systems like raw FIPS or GEOID if they are already encoded into `loc_id`
+
+Common file names:
+- `aggregates.parquet`
+- `{ISO3}.parquet`
+- `all_countries.parquet`
+
+The exact filename can vary by scope, but the row logic is the same.
+
+### 2. Event Data
+
+This is the standard format for discrete incidents such as:
+- earthquakes
+- tornadoes
+- eruptions
+- tsunamis
+- wildfire events
+
+Typical shape:
+
+| event_id | timestamp | latitude | longitude | event_type | loc_id |
+|----------|-----------|----------|-----------|------------|--------|
+| eq_001 | 2024-01-15T08:30:00Z | 34.05 | -118.24 | earthquake | USA-CA |
+
+Required columns:
+- `event_id`
+- `timestamp`
+- `latitude`
+- `longitude`
+
+Common columns:
+- `event_type`
+- `loc_id`
+- `name`
+- `status`
+- magnitude / severity fields
+
+Common file name:
+- `events.parquet`
+
+### 3. Event Areas
+
+Some hazards also need an affected-area layer separate from the event point or track.
+
+Examples:
+- flood extents
+- wildfire perimeters
+- evacuation or impact polygons
+
+Typical use:
+- the event record identifies the incident
+- the event-area file describes where it physically spread or what it affected
+
+Common file name:
+- `event_areas.parquet`
+
+### 4. Links
+
+Some sources need a link table that ties related records together.
+
+Examples:
+- event to article/reference links
+- event to area links
+- cross-source event matching
+
+Common file name:
+- `links.parquet`
+
+### 5. Progression Data
+
+Some hazards change over time and need a time-sequenced geometry layer.
+
+Examples:
+- wildfire progression
+- flood progression
+- storm track positions
+
+This is not required for every source, but it is part of the broader event model for dynamic hazards.
 
 ---
 
-## Geometry Files
+## Geometry Schema
 
-Geometry is stored separately and joined via `loc_id`:
+Geometry is stored separately from most indicator data and joins through `loc_id`.
 
-```
-geometry/{ISO3}.parquet
-```
+Typical geometry columns:
 
-**Schema:**
-| Column | Type | Description |
-|--------|------|-------------|
-| loc_id | string | Location identifier |
-| name | string | Display name |
-| admin_level | int | 0=country, 1=state, 2=county |
-| parent_id | string | Parent loc_id |
-| geometry | WKB | Polygon/MultiPolygon |
-| centroid_lat | float | Center latitude |
-| centroid_lon | float | Center longitude |
+| Column | Description |
+|--------|-------------|
+| `loc_id` | Canonical location ID |
+| `name` | Display name |
+| `admin_level` | Geographic level |
+| `parent_id` | Parent location |
+| `geometry` | Polygon / multipolygon geometry |
+| `centroid_lat` | Latitude for center point |
+| `centroid_lon` | Longitude for center point |
 
----
+Geometry gives the app:
+- map boundaries
+- hierarchy navigation
+- location names
+- centroids and bounds for display and filtering
 
-## Data Storage Location
-
-The app uses a configurable **backup folder** for storing large data files. This keeps your git repository small.
-
-### Configuring via Admin Settings
-
-In the app, go to **Admin > Settings > Data Storage** to configure:
-
-```
-Backup Folder Path: C:\Users\Bryan\Desktop\global map\county-map-data
-```
-
-The app will create/use this structure:
-```
-[backup_path]/
-    geometry/   -- Admin boundaries (GADM, Natural Earth)
-    data/       -- Indicator datasets (parquet/CSV)
-    metadata/   -- Catalog and index files
-```
-
-### Manual Configuration
-
-Edit `settings.json` in the app root:
-```json
-{
-  "backup_path": "C:\\path\\to\\county-map-data"
-}
-```
-
----
-
-## Folder Structure
-
-Data is organized by scope and source:
-
-```
-county-map-data/
-    catalog.json              # Master index of all sources
-
-    global/                   # Global scope datasets
-        earthquakes/
-            events.parquet
-            metadata.json
-        tsunamis/
-            events.parquet
-
-    countries/                # Country-specific datasets
-        USA/
-            index.json        # Country catalog
-            fema_nri/
-                aggregates.parquet
-                metadata.json
-        CAN/
-            ...
-
-    geometry/                 # Geometry files
-        USA.parquet
-        CAN.parquet
-        global.csv
-```
+Data should generally not duplicate geometry metadata unless the source truly requires it.
 
 ---
 
 ## Metadata Schema
 
-Each dataset has a `metadata.json`:
+Every source should have a `metadata.json`.
+
+This is the source's public description layer. It tells the app and the user what the data is.
+
+Typical metadata fields:
 
 ```json
 {
-    "source_id": "usgs_earthquakes",
-    "source_name": "USGS Earthquake Catalog",
-    "source_url": "https://earthquake.usgs.gov/",
-    "license": "Public Domain",
-    "description": "Global earthquake events from USGS",
-    "category": "hazard",
-    "update_frequency": "real-time",
-    "temporal_coverage": {
-        "start_year": 1900,
-        "end_year": 2024
-    },
-    "spatial_coverage": {
-        "scope": "global"
-    },
-    "columns": [
-        {"name": "magnitude", "type": "float", "description": "Richter magnitude"}
-    ]
+  "source_id": "usgs_earthquakes",
+  "source_name": "USGS Earthquake Catalog",
+  "source_url": "https://earthquake.usgs.gov/",
+  "description": "Global earthquake event data.",
+  "license": "Public Domain",
+  "last_updated": "2026-03-01",
+  "geographic_coverage": {
+    "type": "global",
+    "admin_levels": [0]
+  },
+  "temporal_coverage": {
+    "start": 1900,
+    "end": 2026,
+    "field": "timestamp"
+  },
+  "metrics": {
+    "magnitude": {
+      "name": "Magnitude",
+      "unit": "Mw"
+    }
+  }
 }
 ```
 
+At minimum, metadata should answer:
+- what is this source
+- where did it come from
+- what geography does it cover
+- what time period does it cover
+- what fields matter
+
+Good metadata is important for:
+- the UI
+- source transparency
+- pack documentation
+- QA and release decisions
+
 ---
 
-## Creating a Converter
+## Folder Shape
 
-See the [examples/](../examples/) folder for sample converters. The basic pattern:
+The exact internal data tree can be large, but the public mental model is simple:
+
+```text
+county-map-data/
+  catalog.json
+  index.json
+
+  global/
+    {source}/
+      all_countries.parquet
+      metadata.json
+      reference.json
+
+  countries/
+    {ISO3}/
+      index.json
+      crosswalk.json
+      {source}/
+        {ISO3}.parquet
+        events.parquet
+        event_areas.parquet
+        links.parquet
+        metadata.json
+        reference.json
+
+  geometry/
+    {ISO3}.parquet
+```
+
+Not every source has every file.
+
+In practice:
+- aggregate indicator sources usually have one main parquet plus metadata
+- event sources usually have `events.parquet`
+- richer hazard sources may also have `event_areas`, `links`, or progression files
+
+---
+
+## Global vs Country Data
+
+There are two common scopes.
+
+### Global Sources
+
+Used for:
+- country-level world data
+- broad cross-country comparisons
+
+Examples:
+- `global/owid_co2/`
+- `global/who_health/`
+- `global/disasters/earthquakes/`
+
+### Country or Regional Sources
+
+Used for:
+- subnational data
+- country-specific admin hierarchies
+- sources with deeper local detail
+
+Examples:
+- `countries/USA/...`
+- `countries/CAN/...`
+- `countries/AUS/...`
+- `countries/EUR/...`
+
+The core schema logic stays the same. Only the scope changes.
+
+---
+
+## What a Good Source Looks Like
+
+A source is in good shape when it has:
+
+1. geometry-compatible `loc_id` values
+2. clear time fields (`year` or `timestamp`)
+3. numeric metrics where appropriate
+4. a valid `metadata.json`
+5. a clear source identity and update story
+
+For hazard and event sources, a mature package often grows into:
+- `events`
+- `event_areas`
+- `aggregates`
+- `links`
+- progression data if the hazard changes through time
+
+Not every source starts there, but that is the direction of a well-structured pack.
+
+---
+
+## What to Avoid
+
+Avoid these common mistakes:
+
+- storing names instead of stable IDs
+- mixing multiple geography systems without a crosswalk
+- saving metrics as strings when they should be numeric
+- duplicating geometry information in every data row
+- using inconsistent event timestamps
+- shipping a parquet file without metadata
+
+If a dataset cannot cleanly join to `loc_id`, it is not really ready for the app.
+
+---
+
+## Practical Conversion Pattern
+
+Most converters follow the same shape:
+
+1. load raw data
+2. normalize geography into `loc_id`
+3. normalize time into `year` or `timestamp`
+4. keep only the meaningful data columns
+5. write parquet
+6. write or update metadata
+
+Simple example:
 
 ```python
 import pandas as pd
-from pathlib import Path
 
-# 1. Load raw data
 df = pd.read_csv("raw_data.csv")
-
-# 2. Transform to schema
-df = df.rename(columns={"location_code": "loc_id", "date": "year"})
-df["loc_id"] = df["loc_id"].apply(normalize_loc_id)
-df["year"] = pd.to_datetime(df["year"]).dt.year
-
-# 3. Keep only required columns
-df = df[["loc_id", "year", "metric1", "metric2"]]
-
-# 4. Save as parquet
-output_path = Path("county-map-data/countries/USA/my_source/aggregates.parquet")
-output_path.parent.mkdir(parents=True, exist_ok=True)
-df.to_parquet(output_path, index=False)
+df = df.rename(columns={"region_code": "loc_id", "data_year": "year"})
+df["year"] = pd.to_numeric(df["year"], errors="coerce")
+df["value"] = pd.to_numeric(df["value"], errors="coerce")
+df = df[["loc_id", "year", "value"]]
+df.to_parquet("output.parquet", index=False)
 ```
 
 ---
 
-## Country-Specific Formats
+## In Short
 
-### United States (USA)
+If you remember only a few rules, remember these:
 
-| Level | Format | Example |
-|-------|--------|---------|
-| State | `USA-{ST}` | `USA-CA` |
-| County | `USA-{ST}-{FIPS}` | `USA-CA-6037` |
-| ZCTA | `USA-{ST}-Z{ZIP5}` | `USA-CA-Z90210` |
+- `loc_id` is the core geographic join key
+- aggregate data usually joins on `(loc_id, year)`
+- event data centers on `event_id`, `timestamp`, and coordinates
+- geometry lives separately and should be reused, not duplicated
+- every source should describe itself with metadata
 
-**Note:** County FIPS codes have NO leading zeros.
-
-### Canada (CAN)
-
-| Level | Format | Example |
-|-------|--------|---------|
-| Province | `CAN-{PR}` | `CAN-BC` |
-| Census Division | `CAN-{PR}-{CDUID}` | `CAN-BC-5915` |
-
-### Europe (EUR)
-
-| Level | Format | Example |
-|-------|--------|---------|
-| Country | `{ISO3}` | `DEU`, `FRA` |
-| NUTS 1 | `{ISO3}-{NUTS1}` | `DEU-DE1` |
-| NUTS 2 | `{ISO3}-{NUTS1}-{NUTS2}` | `DEU-DE1-DE11` |
-| NUTS 3 | `{ISO3}-{NUTS1}-{NUTS2}-{NUTS3}` | `DEU-DE1-DE11-DE111` |
-
-### Australia (AUS)
-
-| Level | Format | Example |
-|-------|--------|---------|
-| State | `AUS-{ST}` | `AUS-NSW` |
-| LGA | `AUS-{ST}-{LGACODE}` | `AUS-NSW-10050` |
+That is the foundation the rest of the app builds on.
 
 ---
 
-*For source attribution, see [public reference.md](public%20reference.md)*
+## Related Docs
+
+- [APP_OVERVIEW.md](APP_OVERVIEW.md)
+- [LOCAL_AND_HOSTED.md](LOCAL_AND_HOSTED.md)
+- [public reference.md](public%20reference.md)

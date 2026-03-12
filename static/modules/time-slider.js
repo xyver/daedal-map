@@ -1287,6 +1287,21 @@ export const TimeSlider = {
   },
 
   /**
+   * Set trim bounds programmatically.
+   * Accepts year numbers (e.g. 2020) or timestamps (ms).
+   * Pass null for either to clear that bound.
+   * @param {number|null} min - Lower bound (year or timestamp)
+   * @param {number|null} max - Upper bound (year or timestamp)
+   */
+  setTrimBounds(min, max) {
+    this.boundMinTime = min != null ? this.normalizeToTimestamp(min) : null;
+    this.boundMaxTime = max != null ? this.normalizeToTimestamp(max) : null;
+    this.updateTrimHandlePositions();
+    this.saveSliderSettings();
+    console.log(`[TimeSlider] Trim bounds set: ${min} - ${max}`);
+  },
+
+  /**
    * Reset trim bounds to full range (no trim).
    */
   resetTrimBounds() {

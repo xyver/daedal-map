@@ -4,7 +4,10 @@ from fastapi import APIRouter
 import pandas as pd
 
 from mapmover.disaster_filters import apply_location_filters
-from mapmover.duckdb_helpers import duckdb_available, parquet_available, select_filtered_event_rows, select_rows
+from mapmover.duckdb_helpers import (
+    duckdb_available, make_cache_key, parquet_available,
+    select_filtered_event_rows, select_filtered_event_rows_cached, select_rows,
+)
 from mapmover.logging_analytics import logger
 from mapmover.paths import GLOBAL_DIR
 
@@ -97,14 +100,21 @@ async def get_eruptions_geojson(
         if not parquet_available(eruptions_path):
             return msgpack_error("Eruption data not available", 404)
 
-        df = select_filtered_event_rows(
-            eruptions_path,
-            year=year,
-            start=start,
-            end=end,
-            min_value_filters={"VEI": min_vei},
-            like_filters={"loc_id": f"{loc_prefix}%"} if loc_prefix else None,
-        )
+        if year is not None and start is None and end is None and min_vei is None and loc_prefix is None:
+            df = select_filtered_event_rows_cached(
+                eruptions_path,
+                cache_key=make_cache_key("volcanoes", year=year),
+                year=year,
+            )
+        else:
+            df = select_filtered_event_rows(
+                eruptions_path,
+                year=year,
+                start=start,
+                end=end,
+                min_value_filters={"VEI": min_vei},
+                like_filters={"loc_id": f"{loc_prefix}%"} if loc_prefix else None,
+            )
         if df.empty and not duckdb_available():
             df = pd.read_parquet(eruptions_path)
             df = ensure_year_column(df)

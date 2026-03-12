@@ -44,12 +44,11 @@ export function setDependencies(deps) {
 // Welcome message shown on first load and new chat
 const WELCOME_MESSAGE =
   'Welcome! Ask me anything about global data -- earthquakes, hurricanes, ' +
-  'climate indicators, and more.<br><br>' +
-  'Just type a question like you normally would. For example:<br>' +
-  '- "Show me earthquakes in Japan"<br>' +
-  '- "What data do you have?"<br>' +
-  '- "Hurricane tracks in the Atlantic"<br><br>' +
-  'Type <b>help</b> or <b>how do you work?</b> anytime for a full guide.';
+  'climate indicators, and more. Enable the Demographics overlay to zoom through ' +
+  'the countries, states, and territories.<br><br>' +
+  'To explore datasets, type a question in natural language. ' +
+  'Type "help" or "how do you work?" anytime for a full guide.<br><br>' +
+  '<button class="chat-action-btn" data-action="preload-disasters-2020">Load disasters 2020-2025</button>';
 
 // Map event_type from API responses to overlay IDs
 const EVENT_TYPE_TO_OVERLAY = {
@@ -503,11 +502,14 @@ export const ChatManager = {
       }
     }
 
-    // Check for API calls and executed orders to recover (map data)
-    const apiCalls = getApiCallsForRecovery();
-    const executedOrders = getExecutedOrdersForRecovery();
-    if (apiCalls.length > 0 || executedOrders.length > 0) {
-      this.showRecoveryPrompt(apiCalls.length, executedOrders.length);
+    // Only show recovery prompt if the user actually used chat in the previous session
+    const hadChatSession = this.history.some(m => m.role === 'user');
+    if (hadChatSession) {
+      const apiCalls = getApiCallsForRecovery();
+      const executedOrders = getExecutedOrdersForRecovery();
+      if (apiCalls.length > 0 || executedOrders.length > 0) {
+        this.showRecoveryPrompt(apiCalls.length, executedOrders.length);
+      }
     }
   },
 
@@ -755,6 +757,47 @@ export const ChatManager = {
       e.preventDefault();
       await this.handleSubmit();
     });
+
+    // Delegated handler for chat action buttons (e.g. preload buttons in welcome message)
+    this.elements.messages.addEventListener('click', async (e) => {
+      const btn = e.target.closest('[data-action]');
+      if (!btn) return;
+      const action = btn.dataset.action;
+      if (action === 'preload-disasters-2020') {
+        await this.handlePreloadDisasters2020(btn);
+      }
+    });
+  },
+
+  /**
+   * Handle the "Load disasters 2020-2025" preload button.
+   * Makes one ranged API call per disaster type and caches the results in the browser.
+   */
+  async handlePreloadDisasters2020(btn) {
+    btn.disabled = true;
+    btn.textContent = 'Loading...';
+    try {
+      const disasterIds = ['earthquakes', 'hurricanes', 'volcanoes', 'wildfires', 'tsunamis', 'tornadoes'];
+
+      // Enable overlays that aren't already active
+      for (const id of disasterIds) {
+        if (!window.OverlaySelector?.isActive(id)) {
+          window.OverlaySelector?.toggle(id);
+        }
+      }
+
+      // Move trim handles to 2020-2025 (overall range stays at default 2000-present)
+      window.TimeSlider?.setTrimBounds(2020, 2025);
+
+      // Preload all data into browser cache
+      const summary = await window.OverlayController?.preloadDisasters2020to2025();
+      const loaded = summary ? Object.values(summary).filter(r => r.loaded).length : 0;
+      btn.textContent = `Loaded (${loaded}/6 datasets)`;
+    } catch (e) {
+      console.error('Preload failed:', e);
+      btn.textContent = 'Load disasters 2020-2025';
+      btn.disabled = false;
+    }
   },
 
   /**

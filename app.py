@@ -51,12 +51,14 @@ BASE_DIR = Path(__file__).resolve().parent
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialize data catalog, conversions, and order processor on startup."""
+    import asyncio
+    import threading
+
     logger.info("Starting county-map API...")
     load_conversions()
     initialize_catalog()
 
     async def async_execute_order(items, hints):
-        import asyncio
         loop = asyncio.get_event_loop()
         order = {"items": items, "summary": hints.get("summary", "")}
         return await loop.run_in_executor(None, execute_order, order)
@@ -64,6 +66,34 @@ async def lifespan(app: FastAPI):
     order_processor.set_executor(async_execute_order)
     await order_processor.start()
     logger.info("Startup complete - data catalog and order processor initialized")
+
+    # Fire pre-warmers in background threads so startup is not blocked.
+    # In S3 mode this populates DuckDB httpfs metadata cache, our in-memory
+    # DataFrame cache, and the geometry cache so cold R2 fetches do not hit
+    # the first user requests.
+    try:
+        from mapmover.duckdb_helpers import is_s3_mode, prewarm_disaster_sources
+        from mapmover.geometry_handlers import prewarm_geometry
+        from mapmover.paths import GLOBAL_DIR
+        if is_s3_mode():
+            t_disaster = threading.Thread(
+                target=prewarm_disaster_sources,
+                args=(GLOBAL_DIR,),
+                daemon=True,
+                name="prewarm-disasters",
+            )
+            t_disaster.start()
+
+            t_geom = threading.Thread(
+                target=prewarm_geometry,
+                daemon=True,
+                name="prewarm-geometry",
+            )
+            t_geom.start()
+
+            logger.info("Pre-warmers started: disasters + geometry")
+    except Exception as exc:
+        logger.warning("Pre-warmer failed to start: %s", exc)
 
     yield
 

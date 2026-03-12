@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import json
 import os
+import threading
+import time
 from pathlib import Path
 from typing import Iterable, Optional
 
@@ -116,6 +118,10 @@ def _configure_httpfs(con) -> None:
         con.execute(f"SET s3_secret_access_key='{secret}'")
     con.execute(f"SET s3_region='{region}'")
     con.execute("SET s3_url_style='path'")
+    # Cache parquet footer/metadata globally across connections - eliminates
+    # repeated HTTP HEAD+range requests for the same files on each new connection.
+    con.execute("SET enable_http_metadata_cache=true")
+    con.execute("SET http_keep_alive=true")
 
 
 def _make_connection():
@@ -556,3 +562,225 @@ def select_columns_from_parquet(parquet_path: Path, columns: Iterable[str]) -> p
 
     sql = "SELECT " + ", ".join(quote_ident(c) for c in selected) + " FROM read_parquet(?)"
     return run_df(sql, [uri])
+
+
+# ---------------------------------------------------------------------------
+# In-memory TTL response cache
+# Caches DataFrames from slow default GeoJSON queries so cold-start fetches
+# from R2 do not block every incoming request.
+# ---------------------------------------------------------------------------
+
+_CACHE_LOCK = threading.Lock()
+_CACHE: dict[str, tuple[pd.DataFrame, float]] = {}  # key -> (df, expires_at)
+
+DEFAULT_CACHE_TTL = int(os.environ.get("DUCKDB_CACHE_TTL", "300"))  # seconds
+
+
+def cache_get(key: str) -> pd.DataFrame | None:
+    """Return cached DataFrame if still valid, else None."""
+    with _CACHE_LOCK:
+        entry = _CACHE.get(key)
+    if entry is None:
+        return None
+    df, expires_at = entry
+    if time.monotonic() > expires_at:
+        with _CACHE_LOCK:
+            _CACHE.pop(key, None)
+        return None
+    return df
+
+
+def cache_set(key: str, df: pd.DataFrame, ttl: int | None = None) -> None:
+    """Store a DataFrame in the cache with a TTL (default DEFAULT_CACHE_TTL)."""
+    ttl = ttl if ttl is not None else DEFAULT_CACHE_TTL
+    expires_at = time.monotonic() + ttl
+    with _CACHE_LOCK:
+        _CACHE[key] = (df, expires_at)
+
+
+def cache_clear(prefix: str | None = None) -> None:
+    """Clear all cache entries, or only those whose key starts with prefix."""
+    with _CACHE_LOCK:
+        if prefix is None:
+            _CACHE.clear()
+        else:
+            for k in list(_CACHE):
+                if k.startswith(prefix):
+                    del _CACHE[k]
+
+
+def make_cache_key(source: str, **params) -> str:
+    """Build a cache key from a source name and request params.
+
+    Only non-None values are included. Sorted so key is stable regardless of
+    argument order. Use the same helper in both the pre-warmer and route
+    handlers so keys always match.
+
+    Example:
+        make_cache_key("floods", year=2021, include_geometry=True)
+        -> "floods:include_geometry:True:year:2021"
+    """
+    relevant = {k: v for k, v in params.items() if v is not None and v is not False}
+    parts = [source] + [f"{k}:{v}" for k, v in sorted(relevant.items())]
+    return ":".join(parts)
+
+
+def select_filtered_event_rows_cached(
+    parquet_path: Path,
+    cache_key: str,
+    ttl: int | None = None,
+    **kwargs,
+) -> pd.DataFrame:
+    """Like select_filtered_event_rows but checks/stores results in the TTL cache.
+
+    Use this for default (no user-specific filters) queries to avoid cold R2
+    fetches on every request. cached DataFrame is returned for cache_ttl seconds.
+    """
+    cached = cache_get(cache_key)
+    if cached is not None:
+        return cached
+    df = select_filtered_event_rows(parquet_path, **kwargs)
+    if not df.empty:
+        cache_set(cache_key, df, ttl)
+    return df
+
+
+# ---------------------------------------------------------------------------
+# Startup pre-warmer
+# Runs the expensive default queries for each disaster source so the DuckDB
+# http metadata cache and our in-memory DataFrame cache are both populated
+# before the first user request arrives.
+# ---------------------------------------------------------------------------
+
+def _prewarm_source(source_id: str, parquet_path: Path, min_year_filter: dict | None) -> None:
+    """Run the default query for one source and populate the cache."""
+    import logging
+    log = logging.getLogger(__name__)
+    if not parquet_available(parquet_path):
+        return
+    cache_key = f"{source_id}:default:{min_year_filter}"
+    if cache_get(cache_key) is not None:
+        return  # already warm
+    try:
+        t0 = time.monotonic()
+        df = select_filtered_event_rows(
+            parquet_path,
+            min_value_filters=min_year_filter,
+        )
+        elapsed = time.monotonic() - t0
+        if not df.empty:
+            cache_set(cache_key, df)
+        log.info("prewarm %s: %d rows in %.1fs", source_id, len(df), elapsed)
+    except Exception as exc:
+        log.warning("prewarm %s failed: %s", source_id, exc)
+
+
+def prewarm_disaster_sources(global_dir: Path) -> None:
+    """Pre-warm the default queries for all disaster sources.
+
+    Call this in a background thread from the app lifespan. It populates both
+    the DuckDB http metadata cache and our in-memory DataFrame cache so that
+    the first user request does not incur cold R2 latency.
+
+    Animation years 2020-2025 are pre-warmed with the exact filter params that
+    the frontend overlay-controller.js uses (min_magnitude, min_area_km2, etc.)
+    so that animation playback hits the cache on the first pass.
+    """
+    if not is_s3_mode():
+        return  # pre-warming only needed for R2 mode
+
+    import logging
+    log = logging.getLogger(__name__)
+
+    # Animation years the user typically plays through.
+    animation_years = list(range(2020, 2026))
+
+    # --- earthquakes (min_magnitude 5.5 from overlay-controller.js) ----------
+    eq_path = global_dir / "disasters/earthquakes/events.parquet"
+    _prewarm_source("earthquakes", eq_path, {"year": 2000})
+    for yr in animation_years:
+        ck = make_cache_key("earthquakes", year=yr, min_magnitude=5.5)
+        if cache_get(ck) is None:
+            try:
+                t0 = time.monotonic()
+                df = select_filtered_event_rows(eq_path, year=yr, min_value_filters={"magnitude": 5.5})
+                if not df.empty:
+                    cache_set(ck, df)
+                log.info("prewarm earthquakes year=%d: %d rows in %.1fs", yr, len(df), time.monotonic() - t0)
+            except Exception as exc:
+                log.warning("prewarm earthquakes year=%d failed: %s", yr, exc)
+
+    # --- tsunamis (no extra filters) -----------------------------------------
+    ts_path = global_dir / "disasters/tsunamis/events.parquet"
+    _prewarm_source("tsunamis", ts_path, None)
+    for yr in animation_years:
+        ck = make_cache_key("tsunamis", year=yr)
+        if cache_get(ck) is None:
+            try:
+                t0 = time.monotonic()
+                df = select_filtered_event_rows(ts_path, year=yr)
+                if not df.empty:
+                    cache_set(ck, df)
+                log.info("prewarm tsunamis year=%d: %d rows in %.1fs", yr, len(df), time.monotonic() - t0)
+            except Exception as exc:
+                log.warning("prewarm tsunamis year=%d failed: %s", yr, exc)
+
+    # --- floods (include_geometry param does not change what's in the parquet;
+    #     max year is 2019 so skip animation years >2019) ----------------------
+    fl_path = global_dir / "disasters/floods/events_enriched.parquet"
+    if not parquet_available(fl_path):
+        fl_path = global_dir / "disasters/floods/events.parquet"
+    _prewarm_source("floods", fl_path, {"year": 1985})
+    for yr in [y for y in animation_years if y <= 2019]:
+        ck = make_cache_key("floods", year=yr)
+        if cache_get(ck) is None:
+            try:
+                t0 = time.monotonic()
+                df = select_filtered_event_rows(fl_path, year=yr)
+                if not df.empty:
+                    cache_set(ck, df)
+                log.info("prewarm floods year=%d: %d rows in %.1fs", yr, len(df), time.monotonic() - t0)
+            except Exception as exc:
+                log.warning("prewarm floods year=%d failed: %s", yr, exc)
+
+    # --- volcanoes/eruptions (exclude_ongoing does not affect DuckDB query;
+    #     it's a pandas filter after fetch - so cache without it) --------------
+    vol_path = global_dir / "disasters/volcanoes/events.parquet"
+    _prewarm_source("volcanoes", vol_path, None)
+    for yr in animation_years:
+        ck = make_cache_key("volcanoes", year=yr)
+        if cache_get(ck) is None:
+            try:
+                t0 = time.monotonic()
+                df = select_filtered_event_rows(vol_path, year=yr)
+                if not df.empty:
+                    cache_set(ck, df)
+                log.info("prewarm volcanoes year=%d: %d rows in %.1fs", yr, len(df), time.monotonic() - t0)
+            except Exception as exc:
+                log.warning("prewarm volcanoes year=%d failed: %s", yr, exc)
+
+    # --- tornadoes (min_scale=EF2 is a text field; cache raw year slice) ------
+    tor_path = global_dir / "disasters/tornadoes/events.parquet"
+    _prewarm_source("tornadoes", tor_path, {"year": 1990})
+    for yr in animation_years:
+        ck = make_cache_key("tornadoes", year=yr)
+        if cache_get(ck) is None:
+            try:
+                t0 = time.monotonic()
+                df = select_filtered_event_rows(tor_path, year=yr)
+                if not df.empty:
+                    cache_set(ck, df)
+                log.info("prewarm tornadoes year=%d: %d rows in %.1fs", yr, len(df), time.monotonic() - t0)
+            except Exception as exc:
+                log.warning("prewarm tornadoes year=%d failed: %s", yr, exc)
+
+    # --- hurricanes (complex partitioned source; touch metadata only) ---------
+    hur_path = global_dir / "disasters/hurricanes/events.parquet"
+    _prewarm_source("hurricanes", hur_path, {"year": 1950})
+
+    # Wildfires: partitioned by year across multiple dirs + USA/CAN sources;
+    # metadata cache is populated by _prewarm_source on the first global year file.
+    wf_path = global_dir / "disasters/wildfires/by_year_enriched/fires_2020_enriched.parquet"
+    _prewarm_source("wildfires_meta", wf_path, None)
+
+    log.info("Pre-warmer complete")

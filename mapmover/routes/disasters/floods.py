@@ -3,7 +3,10 @@
 from fastapi import APIRouter
 
 from mapmover.disaster_filters import apply_location_filters, get_default_min_year
-from mapmover.duckdb_helpers import duckdb_available, is_s3_mode, parquet_available, select_filtered_event_rows
+from mapmover.duckdb_helpers import (
+    duckdb_available, is_s3_mode, make_cache_key, parquet_available,
+    select_filtered_event_rows, select_filtered_event_rows_cached,
+)
 from mapmover.logging_analytics import logger
 from mapmover.paths import GLOBAL_DIR
 
@@ -41,12 +44,17 @@ async def get_floods_geojson(
         use_duckdb = duckdb_available()
         if use_duckdb:
             if year is not None:
-                df = select_filtered_event_rows(events_path, year=year)
+                df = select_filtered_event_rows_cached(
+                    events_path,
+                    cache_key=make_cache_key("floods", year=year),
+                    year=year,
+                )
             elif start is not None or end is not None:
                 df = select_filtered_event_rows(events_path, start=start, end=end)
             else:
-                df = select_filtered_event_rows(
+                df = select_filtered_event_rows_cached(
                     events_path,
+                    cache_key=make_cache_key("floods", min_year=min_year),
                     min_value_filters={"year": min_year} if min_year is not None else None,
                 )
                 if max_year is not None and "year" in df.columns:

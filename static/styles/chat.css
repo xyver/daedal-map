@@ -156,6 +156,22 @@
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);
 }
 
+.mobile-map-notice {
+  display: none;
+  padding: 9px 15px 10px;
+  background: rgba(37, 17, 6, 0.9);
+  color: #ffb24a;
+  font-size: 12px;
+  line-height: 1.45;
+  font-weight: 700;
+  border-bottom: 1px solid rgba(255, 178, 74, 0.2);
+  box-shadow: inset 0 1px 0 rgba(255, 196, 104, 0.08);
+}
+
+body.mobile-limited #mobileMapNotice {
+  display: block;
+}
+
 .auth-modal.hidden {
   display: none;
 }
@@ -300,10 +316,17 @@
 
 #sidebarHeader,
 .auth-status-bar,
+#mobileMapNotice,
 #sidebarFooter,
 #settingsView,
 .settings-footer {
   background: rgba(7, 20, 31, 0.72);
+}
+
+#mobileMapNotice {
+  background:
+    linear-gradient(90deg, rgba(255, 166, 60, 0.14), rgba(255, 166, 60, 0.04)),
+    rgba(18, 17, 14, 0.9);
 }
 
 #sidebarHeader {
@@ -511,6 +534,30 @@
 
 .recovery-btn.fresh:hover {
   background: #546e7a;
+}
+
+/* Chat action buttons (preload, quick-load, etc.) */
+.chat-action-btn {
+  margin-top: 8px;
+  padding: 7px 14px;
+  border: none;
+  border-radius: 6px;
+  background: #1a5276;
+  color: white;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.2s, transform 0.1s;
+}
+
+.chat-action-btn:hover:not(:disabled) {
+  background: #2471a3;
+  transform: translateY(-1px);
+}
+
+.chat-action-btn:disabled {
+  opacity: 0.7;
+  cursor: default;
 }
 
 /* Show on map button */

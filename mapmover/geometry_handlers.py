@@ -13,6 +13,7 @@ Schema (13 columns):
 
 import json
 import logging
+import threading
 import pandas as pd
 from pathlib import Path
 
@@ -32,6 +33,8 @@ logger = logging.getLogger("mapmover")
 
 # Cache for country parquet data - keyed by (iso3, admin_level) or just iso3 for full
 _country_parquet_cache = {}
+_country_parquet_cache_lock = threading.Lock()
+_country_parquet_inflight = set()  # keys currently being fetched from R2
 
 # Cache for global countries data
 _global_countries_cache = None
@@ -103,15 +106,22 @@ def load_country_parquet(iso3: str, admin_level: int = None):
     """
     # Check cache - if admin_level specified, cache by (iso3, level)
     cache_key = (iso3, admin_level) if admin_level is not None else iso3
-    if cache_key in _country_parquet_cache:
-        return _country_parquet_cache[cache_key]
 
-    # If we have the full dataframe cached, filter from it
-    if admin_level is not None and iso3 in _country_parquet_cache:
-        full_df = _country_parquet_cache[iso3]
-        filtered = full_df[full_df['admin_level'] == admin_level]
-        _country_parquet_cache[cache_key] = filtered
-        return filtered
+    with _country_parquet_cache_lock:
+        if cache_key in _country_parquet_cache:
+            return _country_parquet_cache[cache_key]
+
+        # If we have the full dataframe cached, filter from it
+        if admin_level is not None and iso3 in _country_parquet_cache:
+            full_df = _country_parquet_cache[iso3]
+            filtered = full_df[full_df['admin_level'] == admin_level]
+            _country_parquet_cache[cache_key] = filtered
+            return filtered
+
+        # If another thread is already fetching this key, don't double-fetch
+        if cache_key in _country_parquet_inflight:
+            return None  # Caller will retry on next request
+        _country_parquet_inflight.add(cache_key)
 
     # Priority 1: Country-specific geometry (matches data loc_ids like NUTS)
     country_geom_file = DATA_ROOT / "countries" / iso3 / "geometry.parquet"
@@ -142,6 +152,8 @@ def load_country_parquet(iso3: str, admin_level: int = None):
         logger.debug(f"Using global geometry fallback: {global_geom_file}")
     else:
         logger.debug(f"No geometry file found for {iso3}")
+        with _country_parquet_cache_lock:
+            _country_parquet_inflight.discard(cache_key)
         return None
 
     try:
@@ -172,11 +184,25 @@ def load_country_parquet(iso3: str, admin_level: int = None):
             df['local_loc_id'] = df['loc_id'].map(reverse_map)
             logger.debug(f"Applied crosswalk: {len(reverse_map)} mappings")
 
-        _country_parquet_cache[cache_key] = df
+        # In S3 mode, do not cache empty DataFrames - an empty result from a cold
+        # DuckDB/R2 fetch is likely a transient failure, not "this country has no data".
+        # Caching empty would poison the cache and serve 0 features for the rest of
+        # the container's lifetime. Local mode is fine to cache empty (data truly absent).
+        if df.empty and is_s3_mode():
+            logger.warning(f"Empty geometry result for {iso3} (level={admin_level}) in S3 mode - not caching")
+            with _country_parquet_cache_lock:
+                _country_parquet_inflight.discard(cache_key)
+            return df  # Return empty but do NOT cache, so next request retries
+
+        with _country_parquet_cache_lock:
+            _country_parquet_cache[cache_key] = df
+            _country_parquet_inflight.discard(cache_key)
         logger.debug(f"Loaded {len(df)} features for {iso3} (level={admin_level}) from {parquet_file.name}")
         return df
     except Exception as e:
         logger.error(f"Error loading geometry for {iso3}: {e}")
+        with _country_parquet_cache_lock:
+            _country_parquet_inflight.discard(cache_key)
         return None
 
 
@@ -1402,11 +1428,68 @@ def get_viewport_geometry(admin_level: int, bbox: tuple, debug: bool = False):
 def clear_cache():
     """Clear all cached geometry data. Useful when data files are updated."""
     global _country_parquet_cache, _global_countries_cache, _country_bounds_cache, _subcounty_geometry_cache
-    _country_parquet_cache = {}
+    with _country_parquet_cache_lock:
+        _country_parquet_cache = {}
+        _country_parquet_inflight.clear()
     _global_countries_cache = None
     _country_bounds_cache = None
     _subcounty_geometry_cache = {}
     logger.info("Geometry cache cleared")
+
+
+def prewarm_geometry() -> None:
+    """Pre-warm the geometry cache for the most commonly accessed countries.
+
+    Call this in a background thread from the app lifespan. In S3 mode this
+    populates _country_parquet_cache for the top countries so the first viewport
+    request does not cold-hit R2 for every visible country.
+
+    Only runs in S3 mode. Local mode reads directly from disk and is fast enough
+    that pre-warming adds no benefit.
+    """
+    import time as _time
+
+    if not is_s3_mode():
+        return
+
+    # Countries to pre-warm: covers the typical default landing view (North America,
+    # Europe, East Asia) and the most-accessed individual country drill-downs.
+    # admin_level=1 (states/provinces) is the first drill-down level, and the one
+    # the viewport loads automatically as users pan around the map.
+    priority_countries = [
+        "USA", "CAN", "MEX",  # North America
+        "GBR", "DEU", "FRA", "ITA", "ESP", "NLD", "POL",  # Europe
+        "JPN", "CHN", "IND", "AUS", "BRA", "ZAF",  # Rest of world
+    ]
+
+    logger.info("Geometry pre-warmer starting: %d priority countries", len(priority_countries))
+
+    for iso3 in priority_countries:
+        if (iso3, 1) in _country_parquet_cache:
+            continue  # already cached
+        t0 = _time.monotonic()
+        try:
+            df = load_country_parquet(iso3, admin_level=1)
+            elapsed = _time.monotonic() - t0
+            if df is not None and not df.empty:
+                logger.info("prewarm geometry %s level=1: %d rows in %.1fs", iso3, len(df), elapsed)
+            else:
+                logger.warning("prewarm geometry %s level=1: empty result in %.1fs", iso3, elapsed)
+        except Exception as exc:
+            logger.warning("prewarm geometry %s failed: %s", iso3, exc)
+
+    # Also pre-warm level 2 (counties) for USA since it is the most zoomed-into country
+    if (("USA", 2) not in _country_parquet_cache):
+        t0 = _time.monotonic()
+        try:
+            df = load_country_parquet("USA", admin_level=2)
+            elapsed = _time.monotonic() - t0
+            if df is not None and not df.empty:
+                logger.info("prewarm geometry USA level=2: %d rows in %.1fs", len(df), elapsed)
+        except Exception as exc:
+            logger.warning("prewarm geometry USA level=2 failed: %s", exc)
+
+    logger.info("Geometry pre-warmer complete")
 
 
 def get_selection_geometries(loc_ids: list):

@@ -1,193 +1,186 @@
-# Geographic Data Explorer
+# DaedalMap
 
-An interactive map system that lets you explore global data through natural language. Ask questions about any location and see the answers visualized on a 3D globe.
+DaedalMap is a map-first geographic query engine. It lets people ask place-based questions in natural language and get usable map results across disasters, demographics, economics, climate, and related public data.
 
-**Live Demo**: [[county-map.up.railway.app](https://county-map-production.up.railway.app/)]
----
+Public surfaces:
+- App: `https://daedalmap.io`
+- Website/docs: `https://daedalmap.com`
 
-## This Is a Demo
+This repository is the open app/runtime. It is intended to be understandable and usable on its own: you can run it locally, point it at local or hosted data, and extend it with compatible datasets and pack-style workflows.
 
-This repository is a self-contained demo version of the full Geographic Data Explorer. It ships with a curated subset of public-domain data so you can clone it and run it immediately without any external data downloads.
+## What It Does
 
-**What the demo includes:**
-- 7 disaster datasets (earthquakes, hurricanes, wildfires, tornadoes, floods, tsunamis, volcanoes) -- mostly 2015-2025
-- All 17 UN Sustainable Development Goal indicator sets (~191 countries)
-- Country-level geometry (admin_0 boundaries for 217 countries)
+DaedalMap is built around three ideas:
+- ask in plain language instead of assembling GIS workflows first
+- keep the map as the primary interface, not an afterthought
+- separate runtime delivery from maintained data-pack delivery
 
-**What the full version adds:**
-- Sub-national boundaries (states, provinces, counties) for 267 countries
-- Extended disaster history (1M+ earthquake records back to 1521, etc.)
-- Additional indicator sources (OWID, World Bank, national statistics)
-- Higher-resolution geometry and more granular data
+Typical use cases:
+- show earthquakes, floods, wildfires, storms, volcanoes, or tsunamis for a place and time window
+- compare population, economic, and disaster context in the same workflow
+- move between hosted demo use, logged-in workspace use, and local/self-hosted operation without changing the basic mental model
 
-The demo is fully functional -- the same app code runs both versions. The only difference is the data available in the `data/` folder. See "Adding Your Own Data" below to extend it.
+## Current Runtime Shape
 
----
+The current hosted/runtime direction is:
+- `Railway` for the public app runtime
+- `Cloudflare R2` for canonical runtime data storage
+- `Supabase` for auth and the future entitlement/control plane
+
+In `STORAGE_MODE=s3`, the runtime:
+- eagerly syncs only small metadata files to local cache
+- queries parquet directly from object storage via DuckDB `httpfs`
+- does not sync the full parquet tree at startup
+
+That means the same codebase can be used in:
+- bundled demo mode
+- fuller local-data mode
+- hosted-style S3 mode
+
+## Guest And Logged-In Behavior
+
+Guest users can open the app and try the public workflow without logging in.
+
+Logged-in users currently get:
+- authenticated session identity
+- user-scoped frontend persistence
+- user-scoped backend session cache
+- a dedicated `/settings` page for account/workspace settings
+
+This is the beginning of a larger account/workspace model, not the final form. The direction is:
+- stronger persistence for signed-in users
+- clearer pack visibility and entitlements
+- more meaningful settings/workspace behavior
 
 ## Quick Start
 
-```bash
-git clone <this repo>
+### 1. Install dependencies
+
+```powershell
 cd county-map
 pip install -r requirements.txt
 ```
 
-Create a `.env` file with your Anthropic API key:
-```
+### 2. Add environment variables
+
+Create a `.env` file for local development. Minimum common variables:
+
+```env
 ANTHROPIC_API_KEY=your_key_here
 ```
 
-Run:
-```bash
+If you want to test the hosted-style setup locally, also configure:
+
+```env
+STORAGE_MODE=s3
+S3_BUCKET=global-map-data
+S3_ENDPOINT_URL=https://<account>.r2.cloudflarestorage.com
+AWS_ACCESS_KEY_ID=...
+AWS_SECRET_ACCESS_KEY=...
+AWS_DEFAULT_REGION=auto
+S3_LOCAL_CACHE=C:\path\to\county-map-cache
+```
+
+If you want auth locally:
+
+```env
+SUPABASE_URL=...
+SUPABASE_ANON_KEY=...
+SUPABASE_SERVICE_KEY=...
+```
+
+### 3. Run the app
+
+```powershell
 python app.py
 ```
 
-Open http://localhost:7000 -- the bundled demo data loads automatically.
+Open:
+- `http://localhost:7000`
 
----
+## Data Resolution
 
-## What You Can Do
+The runtime resolves data in this order:
 
-**Ask questions in plain language:**
-- "Show me earthquakes in Japan"
-- "Hurricane tracks in the Atlantic 2020"
-- "What volcanoes have erupted near Indonesia?"
-- "UN poverty indicators for Africa"
+1. `DATA_ROOT` if explicitly set
+2. sibling `county-map-data/` folder for local/full-data development
+3. bundled `data/` folder as demo fallback
 
-**The chat understands three things:** location (where), data (what), and time (when).
-Type "help" or "how do you work?" for a full guide.
+In local demo mode, the app can run directly from bundled data.
 
-**Interactive 3D Globe:**
-- MapLibre GL JS with globe projection
-- Choropleth coloring for indicator data
-- Point markers with radius scaling for events
-- Animated track lines for hurricanes
-- Time slider for filtering by year/date range
+In hosted/S3 mode:
+- metadata is cached locally
+- parquet is queried remotely from object storage
 
----
+That makes local S3-mode testing useful for reproducing hosted-runtime behavior before deploy.
 
-## Included Demo Data (~46 MB)
+## Data And Pack Direction
 
-The `data/` folder contains a filtered subset ready to use out of the box:
+The old “demo data folder plus converters” framing is no longer the whole story.
 
-| Dataset | Source | Filter | Events |
-|---------|--------|--------|--------|
-| Earthquakes | USGS + NOAA | M5.0+, 2015-2025 | 19,132 |
-| Hurricanes | IBTrACS | 2015-2025 | 1,177 storms |
-| Wildfires | Global Fire Atlas | 200+ km2, excl USA/CAN | 11,235 |
-| Tornadoes | NOAA + Canada | 2015-2025 | 17,338 |
-| Floods | DFO | 2015-2019 | 610 |
-| Tsunamis | NOAA NCEI | 2015-2025 | 193 |
-| Volcanoes | Smithsonian GVP | 2015-2025 | 383 |
-| UN SDGs | UN Stats | All 17 goals, ~191 countries | -- |
-| Geometry | GADM (simplified) | Country outlines only | 217 countries |
+The current direction is:
+- the engine stays open
+- maintained data is packaged as packs
+- packs are validated and promoted with explicit release gates
+- runtime catalogs eventually depend on pack availability, installation, and entitlement state
 
-All data sourced from public domain / open-license APIs.
+Key concepts:
+- `available packs`
+- `installed packs`
+- `entitled packs`
+- `active runtime catalog`
 
----
+These are intentionally distinct.
 
-## Adding Your Own Data
+This repo still includes a small bundled `data/` fallback so the app can run as a demo without the full maintained data tree.
 
-This project uses a schema-driven approach. If your data matches the format, it renders automatically -- no app code changes needed.
+## Settings Page
 
-### For event/disaster data:
+The app now has a real settings page:
+- `/settings`
 
-```python
-import pandas as pd
+This page is intended for:
+- account-backed workspace settings
+- persistence-related behavior
+- user-facing configuration that belongs in the app itself
 
-df = pd.DataFrame({
-    "event_id": ["EQ-001", "EQ-002"],
-    "timestamp": ["2024-01-15", "2024-02-20"],
-    "latitude": [35.6, -33.8],
-    "longitude": [139.7, 151.2],
-    "magnitude": [6.2, 5.8],
-    "loc_id": ["JPN-13-QUAKE-001", "AUS-NSW-QUAKE-002"],
-    "year": [2024, 2024]
-})
-df.to_parquet("data/global/disasters/my_events/events.parquet")
-```
+Some local deployment/filesystem setup concerns were intentionally removed from the visible settings UI for now. Those belong more naturally in local/self-host guidance than in the everyday app settings surface.
 
-### For country-level indicators:
+## Useful Paths In This Repo
 
-```python
-df = pd.DataFrame({
-    "loc_id": ["USA", "GBR", "DEU"],
-    "year": [2022, 2022, 2022],
-    "my_metric": [100, 85, 92]
-})
-df.to_parquet("data/global/my_source/all_countries.parquet")
-```
+Important files and folders:
+- `app.py` - FastAPI app entrypoint
+- `mapmover/` - runtime logic, routes, path helpers, DuckDB helpers
+- `static/` - frontend app modules and styles
+- `templates/` - app HTML, including `/settings`
+- `data/` - bundled demo fallback data
+- `supabase_client.py` - auth/control-plane integration
+- `docs/` - local documentation for schemas, runtime notes, and reference material
 
-Add a `metadata.json` next to your parquet file describing the source, then rebuild the catalog:
+## Documentation In This Repo
 
-```bash
-python converters/catalog_builder.py data/
-```
+Current docs in `docs/`:
+- [docs/APP_OVERVIEW.md](docs/APP_OVERVIEW.md) - current runtime/app overview
+- [docs/LOCAL_AND_HOSTED.md](docs/LOCAL_AND_HOSTED.md) - local, full-data, and S3-backed runtime modes
+- [docs/DATA_SCHEMAS.md](docs/DATA_SCHEMAS.md) - schema and `loc_id` conventions
+- [docs/public reference.md](docs/public%20reference.md) - source/licensing reference notes
 
-See [docs/DATA_SCHEMAS.md](docs/DATA_SCHEMAS.md) for the full schema specification.
+## Local Development Modes
 
----
+Useful local modes:
 
-## Expanding the Data
+1. Bundled demo mode
+- simplest startup
+- uses local bundled `data/`
 
-The demo ships with country-level geometry only. For sub-national boundaries (states, provinces, counties), download GADM data:
+2. Full local-data mode
+- points at sibling `county-map-data/`
+- better for real development against fuller data
 
-```bash
-# Download GADM boundaries for a specific country
-python converters/setup_gadm.py --country USA
-```
-
-For the full production dataset (1M+ earthquake events, 50+ indicators, sub-national geometry for 267 countries), see the data expansion section in the docs.
-
----
-
-## Converters
-
-The `converters/` folder contains tools for building and managing data:
-
-| Script | Purpose |
-|--------|---------|
-| `catalog_builder.py` | Build catalog.json and index.json from metadata files |
-| `setup_gadm.py` | Download and process GADM sub-national boundaries |
-
-To rebuild the catalog after adding/modifying data:
-```bash
-python converters/catalog_builder.py data/
-python converters/catalog_builder.py data/ --catalog-only
-python converters/catalog_builder.py data/ --indexes-only
-```
-
----
-
-## Architecture
-
-```
-User Query -> Preprocessor -> LLM -> Postprocessor -> Order Executor -> Map Display
-               (hints)       (interpret)  (validate)    (fetch data)     (render)
-```
-
-The system uses MessagePack for all API responses (not JSON). See the docs for details.
-
-**Data path resolution** (in `mapmover/paths.py`):
-1. `DATA_ROOT` env var (deployment)
-2. Sibling `county-map-data/` folder (local dev with full data)
-3. Bundled `data/` folder (demo fallback)
-
----
-
-## Documentation
-
-| Document | Purpose |
-|----------|---------|
-| [docs/DATA_SCHEMAS.md](docs/DATA_SCHEMAS.md) | Data formats, loc_id specification, parquet schemas |
-| [docs/public reference.md](docs/public%20reference.md) | Data source attribution and licensing |
-
----
+3. Hosted-style S3 mode
+- local server, but object-storage-backed data path
+- best for reproducing hosted runtime behavior before deploy
 
 ## License
 
-MIT License
-
----
-
-*Last Updated: 2026-01-24*
+MIT
