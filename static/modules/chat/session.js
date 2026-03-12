@@ -37,7 +37,9 @@ export function getOrCreateSessionId() {
     return sessionId;
   }
 
-  // Create new session
+  // Create new session - also clear stale chat storage so old conversation
+  // doesn't bleed into the new session on page load.
+  clearChatStorage();
   const prefix = isAuthenticated() ? 'authsess_' : 'sess_';
   sessionId = prefix + Date.now() + '_' + Math.random().toString(36).substring(2, 11);
   localStorage.setItem(sessionKey, sessionId);

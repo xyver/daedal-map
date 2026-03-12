@@ -182,6 +182,14 @@ export const App = {
     ViewportLoader.currentAdminLevel = ViewportLoader.getAdminLevelForViewport(bounds);
     console.log('Viewport navigation ready (area-based thresholds)');
 
+    // Force initial geometry load if demographics was restored as active.
+    // onMoveEnd fires during MapAdapter.init() but onViewportChange only loads on level
+    // *changes* - since currentAdminLevel starts at 0 and world zoom maps to 0, no
+    // load is ever triggered. Kick it manually here after overlay state is set.
+    if (OverlaySelector.getActiveOverlays().includes('demographics')) {
+      ViewportLoader.load(ViewportLoader.currentAdminLevel);
+    }
+
     // Initialize admin level buttons
     NavigationManager.initLevelButtons();
     NavigationManager.updateLevelButtons(ViewportLoader.currentAdminLevel);
