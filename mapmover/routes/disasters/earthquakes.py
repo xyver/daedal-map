@@ -4,7 +4,15 @@ from fastapi import APIRouter
 import pandas as pd
 
 from mapmover.disaster_filters import apply_location_filters, get_affected_event_ids
-from mapmover.duckdb_helpers import duckdb_available, parquet_available, path_to_uri, run_df, select_filtered_event_rows, select_linked_loc_ids
+from mapmover.duckdb_helpers import (
+    _normalize_ts_for_duckdb,
+    duckdb_available,
+    parquet_available,
+    path_to_uri,
+    run_df,
+    select_filtered_event_rows,
+    select_linked_loc_ids,
+)
 from mapmover.logging_analytics import logger
 from mapmover.paths import GLOBAL_DIR
 
@@ -68,10 +76,10 @@ def _load_earthquakes_duckdb(
         params.append(year)
     if start is not None:
         where.append('"timestamp" >= CAST(? AS TIMESTAMP)')
-        params.append(start)
+        params.append(_normalize_ts_for_duckdb(start))
     if end is not None:
         where.append('"timestamp" <= CAST(? AS TIMESTAMP)')
-        params.append(end)
+        params.append(_normalize_ts_for_duckdb(end))
     if min_magnitude is not None:
         where.append('"magnitude" >= ?')
         params.append(min_magnitude)

@@ -44,6 +44,8 @@ export const MapAdapter = {
   focalPrefixes: [],  // Hierarchy prefixes: ['USA', 'USA-CA', 'USA-CA-029']
   clickTimeout: null,  // Timer to distinguish single vs double click
   pendingClickFeature: null,  // Feature from pending single click
+  currentFocusLngLat: null,
+  popupFocusOverride: null,
 
   /**
    * Initialize the map
@@ -69,6 +71,8 @@ export const MapAdapter = {
       // Only unlock if this is a real close (user clicked X), not a re-show
       if (!this.isShowingPopup) {
         this.popupLocked = false;
+        this.clearPopupFocusOverride('popup-close');
+        this.resetVisualFocus();
       }
     });
 
@@ -499,6 +503,10 @@ export const MapAdapter = {
    * @param {Object} geojson - GeoJSON FeatureCollection to search (used as fallback)
    */
   updateFocusedParent(geojson) {
+    if (this.popupFocusOverride) {
+      return;
+    }
+
     if (!this.map) {
       this.focalLocId = null;
       this.focalPrefixes = [];
@@ -684,17 +692,47 @@ export const MapAdapter = {
     const strokeColor = this.getFocalStrokeColorExpression();
 
     this.map.setPaintProperty(CONFIG.layers.fill, 'fill-color', fillColor);
+    this.map.setPaintProperty(CONFIG.layers.fill, 'fill-opacity', [
+      'case',
+      ['boolean', ['feature-state', 'hover'], false],
+      CONFIG.colors.fillHoverOpacity,
+      ['==', ['get', 'parent_id'], this.focusedParentId || ''],
+      CONFIG.colors.focalFillOpacity,
+      CONFIG.colors.fillOpacity
+    ]);
     this.map.setPaintProperty(CONFIG.layers.stroke, 'line-color', [
       'case',
       ['boolean', ['feature-state', 'hover'], false],
       CONFIG.colors.strokeHover,
       strokeColor
     ]);
+    this.map.setPaintProperty(CONFIG.layers.stroke, 'line-opacity', this.getFocalStrokeOpacityExpression());
 
     // Debug: log when colors are updated
-    if (this.focalPrefixes.length > 0) {
-      console.log(`Updated fill colors for focal: ${this.focalPrefixes[this.focalPrefixes.length - 1]}`);
-    }
+  },
+
+  setPopupFocusOverride(properties) {
+    if (!properties?.loc_id) return;
+
+    const locId = properties.loc_id;
+    const parts = locId.split('-');
+    this.popupFocusOverride = {
+      locId,
+      parentId: properties.parent_id || null,
+      prefixes: parts.map((_, index) => parts.slice(0, index + 1).join('-'))
+    };
+
+    this.focalLocId = this.popupFocusOverride.locId;
+    this.focusedParentId = this.popupFocusOverride.parentId;
+    this.focalPrefixes = [...this.popupFocusOverride.prefixes];
+    this.updateFocalColors();
+  },
+
+  clearPopupFocusOverride(reason = 'unknown') {
+    if (!this.popupFocusOverride) return;
+    this.popupFocusOverride = null;
+    this.updateFocusedParent(this.currentRegionGeojson);
+    this.updateFocalColors();
   },
 
   /**
@@ -776,6 +814,7 @@ export const MapAdapter = {
       if (e.features.length > 0) {
         const feature = e.features[0];
         this.popupLocked = true;
+        this.setPopupFocusOverride(feature.properties);
         // Show basic popup immediately
         App?.handleFeatureHover(feature, e.lngLat);
         // Fetch enriched data and update popup
@@ -806,6 +845,7 @@ export const MapAdapter = {
 
       if (allFeatures.length === 0 && this.popupLocked) {
         this.popupLocked = false;
+        this.clearPopupFocusOverride('map-click-empty');
         this.hidePopup();
       }
     });
@@ -873,6 +913,9 @@ export const MapAdapter = {
   showPopup(lngLat, html) {
     // Set flag to prevent close event from unlocking
     this.isShowingPopup = true;
+    if (this.popupLocked) {
+      this.setVisualFocus(lngLat);
+    }
     this.popup
       .setLngLat(lngLat)
       .setHTML(html)
@@ -891,9 +934,49 @@ export const MapAdapter = {
     this.isShowingPopup = true;
     this.popup.remove();
     this.popupLocked = false;
+    this.clearPopupFocusOverride('hidePopup');
+    this.resetVisualFocus();
     setTimeout(() => {
       this.isShowingPopup = false;
     }, 50);
+  },
+
+  setVisualFocus(lngLat) {
+    if (!this.map || !Array.isArray(lngLat)) return;
+    const mapContainer = document.getElementById('mapContainer');
+    const mapEl = document.getElementById('map');
+    if (!mapContainer) return;
+
+    const point = this.map.project(lngLat);
+    const width = mapContainer.clientWidth || 1;
+    const height = mapContainer.clientHeight || 1;
+    const x = Math.max(0, Math.min(100, (point.x / width) * 100));
+    const y = Math.max(0, Math.min(100, (point.y / height) * 100));
+
+    document.documentElement.style.setProperty('--focus-x', `${x}%`);
+    document.documentElement.style.setProperty('--focus-y', `${y}%`);
+    mapContainer.style.setProperty('--focus-x', `${x}%`);
+    mapContainer.style.setProperty('--focus-y', `${y}%`);
+    if (mapEl) {
+      mapEl.style.setProperty('--focus-x', `${x}%`);
+      mapEl.style.setProperty('--focus-y', `${y}%`);
+    }
+    this.currentFocusLngLat = lngLat;
+  },
+
+  resetVisualFocus() {
+    const mapContainer = document.getElementById('mapContainer');
+    const mapEl = document.getElementById('map');
+    document.documentElement.style.setProperty('--focus-x', '50%');
+    document.documentElement.style.setProperty('--focus-y', '50%');
+    if (!mapContainer) return;
+    mapContainer.style.setProperty('--focus-x', '50%');
+    mapContainer.style.setProperty('--focus-y', '50%');
+    if (mapEl) {
+      mapEl.style.setProperty('--focus-x', '50%');
+      mapEl.style.setProperty('--focus-y', '50%');
+    }
+    this.currentFocusLngLat = null;
   },
 
   /**

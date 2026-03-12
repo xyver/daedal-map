@@ -26,16 +26,17 @@ def _resolve_first_existing(*paths):
 def list_wildfire_year_files():
     """Return available yearly wildfire parquet files (year, path), sorted by year."""
     if is_s3_mode():
-        # In S3 mode, generate expected year paths (2000-2024) without local disk check.
-        # DuckDB will handle missing files gracefully per query.
+        # In S3 mode, generate the currently published year paths.
+        # This avoids probing missing future partitions like 2025 when the
+        # wildfire package only goes through 2024.
         files = []
         base = GLOBAL_DIR / "disasters/wildfires/by_year_enriched"
-        for yr in range(2000, 2025):
+        for yr in range(2002, 2025):
             path = base / f"fires_{yr}_enriched.parquet"
             files.append((yr, path))
         return files
 
-    files = []
+    files_by_year = {}
     for base, suffix in [
         (GLOBAL_DIR / "disasters/wildfires/by_year_enriched", "_enriched.parquet"),
         (GLOBAL_DIR / "disasters/wildfires/by_year", ".parquet"),
@@ -49,11 +50,13 @@ def list_wildfire_year_files():
                 continue
             try:
                 yr = int(parts[1])
-                files.append((yr, path))
+                # Prefer the enriched partition when both enriched and raw
+                # yearly files exist for the same year.
+                if yr not in files_by_year or suffix == "_enriched.parquet":
+                    files_by_year[yr] = path
             except Exception:
                 continue
-    files.sort(key=lambda x: x[0])
-    return files
+    return sorted(files_by_year.items(), key=lambda x: x[0])
 
 
 def wildfire_year_from_path(path) -> int | None:
@@ -199,16 +202,12 @@ async def get_wildfires_geojson(
 
         if loc_prefix is None or (not loc_prefix.startswith("USA") and not loc_prefix.startswith("CAN")):
             if parquet_available(global_by_year_path) or is_s3_mode():
+                available_year_files = dict(list_wildfire_year_files())
                 year_files = []
                 for yr in years_to_load:
-                    year_file = global_by_year_path / f"fires_{yr}_enriched.parquet"
-                    if is_s3_mode():
+                    year_file = available_year_files.get(yr)
+                    if year_file is not None:
                         year_files.append(year_file)
-                    else:
-                        if not year_file.exists():
-                            year_file = global_by_year_path / f"fires_{yr}.parquet"
-                        if year_file.exists():
-                            year_files.append(year_file)
 
                 global_df = pd.DataFrame()
                 if year_files and duckdb_available():

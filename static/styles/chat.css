@@ -259,6 +259,70 @@
   display: flex;
 }
 
+/* ==========================================================================
+   HUD Sidebar Overrides
+   Keep the map field visible through the sidebar chrome so it feels like one
+   instrument surface rather than a solid panel pasted on top.
+   ========================================================================== */
+
+#sidebar {
+  background:
+    linear-gradient(rgba(255, 255, 255, 0.012) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.012) 1px, transparent 1px),
+    linear-gradient(180deg, rgba(8, 24, 38, 0.9), rgba(4, 12, 20, 0.88));
+  background-size: 100% 38px, 38px 100%, 100% 100%;
+  border-right: 1px solid rgba(123, 231, 255, 0.16);
+  box-shadow: 18px 0 44px rgba(0, 0, 0, 0.34);
+  backdrop-filter: blur(10px);
+}
+
+#sidebar::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  right: -180px;
+  width: 180px;
+  height: 100%;
+  pointer-events: none;
+  background:
+    linear-gradient(rgba(255, 255, 255, 0.01) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.01) 1px, transparent 1px),
+    linear-gradient(
+      90deg,
+      rgba(7, 20, 31, 0.52) 0%,
+      rgba(7, 20, 31, 0.28) 38%,
+      rgba(7, 20, 31, 0.08) 72%,
+      transparent 100%
+    );
+  background-size: 100% 38px, 38px 100%, 100% 100%;
+  opacity: 0.8;
+}
+
+#sidebarHeader,
+.auth-status-bar,
+#sidebarFooter,
+#settingsView,
+.settings-footer {
+  background: rgba(7, 20, 31, 0.72);
+}
+
+#sidebarHeader {
+  border-bottom: 1px solid rgba(123, 231, 255, 0.1);
+}
+
+.auth-status-bar,
+#sidebarFooter,
+.settings-footer {
+  border-top: 1px solid rgba(123, 231, 255, 0.08);
+  border-bottom: 1px solid rgba(123, 231, 255, 0.06);
+}
+
+#sidebarToggle,
+#newChatBtn,
+#authBtn {
+  box-shadow: 0 0 0 1px rgba(123, 231, 255, 0.12);
+}
+
 .auth-label {
   font-size: 12px;
   font-weight: 600;
