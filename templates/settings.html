@@ -44,74 +44,132 @@
         </div>
 
         <div id="settingsUnlocked" class="settings-unlocked hidden">
-          <section class="settings-section">
-            <h2>Account Access</h2>
-            <div id="accountSummary" class="account-summary-grid">
-              <div class="summary-card"><span class="summary-label">Plan</span><strong id="summaryPlan">free</strong></div>
-              <div class="summary-card"><span class="summary-label">Shells</span><strong id="summaryShells">simple</strong></div>
-              <div class="summary-card"><span class="summary-label">Pack Limit</span><strong id="summaryPackLimit">2</strong></div>
-              <div class="summary-card"><span class="summary-label">Entitled Packs</span><strong id="summaryPackCount">0</strong></div>
-            </div>
-          </section>
 
-          <section class="settings-section">
-            <h2>Workspace Settings</h2>
-            <p class="settings-intro">Use this page to manage account-backed workspace settings, storage paths, display preferences, and the persistent behavior tied to your signed-in map session.</p>
-            <p class="settings-intro">
-              This page is focused on account-backed workspace behavior. Local deployment paths and filesystem setup are
-              better handled through the self-host and local deployment guidance rather than exposed directly here.
-            </p>
-          </section>
+          <!-- Tab Navigation -->
+          <nav class="settings-tabs" role="tablist">
+            <button class="settings-tab active" data-tab="account" role="tab">Account</button>
+            <button class="settings-tab" data-tab="packs" role="tab">Packs</button>
+            <button class="settings-tab" data-tab="display" role="tab">Display</button>
+            <button class="settings-tab" data-tab="help" role="tab">Help</button>
+          </nav>
 
-          <section class="settings-section">
-            <h2>Display Settings</h2>
-            <label for="timezoneSelect" class="settings-label">Clock Timezone (live mode)</label>
-            <select id="timezoneSelect" class="settings-input">
-              <option value="local">Local (auto-detect)</option>
-              <option value="UTC">UTC</option>
-              <option value="America/Los_Angeles">Pacific (PST/PDT)</option>
-              <option value="America/Denver">Mountain (MST/MDT)</option>
-              <option value="America/Chicago">Central (CST/CDT)</option>
-              <option value="America/New_York">Eastern (EST/EDT)</option>
-              <option value="Europe/London">London (GMT/BST)</option>
-              <option value="Europe/Paris">Paris (CET/CEST)</option>
-              <option value="Asia/Tokyo">Tokyo (JST)</option>
-              <option value="Asia/Shanghai">Shanghai (CST)</option>
-              <option value="Australia/Sydney">Sydney (AEST/AEDT)</option>
-            </select>
-          </section>
+          <!-- Tab: Account -->
+          <div class="settings-tab-panel active" id="tab-account">
+            <section class="settings-section">
+              <h2>Plan</h2>
+              <div id="accountSummary" class="account-summary-grid">
+                <div class="summary-card"><span class="summary-label">Plan</span><strong id="summaryPlan">free</strong></div>
+                <div class="summary-card"><span class="summary-label">Shells</span><strong id="summaryShells">simple</strong></div>
+                <div class="summary-card"><span class="summary-label">Pack Limit</span><strong id="summaryPackLimit">2</strong></div>
+                <div class="summary-card"><span class="summary-label">Entitled Packs</span><strong id="summaryPackCount">0</strong></div>
+              </div>
+            </section>
 
-          <section class="settings-section">
-            <h2>Related Guides</h2>
-            <p class="settings-intro">Use these direct links when you want the public explanation behind a specific part of the app or runtime model.</p>
-            <div class="settings-link-grid">
-              <a class="settings-doc-link" href="https://daedalmap.com/docs/packs" target="_blank" rel="noreferrer">
-                <strong>Packs</strong>
-                <span>How packs are structured and released.</span>
-              </a>
-              <a class="settings-doc-link" href="https://daedalmap.com/docs/source-data" target="_blank" rel="noreferrer">
-                <strong>Source Data</strong>
-                <span>What each pack should disclose publicly.</span>
-              </a>
-              <a class="settings-doc-link" href="https://daedalmap.com/docs/source-map" target="_blank" rel="noreferrer">
-                <strong>Source Map</strong>
-                <span>What source families are currently in play.</span>
-              </a>
-              <a class="settings-doc-link" href="https://daedalmap.com/docs/accounts" target="_blank" rel="noreferrer">
-                <strong>Accounts</strong>
-                <span>Guest versus logged-in workspace behavior.</span>
-              </a>
-              <a class="settings-doc-link" href="https://daedalmap.com/docs/hosted-vs-local" target="_blank" rel="noreferrer">
-                <strong>Hosted vs Local</strong>
-                <span>How delivery and control differ by mode.</span>
-              </a>
-              <a class="settings-doc-link" href="https://daedalmap.com/docs/self-host" target="_blank" rel="noreferrer">
-                <strong>Self-Host</strong>
-                <span>Run your own deployment from the open repo.</span>
-              </a>
-            </div>
-          </section>
-        </div>
+            <section class="settings-section">
+              <h2>Profile</h2>
+              <div class="profile-fields">
+                <div class="profile-field-group">
+                  <label class="settings-label" for="profileEmail">Email</label>
+                  <div class="profile-field-row">
+                    <input type="email" id="profileEmail" class="settings-input" autocomplete="email" placeholder="your@email.com">
+                    <button id="updateEmailBtn" class="settings-action-btn">Update Email</button>
+                  </div>
+                  <p id="profileEmailStatus" class="profile-field-status"></p>
+                </div>
+
+                <div class="profile-field-group">
+                  <label class="settings-label">Password</label>
+                  <div class="profile-field-row">
+                    <input type="password" id="profileNewPassword" class="settings-input" autocomplete="new-password" placeholder="New password (8+ characters)" minlength="8">
+                    <button id="updatePasswordBtn" class="settings-action-btn">Update Password</button>
+                  </div>
+                  <p id="profilePasswordStatus" class="profile-field-status"></p>
+                </div>
+              </div>
+            </section>
+          </div>
+
+          <!-- Tab: Packs -->
+          <div class="settings-tab-panel" id="tab-packs">
+            <section class="settings-section">
+              <h2>My Packs</h2>
+              <p class="settings-intro">Select which packs to include in your active catalog. Only checked packs will appear in the map overlay selector.</p>
+              <div id="packsList"></div>
+              <div class="packs-save-bar">
+                <span id="packsSaveStatus" class="packs-save-status"></span>
+                <button id="packsApplyBtn" class="settings-cta-btn packs-apply-btn">Save to Account</button>
+              </div>
+            </section>
+          </div>
+
+          <!-- Tab: Display -->
+          <div class="settings-tab-panel" id="tab-display">
+            <section class="settings-section">
+              <h2>Display Settings</h2>
+              <label for="timezoneSelect" class="settings-label">Clock Timezone (live mode)</label>
+              <select id="timezoneSelect" class="settings-input">
+                <option value="local">Local (auto-detect)</option>
+                <option value="UTC">UTC</option>
+                <option value="America/Los_Angeles">Pacific (PST/PDT)</option>
+                <option value="America/Denver">Mountain (MST/MDT)</option>
+                <option value="America/Chicago">Central (CST/CDT)</option>
+                <option value="America/New_York">Eastern (EST/EDT)</option>
+                <option value="Europe/London">London (GMT/BST)</option>
+                <option value="Europe/Paris">Paris (CET/CEST)</option>
+                <option value="Asia/Tokyo">Tokyo (JST)</option>
+                <option value="Asia/Shanghai">Shanghai (CST)</option>
+                <option value="Australia/Sydney">Sydney (AEST/AEDT)</option>
+              </select>
+            </section>
+          </div>
+
+          <!-- Tab: Help -->
+          <div class="settings-tab-panel" id="tab-help">
+            <section class="settings-section">
+              <h2>Related Guides</h2>
+              <p class="settings-intro">Public documentation for the app, runtime model, and deployment options.</p>
+              <div class="settings-link-grid">
+                <a class="settings-doc-link" href="https://daedalmap.com/docs/packs" target="_blank" rel="noreferrer">
+                  <strong>Packs</strong>
+                  <span>How packs are structured and released.</span>
+                </a>
+                <a class="settings-doc-link" href="https://daedalmap.com/docs/source-data" target="_blank" rel="noreferrer">
+                  <strong>Source Data</strong>
+                  <span>What each pack should disclose publicly.</span>
+                </a>
+                <a class="settings-doc-link" href="https://daedalmap.com/docs/source-map" target="_blank" rel="noreferrer">
+                  <strong>Source Map</strong>
+                  <span>What source families are currently in play.</span>
+                </a>
+                <a class="settings-doc-link" href="https://daedalmap.com/docs/accounts" target="_blank" rel="noreferrer">
+                  <strong>Accounts</strong>
+                  <span>Guest versus logged-in workspace behavior.</span>
+                </a>
+                <a class="settings-doc-link" href="https://daedalmap.com/docs/hosted-vs-local" target="_blank" rel="noreferrer">
+                  <strong>Hosted vs Local</strong>
+                  <span>How delivery and control differ by mode.</span>
+                </a>
+                <a class="settings-doc-link" href="https://daedalmap.com/docs/self-host" target="_blank" rel="noreferrer">
+                  <strong>Self-Host</strong>
+                  <span>Run your own deployment from the open repo.</span>
+                </a>
+              </div>
+            </section>
+          </div><!-- end tab-help -->
+
+          <!-- Admin section: visible to master/admin only, shown by JS -->
+          <div id="adminSection" class="hidden">
+            <section class="settings-section">
+              <h2>Admin</h2>
+              <p class="settings-intro">Owner-only controls. Not visible to other plan tiers.</p>
+              <div class="profile-field-row">
+                <button id="adminCatalogRefreshBtn" class="settings-action-btn">Force Catalog Refresh</button>
+                <span id="adminCatalogRefreshStatus" class="profile-field-status"></span>
+              </div>
+            </section>
+          </div>
+
+        </div><!-- end settingsUnlocked -->
       </section>
     </main>
   </div>

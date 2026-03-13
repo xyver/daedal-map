@@ -5,6 +5,7 @@
  */
 
 import { postMsgpack } from './utils/fetch.js';
+import { getCurrentUser } from './auth.js';
 
 const MAX_CHARS = 2000;
 
@@ -102,7 +103,10 @@ function createBubble() {
     status.className = 'feedback-status';
 
     try {
-      await postMsgpack('/api/feedback', { message });
+      const user = getCurrentUser();
+      const payload = { message };
+      if (user?.id) payload.user_id = user.id;
+      await postMsgpack('/api/feedback', payload);
       textarea.value = '';
       charCount.textContent = `${MAX_CHARS} left`;
       status.textContent = 'Thank you!';

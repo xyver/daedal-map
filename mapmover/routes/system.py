@@ -35,9 +35,16 @@ async def health_check():
 
 @router.post("/api/feedback")
 async def submit_feedback(request: Request):
-    """Accept anonymous feedback and write it to the Supabase feedback table."""
+    """Accept anonymous feedback and write it to the Supabase feedback table.
+    Accepts both msgpack (map app) and JSON (the .com site).
+    """
     try:
-        body = await decode_request_body(request)
+        content_type = request.headers.get("content-type", "")
+        raw = await request.body()
+        if "application/json" in content_type:
+            body = json.loads(raw)
+        else:
+            body = msgpack.unpackb(raw, raw=False)
     except Exception:
         return msgpack_error("Invalid request body", 400)
 
@@ -46,6 +53,8 @@ async def submit_feedback(request: Request):
         return msgpack_error("Message is required", 400)
     if len(message) > 2000:
         return msgpack_error("Message too long (max 2000 chars)", 400)
+
+    user_id = body.get("user_id") or None
 
     # Derive source from Origin header (daedalmap.io vs daedalmap.com vs local)
     origin = request.headers.get("origin", "") or request.headers.get("referer", "")
@@ -60,10 +69,10 @@ async def submit_feedback(request: Request):
         from supabase_client import get_supabase_client
         sb = get_supabase_client()
         if sb:
-            sb.client.table("feedback").insert({
-                "message": message,
-                "source": source,
-            }).execute()
+            row = {"message": message, "source": source}
+            if user_id:
+                row["user_id"] = user_id
+            sb.client.table("feedback").insert(row).execute()
         else:
             logger.warning("Feedback received but Supabase not configured: %s", message[:80])
     except Exception as exc:
@@ -163,25 +172,151 @@ async def debug_geometry():
     return result
 
 
+def _get_entitled_packs(req: Request):
+    """
+    Return the set of pack_ids this request is entitled to, or None for full bypass.
+
+    None  -> full bypass: all catalog sources returned, including those without pack_id.
+             Applies to: master plan, is_admin=True, or no service key (dev/self-host).
+    set() -> anonymous or entitlement lookup failed: geometry_global only.
+    {..}  -> authenticated user: their entitled pack_ids from Supabase.
+
+    Plan tiers:
+      master      -> None (owner, sees everything including untagged/unreleased sources)
+      is_admin    -> None (admin flag on any plan, same full bypass)
+      enterprise  -> entitled packs from pack_entitlements
+      pro         -> entitled packs from pack_entitlements
+      member      -> entitled packs from pack_entitlements
+      free        -> entitled packs from pack_entitlements (usually geometry_global only)
+      anonymous   -> empty set
+    """
+    auth_user = get_authenticated_user(req)
+    if not auth_user:
+        return set()
+
+    service_key = os.getenv("SUPABASE_SERVICE_KEY", "").strip()
+    if not service_key:
+        # Dev / self-host mode: no entitlement enforcement
+        return None
+
+    user_id = auth_user.get("id")
+    try:
+        from supabase_client import SupabaseClient
+        supa = SupabaseClient()
+        context = supa.get_user_entitlement_context(user_id)
+        if context and not context.get("error"):
+            # Master plan or admin flag: full bypass, no pack_id filtering at all
+            if context.get("plan_id") == "master" or context.get("is_admin"):
+                return None
+            user_packs = set(context.get("user_packs") or [])
+            org_packs = set(context.get("org_packs") or [])
+            return user_packs | org_packs
+    except Exception as exc:
+        logger.warning(f"Entitlement lookup failed for catalog filter: {exc}")
+
+    # Fallback: authenticated but entitlement fetch failed
+    return set()
+
+
 @router.get("/api/catalog/overlays")
-async def get_catalog_overlays():
-    """Get overlay tree from the catalog for the frontend layer panel."""
+async def get_catalog_overlays(req: Request):
+    """Get overlay tree from the catalog, filtered to the user's entitled packs."""
     from mapmover.data_loading import load_catalog
 
     catalog = load_catalog()
+    entitled = _get_entitled_packs(req)
+
+    all_sources = catalog.get("sources", [])
+
+    if entitled is None:
+        # No service key - dev/self-host mode, return everything
+        filtered_sources = all_sources
+    else:
+        # Filter to entitled packs; sources with no pack_id are excluded
+        # geometry_global is always included for authenticated users
+        entitled_with_base = entitled | {"geometry_global"}
+        if entitled:
+            # Authenticated with entitlements: include entitled packs + geometry_global
+            filtered_sources = [
+                s for s in all_sources
+                if s.get("pack_id") in entitled_with_base
+            ]
+        else:
+            # Anonymous: geometry_global only
+            filtered_sources = [
+                s for s in all_sources
+                if s.get("pack_id") == "geometry_global"
+            ]
+
     return msgpack_response(
         {
+            "sources": filtered_sources,
             "overlay_tree": catalog.get("overlay_tree", {}),
-            "overlay_count": catalog.get("overlay_count", 0),
+            "overlay_count": len(filtered_sources),
         }
     )
 
 
+@router.post("/api/admin/catalog/refresh")
+async def admin_catalog_refresh(req: Request):
+    """
+    Force an immediate catalog.json refresh from R2.
+    Restricted to master plan and is_admin users only.
+    """
+    from mapmover.data_loading import _refresh_catalog_from_s3, get_catalog_path
+    import mapmover.data_loading as _dl
+
+    auth_user = get_authenticated_user(req)
+    if not auth_user:
+        return msgpack_error("Unauthorized", 401)
+
+    service_key = os.getenv("SUPABASE_SERVICE_KEY", "").strip()
+    if service_key:
+        try:
+            from supabase_client import SupabaseClient
+            supa = SupabaseClient()
+            context = supa.get_user_entitlement_context(auth_user.get("id"))
+            if not context or context.get("error"):
+                return msgpack_error("Forbidden", 403)
+            if context.get("plan_id") != "master" and not context.get("is_admin"):
+                return msgpack_error("Forbidden", 403)
+        except Exception as exc:
+            logger.warning(f"Admin catalog refresh: entitlement check failed: {exc}")
+            return msgpack_error("Entitlement check failed", 500)
+
+    catalog_path = get_catalog_path()
+    _refresh_catalog_from_s3(catalog_path)
+
+    # Clear the in-memory cache so the next load_catalog() reads the fresh file
+    _dl._catalog_cache = None
+    _dl._catalog_cache_time = 0.0
+
+    from mapmover.data_loading import load_catalog
+    catalog = load_catalog()
+    return msgpack_response({
+        "ok": True,
+        "source_count": len(catalog.get("sources", [])),
+        "message": "Catalog refreshed from R2",
+    })
+
+
 @router.get("/", response_class=HTMLResponse)
 async def serve_index():
-    """Serve the frontend HTML shell."""
+    """Serve the frontend HTML shell with cache-busting version stamps on static assets."""
     template_path = BASE_DIR / "templates" / "index.html"
-    return template_path.read_text(encoding="utf-8")
+    static_dir = BASE_DIR / "static"
+
+    def _v(rel: str) -> str:
+        p = static_dir / rel
+        try:
+            return str(int(p.stat().st_mtime))
+        except OSError:
+            return "0"
+
+    html = template_path.read_text(encoding="utf-8")
+    html = html.replace('href="/static/styles/map.css"', f'href="/static/styles/map.css?v={_v("styles/map.css")}"')
+    html = html.replace('href="/static/styles/chat.css"', f'href="/static/styles/chat.css?v={_v("styles/chat.css")}"')
+    return html
 
 
 @router.get("/settings", response_class=HTMLResponse)
@@ -268,6 +403,8 @@ async def get_auth_me(req: Request):
                     "org_id": context.get("org_id"),
                     "user_packs": context.get("user_packs", []),
                     "org_packs": context.get("org_packs", []),
+                    "credits_balance": context.get("credits_balance", 0),
+                    "account_url": "https://daedalmap.com/account",
                 })
         except Exception as exc:
             logger.warning(f"Failed to load entitlement context: {exc}")

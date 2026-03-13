@@ -33,6 +33,8 @@ Path resolution uses catalog.json 'path' field:
 
 import json
 import logging
+import os
+import time
 from pathlib import Path
 
 from .paths import DATA_ROOT, CATALOG_PATH, GEOMETRY_DIR, COUNTRIES_DIR
@@ -46,8 +48,11 @@ data_catalog = {}
 # Cache for source metadata
 _metadata_cache = {}
 
-# Cache for catalog.json (loaded once)
+# Cache for catalog.json with TTL so R2 updates are picked up without a restart.
+# After the TTL expires the next request re-reads catalog.json from disk.
 _catalog_cache = None
+_catalog_cache_time = 0.0
+_CATALOG_TTL_SECONDS = 300  # 5 minutes
 
 
 def get_data_folder():
@@ -60,20 +65,45 @@ def get_catalog_path():
     return CATALOG_PATH
 
 
+def _refresh_catalog_from_s3(catalog_path: Path) -> None:
+    """Re-download catalog.json from R2 to local disk. Logs and swallows errors."""
+    try:
+        import boto3 as _boto3
+        bucket = os.environ.get("S3_BUCKET", "").strip()
+        if not bucket:
+            return
+        prefix = (os.environ.get("S3_PREFIX", "") or "").strip().strip("/")
+        key = f"{prefix}/catalog.json" if prefix else "catalog.json"
+        endpoint_url = os.environ.get("S3_ENDPOINT_URL")
+        region = os.environ.get("AWS_DEFAULT_REGION") or os.environ.get("AWS_REGION") or "auto"
+        client = _boto3.client("s3", endpoint_url=endpoint_url, region_name=region)
+        catalog_path.parent.mkdir(parents=True, exist_ok=True)
+        client.download_file(bucket, key, str(catalog_path))
+        logger.info("catalog.json refreshed from R2")
+    except Exception as exc:
+        logger.warning(f"catalog.json R2 refresh failed, using cached copy: {exc}")
+
+
 def load_catalog():
     """
     Load the unified catalog.json file.
-    Cached after first load for performance.
+    Cached with a 5-minute TTL. In S3 mode, re-downloads catalog.json from R2
+    on each TTL expiry so catalog updates go live without a Railway restart.
 
     Returns:
         dict: Catalog with sources, or empty dict if not found
     """
-    global _catalog_cache
+    global _catalog_cache, _catalog_cache_time
 
-    if _catalog_cache is not None:
+    now = time.time()
+    if _catalog_cache is not None and (now - _catalog_cache_time) < _CATALOG_TTL_SECONDS:
         return _catalog_cache
 
     catalog_path = get_catalog_path()
+
+    if os.environ.get("STORAGE_MODE", "").strip().lower() == "s3":
+        _refresh_catalog_from_s3(catalog_path)
+
     if not catalog_path or not catalog_path.exists():
         logger.warning(f"Catalog not found at {catalog_path}")
         return {"sources": [], "total_sources": 0}
@@ -81,6 +111,7 @@ def load_catalog():
     try:
         with open(catalog_path, 'r', encoding='utf-8') as f:
             _catalog_cache = json.load(f)
+            _catalog_cache_time = now
             logger.debug(f"Loaded catalog.json with {len(_catalog_cache.get('sources', []))} sources")
             return _catalog_cache
     except Exception as e:

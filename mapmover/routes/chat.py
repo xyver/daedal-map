@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import os
 import traceback
 
 import msgpack
@@ -15,6 +16,74 @@ from mapmover.order_taker import interpret_request
 from mapmover.postprocessor import get_display_items, postprocess_order
 from mapmover.preprocessor import preprocess_query
 from mapmover.routes.disasters.helpers import msgpack_error, msgpack_response
+
+
+# ---------------------------------------------------------------------------
+# Credit helpers - direct Supabase RPC, no billing module in the public repo.
+# Fail-open: if Supabase is unavailable the call proceeds and is logged.
+# Credit cost constants must stay in sync with billing.py in county-map-private.
+# ---------------------------------------------------------------------------
+
+_ACCOUNT_URL = "https://daedalmap.com/account"
+
+_CREDIT_COSTS = {
+    "chat_turn": 1,   # plain chat response, no tool calls
+    "tool_loop": 5,   # LLM used tools (order, navigate, multi-step)
+}
+
+
+def _credits_client():
+    url = os.getenv("SUPABASE_URL", "").strip()
+    key = os.getenv("SUPABASE_SERVICE_KEY", "").strip()
+    if not url or not key:
+        return None
+    try:
+        from supabase import create_client
+        return create_client(url, key)
+    except Exception:
+        return None
+
+
+def _get_credit_balance(user_id: str) -> int:
+    """Return credit balance. Returns -1 if Supabase unavailable (fail-open)."""
+    client = _credits_client()
+    if not client:
+        return -1
+    try:
+        result = (
+            client.table("profiles")
+            .select("credits_balance")
+            .eq("id", user_id)
+            .single()
+            .execute()
+        )
+        return result.data.get("credits_balance", 0) if result.data else 0
+    except Exception as e:
+        logger.warning(f"[credits] balance check error for {user_id}: {e}")
+        return -1
+
+
+def _deduct_credits(user_id: str, operation: str) -> dict:
+    """
+    Atomically deduct credits via Postgres function.
+    The Postgres function locks the row to prevent race conditions.
+    Fails open if Supabase is unavailable - logs warning but allows the call.
+    """
+    client = _credits_client()
+    if not client:
+        return {"success": True, "warning": "billing_not_configured"}
+    cost = _CREDIT_COSTS.get(operation, 1)
+    try:
+        result = client.rpc("deduct_credits", {
+            "p_user_id":        user_id,
+            "p_amount":         cost,
+            "p_operation_type": operation,
+            "p_notes":          None,
+        }).execute()
+        return result.data if result.data else {"success": False, "error": "rpc_no_response"}
+    except Exception as e:
+        logger.warning(f"[credits] deduction error for {user_id}: {e}")
+        return {"success": True, "warning": str(e)}
 
 
 router = APIRouter()
@@ -234,7 +303,31 @@ async def chat_endpoint(req: Request):
                     }
                 )
 
+        # Credit check - authenticated users only. Guests proceed freely.
+        # Balance is checked before the LLM call; deduction happens after.
+        # Both steps fail-open: Supabase errors do not block the user.
+        user_id = auth_user.get("id") if auth_user else None
+        if user_id:
+            balance = _get_credit_balance(user_id)
+            if balance != -1 and balance < _CREDIT_COSTS.get("chat_turn", 1):
+                return msgpack_response({
+                    "type": "chat",
+                    "reply": (
+                        "You have run out of credits. "
+                        "Visit your account page to top up and continue."
+                    ),
+                    "out_of_credits": True,
+                    "account_url": _ACCOUNT_URL,
+                })
+
         result = interpret_request(query, chat_history, hints=hints)
+
+        # Deduct credits based on what the LLM actually did.
+        if user_id:
+            op = "chat_turn" if result["type"] == "chat" else "tool_loop"
+            deduct_result = _deduct_credits(user_id, op)
+            if not deduct_result.get("success") and deduct_result.get("error") == "insufficient_credits":
+                logger.warning(f"[credits] post-call deduction failed for {user_id}: {deduct_result}")
 
         if result["type"] == "order":
             result_summary = result.get("summary") or result.get("order", {}).get("summary") or "Data request"

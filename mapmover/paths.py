@@ -76,7 +76,6 @@ def _get_data_root() -> Path:
     1. If STORAGE_MODE=s3, hydrate local S3 mirror cache and use that
     2. DATA_ROOT environment variable (direct path to local data folder)
     3. Derived from GLOBAL_MAP_ROOT / county-map-data (local dev with full data)
-    4. Bundled data/ folder inside the app (demo/deployment fallback)
     """
     if get_storage_mode() == "s3":
         cache_root = get_s3_cache_root(_get_project_root())
@@ -91,9 +90,11 @@ def _get_data_root() -> Path:
     if full_data.exists():
         return full_data
 
-    # Fallback to bundled demo data inside the app
-    bundled = _get_project_root() / "data"
-    return bundled
+    raise RuntimeError(
+        "Data folder not found. Set DATA_ROOT env var to the county-map-data path, "
+        "or set STORAGE_MODE=s3 with S3_BUCKET configured. "
+        f"Looked for: {full_data}"
+    )
 
 
 # =============================================================================

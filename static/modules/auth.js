@@ -131,17 +131,20 @@ function updateDom() {
     const email = getCurrentUser()?.email || 'Signed in';
     const planId = getUserPlanId();
     const maxPacks = currentProfile?.max_packs;
+    const credits = currentProfile?.credits_balance;
     const shells = getEnabledShells();
     const packText = maxPacks == null ? 'unlimited packs' : `${maxPacks} pack${maxPacks === 1 ? '' : 's'}`;
+    const creditsText = credits != null ? ` | ${credits} credits` : '';
+    const accountUrl = currentProfile?.account_url || 'https://daedalmap.com/account';
     btn.textContent = 'Logout';
     btn.disabled = false;
     btn.classList.add('logged-in');
-    status.textContent = `${email}: ${planId} plan, ${packText}, shells ${shells.join(', ')}.`;
+    status.innerHTML = `${email}: ${planId} plan, ${packText}${creditsText}, shells ${shells.join(', ')}. <a href="${accountUrl}" target="_blank" rel="noopener">Manage account</a>`;
   } else {
     btn.textContent = 'Login';
     btn.disabled = false;
     btn.classList.remove('logged-in');
-    status.textContent = 'Guest mode: local-only workspace and cache.';
+    status.innerHTML = 'Guest mode: local-only workspace and cache. <a href="https://daedalmap.com/account" target="_blank" rel="noopener">Create account</a>';
   }
 }
 
@@ -284,6 +287,15 @@ export const AuthManager = {
             storage: window.localStorage
           }
         });
+        // Handle cross-domain session handoff from daedalmap.com.
+        // After login on .com the user is redirected here with tokens in the
+        // URL hash. Supabase detects this automatically via detectSessionInUrl.
+        // We then clean the hash so tokens are not left in browser history.
+        const hash = window.location.hash;
+        if (hash && hash.includes('access_token=')) {
+          window.history.replaceState(null, '', window.location.pathname + window.location.search);
+        }
+
         const { data, error } = await authClient.auth.getSession();
         if (!error) {
           currentSession = data.session;
@@ -353,4 +365,13 @@ export function getUserPlanId() {
 
 export function getEnabledShells() {
   return currentProfile?.enabled_shells || ['simple'];
+}
+
+export function getCreditsBalance() {
+  return currentProfile?.credits_balance ?? null;
+}
+
+export async function updateUser(updates) {
+  if (!authClient) throw new Error('Not authenticated');
+  return authClient.auth.updateUser(updates);
 }

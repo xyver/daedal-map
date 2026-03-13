@@ -114,13 +114,16 @@ export const NavigationManager = {
    */
   updateLevelDisplay(adminLevel) {
     const levelNames = ['World', 'States', 'Counties', 'Tracts', 'Block Groups', 'Blocks'];
-    const levelName = levelNames[adminLevel] || `Level ${adminLevel}`;
 
-    // Update the path to reflect current level
     if (ViewportLoader?.enabled) {
-      this.path = [{ loc_id: 'world', name: 'World', level: 'world' }];
-      if (adminLevel >= 1) {
-        this.path.push({ loc_id: `level_${adminLevel}`, name: levelName, level: `level_${adminLevel}` });
+      this.path = [];
+      for (let i = 0; i <= adminLevel; i++) {
+        const name = levelNames[i] || `Level ${i}`;
+        this.path.push({
+          loc_id: i === 0 ? 'world' : `level_${i}`,
+          name: name,
+          level: i === 0 ? 'world' : `level_${i}`
+        });
       }
       this.updateBreadcrumb();
     }

@@ -37,9 +37,11 @@ node_modules/
 package-lock.json
 
 # -----------------------------------------------------------------------------
-# Data pipeline (processing scripts, not the bundled demo data)
+# Data (all data lives in county-map-data, never inside this repo)
 # -----------------------------------------------------------------------------
+data/
 data_pipeline/
+.data_s3_cache/
 
 # -----------------------------------------------------------------------------
 # Logs and temp files

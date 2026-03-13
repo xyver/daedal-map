@@ -101,139 +101,57 @@ body {
   background: radial-gradient(circle at var(--focus-x) var(--focus-y), #0a1b2b 0%, #040b14 58%, #020814 100%);
 }
 
-/* ========== Breadcrumb Navigation ========== */
+/* ========== HUD Elements (structural only; visuals in HUD Theme Overrides below) ========== */
 
 #breadcrumb {
   position: absolute;
-  top: 10px;
-  right: 120px;
   z-index: 1000;
-  background: rgba(0, 0, 0, 0.7);
-  padding: 8px 12px;
-  border-radius: 4px;
-  color: white;
   font-size: 14px;
-  max-width: 50%;
+  max-width: 40%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-#breadcrumb span {
-  cursor: pointer;
-}
-
-#breadcrumb span:hover {
-  text-decoration: underline;
-}
-
-#breadcrumb span.current {
-  color: #ff6600;
-  cursor: default;
-}
-
-#breadcrumb span.current:hover {
-  text-decoration: none;
-}
-
-/* ========== Zoom Level Display ========== */
+#breadcrumb span { cursor: pointer; }
+#breadcrumb span:hover { text-decoration: underline; }
+#breadcrumb span.current { cursor: default; }
+#breadcrumb span.current:hover { text-decoration: none; }
 
 #zoomLevel {
   position: absolute;
-  top: 10px;
-  right: 10px;
   z-index: 1000;
-  background: rgba(0, 0, 0, 0.7);
-  padding: 8px 12px;
-  border-radius: 4px;
-  color: white;
-  font-size: 14px;
-  font-family: monospace;
 }
-
-/* ========== Globe Toggle ========== */
 
 #globeToggle {
   position: absolute;
-  top: 10px;
-  right: 100px;
   z-index: 1000;
-  background: rgba(0, 0, 0, 0.7);
-  padding: 6px 10px;
-  border-radius: 4px;
-  color: white;
   font-size: 12px;
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
 }
 
 #globeToggle label {
   cursor: pointer;
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
 }
-
-#globeToggle input[type="checkbox"] {
-  width: 14px;
-  height: 14px;
-  cursor: pointer;
-  accent-color: #5dade2;
-}
-
-/* ========== Admin Level Buttons ========== */
 
 #levelButtons {
   position: absolute;
-  top: 45px;
-  right: 10px;
   z-index: 1000;
   display: flex;
-  gap: 4px;
 }
 
-#levelButtons button {
-  background: rgba(0, 0, 0, 0.7);
-  border: 1px solid #555;
-  color: #aaa;
-  padding: 4px 8px;
-  border-radius: 3px;
-  font-size: 11px;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-
-#levelButtons button:hover {
-  background: rgba(50, 50, 50, 0.9);
-  color: white;
-  border-color: #888;
-}
-
-#levelButtons button.active {
-  background: rgba(255, 102, 0, 0.8);
-  color: white;
-  border-color: #ff6600;
-}
-
-/* Lock button - separate from level buttons */
+#levelButtons button,
 #levelLockBtn {
-  background: rgba(0, 0, 0, 0.7);
-  border: 1px solid #555;
-  color: #aaa;
-  padding: 4px 6px;
-  border-radius: 3px;
-  font-size: 11px;
   cursor: pointer;
   transition: all 0.2s;
-  margin-left: 4px;
 }
 
-#levelLockBtn:hover {
-  background: rgba(50, 50, 50, 0.9);
-  color: white;
-  border-color: #888;
-}
+#levelLockBtn { margin-left: 4px; }
 
 #levelLockBtn.locked {
   background: rgba(200, 50, 50, 0.8);
@@ -412,7 +330,7 @@ body {
 
 #timeSliderContainer {
   position: absolute;
-  bottom: 50px;
+  bottom: 20px;
   left: 50%;
   transform: translateX(-50%);
   z-index: 1000;
@@ -954,21 +872,13 @@ body {
   50% { opacity: 0.4; }
 }
 
-/* ========== Choropleth Legend ========== */
+/* ========== Choropleth Legend (nested inside timeSliderContainer) ========== */
 
 #choroplethLegend {
-  position: absolute;
-  bottom: -2px;
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 1500;
-  background: rgba(26,26,46,0.9);
-  padding: 6px 20px;
-  border-radius: 4px;
-  box-shadow: 0 2px 6px rgba(0,0,0,0.4);
   display: none;
-  min-width: 250px;
-  border: 1px solid rgba(255,255,255,0.1);
+  border-top: 1px solid rgba(255,255,255,0.08);
+  margin: 6px -20px -12px;
+  padding: 8px 20px 10px;
 }
 
 #choroplethLegend.visible {
@@ -1767,9 +1677,21 @@ body {
 
 #breadcrumb {
   top: 14px;
-  right: 144px;
-  padding: 10px 14px;
+  right: 257px;
+  padding: 8px 12px;
   color: var(--map-muted);
+  font-size: 13px;
+  max-width: 900px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+  text-align: right;
+}
+
+#breadcrumb span {
+  direction: ltr;
+  unicode-bidi: embed;
 }
 
 #breadcrumb span.current {
@@ -1779,27 +1701,62 @@ body {
 #zoomLevel {
   top: 14px;
   right: 14px;
+  padding: 8px 12px;
   font-size: 13px;
+  font-family: monospace;
   color: var(--map-cyan);
   letter-spacing: 0.08em;
 }
 
 #globeToggle {
   top: 14px;
-  right: 106px;
+  right: 127px;
   padding: 8px 12px;
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
   color: var(--map-muted);
   border-radius: 14px;
 }
 
 #globeToggle input[type="checkbox"] {
-  accent-color: var(--map-cyan-strong);
+  appearance: none;
+  -webkit-appearance: none;
+  width: 13px;
+  height: 13px;
+  border: 1px solid rgba(127, 231, 255, 0.35);
+  border-radius: 3px;
+  background: rgba(7, 20, 31, 0.9);
+  cursor: pointer;
+  position: relative;
+  flex-shrink: 0;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+#globeToggle input[type="checkbox"]:checked {
+  background: rgba(127, 231, 255, 0.18);
+  border-color: rgba(127, 231, 255, 0.6);
+}
+
+#globeToggle input[type="checkbox"]:checked::after {
+  content: '';
+  position: absolute;
+  left: 3px;
+  top: 0px;
+  width: 4px;
+  height: 8px;
+  border: 1.5px solid #7fe7ff;
+  border-left: none;
+  border-top: none;
+  transform: rotate(45deg);
 }
 
 #levelButtons {
-  top: 52px;
+  top: 54px;
   right: 14px;
   gap: 6px;
+  display: flex;
 }
 
 #levelButtons button,
@@ -2088,16 +2045,16 @@ body {
 
 .feedback-btn {
   position: fixed;
-  bottom: 20px;
+  bottom: 55px;
   right: 20px;
   z-index: 1200;
-  background: var(--map-panel-strong);
-  color: var(--map-muted);
-  border: 1px solid var(--map-line);
+  background: rgba(255, 120, 40, 0.15);
+  color: #ff8c42;
+  border: 1px solid rgba(255, 120, 40, 0.5);
   border-radius: 20px;
-  padding: 7px 14px;
-  font-size: 12px;
-  font-weight: 500;
+  padding: 11px 22px;
+  font-size: 14px;
+  font-weight: 600;
   cursor: pointer;
   letter-spacing: 0.03em;
   transition: color 0.15s, border-color 0.15s, background 0.15s;
@@ -2105,14 +2062,14 @@ body {
 
 .feedback-btn:hover,
 .feedback-btn.active {
-  color: var(--map-cyan);
-  border-color: rgba(123, 231, 255, 0.35);
-  background: rgba(8, 24, 38, 0.98);
+  color: #ffaa66;
+  border-color: rgba(255, 120, 40, 0.75);
+  background: rgba(255, 120, 40, 0.25);
 }
 
 .feedback-panel {
   position: fixed;
-  bottom: 56px;
+  bottom: 105px;
   right: 20px;
   z-index: 1200;
   width: 320px;
