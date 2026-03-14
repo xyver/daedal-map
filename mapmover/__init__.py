@@ -46,6 +46,10 @@ from .paths import (
     RAW_DATA_DIR,
     SOURCE_DATA_DIR,
     BACKUPS_DIR,
+    # Deployment URLs
+    APP_URL,
+    SITE_URL,
+    ACCOUNT_URL,
     # Helper functions
     get_country_dir,
     get_country_index,

@@ -5,6 +5,9 @@ This module provides all file system paths used across the application.
 Supports both local development and deployed environments via environment variables.
 
 Environment Variables (in priority order):
+    DEPLOYMENT       - `local` for local dev, `railway` for deployed (or unset)
+    APP_URL          - override .io app URL (default: driven by DEPLOYMENT)
+    SITE_URL         - override .com site URL (default: driven by DEPLOYMENT)
     STORAGE_MODE     - `local` (default) or `s3`
     DATA_ROOT        - Direct path to data folder (parquet, geometry, catalog)
                        e.g. DATA_ROOT=/mnt/data or DATA_ROOT=D:/county-map-data
@@ -155,6 +158,28 @@ DOWNLOADERS_DIR = PRIVATE_ROOT / "data_converters" / "downloaders"
 RAW_DATA_DIR = RAW_ROOT / "Raw data"
 SOURCE_DATA_DIR = RAW_ROOT / "source_data"
 BACKUPS_DIR = RAW_ROOT / "backups"
+
+# =============================================================================
+# Deployment URLs
+#
+# DEPLOYMENT=local   -> localhost URLs for local development
+# DEPLOYMENT=railway -> daedalmap.* production URLs (set this in Railway env vars)
+# unset              -> same as railway (production)
+#
+# Override individual URLs with APP_URL / SITE_URL if needed.
+# =============================================================================
+
+_DEPLOYMENT = os.environ.get("DEPLOYMENT", "railway")
+_is_local = _DEPLOYMENT == "local"
+
+# .io app (FastAPI / Railway map app)
+APP_URL = os.environ.get("APP_URL", "http://localhost:7000" if _is_local else "https://daedalmap.io")
+
+# .com site (serve.py / Railway site server)
+SITE_URL = os.environ.get("SITE_URL", "http://localhost:8080" if _is_local else "https://daedalmap.com")
+
+# Account management page (on the .com site)
+ACCOUNT_URL = f"{SITE_URL}/account"
 
 # =============================================================================
 # Helper Functions

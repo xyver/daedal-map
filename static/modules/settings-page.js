@@ -2,51 +2,25 @@ import { AuthManager, getCurrentProfile, getCurrentUser, isAuthenticated, onAuth
 import { fetchMsgpack, postMsgpack } from './utils/fetch.js';
 
 // ============================================================================
-// PACK REGISTRY
-// All known packs grouped by bundle. entitled_by_default = true until
-// real entitlement enforcement is wired from Supabase.
+// PACKS - driven entirely by catalog API (pack_id is the publish gate)
 // ============================================================================
-
-const PACK_REGISTRY = [
-  {
-    bundle: 'Disasters',
-    packs: [
-      { id: 'fires',       label: 'Fires',       description: 'Global wildfire events, US and Canada perimeters and risk scores', published: true },
-      { id: 'earthquakes', label: 'Earthquakes',  description: 'USGS global events, PAGER historical catalog, NRCan Canada', published: true },
-      { id: 'hurricanes',  label: 'Hurricanes',   description: 'IBTrACS global hurricane and tropical storm tracks', published: true },
-      { id: 'tornadoes',   label: 'Tornadoes',    description: 'Global tornado events', published: true },
-      { id: 'floods',      label: 'Floods',       description: 'Global flood events (data through 2019)', published: true },
-      { id: 'volcanoes',   label: 'Volcanoes',    description: 'Global volcanic activity', published: true },
-      { id: 'tsunamis',    label: 'Tsunamis',     description: 'Global tsunami events', published: true },
-    ]
-  },
-  {
-    bundle: 'Development',
-    packs: [
-      { id: 'un_sdg',     label: 'UN SDG',     description: 'All 17 Sustainable Development Goal indicators by country', published: true },
-      { id: 'currencies', label: 'Currencies', description: 'Global currency lifecycle and reference data' },
-    ]
-  },
-  {
-    bundle: 'Geometry',
-    packs: [
-      { id: 'geometry_global', label: 'Global Geometry',      description: 'All countries and territories to admin level 2', always_on: true, published: true },
-      { id: 'geometry_usa',    label: 'US Detailed Geometry', description: 'Census tracts, block groups, ZIP codes, and tribal lands' },
-    ]
-  }
-];
 
 const PACKS_STORAGE_KEY = 'active_pack_ids';
 
-function loadActivePacks() {
+const ACRONYMS = new Set(['sdg', 'un', 'fx', 'co2', 'imf', 'bop', 'us', 'usa', 'epa', 'cia', 'nasa', 'who', 'bom', 'zcta', 'nrcan', 'abs']);
+
+function prettifyId(id) {
+  return id.replace(/_/g, ' ').split(' ').map(word =>
+    ACRONYMS.has(word.toLowerCase()) ? word.toUpperCase() : word.charAt(0).toUpperCase() + word.slice(1)
+  ).join(' ');
+}
+
+function loadActivePacks(defaultIds) {
   try {
     const saved = localStorage.getItem(PACKS_STORAGE_KEY);
     if (saved) return new Set(JSON.parse(saved));
   } catch (_) {}
-  // Default: all packs on
-  const all = new Set();
-  PACK_REGISTRY.forEach(b => b.packs.forEach(p => all.add(p.id)));
-  return all;
+  return new Set(defaultIds || []);
 }
 
 function saveActivePacks(activeSet) {
@@ -55,84 +29,146 @@ function saveActivePacks(activeSet) {
   } catch (_) {}
 }
 
-function renderPackBundle(bundle, entitled, active) {
-  return `
-    <div class="packs-bundle">
-      <h3 class="packs-bundle-label">${bundle.bundle}</h3>
-      <div class="packs-grid">
-        ${bundle.packs.map(pack => {
-          const isEntitled = pack.always_on || entitled.has(pack.id);
-          const isActive = active.has(pack.id);
-          const disabledAttr = pack.always_on ? 'disabled' : (!isEntitled ? 'disabled' : '');
-          const checkedAttr = (pack.always_on || isActive) ? 'checked' : '';
-          const lockedClass = pack.always_on ? 'pack-always-on' : (!isEntitled ? 'pack-locked' : '');
-          return `
-            <label class="pack-card ${lockedClass}" for="pack_${pack.id}">
-              <input type="checkbox" id="pack_${pack.id}" class="pack-checkbox" data-pack-id="${pack.id}"
-                     ${checkedAttr} ${disabledAttr}>
-              <div class="pack-card-body">
-                <span class="pack-label">${pack.label}</span>
-                <span class="pack-desc">${pack.description}</span>
-                ${pack.always_on ? '<span class="pack-tag">always on</span>' : ''}
-                ${!isEntitled && !pack.always_on ? '<span class="pack-tag locked">upgrade</span>' : ''}
-              </div>
-            </label>`;
-        }).join('')}
-      </div>
-    </div>
-  `;
+function buildPacksFromSources(sources) {
+  // Published: one card per unique pack_id.
+  // Prefer the source whose source_id matches its pack_id as the representative.
+  const packMap = new Map();
+  for (const src of sources) {
+    if (!src.pack_id) continue;
+    if (!packMap.has(src.pack_id) || src.source_id === src.pack_id) {
+      packMap.set(src.pack_id, src);
+    }
+  }
+  // Count sources per pack to detect multi-source packs
+  const packSourceCount = new Map();
+  for (const src of sources) {
+    if (!src.pack_id) continue;
+    packSourceCount.set(src.pack_id, (packSourceCount.get(src.pack_id) || 0) + 1);
+  }
+
+  const published = [...packMap.entries()].map(([pack_id, src]) => {
+    const count = packSourceCount.get(pack_id) || 1;
+    const desc = count > 1
+      ? (src.topic_tags || []).slice(0, 4).join(', ')
+      : (src.source_name || '');
+    return {
+      id: pack_id,
+      label: prettifyId(pack_id),
+      description: desc,
+      category: src.category || 'other',
+      source_count: count,
+      pack_page: `https://daedalmap.com/packs/${pack_id}`,
+    };
+  });
+
+  // Internal: sources with no pack_id
+  const internal = sources
+    .filter(s => !s.pack_id)
+    .map(src => ({
+      id: src.source_id,
+      label: src.source_name || prettifyId(src.source_id),
+      description: (src.topic_tags || []).slice(0, 3).join(', '),
+      category: src.category || 'other',
+    }));
+
+  return { published, internal };
 }
 
-function renderPacksSection(entitledPackIds, isMaster) {
+function groupByCategory(items) {
+  const groups = new Map();
+  for (const item of items) {
+    const cat = item.category || 'other';
+    if (!groups.has(cat)) groups.set(cat, []);
+    groups.get(cat).push(item);
+  }
+  return groups;
+}
+
+function renderPackCards(items, active, entitled) {
+  return items.map(item => {
+    const isEntitled = entitled ? entitled.has(item.id) : true;
+    const isActive = active.has(item.id);
+    const disabledAttr = isEntitled ? '' : 'disabled';
+    const checkedAttr = isActive ? 'checked' : '';
+    const lockedClass = isEntitled ? '' : 'pack-locked';
+    return `
+      <label class="pack-card ${lockedClass}" for="pack_${item.id}">
+        <input type="checkbox" id="pack_${item.id}" class="pack-checkbox" data-pack-id="${item.id}"
+               ${checkedAttr} ${disabledAttr}>
+        <div class="pack-card-body">
+          <span class="pack-label">${item.label}</span>
+          <span class="pack-desc">${item.description}</span>
+          <div class="pack-card-footer">
+            ${item.source_count > 1 ? `<span class="pack-tag">${item.source_count} sources</span>` : ''}
+            ${!isEntitled ? '<span class="pack-tag locked">upgrade</span>' : ''}
+            ${item.pack_page ? `<a class="pack-more-info" href="${item.pack_page}" target="_blank" rel="noopener">More info</a>` : ''}
+          </div>
+        </div>
+      </label>`;
+  }).join('');
+}
+
+function renderCategoryGroups(groups, active, entitled) {
+  return [...groups.entries()].map(([cat, items]) => `
+    <div class="packs-bundle">
+      <h3 class="packs-bundle-label">${prettifyId(cat)}</h3>
+      <div class="packs-grid">
+        ${renderPackCards(items, active, entitled)}
+      </div>
+    </div>
+  `).join('');
+}
+
+function renderPacksSection(sources, entitledPackIds, isMaster) {
   const container = document.getElementById('packsList');
   if (!container) return;
 
-  const entitled = entitledPackIds || new Set(PACK_REGISTRY.flatMap(b => b.packs.map(p => p.id)));
-  const active = loadActivePacks();
-
-  // Section 1: published packs only (all users)
-  const publishedRegistry = PACK_REGISTRY.map(bundle => ({
-    ...bundle,
-    packs: bundle.packs.filter(p => p.published || p.always_on)
-  })).filter(bundle => bundle.packs.length > 0);
-
-  const publishedHtml = publishedRegistry.map(bundle => renderPackBundle(bundle, entitled, active)).join('');
-
-  // Section 2: all packs including unreleased (master only)
-  let allPacksHtml = '';
-  if (isMaster) {
-    const unreleasedRegistry = PACK_REGISTRY.map(bundle => ({
-      ...bundle,
-      packs: bundle.packs.filter(p => !p.published && !p.always_on)
-    })).filter(bundle => bundle.packs.length > 0);
-
-    if (unreleasedRegistry.length > 0) {
-      const unreleasedHtml = unreleasedRegistry.map(bundle => renderPackBundle(bundle, entitled, active)).join('');
-      allPacksHtml = `
-        <div class="packs-section-header packs-section-internal">
-          <h3>Internal / Unreleased</h3>
-          <span class="packs-section-note">Master account only</span>
-        </div>
-        ${unreleasedHtml}
-      `;
-    }
+  if (!sources || sources.length === 0) {
+    container.innerHTML = '<p class="packs-loading">Loading catalog...</p>';
+    return;
   }
 
-  container.innerHTML = publishedHtml + allPacksHtml;
+  const { published, internal } = buildPacksFromSources(sources);
+  const defaultActive = published.map(p => p.id);
+  const active = loadActivePacks(defaultActive);
+  const entitled = entitledPackIds; // null = all entitled (master)
+
+  const publishedGroups = groupByCategory(published);
+  let html = renderCategoryGroups(publishedGroups, active, entitled);
+
+  if (isMaster && internal.length > 0) {
+    const internalGroups = groupByCategory(internal);
+    html += `
+      <div class="packs-section-header packs-section-internal">
+        <h3>Internal / Unreleased</h3>
+        <span class="packs-section-note">Master account only</span>
+      </div>
+      ${renderCategoryGroups(internalGroups, active, null)}
+    `;
+  }
+
+  container.innerHTML = html;
 }
 
 function collectPackSelection() {
   const active = new Set();
-  // always-on packs are always included
-  PACK_REGISTRY.forEach(b => b.packs.forEach(p => { if (p.always_on) active.add(p.id); }));
   document.querySelectorAll('.pack-checkbox:not([disabled]):checked').forEach(cb => {
     active.add(cb.dataset.packId);
   });
   return active;
 }
 
-function initPacksSection(entitledPackIds, isMaster) {
-  renderPacksSection(entitledPackIds, isMaster);
+async function initPacksSection(entitledPackIds, isMaster) {
+  const container = document.getElementById('packsList');
+  if (container) container.innerHTML = '<p class="packs-loading">Loading catalog...</p>';
+
+  let sources = [];
+  try {
+    const data = await fetchMsgpack('/api/catalog/sources');
+    sources = data.sources || [];
+  } catch (_) {}
+
+  renderPacksSection(sources, entitledPackIds, isMaster);
 
   const applyBtn = document.getElementById('packsApplyBtn');
   const status = document.getElementById('packsSaveStatus');
@@ -398,7 +434,7 @@ async function renderPage() {
   await initProfileSection();
   const profile = getCurrentProfile() || {};
   const isMaster = profile.plan_id === 'master' || profile.is_admin === true;
-  initPacksSection(null, isMaster);
+  await initPacksSection(null, isMaster);
   initAdminSection();
   await loadSettings();
 }

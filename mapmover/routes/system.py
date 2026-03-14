@@ -11,7 +11,7 @@ from fastapi import APIRouter, Request, Response
 from fastapi.responses import HTMLResponse
 
 from mapmover.auth_context import build_session_cache_key, get_authenticated_user
-from mapmover import CacheSignature, logger, session_manager
+from mapmover import ACCOUNT_URL, CacheSignature, logger, session_manager
 from mapmover.order_queue import order_queue
 from mapmover.routes.disasters.helpers import msgpack_error, msgpack_response
 from mapmover.settings import get_settings_with_status, init_backup_folders, save_settings
@@ -218,6 +218,158 @@ def _get_entitled_packs(req: Request):
     return set()
 
 
+@router.get("/api/catalog/sources")
+async def get_catalog_sources(req: Request):
+    """
+    Return catalog sources filtered to what this request is entitled to see.
+
+    Master / admin / no-service-key: all sources, including those without pack_id.
+    Authenticated user: only sources whose pack_id is in their entitled set.
+    Anonymous: empty list.
+
+    Response fields per source: source_id, pack_id, source_name, category,
+    data_type, scope, topic_tags.  Full catalog metadata is not included to
+    keep the response small.
+    """
+    from mapmover.data_loading import load_catalog
+
+    entitled = _get_entitled_packs(req)
+    all_sources = load_catalog().get("sources", [])
+
+    SUMMARY_KEYS = {"source_id", "pack_id", "source_name", "category", "data_type", "scope", "topic_tags"}
+
+    if entitled is None:
+        # Master / bypass: return everything
+        sources = [{k: s.get(k) for k in SUMMARY_KEYS} for s in all_sources]
+    elif not entitled:
+        # Anonymous or entitlement lookup failed
+        sources = []
+    else:
+        sources = [
+            {k: s.get(k) for k in SUMMARY_KEYS}
+            for s in all_sources
+            if s.get("pack_id") in entitled
+        ]
+
+    return msgpack_response({"sources": sources, "total": len(sources)})
+
+
+@router.get("/api/catalog/packs")
+async def get_catalog_packs_list(req: Request):
+    """
+    Return the public pack library: all sources with a pack_id assigned.
+    No auth required - pack_id assignment is the publish gate.
+    Supports ?format=json for the .com packs browsing page.
+    """
+    from mapmover.data_loading import load_catalog
+    from fastapi.responses import JSONResponse
+
+    all_sources = load_catalog().get("sources", [])
+    published = [s for s in all_sources if s.get("pack_id")]
+
+    pack_map = {}
+    pack_counts = {}
+    for s in published:
+        pid = s["pack_id"]
+        pack_counts[pid] = pack_counts.get(pid, 0) + 1
+        if pid not in pack_map or s.get("source_id") == pid:
+            pack_map[pid] = s
+
+    packs = []
+    for pid, s in pack_map.items():
+        ref = s.get("reference", {})
+        ref_src = ref.get("source", {})
+        tc = s.get("temporal_coverage", {})
+        packs.append({
+            "pack_id":        pid,
+            "source_name":    ref_src.get("source_name") or s.get("source_name", ""),
+            "description":    ref_src.get("description", ""),
+            "category":       s.get("category", "other"),
+            "data_type":      s.get("data_type", ""),
+            "scope":          s.get("scope", ""),
+            "topic_tags":     s.get("topic_tags") or [],
+            "source_count":   pack_counts[pid],
+            "temporal_start": tc.get("start"),
+            "temporal_end":   tc.get("end"),
+        })
+
+    packs.sort(key=lambda p: (p["category"], p["source_name"].lower()))
+
+    fmt = req.query_params.get("format", "")
+    if fmt == "json":
+        return JSONResponse({"packs": packs, "total": len(packs)})
+    return msgpack_response({"packs": packs, "total": len(packs)})
+
+
+@router.get("/api/catalog/packs/{pack_id}")
+async def get_catalog_pack(pack_id: str, req: Request):
+    """
+    Return full metadata for a single pack by pack_id.
+    Merges all sources sharing that pack_id into one pack profile.
+    Published packs (those with a pack_id) are publicly readable without auth.
+    Unpublished sources require master/bypass.
+    Supports ?format=json for the .com public pack profile pages.
+    """
+    from mapmover.data_loading import load_catalog
+    from fastapi.responses import JSONResponse
+
+    entitled = _get_entitled_packs(req)
+    all_sources = load_catalog().get("sources", [])
+
+    pack_sources = [s for s in all_sources if s.get("pack_id") == pack_id]
+    if not pack_sources:
+        return msgpack_error("Pack not found", 404)
+
+    # Published packs are publicly readable. Unpublished (no pack_id) require bypass.
+    # Since we already filtered to pack_id sources, access is always allowed here.
+    # (Entitlement gate is enforced at the catalog/sources level, not individual pack pages.)
+
+    # Use the source whose source_id matches pack_id as primary, else first
+    primary = next((s for s in pack_sources if s.get("source_id") == pack_id), pack_sources[0])
+    ref = primary.get("reference", {})
+    ref_source = ref.get("source", {})
+
+    # Aggregate metrics across all sources in the pack
+    all_metrics = {}
+    for s in pack_sources:
+        for k, v in (s.get("reference", {}).get("metrics", {}) or {}).items():
+            all_metrics[k] = v
+
+    # Aggregate temporal coverage
+    temporal_starts = [s["temporal_coverage"]["start"] for s in pack_sources if s.get("temporal_coverage", {}).get("start")]
+    temporal_ends   = [s["temporal_coverage"]["end"]   for s in pack_sources if s.get("temporal_coverage", {}).get("end")]
+    temporal = {
+        "start": min(temporal_starts) if temporal_starts else None,
+        "end":   max(temporal_ends)   if temporal_ends   else None,
+        "granularity": primary.get("temporal_coverage", {}).get("granularity"),
+    }
+
+    pack = {
+        "pack_id":            pack_id,
+        "source_name":        ref_source.get("source_name") or primary.get("source_name", ""),
+        "description":        ref_source.get("description", ""),
+        "source_url":         ref_source.get("source_url", ""),
+        "license":            ref_source.get("license", ""),
+        "category":           primary.get("category", ""),
+        "data_type":          primary.get("data_type", ""),
+        "scope":              primary.get("scope", ""),
+        "topic_tags":         primary.get("topic_tags") or [],
+        "keywords":           primary.get("keywords") or [],
+        "geographic_level":   primary.get("geographic_level"),
+        "coverage_description": primary.get("coverage_description", ""),
+        "temporal_coverage":  temporal,
+        "metrics":            all_metrics,
+        "llm_summary":        primary.get("llm_summary", ""),
+        "source_count":       len(pack_sources),
+        "source_ids":         [s["source_id"] for s in pack_sources],
+    }
+
+    fmt = req.query_params.get("format", "")
+    if fmt == "json":
+        return JSONResponse({"pack": pack})
+    return msgpack_response({"pack": pack})
+
+
 @router.get("/api/catalog/overlays")
 async def get_catalog_overlays(req: Request):
     """Get overlay tree from the catalog, filtered to the user's entitled packs."""
@@ -404,7 +556,7 @@ async def get_auth_me(req: Request):
                     "user_packs": context.get("user_packs", []),
                     "org_packs": context.get("org_packs", []),
                     "credits_balance": context.get("credits_balance", 0),
-                    "account_url": "https://daedalmap.com/account",
+                    "account_url": ACCOUNT_URL,
                 })
         except Exception as exc:
             logger.warning(f"Failed to load entitlement context: {exc}")

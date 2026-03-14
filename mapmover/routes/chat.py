@@ -16,6 +16,7 @@ from mapmover.order_taker import interpret_request
 from mapmover.postprocessor import get_display_items, postprocess_order
 from mapmover.preprocessor import preprocess_query
 from mapmover.routes.disasters.helpers import msgpack_error, msgpack_response
+from mapmover import ACCOUNT_URL
 
 
 # ---------------------------------------------------------------------------
@@ -24,7 +25,7 @@ from mapmover.routes.disasters.helpers import msgpack_error, msgpack_response
 # Credit cost constants must stay in sync with billing.py in county-map-private.
 # ---------------------------------------------------------------------------
 
-_ACCOUNT_URL = "https://daedalmap.com/account"
+_ACCOUNT_URL = ACCOUNT_URL
 
 _CREDIT_COSTS = {
     "chat_turn": 1,   # plain chat response, no tool calls
