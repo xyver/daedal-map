@@ -11,26 +11,26 @@ const PACK_REGISTRY = [
   {
     bundle: 'Disasters',
     packs: [
-      { id: 'fires',       label: 'Fires',       description: 'Global wildfire events, US and Canada perimeters and risk scores' },
-      { id: 'earthquakes', label: 'Earthquakes',  description: 'USGS global events, PAGER historical catalog, NRCan Canada' },
-      { id: 'hurricanes',  label: 'Hurricanes',   description: 'IBTrACS global hurricane and tropical storm tracks' },
-      { id: 'tornadoes',   label: 'Tornadoes',    description: 'Global tornado events' },
-      { id: 'floods',      label: 'Floods',       description: 'Global flood events (data through 2019)' },
-      { id: 'volcanoes',   label: 'Volcanoes',    description: 'Global volcanic activity' },
-      { id: 'tsunamis',    label: 'Tsunamis',     description: 'Global tsunami events' },
+      { id: 'fires',       label: 'Fires',       description: 'Global wildfire events, US and Canada perimeters and risk scores', published: true },
+      { id: 'earthquakes', label: 'Earthquakes',  description: 'USGS global events, PAGER historical catalog, NRCan Canada', published: true },
+      { id: 'hurricanes',  label: 'Hurricanes',   description: 'IBTrACS global hurricane and tropical storm tracks', published: true },
+      { id: 'tornadoes',   label: 'Tornadoes',    description: 'Global tornado events', published: true },
+      { id: 'floods',      label: 'Floods',       description: 'Global flood events (data through 2019)', published: true },
+      { id: 'volcanoes',   label: 'Volcanoes',    description: 'Global volcanic activity', published: true },
+      { id: 'tsunamis',    label: 'Tsunamis',     description: 'Global tsunami events', published: true },
     ]
   },
   {
     bundle: 'Development',
     packs: [
-      { id: 'un_sdg',     label: 'UN SDG',     description: 'All 14 Sustainable Development Goal indicators by country' },
+      { id: 'un_sdg',     label: 'UN SDG',     description: 'All 17 Sustainable Development Goal indicators by country', published: true },
       { id: 'currencies', label: 'Currencies', description: 'Global currency lifecycle and reference data' },
     ]
   },
   {
     bundle: 'Geometry',
     packs: [
-      { id: 'geometry_global', label: 'Global Geometry',      description: 'All countries and territories to admin level 2', always_on: true },
+      { id: 'geometry_global', label: 'Global Geometry',      description: 'All countries and territories to admin level 2', always_on: true, published: true },
       { id: 'geometry_usa',    label: 'US Detailed Geometry', description: 'Census tracts, block groups, ZIP codes, and tribal lands' },
     ]
   }
@@ -55,16 +55,8 @@ function saveActivePacks(activeSet) {
   } catch (_) {}
 }
 
-function renderPacksSection(entitledPackIds) {
-  const container = document.getElementById('packsList');
-  if (!container) return;
-
-  // entitledPackIds: Set of pack IDs the user is allowed to use.
-  // For now pass null to mean "all entitled" until Supabase is wired.
-  const entitled = entitledPackIds || new Set(PACK_REGISTRY.flatMap(b => b.packs.map(p => p.id)));
-  const active = loadActivePacks();
-
-  const html = PACK_REGISTRY.map(bundle => `
+function renderPackBundle(bundle, entitled, active) {
+  return `
     <div class="packs-bundle">
       <h3 class="packs-bundle-label">${bundle.bundle}</h3>
       <div class="packs-grid">
@@ -88,9 +80,45 @@ function renderPacksSection(entitledPackIds) {
         }).join('')}
       </div>
     </div>
-  `).join('');
+  `;
+}
 
-  container.innerHTML = html;
+function renderPacksSection(entitledPackIds, isMaster) {
+  const container = document.getElementById('packsList');
+  if (!container) return;
+
+  const entitled = entitledPackIds || new Set(PACK_REGISTRY.flatMap(b => b.packs.map(p => p.id)));
+  const active = loadActivePacks();
+
+  // Section 1: published packs only (all users)
+  const publishedRegistry = PACK_REGISTRY.map(bundle => ({
+    ...bundle,
+    packs: bundle.packs.filter(p => p.published || p.always_on)
+  })).filter(bundle => bundle.packs.length > 0);
+
+  const publishedHtml = publishedRegistry.map(bundle => renderPackBundle(bundle, entitled, active)).join('');
+
+  // Section 2: all packs including unreleased (master only)
+  let allPacksHtml = '';
+  if (isMaster) {
+    const unreleasedRegistry = PACK_REGISTRY.map(bundle => ({
+      ...bundle,
+      packs: bundle.packs.filter(p => !p.published && !p.always_on)
+    })).filter(bundle => bundle.packs.length > 0);
+
+    if (unreleasedRegistry.length > 0) {
+      const unreleasedHtml = unreleasedRegistry.map(bundle => renderPackBundle(bundle, entitled, active)).join('');
+      allPacksHtml = `
+        <div class="packs-section-header packs-section-internal">
+          <h3>Internal / Unreleased</h3>
+          <span class="packs-section-note">Master account only</span>
+        </div>
+        ${unreleasedHtml}
+      `;
+    }
+  }
+
+  container.innerHTML = publishedHtml + allPacksHtml;
 }
 
 function collectPackSelection() {
@@ -103,8 +131,8 @@ function collectPackSelection() {
   return active;
 }
 
-function initPacksSection(entitledPackIds) {
-  renderPacksSection(entitledPackIds);
+function initPacksSection(entitledPackIds, isMaster) {
+  renderPacksSection(entitledPackIds, isMaster);
 
   const applyBtn = document.getElementById('packsApplyBtn');
   const status = document.getElementById('packsSaveStatus');
@@ -368,7 +396,9 @@ async function renderPage() {
   initTabs();
   renderAccountSummary();
   await initProfileSection();
-  initPacksSection(null);
+  const profile = getCurrentProfile() || {};
+  const isMaster = profile.plan_id === 'master' || profile.is_admin === true;
+  initPacksSection(null, isMaster);
   initAdminSection();
   await loadSettings();
 }
