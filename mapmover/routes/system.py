@@ -474,8 +474,11 @@ async def serve_index():
 @router.get("/settings", response_class=HTMLResponse)
 async def serve_settings_page():
     """Serve the standalone settings/account page."""
+    from mapmover import SITE_URL
     template_path = BASE_DIR / "templates" / "settings.html"
-    return template_path.read_text(encoding="utf-8")
+    html = template_path.read_text(encoding="utf-8")
+    html = html.replace("{{site_url}}", SITE_URL)
+    return html
 
 
 @router.get("/reference/admin-levels")

@@ -13,6 +13,8 @@ import sys
 from pathlib import Path
 
 from dotenv import load_dotenv
+load_dotenv()  # Must run before any mapmover imports so env vars are set when paths.py executes
+
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
@@ -42,8 +44,6 @@ if sys.stdout.encoding != "utf-8":
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
 if sys.stderr.encoding != "utf-8":
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
-
-load_dotenv()
 
 BASE_DIR = Path(__file__).resolve().parent
 

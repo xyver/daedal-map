@@ -57,7 +57,7 @@ function buildPacksFromSources(sources) {
       description: desc,
       category: src.category || 'other',
       source_count: count,
-      pack_page: `https://daedalmap.com/packs/${pack_id}`,
+      pack_page: `${window.__SITE_URL__ || 'https://daedalmap.com'}/packs/${pack_id}`,
     };
   });
 
