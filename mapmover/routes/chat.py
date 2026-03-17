@@ -7,7 +7,7 @@ import traceback
 
 import msgpack
 from fastapi import APIRouter, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 
 from mapmover.auth_context import build_session_cache_key, get_authenticated_user
 from mapmover import logger, session_manager
@@ -16,6 +16,7 @@ from mapmover.order_taker import interpret_request
 from mapmover.postprocessor import get_display_items, postprocess_order
 from mapmover.preprocessor import preprocess_query
 from mapmover.routes.disasters.helpers import msgpack_error, msgpack_response
+from mapmover.security import get_client_ip, rate_limiter
 from mapmover import ACCOUNT_URL
 
 
@@ -90,6 +91,12 @@ def _deduct_credits(user_id: str, operation: str) -> dict:
 router = APIRouter()
 
 
+def _rate_limited_message(message: str, retry_after: int) -> Response:
+    response = msgpack_response({"error": message, "retry_after": retry_after}, status_code=429)
+    response.headers["Retry-After"] = str(retry_after)
+    return response
+
+
 async def decode_request_body(request: Request) -> dict:
     """Decode MessagePack request body."""
     body_bytes = await request.body()
@@ -104,6 +111,17 @@ async def chat_endpoint(req: Request):
 
         frontend_session_id = body.get("sessionId", "anonymous")
         auth_user = get_authenticated_user(req)
+        client_ip = get_client_ip(req)
+        user_id = auth_user.get("id") if auth_user else None
+        if user_id:
+            allowed, retry_after = rate_limiter.check(f"chat:user:{user_id}", limit=60, window_seconds=60)
+            if not allowed:
+                return _rate_limited_message("Too many chat requests. Please slow down and try again shortly.", retry_after)
+        else:
+            allowed, retry_after = rate_limiter.check(f"chat:ip:{client_ip}", limit=20, window_seconds=60)
+            if not allowed:
+                return _rate_limited_message("Too many anonymous chat requests. Please wait a moment and try again.", retry_after)
+
         session_id = build_session_cache_key(frontend_session_id, auth_user)
         cache = session_manager.get_or_create(session_id)
 
@@ -307,7 +325,6 @@ async def chat_endpoint(req: Request):
         # Credit check - authenticated users only. Guests proceed freely.
         # Balance is checked before the LLM call; deduction happens after.
         # Both steps fail-open: Supabase errors do not block the user.
-        user_id = auth_user.get("id") if auth_user else None
         if user_id:
             balance = _get_credit_balance(user_id)
             if balance != -1 and balance < _CREDIT_COSTS.get("chat_turn", 1):

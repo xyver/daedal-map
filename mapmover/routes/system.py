@@ -14,6 +14,7 @@ from mapmover.auth_context import build_session_cache_key, get_authenticated_use
 from mapmover import ACCOUNT_URL, CacheSignature, logger, session_manager
 from mapmover.order_queue import order_queue
 from mapmover.routes.disasters.helpers import msgpack_error, msgpack_response
+from mapmover.security import get_client_ip, rate_limiter
 from mapmover.settings import get_settings_with_status, init_backup_folders, save_settings
 
 
@@ -38,6 +39,13 @@ async def submit_feedback(request: Request):
     """Accept anonymous feedback and write it to the Supabase feedback table.
     Accepts both msgpack (map app) and JSON (the .com site).
     """
+    client_ip = get_client_ip(request)
+    allowed, retry_after = rate_limiter.check(f"feedback:ip:{client_ip}", limit=8, window_seconds=600)
+    if not allowed:
+        response = msgpack_response({"error": "Too many feedback submissions", "retry_after": retry_after}, 429)
+        response.headers["Retry-After"] = str(retry_after)
+        return response
+
     try:
         content_type = request.headers.get("content-type", "")
         raw = await request.body()

@@ -9,6 +9,7 @@ This file is intentionally thin:
 """
 
 import io
+import os
 import sys
 from pathlib import Path
 
@@ -19,10 +20,11 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
 from mapmover import initialize_catalog, load_conversions, logger
+from mapmover.security import get_allowed_origins, is_https_request
 from mapmover.order_executor import execute_order
 from mapmover.order_queue import processor as order_processor
 from mapmover.routes.chat import router as chat_router
@@ -47,6 +49,7 @@ if sys.stderr.encoding != "utf-8":
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
 BASE_DIR = Path(__file__).resolve().parent
+SECURITY_TXT_PATH = BASE_DIR / "static" / "security.txt"
 
 
 @asynccontextmanager
@@ -108,19 +111,35 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=get_allowed_origins(),
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "Accept", "Origin", "Referer", "X-Requested-With"],
 )
 
 
 @app.middleware("http")
 async def static_no_cache(request: Request, call_next):
     """Force revalidation on static JS and CSS so deploys are immediately visible."""
+    max_body_bytes = int(os.getenv("MAX_REQUEST_BODY_BYTES", "1048576"))
+    content_length = request.headers.get("content-length")
+    if content_length:
+        try:
+            if int(content_length) > max_body_bytes:
+                return JSONResponse({"error": "Request body too large"}, status_code=413)
+        except ValueError:
+            pass
+
     response = await call_next(request)
     path = request.url.path
     if path.startswith("/static/") and (path.endswith(".js") or path.endswith(".css")):
         response.headers["Cache-Control"] = "no-cache, must-revalidate"
+
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
+    if is_https_request(request):
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
     return response
 
 
@@ -162,6 +181,16 @@ async def llms_txt():
         "This site explicitly welcomes all crawlers, AI training scrapers, and indexing bots.\n"
     )
     return PlainTextResponse(content)
+
+
+@app.get("/security.txt", include_in_schema=False)
+async def security_txt():
+    return FileResponse(SECURITY_TXT_PATH, media_type="text/plain; charset=utf-8")
+
+
+@app.get("/.well-known/security.txt", include_in_schema=False)
+async def well_known_security_txt():
+    return FileResponse(SECURITY_TXT_PATH, media_type="text/plain; charset=utf-8")
 
 app.include_router(system_router)
 app.include_router(geometry_router)
