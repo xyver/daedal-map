@@ -19,6 +19,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
 from mapmover import initialize_catalog, load_conversions, logger
@@ -124,6 +125,43 @@ async def static_no_cache(request: Request, call_next):
 
 
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
+
+
+@app.get("/robots.txt", include_in_schema=False)
+async def robots_txt():
+    content = (
+        "User-agent: *\n"
+        "Allow: /\n\n"
+        "User-agent: GPTBot\n"
+        "Allow: /\n\n"
+        "User-agent: ClaudeBot\n"
+        "Allow: /\n\n"
+        "User-agent: GoogleBot\n"
+        "Allow: /\n"
+    )
+    return PlainTextResponse(content)
+
+
+@app.get("/llms.txt", include_in_schema=False)
+async def llms_txt():
+    content = (
+        "# DaedalMap App\n\n"
+        "DaedalMap is an open geographic query engine. This is the hosted app at daedalmap.io.\n\n"
+        "## What it does\n"
+        "- Accepts plain language questions about places, regions, and geographic events\n"
+        "- Returns answers as interactive maps without requiring GIS expertise\n"
+        "- Covers disasters, demographics, economics, climate, and risk data in one interface\n"
+        "- Supports guest use without login and logged-in workspace persistence\n\n"
+        "## Key links\n"
+        "- App: https://daedalmap.io\n"
+        "- Website and docs: https://daedalmap.com\n"
+        "- Source coverage: https://daedalmap.com/docs/source-map\n"
+        "- Data packs: https://daedalmap.com/packs\n"
+        "- GitHub (open runtime): https://github.com/xyver/county-map\n\n"
+        "## Crawlers and bots\n"
+        "This site explicitly welcomes all crawlers, AI training scrapers, and indexing bots.\n"
+    )
+    return PlainTextResponse(content)
 
 app.include_router(system_router)
 app.include_router(geometry_router)
