@@ -25,9 +25,6 @@ rapidfuzz>=3.0.0
 # Cloud logging and analytics (optional - graceful fallback if not configured)
 supabase>=2.0.0
 
-# Admin dashboard (local only, not deployed to Railway)
-streamlit>=1.30.0
-
 # Required for country bounds bbox intersection (viewport geometry loading):
 shapely>=2.0.0
 
