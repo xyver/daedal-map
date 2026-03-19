@@ -30,6 +30,12 @@ logger = logging.getLogger("mapmover")
 # Extensions synced synchronously at startup (small, needed for catalog init)
 _EAGER_EXTENSIONS = {".json", ".csv", ".txt", ".md"}
 
+# Small parquet files that are used frequently enough to be worth hydrating into
+# the local Railway cache during the blocking startup sync.
+_EAGER_PARQUET_PATHS = {
+    "global/world_factbook_static/all_countries.parquet",
+}
+
 
 def get_storage_mode() -> str:
     """Return configured storage mode."""
@@ -83,6 +89,14 @@ def _download_object(client, bucket: str, key: str, local_path: Path, remote_mti
     client.download_file(bucket, key, str(local_path))
     if remote_mtime:
         os.utime(local_path, (remote_mtime, remote_mtime))
+
+
+def _is_eager_object(relative_key: str) -> bool:
+    """Return True when an S3 object should be hydrated during startup."""
+    rel = relative_key.replace("\\", "/")
+    if Path(rel).suffix.lower() in _EAGER_EXTENSIONS:
+        return True
+    return rel in _EAGER_PARQUET_PATHS
 
 
 def _sync_objects(client, bucket: str, prefix: str, cache_root: Path, objects: list[dict]) -> tuple[int, int]:
@@ -159,13 +173,13 @@ def ensure_s3_data_root(cache_root: Path) -> Path:
                 "remote_mtime": remote_mtime,
             }
 
-            ext = Path(relative_key).suffix.lower()
-            if ext in _EAGER_EXTENSIONS:
+            if _is_eager_object(relative_key):
                 eager.append(entry)
             else:
                 deferred.append(entry)
 
-    # Phase 1: sync catalog/index/metadata files now (blocking)
+    # Phase 1: sync catalog/index/metadata files now (blocking), plus a tiny
+    # allowlist of hot parquet files that benefit from local cache hydration.
     synced1, downloaded1 = _sync_objects(client, bucket, prefix, cache_root, eager)
     logger.info(
         "S3 eager sync complete: bucket=%s prefix=%s files=%d downloaded=%d cache=%s",

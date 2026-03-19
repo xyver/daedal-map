@@ -327,6 +327,18 @@ export const PopupBuilder = {
       parts.push(`<span style="color: #888; font-size: 11px;">${countryDatasets} datasets</span>`);
     }
 
+    if (info.admin_level === 0) {
+      if (info.capital_name) {
+        parts.push(`<span style="color: #888; font-size: 11px;">Capital: ${info.capital_name}</span>`);
+      }
+      if (typeof info.area_total_sq_km === 'number' && Number.isFinite(info.area_total_sq_km)) {
+        parts.push(`<span style="color: #888; font-size: 11px;">Area: ${this.formatAreaKm2(info.area_total_sq_km)}</span>`);
+      }
+      if (typeof info.coastline_km === 'number' && Number.isFinite(info.coastline_km) && info.coastline_km > 0) {
+        parts.push(`<span style="color: #888; font-size: 11px;">Coastline: ${this.formatDistanceKm(info.coastline_km)}</span>`);
+      }
+    }
+
     // Subdivisions - compact, one line with dataset counts
     if (info.children_count > 0 || info.descendants_count > 0) {
       const subdivisionLines = this.formatSubdivisions(info);
@@ -336,6 +348,19 @@ export const PopupBuilder = {
     }
 
     return parts.join('<br>');
+  },
+
+  formatAreaKm2(value) {
+    if (!Number.isFinite(value)) return 'N/A';
+    if (Math.abs(value) >= 1000000) {
+      return `${(value / 1000000).toFixed(2).replace(/\.00$/, '')}M sq km`;
+    }
+    return `${Math.round(value).toLocaleString()} sq km`;
+  },
+
+  formatDistanceKm(value) {
+    if (!Number.isFinite(value)) return 'N/A';
+    return `${Math.round(value).toLocaleString()} km`;
   },
 
   /**

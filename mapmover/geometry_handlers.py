@@ -45,6 +45,9 @@ _country_bounds_cache = None
 # Cache for admin level names from reference/admin_levels.json
 _admin_levels_cache = None
 
+# Cache for small world factbook static country attributes used in popups
+_world_factbook_static_cache = None
+
 
 def _parquet_accessible(path: Path) -> bool:
     """Returns True if a parquet file exists locally or is accessible via S3/DuckDB."""
@@ -76,6 +79,29 @@ def load_global_countries():
     geom_path = get_geometry_path()
     if not geom_path:
         logger.warning("No backup path configured")
+        return None
+
+
+def load_world_factbook_static():
+    """
+    Load world_factbook_static/all_countries.parquet for lightweight country popup enrichment.
+    Returns DataFrame or None if unavailable.
+    """
+    global _world_factbook_static_cache
+    if _world_factbook_static_cache is not None:
+        return _world_factbook_static_cache
+
+    factbook_file = DATA_ROOT / "global" / "world_factbook_static" / "all_countries.parquet"
+    if not _parquet_accessible(factbook_file):
+        logger.warning("world_factbook_static parquet not accessible at %s", factbook_file)
+        return None
+
+    try:
+        _world_factbook_static_cache = pd.read_parquet(factbook_file)
+        logger.info("Loaded %d rows from world_factbook_static", len(_world_factbook_static_cache))
+        return _world_factbook_static_cache
+    except Exception as e:
+        logger.warning("Error loading world_factbook_static parquet: %s", e)
         return None
 
     global_file = geom_path / "global.csv"
@@ -635,6 +661,20 @@ def get_location_info(loc_id: str):
 
                 # Get memberships from conversions.json
                 result["memberships"] = _get_country_memberships(iso3)
+
+                # Add a few lightweight static country facts for navigation popups
+                static_df = load_world_factbook_static()
+                if static_df is not None:
+                    static_row = static_df[static_df["loc_id"] == loc_id]
+                    if len(static_row) > 0:
+                        sr = static_row.iloc[0]
+                        result["capital_name"] = sr.get("capital_name")
+                        area_total = sr.get("area_total_sq_km")
+                        coastline = sr.get("coastline_km")
+                        if pd.notna(area_total):
+                            result["area_total_sq_km"] = float(area_total)
+                        if pd.notna(coastline):
+                            result["coastline_km"] = float(coastline)
 
                 # Get dataset counts by level
                 result["dataset_counts"] = _get_dataset_counts_by_level(loc_id)

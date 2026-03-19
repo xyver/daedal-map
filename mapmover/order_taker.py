@@ -10,6 +10,7 @@ This replaces the old multi-LLM chat system with a simpler "Fast Food Kiosk" mod
 """
 
 import json
+import os
 from datetime import datetime
 from pathlib import Path
 from anthropic import Anthropic
@@ -20,6 +21,7 @@ from .preprocessor import build_tier3_context, build_tier4_context
 from .constants import CHAT_HISTORY_LLM_LIMIT
 from .llm_tools import format_tools_for_provider, execute_tool, format_tool_result_for_llm
 from .aggregation_system import validate_aggregation_policy
+from .paths import APP_URL, SITE_URL
 
 load_dotenv()
 
@@ -126,6 +128,23 @@ def build_regions_text(conversions: dict) -> str:
     return "\n".join(lines)
 
 
+def get_source_visibility_mode() -> str:
+    """
+    Order Taker source visibility policy.
+
+    live:
+      Only published sources (those with pack_id) are visible/selectable.
+    test:
+      All sources are visible for QA, but prompt guidance should prefer
+      published pack_id sources when multiple candidates overlap.
+    """
+    configured = os.getenv("ORDER_TAKER_SOURCE_MODE", "").strip().lower()
+    if configured in {"live", "test"}:
+        return configured
+    deployment = os.getenv("DEPLOYMENT", "railway").strip().lower()
+    return "test" if deployment == "local" else "live"
+
+
 def build_system_prompt(catalog: dict, conversions: dict) -> str:
     """
     Build system prompt with catalog organized by geographic scope.
@@ -133,11 +152,16 @@ def build_system_prompt(catalog: dict, conversions: dict) -> str:
     Groups sources by scope and combines related sources (UN SDGs, World Factbook).
     """
 
-    # Group sources by scope
+    source_visibility_mode = get_source_visibility_mode()
+    all_sources = catalog["sources"]
+    published_sources = [src for src in all_sources if src.get("pack_id")]
+    visible_sources = published_sources if source_visibility_mode == "live" else all_sources
+
+    # Group visible sources by scope for source selection.
     sources_by_scope = {}
     chat_first_sources = []
     hybrid_sources = []
-    for src in catalog["sources"]:
+    for src in visible_sources:
         scope = src.get("scope", "global")
         if scope not in sources_by_scope:
             sources_by_scope[scope] = []
@@ -151,6 +175,7 @@ def build_system_prompt(catalog: dict, conversions: dict) -> str:
 
     # Build sources text with grouping of related sources
     sources_text = ""
+    published_pack_text = ", ".join(sorted({src.get("pack_id") for src in published_sources if src.get("pack_id")})) or "(none)"
 
     def format_source_group(sources, scope_label):
         """Format sources, grouping related ones together."""
@@ -167,8 +192,9 @@ def build_system_prompt(catalog: dict, conversions: dict) -> str:
             temp = src.get("temporal_coverage", {})
             name = src.get("source_name", src["source_id"])
             sid = src["source_id"]
-            # Show both name and source_id so LLM knows exact ID to use
-            lines.append(f"- {name} [source_id: {sid}]: {temp.get('start', '?')}-{temp.get('end', '?')}")
+            pid = src.get("pack_id")
+            publish_note = f"pack_id: {pid}" if pid else "pre-release: no pack_id yet"
+            lines.append(f"- {name} [{publish_note}; source_id: {sid}]: {temp.get('start', '?')}-{temp.get('end', '?')}")
 
         # List SDG sources individually with human-readable goal titles
         if sdg_sources:
@@ -202,12 +228,37 @@ def build_system_prompt(catalog: dict, conversions: dict) -> str:
                 if not goal_title:
                     goal_title = src.get("source_name", sid)
 
-                lines.append(f"- {goal_title} [source_id: {sid}]: {year_range}")
+                publish_note = f"pack_id: {src.get('pack_id')}" if src.get("pack_id") else "pre-release: no pack_id yet"
+                lines.append(f"- {goal_title} [{publish_note}; source_id: {sid}]: {year_range}")
 
         # Group World Factbook
         if factbook_sources:
-            names = [s['source_id'] for s in factbook_sources]
-            lines.append(f"- World Factbook ({', '.join(names)}): country profiles, demographics, infrastructure")
+            by_id = {s["source_id"]: s for s in factbook_sources}
+            unique = by_id.get("world_factbook")
+            overlap = by_id.get("world_factbook_overlap")
+            static = by_id.get("world_factbook_static")
+
+            if unique:
+                pid = unique.get("pack_id")
+                publish_note = f"pack_id: {pid}" if pid else "pre-release: no pack_id yet"
+                lines.append(
+                    f"- CIA World Factbook [{publish_note}; source_id: world_factbook]: "
+                    f"yearly country metrics such as internet users, military expenditure (% of GDP), railways (km), airports, telephones"
+                )
+            if overlap:
+                pid = overlap.get("pack_id")
+                publish_note = f"pack_id: {pid}" if pid else "pre-release: no pack_id yet"
+                lines.append(
+                    f"- CIA World Factbook Overlap [{publish_note}; source_id: world_factbook_overlap]: "
+                    f"yearly country metrics such as life expectancy, GDP per capita PPP, birth rate, death rate, population"
+                )
+            if static:
+                pid = static.get("pack_id")
+                publish_note = f"pack_id: {pid}" if pid else "pre-release: no pack_id yet"
+                lines.append(
+                    f"- CIA World Factbook Static Geography [{publish_note}; source_id: world_factbook_static]: "
+                    f"country-level static numeric fields such as total area, coastline length, highest point elevation, mean elevation, border count, capital coordinates"
+                )
 
         return "\n".join(lines)
 
@@ -246,6 +297,10 @@ Example: "I have 17 SDG goals available. Which would you like to explore, or sho
 DATA SOURCES:
 {sources_text}
 IMPORTANT: Country-specific sources can ONLY be used for that country.
+Published pack_ids currently in the public library: {published_pack_text}
+Order Taker source visibility mode: {source_visibility_mode}
+Only sources with a pack_id are published and should be described to users in general catalog/library answers.
+{"Sources marked \"pre-release: no pack_id yet\" may still exist for internal QA and direct map requests, but they are not public library items yet." if source_visibility_mode == "test" else "In live mode, unpublished sources with no pack_id are invisible and must never be selected."}
 
 REGIONS:
 {regions_text}
@@ -253,7 +308,17 @@ REGIONS:
 WHEN USER ASKS "what data for [country]" or "what do you have":
 1. List that country's specific sources FIRST (if any)
 2. Then mention global sources are also available
-3. Be CONCISE - use human-readable names, group related sources
+3. Only mention published packs/sources with a pack_id
+4. Be CONCISE - use human-readable names, group related sources
+5. End with:
+   - Public pack library: {SITE_URL}/packs
+   - More packs when logged in: {APP_URL}/settings
+
+FACTBOOK-SPECIFIC RULES:
+- The World Factbook sources are all country-level (admin_0), similar to SDG country choropleths.
+- If the user explicitly asks to show/map/rank a numeric Factbook metric, prefer type="order", even if the source is pre-release.
+- For world_factbook_static numeric fields (highest_point_m, mean_elevation_m, coastline_km, area_total_sq_km, border_countries_count), prefer a map order rather than a chat explanation.
+- Reserve chat/reference behavior for text-heavy static fields like climate, terrain, natural_resources, or named peak/capital descriptions.
 
 WHEN USER ASKS about a specific source ("what's in X?" or "show me metrics"):
 - Use the list_source_metrics tool to get the actual metrics
@@ -348,6 +413,10 @@ INTERPRETATION RULES:
 - If location is marked [LIKELY FALSE POSITIVE], ignore that location match
 - If query mentions a data source by name, it's almost certainly a data request, NOT navigation
 - "show me data from X" = data request, NOT navigation to a place called "data"
+- When multiple sources could satisfy the same metric/request, prefer a published source with a pack_id over a pre-release source with no pack_id
+- If the user explicitly names a source or pack, honor that source/pack even if another published source could also answer
+- Do not mention source_id to users unless necessary for internal QA; prefer pack/source display names in explanations
+- In live mode, never select a source that has no pack_id
 
 INCREMENTAL ORDERS (IMPORTANT):
 - Orders describe ONLY what's changing, not the total map state
@@ -525,6 +594,10 @@ def validate_order_item(item: dict) -> dict:
     if not metadata:
         item["_valid"] = False
         item["_error"] = f"Unknown source: {source_id}"
+        return item
+    if get_source_visibility_mode() == "live" and not metadata.get("pack_id"):
+        item["_valid"] = False
+        item["_error"] = f"Source '{source_id}' is not published in live mode"
         return item
 
     # Check metric exists
