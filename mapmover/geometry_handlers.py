@@ -81,6 +81,19 @@ def load_global_countries():
         logger.warning("No backup path configured")
         return None
 
+    global_file = geom_path / "global.csv"
+    if not global_file.exists():
+        logger.warning(f"global.csv not found at {global_file}")
+        return None
+
+    try:
+        _global_countries_cache = pd.read_csv(global_file)
+        logger.info(f"Loaded {len(_global_countries_cache)} countries from global.csv")
+        return _global_countries_cache
+    except Exception as e:
+        logger.error(f"Error loading global.csv: {e}")
+        return None
+
 
 def load_world_factbook_static():
     """
@@ -102,19 +115,6 @@ def load_world_factbook_static():
         return _world_factbook_static_cache
     except Exception as e:
         logger.warning("Error loading world_factbook_static parquet: %s", e)
-        return None
-
-    global_file = geom_path / "global.csv"
-    if not global_file.exists():
-        logger.warning(f"global.csv not found at {global_file}")
-        return None
-
-    try:
-        _global_countries_cache = pd.read_csv(global_file)
-        logger.info(f"Loaded {len(_global_countries_cache)} countries from global.csv")
-        return _global_countries_cache
-    except Exception as e:
-        logger.error(f"Error loading global.csv: {e}")
         return None
 
 
