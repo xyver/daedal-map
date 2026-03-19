@@ -3,7 +3,7 @@
 DaedalMap is a map-first geographic query engine. It lets people ask place-based questions in natural language and get usable map results across disasters, demographics, economics, climate, and related public data.
 
 Public surfaces:
-- App: `https://daedalmap.io`
+- App: `https://app.daedalmap.com`
 - Website/docs: `https://daedalmap.com`
 
 This repository is the open app/runtime. It is intended to be understandable and usable on its own: you can run it locally, point it at local or hosted data, and extend it with compatible datasets and pack-style workflows.

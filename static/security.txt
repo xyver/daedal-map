@@ -1,4 +1,4 @@
 Contact: https://daedalmap.com/about
-Canonical: https://daedalmap.io/.well-known/security.txt
+Canonical: https://app.daedalmap.com/.well-known/security.txt
 Expires: 2027-03-17T00:00:00Z
 Preferred-Languages: en

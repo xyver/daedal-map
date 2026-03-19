@@ -18,6 +18,7 @@ def get_allowed_origins() -> list[str]:
         return [origin.strip() for origin in configured.split(",") if origin.strip()]
 
     return [
+        "https://app.daedalmap.com",
         "https://daedalmap.io",
         "https://www.daedalmap.io",
         "https://daedalmap.com",

@@ -172,7 +172,7 @@ async def llms_txt():
         "- Covers disasters, demographics, economics, climate, and risk data in one interface\n"
         "- Supports guest use without login and logged-in workspace persistence\n\n"
         "## Key links\n"
-        "- App: https://daedalmap.io\n"
+        "- App: https://app.daedalmap.com\n"
         "- Website and docs: https://daedalmap.com\n"
         "- Source coverage: https://daedalmap.com/docs/source-map\n"
         "- Data packs: https://daedalmap.com/packs\n"

@@ -136,10 +136,10 @@ async def submit_feedback(request: Request):
 
     user_id = body.get("user_id") or None
 
-    # Derive source from Origin header (daedalmap.io vs daedalmap.com vs local)
+    # Derive source from Origin header (app.daedalmap.com vs daedalmap.com vs local)
     origin = request.headers.get("origin", "") or request.headers.get("referer", "")
-    if "daedalmap.io" in origin:
-        source = "daedalmap.io"
+    if "app.daedalmap.com" in origin or "daedalmap.io" in origin:
+        source = "app.daedalmap.com"
     elif "daedalmap.com" in origin:
         source = "daedalmap.com"
     else:
