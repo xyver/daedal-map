@@ -1838,6 +1838,7 @@ def execute_order(order: dict) -> dict:
     # Step 4: Join with geometry
     # Determine geographic level from sources
     primary_level = "country" if "country" in geo_levels else list(geo_levels)[0] if geo_levels else "country"
+    uses_global_country_geometry = primary_level in {"country", "admin_0"}
 
     geometry_df = None
 
@@ -1852,7 +1853,7 @@ def execute_order(order: dict) -> dict:
         else:
             print(f"Warning: No geometry source found for special level: {primary_level}")
 
-    elif primary_level == "country":
+    elif uses_global_country_geometry:
         geometry_df = load_global_countries()
         logger.info(f"[DEBUG] load_global_countries returned: {len(geometry_df) if geometry_df is not None else None} rows")
         logger.info(f"[DEBUG] all_region_codes sample: {list(all_region_codes)[:5]}, year_data years: {list(year_data.keys())[:3] if year_data else []}")
