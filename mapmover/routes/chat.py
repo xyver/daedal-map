@@ -3,6 +3,7 @@
 import hashlib
 import json
 import os
+import time
 import traceback
 
 import msgpack
@@ -91,6 +92,19 @@ def _deduct_credits(user_id: str, operation: str) -> dict:
 router = APIRouter()
 
 
+def _chat_trace_id(session_id: str, query: str) -> str:
+    seed = f"{session_id}|{query[:80]}"
+    return hashlib.md5(seed.encode()).hexdigest()[:10]
+
+
+def _chat_log_timing(trace_id: str, stage: str, started_at: float, extra: str = "") -> float:
+    now = time.perf_counter()
+    elapsed_ms = (now - started_at) * 1000
+    suffix = f" | {extra}" if extra else ""
+    logger.info(f"[chat:{trace_id}] {stage}: {elapsed_ms:.1f}ms{suffix}")
+    return now
+
+
 def _rate_limited_message(message: str, retry_after: int) -> Response:
     response = msgpack_response({"error": message, "retry_after": retry_after}, status_code=429)
     response.headers["Retry-After"] = str(retry_after)
@@ -106,6 +120,8 @@ async def decode_request_body(request: Request) -> dict:
 @router.post("/chat")
 async def chat_endpoint(req: Request):
     """Chat endpoint - Order Taker model."""
+    t_request_start = time.perf_counter()
+    trace_id = "unknown"
     try:
         body = await decode_request_body(req)
 
@@ -123,6 +139,13 @@ async def chat_endpoint(req: Request):
                 return _rate_limited_message("Too many anonymous chat requests. Please wait a moment and try again.", retry_after)
 
         session_id = build_session_cache_key(frontend_session_id, auth_user)
+        query_preview = body.get("query", "") or "[confirmed_order]"
+        trace_id = _chat_trace_id(session_id, query_preview)
+        logger.info(
+            f"[chat:{trace_id}] request start | confirmed_order={bool(body.get('confirmed_order'))} "
+            f"| query_len={len(body.get('query', '') or '')} | user={'auth' if user_id else 'anon'}"
+        )
+        _chat_log_timing(trace_id, "body_decoded", t_request_start, f"session={frontend_session_id}")
         cache = session_manager.get_or_create(session_id)
 
         if body.get("confirmed_order"):
@@ -130,7 +153,14 @@ async def chat_endpoint(req: Request):
                 confirmed_order = body["confirmed_order"]
                 order_str = json.dumps(confirmed_order, sort_keys=True)
                 request_key = hashlib.md5(order_str.encode()).hexdigest()[:16]
+                t_exec_start = time.perf_counter()
                 result = execute_order(confirmed_order)
+                _chat_log_timing(
+                    trace_id,
+                    "confirmed_order_executed",
+                    t_exec_start,
+                    f"request_key={request_key} type={result.get('type')} source={result.get('source_id')}",
+                )
                 if result.get("type") == "error":
                     return msgpack_response({"type": "error", "message": result.get("message", "Order execution failed.")}, status_code=400)
 
@@ -239,9 +269,10 @@ async def chat_endpoint(req: Request):
                 if delta_count < original_count:
                     logger.info(f"Delta sent: {delta_count}/{original_count} features ({original_count - delta_count} deduped)")
 
+                _chat_log_timing(trace_id, "responding", t_request_start, f"type={response.get('type')} count={response.get('count')}")
                 return msgpack_response(response)
             except Exception as e:
-                logger.error(f"Order execution error: {e}")
+                logger.error(f"[chat:{trace_id}] Order execution error: {e}")
                 return msgpack_response({"type": "error", "message": str(e)}, status_code=400)
 
         query = body.get("query", "")
@@ -257,7 +288,8 @@ async def chat_endpoint(req: Request):
         if not query:
             return msgpack_error("No query provided", 400)
 
-        logger.debug(f"Chat query: {query[:100]}...")
+        logger.debug(f"[chat:{trace_id}] Chat query: {query[:100]}...")
+        t_preprocess_start = time.perf_counter()
         hints = preprocess_query(
             query,
             viewport=viewport,
@@ -266,6 +298,12 @@ async def chat_endpoint(req: Request):
             saved_order_names=saved_order_names,
             time_state=time_state,
             loaded_data=loaded_data,
+        )
+        _chat_log_timing(
+            trace_id,
+            "preprocess_complete",
+            t_preprocess_start,
+            f"show_borders={bool(hints.get('show_borders'))} nav={bool((hints.get('navigation') or {}).get('is_navigation'))}",
         )
 
         if resolved_location:
@@ -338,7 +376,9 @@ async def chat_endpoint(req: Request):
                     "account_url": _ACCOUNT_URL,
                 })
 
+        t_interpret_start = time.perf_counter()
         result = interpret_request(query, chat_history, hints=hints)
+        _chat_log_timing(trace_id, "interpret_complete", t_interpret_start, f"type={result.get('type')}")
 
         # Deduct credits based on what the LLM actually did.
         if user_id:
@@ -349,10 +389,18 @@ async def chat_endpoint(req: Request):
 
         if result["type"] == "order":
             result_summary = result.get("summary") or result.get("order", {}).get("summary") or "Data request"
+            t_postprocess_start = time.perf_counter()
             processed = postprocess_order(result["order"], hints)
+            _chat_log_timing(
+                trace_id,
+                "postprocess_complete",
+                t_postprocess_start,
+                f"items={len(processed.get('items', []) or [])} derived={len(processed.get('derived_specs', []) or [])}",
+            )
             if processed.get("metric_warning") and not body.get("force_metrics"):
                 display_items = get_display_items(processed.get("items", []), processed.get("derived_specs", []))
                 full_order = {**result["order"], "items": display_items, "derived_specs": processed.get("derived_specs", [])}
+                _chat_log_timing(trace_id, "responding", t_request_start, "type=metric_warning")
                 return msgpack_response(
                     {
                         "type": "metric_warning",
@@ -365,6 +413,7 @@ async def chat_endpoint(req: Request):
                 )
 
             display_items = get_display_items(processed.get("items", []), processed.get("derived_specs", []))
+            _chat_log_timing(trace_id, "responding", t_request_start, "type=order")
             return msgpack_response(
                 {
                     "type": "order",
@@ -385,6 +434,7 @@ async def chat_endpoint(req: Request):
                 from mapmover.order_executor import execute_geometry_overlay
 
                 geojson = execute_geometry_overlay(geometry_overlay, loc_ids)
+            _chat_log_timing(trace_id, "responding", t_request_start, f"type=navigate locations={len(locations)}")
             return msgpack_response(
                 {
                     "type": "navigate",
@@ -399,6 +449,7 @@ async def chat_endpoint(req: Request):
             )
 
         if result["type"] == "disambiguate":
+            _chat_log_timing(trace_id, "responding", t_request_start, f"type=disambiguate options={len(result.get('options', []))}")
             return msgpack_response(
                 {
                     "type": "disambiguate",
@@ -411,6 +462,7 @@ async def chat_endpoint(req: Request):
             )
 
         if result["type"] == "filter_update":
+            _chat_log_timing(trace_id, "responding", t_request_start, "type=filter_update")
             return msgpack_response(
                 {
                     "type": "filter_update",
@@ -421,6 +473,7 @@ async def chat_endpoint(req: Request):
             )
 
         if result["type"] == "overlay_toggle":
+            _chat_log_timing(trace_id, "responding", t_request_start, "type=overlay_toggle")
             return msgpack_response(
                 {
                     "type": "overlay_toggle",
@@ -431,10 +484,12 @@ async def chat_endpoint(req: Request):
             )
 
         if result["type"] == "clarify":
+            _chat_log_timing(trace_id, "responding", t_request_start, "type=clarify")
             return msgpack_response(
                 {"type": "clarify", "message": result["message"], "geojson": {"type": "FeatureCollection", "features": []}, "needsMoreInfo": True}
             )
 
+        _chat_log_timing(trace_id, "responding", t_request_start, "type=chat")
         return msgpack_response(
             {
                 "type": "chat",
@@ -445,7 +500,7 @@ async def chat_endpoint(req: Request):
             }
         )
     except Exception as e:
-        logger.error(f"Chat error: {e}")
+        logger.error(f"[chat:{trace_id}] Chat error: {e}")
         traceback.print_exc()
         return msgpack_response(
             {
