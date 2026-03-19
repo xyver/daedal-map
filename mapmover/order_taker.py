@@ -280,6 +280,14 @@ def build_system_prompt(catalog: dict, conversions: dict) -> str:
 
     # Build regions text from conversions
     regions_text = build_regions_text(conversions)
+    unpublished_visibility_note = (
+        'Sources marked "pre-release: no pack_id yet" may still exist for internal QA and direct map requests, '
+        'but they are not public library items yet.'
+        if source_visibility_mode == "test"
+        else "In live mode, unpublished sources with no pack_id are invisible and must never be selected."
+    )
+    chat_first_text = ", ".join(sorted(chat_first_sources)) if chat_first_sources else "(none)"
+    hybrid_text = ", ".join(sorted(hybrid_sources)) if hybrid_sources else "(none)"
 
     return f"""You are an Order Taker for a map data visualization system.
 
@@ -300,7 +308,7 @@ IMPORTANT: Country-specific sources can ONLY be used for that country.
 Published pack_ids currently in the public library: {published_pack_text}
 Order Taker source visibility mode: {source_visibility_mode}
 Only sources with a pack_id are published and should be described to users in general catalog/library answers.
-{"Sources marked \"pre-release: no pack_id yet\" may still exist for internal QA and direct map requests, but they are not public library items yet." if source_visibility_mode == "test" else "In live mode, unpublished sources with no pack_id are invisible and must never be selected."}
+{unpublished_visibility_note}
 
 REGIONS:
 {regions_text}
@@ -333,8 +341,8 @@ INTERACTION POLICY:
 - If a source has interaction_mode="chat_first", prefer conversational/reference response unless user explicitly asks to map/query metrics.
 - If a source has interaction_mode="hybrid", use judgment between chat and order.
 - For source-backed analytical questions, prefer returning type="order" over type="chat".
-- chat_first sources: {", ".join(sorted(chat_first_sources)) if chat_first_sources else "(none)"}
-- hybrid sources: {", ".join(sorted(hybrid_sources)) if hybrid_sources else "(none)"}
+- chat_first sources: {chat_first_text}
+- hybrid sources: {hybrid_text}
 
 ORDER FORMAT (JSON when user requests data):
 ```json
