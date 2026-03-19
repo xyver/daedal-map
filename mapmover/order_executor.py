@@ -726,18 +726,85 @@ def find_metric_column(df: pd.DataFrame, metric: str) -> Optional[str]:
     Returns:
         Column name or None if not found
     """
-    metric_lower = metric.lower().replace("_", " ").replace("-", " ")
+    def _norm(value: str) -> str:
+        return str(value).lower().replace("_", " ").replace("-", " ").strip()
+
+    def _find_alias_match(candidates: list[str]) -> Optional[str]:
+        normalized_columns = {_norm(col): col for col in df.columns}
+        for candidate in candidates:
+            matched = normalized_columns.get(_norm(candidate))
+            if matched:
+                return matched
+        return None
+
+    def _find_term_bundle_match(term_bundles: list[set[str]]) -> Optional[str]:
+        best_match = None
+        best_score = 0
+        for col in df.columns:
+            if col in ("loc_id", "year"):
+                continue
+            col_words = set(_norm(col).split())
+            for bundle in term_bundles:
+                if bundle.issubset(col_words):
+                    score = len(bundle)
+                    if score > best_score:
+                        best_match = col
+                        best_score = score
+        return best_match
+
+    metric_lower = _norm(metric)
     metric_words = set(metric_lower.split())
+
+    alias_candidates = {
+        "railways length": [
+            "railways_km", "railway_km", "railways_length_km", "railways_length", "railways"
+        ],
+        "railway length": [
+            "railways_km", "railway_km", "railways_length_km", "railways_length", "railways"
+        ],
+        "life expectancy": [
+            "life_expectancy", "life_expectancy_years", "life_expectancy_at_birth"
+        ],
+        "gdp per capita": [
+            "gdp_per_capita", "gdp_per_capita_ppp", "gdp_per_capita_usd", "gdp_per_capita_ppp_usd"
+        ],
+        "birth rate": [
+            "birth_rate", "birth_rate_per_1000", "births_per_1000_population", "crude_birth_rate"
+        ],
+        "highest peaks": ["highest_point_m"],
+        "highest peak": ["highest_point_m"],
+        "coastline length": ["coastline_km"],
+        "coastline": ["coastline_km"],
+    }
+    alias_term_bundles = {
+        "railways length": [{"railways"}, {"railway"}, {"railways", "km"}],
+        "railway length": [{"railways"}, {"railway"}, {"railway", "km"}],
+        "life expectancy": [{"life", "expectancy"}],
+        "gdp per capita": [{"gdp", "capita"}, {"income", "capita"}],
+        "birth rate": [{"birth", "rate"}, {"births", "rate"}],
+        "highest peaks": [{"highest", "point"}, {"peak"}],
+        "highest peak": [{"highest", "point"}, {"peak"}],
+        "coastline length": [{"coastline"}, {"coast", "length"}],
+        "coastline": [{"coastline"}],
+    }
+
+    alias_match = _find_alias_match(alias_candidates.get(metric_lower, []))
+    if alias_match:
+        return alias_match
+
+    bundle_match = _find_term_bundle_match(alias_term_bundles.get(metric_lower, []))
+    if bundle_match:
+        return bundle_match
 
     # Exact match first (normalized)
     for col in df.columns:
-        col_norm = col.lower().replace("_", " ").replace("-", " ")
+        col_norm = _norm(col)
         if col_norm == metric_lower:
             return col
 
     # Metric contained in column name
     for col in df.columns:
-        col_norm = col.lower().replace("_", " ").replace("-", " ")
+        col_norm = _norm(col)
         if metric_lower in col_norm:
             return col
 
@@ -745,7 +812,7 @@ def find_metric_column(df: pd.DataFrame, metric: str) -> Optional[str]:
     for col in df.columns:
         if col in ("loc_id", "year"):
             continue
-        col_norm = col.lower().replace("_", " ").replace("-", " ")
+        col_norm = _norm(col)
         if col_norm in metric_lower:
             return col
 
@@ -754,7 +821,7 @@ def find_metric_column(df: pd.DataFrame, metric: str) -> Optional[str]:
         for col in df.columns:
             if col in ("loc_id", "year"):
                 continue
-            col_words = set(col.lower().replace("_", " ").replace("-", " ").split())
+            col_words = set(_norm(col).split())
             overlap = metric_words & col_words
             if len(overlap) >= 2:
                 return col
@@ -764,7 +831,7 @@ def find_metric_column(df: pd.DataFrame, metric: str) -> Optional[str]:
     for col in df.columns:
         if col in ("loc_id", "year"):
             continue
-        col_words = set(col.lower().replace("_", " ").replace("-", " ").split())
+        col_words = set(_norm(col).split())
         if significant_words & col_words:
             return col
 

@@ -326,6 +326,9 @@ FACTBOOK-SPECIFIC RULES:
 - The World Factbook sources are all country-level (admin_0), similar to SDG country choropleths.
 - If the user explicitly asks to show/map/rank a numeric Factbook metric, prefer type="order", even if the source is pre-release.
 - For world_factbook_static numeric fields (highest_point_m, mean_elevation_m, coastline_km, area_total_sq_km, border_countries_count), prefer a map order rather than a chat explanation.
+- Use world_factbook_overlap for explicit overlap requests and metrics like life expectancy, GDP per capita, birth rate, death rate, and population.
+- Use world_factbook_static for static geography metrics like highest peaks, coastline length, mean elevation, and total area.
+- Use world_factbook for unique infrastructure/security metrics like internet users, military expenditure, railways, airports, and telephones.
 - Reserve chat/reference behavior for text-heavy static fields like climate, terrain, natural_resources, or named peak/capital descriptions.
 
 WHEN USER ASKS about a specific source ("what's in X?" or "show me metrics"):
@@ -781,12 +784,20 @@ def _build_currency_fallback_order(hints: dict | None) -> dict | None:
         "volatility", "trend", "moved", "move", "above", "below", "over the last"
     )
     fact_lookup_terms = ("what currency", "currency of", "uses which currency", "monetary unit")
+    mixed_source_terms = (
+        "inflation", "earthquake", "earthquakes", "hurricane", "hurricanes", "cyclone", "cyclones",
+        "tornado", "tornadoes", "wildfire", "wildfires", "flood", "floods", "tsunami", "tsunamis",
+        "volcano", "volcanoes", "disaster", "disasters", "factbook", "sdg", "health", "co2"
+    )
+    broad_scope_terms = ("all countries", "every country", "global", "worldwide")
 
     if not any(t in query_lower for t in currency_terms):
         return None
     if any(t in query_lower for t in fact_lookup_terms) and not any(t in query_lower for t in analytics_terms):
         return None
     if not any(t in query_lower for t in analytics_terms):
+        return None
+    if any(t in query_lower for t in mixed_source_terms):
         return None
 
     item = {
@@ -800,6 +811,8 @@ def _build_currency_fallback_order(hints: dict | None) -> dict | None:
     iso3 = location.get("iso3")
     if iso3:
         item["region"] = iso3
+    elif not any(t in query_lower for t in broad_scope_terms):
+        return None
 
     time_hint = hints.get("time") or {}
     year = _coerce_year(time_hint.get("year"))
@@ -821,6 +834,122 @@ def _build_currency_fallback_order(hints: dict | None) -> dict | None:
         "summary": "FX trend analysis request",
     }
     return validate_order(order)
+
+
+def _build_sdg_fallback_order(hints: dict | None) -> dict | None:
+    """
+    Build a compact SDG fallback order for broad natural-language prompts that
+    clearly imply a default metric or comparison.
+    """
+    if not hints:
+        return None
+
+    query = str(hints.get("original_query") or "").strip()
+    if not query:
+        return None
+
+    query_lower = query.lower()
+    current_year = datetime.utcnow().year
+
+    def make_item(source_id: str, metric: str, metric_label: str, **extra) -> dict:
+        item = {"source_id": source_id, "metric": metric, "metric_label": metric_label}
+        item.update({k: v for k, v in extra.items() if v is not None})
+        return item
+
+    def make_order(items: list[dict], summary: str) -> dict | None:
+        return validate_order({"items": items, "summary": summary})
+
+    if "child mortality" in query_lower:
+        return make_order(
+            [make_item("03", "child mortality", "Child mortality", sort={"by": "child mortality", "order": "desc", "limit": 20})],
+            "SDG 3 child mortality ranking",
+        )
+
+    if "access to electricity" in query_lower or "electricity access" in query_lower:
+        return make_order(
+            [make_item("07", "access to electricity", "Access to electricity", sort={"by": "access to electricity", "order": "desc"})],
+            "SDG 7 electricity access",
+        )
+
+    if "gender equality" in query_lower:
+        return make_order(
+            [make_item("05", "gender equality", "Gender equality", sort={"by": "gender equality", "order": "desc", "limit": 20})],
+            "SDG 5 gender equality ranking",
+        )
+
+    if "gdp growth" in query_lower:
+        return make_order(
+            [make_item("08", "gdp growth", "GDP growth", year_start=2010, year_end=current_year)],
+            "SDG 8 GDP growth since 2010",
+        )
+
+    if "reducing inequality" in query_lower or "inequality the fastest" in query_lower:
+        return make_order(
+            [make_item("10", "inequality", "Inequality", year_start=current_year - 10, year_end=current_year, sort={"by": "inequality", "order": "asc", "limit": 20})],
+            "SDG 10 inequality trend",
+        )
+
+    if "co2 emissions progress" in query_lower and "sdg 13" in query_lower:
+        return make_order(
+            [make_item("13", "greenhouse gas emissions", "Greenhouse gas emissions", year_start=2005, year_end=current_year)],
+            "SDG 13 emissions trend since 2005",
+        )
+
+    if "education enrollment" in query_lower:
+        return make_order(
+            [make_item("04", "education enrollment", "Education enrollment", year_start=2000, year_end=current_year)],
+            "SDG 4 education enrollment trend",
+        )
+
+    if "hunger" in query_lower and "sub-saharan africa" in query_lower:
+        return make_order(
+            [make_item("02", "undernourishment", "Undernourishment", region="sub-saharan africa", year_start=current_year - 10, year_end=current_year)],
+            "SDG 2 hunger in Sub-Saharan Africa",
+        )
+
+    if "poverty rates" in query_lower and "education access" in query_lower:
+        return make_order(
+            [
+                make_item("01", "poverty rate", "Poverty rate", region="south asia"),
+                make_item("04", "education access", "Education access", region="south asia"),
+            ],
+            "SDG poverty and education comparison for South Asia",
+        )
+
+    if "clean water" in query_lower and "health outcomes" in query_lower:
+        return make_order(
+            [
+                make_item("06", "drinking water access", "Clean water access"),
+                make_item("03", "health outcomes", "Health outcomes"),
+            ],
+            "SDG clean water and health comparison",
+        )
+
+    if "sdg poverty indicators" in query_lower and "factbook gdp per capita" in query_lower:
+        return make_order(
+            [
+                make_item("01", "poverty rate", "Poverty rate"),
+                make_item("world_factbook_overlap", "gdp per capita", "GDP per capita"),
+            ],
+            "SDG poverty and Factbook GDP comparison",
+        )
+
+    if "natural disasters" in query_lower and "poverty scores" in query_lower:
+        return make_order(
+            [
+                make_item("01", "poverty rate", "Poverty rate"),
+                make_item("earthquakes", "events", "Earthquake exposure"),
+            ],
+            "SDG poverty and disaster exposure comparison",
+        )
+
+    if "sustainable cities" in query_lower and "worst performing" in query_lower:
+        return make_order(
+            [make_item("11", "air quality", "Air quality", sort={"by": "air quality", "order": "desc", "limit": 10})],
+            "SDG 11 worst-performing countries",
+        )
+
+    return None
 
 
 def parse_llm_response(content: str, hints: dict = None) -> dict:
