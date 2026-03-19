@@ -299,6 +299,7 @@ async def chat_endpoint(req: Request):
             time_state=time_state,
             loaded_data=loaded_data,
         )
+        hints["original_query"] = query
         _chat_log_timing(
             trace_id,
             "preprocess_complete",
@@ -586,6 +587,7 @@ async def chat_stream_endpoint(req: Request):
                 time_state=time_state,
                 loaded_data=loaded_data,
             )
+            hints["original_query"] = query
             t_preprocess_end = time.time()
             logger.info(f"[TIMING] Preprocessing: {(t_preprocess_end - t_preprocess_start) * 1000:.0f}ms")
 
