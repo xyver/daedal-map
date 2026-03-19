@@ -1029,6 +1029,13 @@ def parse_llm_response(content: str, hints: dict = None) -> dict:
 
         elif response_type == "chat":
             # General chat response
+            sdg_fallback_order = _build_sdg_fallback_order(hints)
+            if sdg_fallback_order:
+                return {
+                    "type": "order",
+                    "order": sdg_fallback_order,
+                    "summary": sdg_fallback_order.get("summary", "SDG data request"),
+                }
             fallback_order = _build_currency_fallback_order(hints)
             if fallback_order:
                 return {
@@ -1062,6 +1069,13 @@ def parse_llm_response(content: str, hints: dict = None) -> dict:
         return {"type": "clarify", "message": message}
 
     # Otherwise it's a chat response
+    sdg_fallback_order = _build_sdg_fallback_order(hints)
+    if sdg_fallback_order:
+        return {
+            "type": "order",
+            "order": sdg_fallback_order,
+            "summary": sdg_fallback_order.get("summary", "SDG data request"),
+        }
     fallback_order = _build_currency_fallback_order(hints)
     if fallback_order:
         return {
