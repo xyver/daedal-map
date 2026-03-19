@@ -1740,12 +1740,12 @@ def execute_order(order: dict) -> dict:
             if metric_col and metric_col in df.columns:
                 years_with_data = df[df[metric_col].notna()]["year"].unique()
                 if len(years_with_data) > 0:
-                df = df[df["year"] == max(years_with_data)]
+                    df = df[df["year"] == max(years_with_data)]
+                else:
+                    df = df[df["year"] == df["year"].max()]
             else:
                 df = df[df["year"] == df["year"].max()]
         t_after_time_filter = _executor_log(trace_id, "time_filtered", t_after_fx, f"item={idx}/{len(items)} source={source_id} rows={len(df)}")
-            else:
-                df = df[df["year"] == df["year"].max()]
 
         # Filter by region
         region_codes = expand_region(region)
