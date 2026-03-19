@@ -22,6 +22,78 @@ router = APIRouter()
 BASE_DIR = Path(__file__).resolve().parents[2]
 
 
+def _pack_display_meta(pack_id: str, primary: dict, pack_sources: list[dict]) -> dict:
+    """Return display-oriented pack title/description overrides for combo packs."""
+    ref_source = (primary.get("reference", {}) or {}).get("source", {}) or {}
+    default_name = ref_source.get("source_name") or primary.get("source_name", "")
+    default_description = ref_source.get("description", "") or primary.get("description", "")
+
+    if pack_id == "un_sdg":
+        return {
+            "source_name": "UN SDG",
+            "description": (
+                "United Nations Sustainable Development Goals indicator library spanning all "
+                "17 goals, from poverty and health to climate and institutions."
+            ),
+        }
+
+    if pack_id == "world_factbook":
+        return {
+            "source_name": "CIA World Factbook",
+            "description": (
+                "Combined CIA World Factbook pack covering unique annual indicators, overlap "
+                "metrics, and static country geography/reference fields."
+            ),
+        }
+
+    return {
+        "source_name": default_name,
+        "description": default_description,
+    }
+
+
+def _resolve_pack_temporal(pack_id: str, pack_sources: list[dict], primary: dict) -> dict:
+    """
+    Resolve pack time coverage with disaster-aware overrides.
+
+    Disaster metadata uses the real archival year column and should override
+    timestamp-based source coverage that can hide ancient/BCE records.
+    """
+    try:
+        from mapmover.disaster_filters import get_disaster_metadata
+        disaster_meta = get_disaster_metadata(pack_id)
+        if disaster_meta:
+            return {
+                "start": disaster_meta.get("data_min_year"),
+                "end": disaster_meta.get("data_max_year"),
+                "granularity": (primary.get("temporal_coverage", {}) or {}).get("granularity") or "yearly",
+            }
+    except Exception:
+        pass
+
+    starts = []
+    ends = []
+    granularities = []
+
+    for src in pack_sources:
+        tc = src.get("temporal_coverage", {}) or {}
+        start = tc.get("start")
+        end = tc.get("end")
+        granularity = tc.get("granularity")
+        if start not in (None, "", "unknown"):
+            starts.append(start)
+        if end not in (None, "", "unknown"):
+            ends.append(end)
+        if granularity not in (None, "", "unknown"):
+            granularities.append(granularity)
+
+    return {
+        "start": min(starts) if starts else None,
+        "end": max(ends) if ends else None,
+        "granularity": granularities[0] if granularities else (primary.get("temporal_coverage", {}) or {}).get("granularity"),
+    }
+
+
 async def decode_request_body(request: Request) -> dict:
     """Decode MessagePack request body."""
     body_bytes = await request.body()
@@ -275,48 +347,6 @@ async def get_catalog_packs_list(req: Request):
     all_sources = load_catalog().get("sources", [])
     published = [s for s in all_sources if s.get("pack_id")]
 
-    def resolve_pack_temporal(pack_id: str, pack_sources: list[dict], primary: dict) -> dict:
-        starts = []
-        ends = []
-        granularities = []
-
-        for src in pack_sources:
-            tc = src.get("temporal_coverage", {}) or {}
-            start = tc.get("start")
-            end = tc.get("end")
-            granularity = tc.get("granularity")
-            if start not in (None, "", "unknown"):
-                starts.append(start)
-            if end not in (None, "", "unknown"):
-                ends.append(end)
-            if granularity not in (None, "", "unknown"):
-                granularities.append(granularity)
-
-        if starts or ends:
-            return {
-                "start": min(starts) if starts else None,
-                "end": max(ends) if ends else None,
-                "granularity": granularities[0] if granularities else (primary.get("temporal_coverage", {}) or {}).get("granularity"),
-            }
-
-        try:
-            from mapmover.disaster_filters import get_disaster_metadata
-            disaster_meta = get_disaster_metadata(pack_id)
-            if disaster_meta:
-                return {
-                    "start": disaster_meta.get("data_min_year"),
-                    "end": disaster_meta.get("data_max_year"),
-                    "granularity": (primary.get("temporal_coverage", {}) or {}).get("granularity") or "yearly",
-                }
-        except Exception:
-            pass
-
-        return {
-            "start": None,
-            "end": None,
-            "granularity": (primary.get("temporal_coverage", {}) or {}).get("granularity"),
-        }
-
     pack_map = {}
     pack_counts = {}
     pack_sources_map = {}
@@ -329,13 +359,12 @@ async def get_catalog_packs_list(req: Request):
 
     packs = []
     for pid, s in pack_map.items():
-        ref = s.get("reference", {})
-        ref_src = ref.get("source", {})
-        tc = resolve_pack_temporal(pid, pack_sources_map.get(pid, [s]), s)
+        display = _pack_display_meta(pid, s, pack_sources_map.get(pid, [s]))
+        tc = _resolve_pack_temporal(pid, pack_sources_map.get(pid, [s]), s)
         packs.append({
             "pack_id":        pid,
-            "source_name":    ref_src.get("source_name") or s.get("source_name", ""),
-            "description":    ref_src.get("description", ""),
+            "source_name":    display.get("source_name") or s.get("source_name", ""),
+            "description":    display.get("description", ""),
             "category":       s.get("category", "other"),
             "data_type":      s.get("data_type", ""),
             "scope":          s.get("scope", ""),
@@ -380,6 +409,7 @@ async def get_catalog_pack(pack_id: str, req: Request):
     primary = next((s for s in pack_sources if s.get("source_id") == pack_id), pack_sources[0])
     ref = primary.get("reference", {})
     ref_source = ref.get("source", {})
+    display = _pack_display_meta(pack_id, primary, pack_sources)
 
     # Aggregate metrics across all sources in the pack
     all_metrics = {}
@@ -410,30 +440,12 @@ async def get_catalog_pack(pack_id: str, req: Request):
             "interaction_mode": s.get("interaction_mode"),
         })
 
-    # Aggregate temporal coverage
-    temporal_starts = [s["temporal_coverage"]["start"] for s in pack_sources if s.get("temporal_coverage", {}).get("start") not in (None, "", "unknown")]
-    temporal_ends   = [s["temporal_coverage"]["end"]   for s in pack_sources if s.get("temporal_coverage", {}).get("end") not in (None, "", "unknown")]
-    temporal = {
-        "start": min(temporal_starts) if temporal_starts else None,
-        "end":   max(temporal_ends)   if temporal_ends   else None,
-        "granularity": primary.get("temporal_coverage", {}).get("granularity"),
-    }
-    if temporal["start"] is None and temporal["end"] is None:
-        try:
-            from mapmover.disaster_filters import get_disaster_metadata
-            disaster_meta = get_disaster_metadata(pack_id)
-            if disaster_meta:
-                temporal["start"] = disaster_meta.get("data_min_year")
-                temporal["end"] = disaster_meta.get("data_max_year")
-                if not temporal.get("granularity") or temporal["granularity"] == "unknown":
-                    temporal["granularity"] = "yearly"
-        except Exception:
-            pass
+    temporal = _resolve_pack_temporal(pack_id, pack_sources, primary)
 
     pack = {
         "pack_id":            pack_id,
-        "source_name":        ref_source.get("source_name") or primary.get("source_name", ""),
-        "description":        ref_source.get("description", ""),
+        "source_name":        display.get("source_name") or ref_source.get("source_name") or primary.get("source_name", ""),
+        "description":        display.get("description", "") or ref_source.get("description", ""),
         "source_url":         ref_source.get("source_url", ""),
         "license":            ref_source.get("license", ""),
         "category":           primary.get("category", ""),
