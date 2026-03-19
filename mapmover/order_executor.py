@@ -12,12 +12,30 @@ Implements the "Empty Box" model from CHAT_REDESIGN.md:
 """
 
 import logging
+import hashlib
 import pandas as pd
 import json
+import time
 from pathlib import Path
 from typing import Optional
 
 logger = logging.getLogger("mapmover")
+
+
+def _executor_trace_id(order: dict) -> str:
+    summary = order.get("summary", "") or ""
+    items = order.get("items", []) or []
+    lead = items[0].get("source_id", "") if items else ""
+    seed = f"{summary[:80]}|{lead}|{len(items)}"
+    return hashlib.md5(seed.encode()).hexdigest()[:10]
+
+
+def _executor_log(trace_id: str, stage: str, started_at: float, extra: str = "") -> float:
+    now = time.perf_counter()
+    elapsed_ms = (now - started_at) * 1000
+    suffix = f" | {extra}" if extra else ""
+    logger.info(f"[executor:{trace_id}] {stage}: {elapsed_ms:.1f}ms{suffix}")
+    return now
 
 from .geometry_handlers import (
     load_global_countries,
@@ -1565,9 +1583,13 @@ def execute_order(order: dict) -> dict:
         Multi-year: {type, geojson, year_data, year_range, multi_year, summary, count, sources}
         Event mode: {type: "events", event_type, geojson, time_range, summary, count, sources}
     """
+    t_execute_start = time.perf_counter()
+    trace_id = _executor_trace_id(order)
     items = order.get("items", [])
     summary = order.get("summary", "")
     action = order.get("action", "add")  # "add" (default) or "remove"
+
+    logger.info(f"[executor:{trace_id}] start | items={len(items)} action={action}")
 
     if not items:
         return {
@@ -1624,7 +1646,7 @@ def execute_order(order: dict) -> dict:
     geo_levels = set()
     sources_used = {}
 
-    for item in items:
+    for idx, item in enumerate(items, start=1):
         region = item.get("region")
         countries = expand_region(region)
         if countries:
@@ -1639,6 +1661,7 @@ def execute_order(order: dict) -> dict:
                 geo_levels.add(metadata.get("geographic_level", "country"))
             except Exception:
                 pass
+    _executor_log(trace_id, "source_metadata_collected", t_execute_start, f"sources={len(sources_used)} geo_levels={sorted(geo_levels)}")
 
     # For multi-year: year_data[year][loc_id] = {metric: value}
     # For single-year: boxes[loc_id] = {metric: value}
@@ -1655,7 +1678,7 @@ def execute_order(order: dict) -> dict:
     all_region_codes = set()  # Track all requested region codes for GeoJSON
 
     # Step 3: Process each order item
-    for item in items:
+    for idx, item in enumerate(items, start=1):
         source_id = item.get("source_id")
         metric = item.get("metric")
         region = item.get("region")
@@ -1670,11 +1693,13 @@ def execute_order(order: dict) -> dict:
         if not source_id:
             continue
 
+        t_item_start = time.perf_counter()
         try:
             df, metadata = load_source_data(source_id)
         except Exception as e:
             logger.error(f"Error loading {source_id}: {e}", exc_info=True)
             continue
+        t_after_load = _executor_log(trace_id, "item_loaded", t_item_start, f"item={idx}/{len(items)} source={source_id} rows={len(df)} cols={len(df.columns)}")
 
         # Apply shared aggregation contract for FX temporal requests.
         if source_id == "fx_usd_historical":
@@ -1682,6 +1707,7 @@ def execute_order(order: dict) -> dict:
             aggregation_trace.append(trace)
             if fx_df is not None:
                 df = fx_df
+        t_after_fx = _executor_log(trace_id, "item_aggregation_applied", t_after_load, f"item={idx}/{len(items)} source={source_id} rows={len(df)}")
 
         # Find the metric column first (needed for smart year filtering)
         if metric:
@@ -1689,6 +1715,7 @@ def execute_order(order: dict) -> dict:
         else:
             numeric_cols = df.select_dtypes(include=['float64', 'int64', 'Float64', 'Int64']).columns
             metric_col = numeric_cols[0] if len(numeric_cols) > 0 else None
+        _executor_log(trace_id, "metric_resolved", t_after_fx, f"item={idx}/{len(items)} source={source_id} metric={metric_col}")
 
         # Store metric label for frontend
         item_label = item.get("metric_label", metric_col)
@@ -1713,9 +1740,10 @@ def execute_order(order: dict) -> dict:
             if metric_col and metric_col in df.columns:
                 years_with_data = df[df[metric_col].notna()]["year"].unique()
                 if len(years_with_data) > 0:
-                    df = df[df["year"] == max(years_with_data)]
-                else:
-                    df = df[df["year"] == df["year"].max()]
+                df = df[df["year"] == max(years_with_data)]
+            else:
+                df = df[df["year"] == df["year"].max()]
+        t_after_time_filter = _executor_log(trace_id, "time_filtered", t_after_fx, f"item={idx}/{len(items)} source={source_id} rows={len(df)}")
             else:
                 df = df[df["year"] == df["year"].max()]
 
@@ -1737,6 +1765,7 @@ def execute_order(order: dict) -> dict:
                 df["_country_code"] = df["loc_id"].str.split("-").str[0]
                 df = df[df["_country_code"].isin(country_codes)]
                 df = df.drop(columns=["_country_code"])
+        t_after_region_filter = _executor_log(trace_id, "region_filtered", t_after_time_filter, f"item={idx}/{len(items)} source={source_id} rows={len(df)}")
 
         # Apply sort/limit if specified (only for single-year mode)
         if sort_spec and not multi_year_mode:
@@ -1748,6 +1777,7 @@ def execute_order(order: dict) -> dict:
                     df = df.sort_values(matched_col, ascending=ascending, na_position='last')
                     if sort_spec.get("limit"):
                         df = df.head(sort_spec["limit"])
+        t_after_sort = _executor_log(trace_id, "sort_applied", t_after_region_filter, f"item={idx}/{len(items)} source={source_id} rows={len(df)}")
 
         # metric_col already found above for year filtering
         if not metric_col:
@@ -1785,6 +1815,9 @@ def execute_order(order: dict) -> dict:
                         boxes[loc_id] = {"year": row.get("year")} if "year" in df.columns else {}
 
                     boxes[loc_id][label] = val
+        tracked_rows = len(df)
+        box_count = len(year_data) if multi_year_mode and year_data is not None else len(boxes or {})
+        _executor_log(trace_id, "item_values_applied", t_after_sort, f"item={idx}/{len(items)} source={source_id} metric={label} rows={tracked_rows} box_count={box_count}")
 
     # Step 3.5: Apply derived field calculations
     derived_specs = order.get("derived_specs", [])
@@ -1800,6 +1833,7 @@ def execute_order(order: dict) -> dict:
         derivation_warnings = apply_derived_fields(boxes, derived_specs, calc_year)
         if derivation_warnings:
             print(f"Derivation warnings: {derivation_warnings[:5]}")  # Log first 5
+    _executor_log(trace_id, "data_boxes_ready", t_execute_start, f"multi_year={multi_year_mode} boxes={len(boxes or {})} years={len(year_data or {})}")
 
     # Step 4: Join with geometry
     # Determine geographic level from sources
@@ -1845,13 +1879,16 @@ def execute_order(order: dict) -> dict:
                 geometry_rows.append(country_geom[["loc_id", "name", "geometry"]])
 
         geometry_df = pd.concat(geometry_rows, ignore_index=True) if geometry_rows else None
+    _executor_log(trace_id, "geometry_loaded", t_execute_start, f"level={primary_level} geometry_rows={len(geometry_df) if geometry_df is not None else 0}")
 
     # Step 5: Build GeoJSON features
     # Include ALL locations in geometry (region), with or without data
     features = []
 
     if geometry_df is not None:
+        t_geom_lookup = time.perf_counter()
         geom_lookup = geometry_df.set_index("loc_id")[["name", "geometry"]].to_dict("index")
+        t_after_geom_lookup = _executor_log(trace_id, "geometry_lookup_built", t_geom_lookup, f"entries={len(geom_lookup)}")
 
         if multi_year_mode:
             # Multi-year: build base geometry features (no year-specific data)
@@ -1904,6 +1941,7 @@ def execute_order(order: dict) -> dict:
                     "geometry": geom,
                     "properties": properties
                 })
+        _executor_log(trace_id, "features_built", t_after_geom_lookup, f"features={len(features)} multi_year={multi_year_mode}")
 
     # Build source info for response (include URL and category)
     source_info = [
@@ -1970,4 +2008,5 @@ def execute_order(order: dict) -> dict:
         if data_notes:
             response["data_note"] = " | ".join(data_notes)
 
+    _executor_log(trace_id, "complete", t_execute_start, f"features={len(features)} source={primary_source} response_type={response.get('type')}")
     return response
