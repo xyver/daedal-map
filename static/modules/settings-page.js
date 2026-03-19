@@ -30,6 +30,7 @@ function saveActivePacks(activeSet) {
 }
 
 function buildPacksFromSources(sources) {
+  const siteOrigin = window.location?.origin || '';
   // Published: one card per unique pack_id.
   // Prefer the source whose source_id matches its pack_id as the representative.
   const packMap = new Map();
@@ -57,7 +58,7 @@ function buildPacksFromSources(sources) {
       description: desc,
       category: src.category || 'other',
       source_count: count,
-      pack_page: `${window.__SITE_URL__ || 'https://daedalmap.com'}/packs/${pack_id}`,
+      pack_page: `${siteOrigin}/packs/${pack_id}`,
     };
   });
 

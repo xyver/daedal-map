@@ -275,11 +275,55 @@ async def get_catalog_packs_list(req: Request):
     all_sources = load_catalog().get("sources", [])
     published = [s for s in all_sources if s.get("pack_id")]
 
+    def resolve_pack_temporal(pack_id: str, pack_sources: list[dict], primary: dict) -> dict:
+        starts = []
+        ends = []
+        granularities = []
+
+        for src in pack_sources:
+            tc = src.get("temporal_coverage", {}) or {}
+            start = tc.get("start")
+            end = tc.get("end")
+            granularity = tc.get("granularity")
+            if start not in (None, "", "unknown"):
+                starts.append(start)
+            if end not in (None, "", "unknown"):
+                ends.append(end)
+            if granularity not in (None, "", "unknown"):
+                granularities.append(granularity)
+
+        if starts or ends:
+            return {
+                "start": min(starts) if starts else None,
+                "end": max(ends) if ends else None,
+                "granularity": granularities[0] if granularities else (primary.get("temporal_coverage", {}) or {}).get("granularity"),
+            }
+
+        try:
+            from mapmover.disaster_filters import get_disaster_metadata
+            disaster_meta = get_disaster_metadata(pack_id)
+            if disaster_meta:
+                return {
+                    "start": disaster_meta.get("data_min_year"),
+                    "end": disaster_meta.get("data_max_year"),
+                    "granularity": (primary.get("temporal_coverage", {}) or {}).get("granularity") or "yearly",
+                }
+        except Exception:
+            pass
+
+        return {
+            "start": None,
+            "end": None,
+            "granularity": (primary.get("temporal_coverage", {}) or {}).get("granularity"),
+        }
+
     pack_map = {}
     pack_counts = {}
+    pack_sources_map = {}
     for s in published:
         pid = s["pack_id"]
         pack_counts[pid] = pack_counts.get(pid, 0) + 1
+        pack_sources_map.setdefault(pid, []).append(s)
         if pid not in pack_map or s.get("source_id") == pid:
             pack_map[pid] = s
 
@@ -287,7 +331,7 @@ async def get_catalog_packs_list(req: Request):
     for pid, s in pack_map.items():
         ref = s.get("reference", {})
         ref_src = ref.get("source", {})
-        tc = s.get("temporal_coverage", {})
+        tc = resolve_pack_temporal(pid, pack_sources_map.get(pid, [s]), s)
         packs.append({
             "pack_id":        pid,
             "source_name":    ref_src.get("source_name") or s.get("source_name", ""),
@@ -343,14 +387,48 @@ async def get_catalog_pack(pack_id: str, req: Request):
         for k, v in (s.get("reference", {}).get("metrics", {}) or {}).items():
             all_metrics[k] = v
 
+    subsources = []
+    for s in pack_sources:
+        sref = s.get("reference", {})
+        sref_source = sref.get("source", {})
+        smetrics = sref.get("metrics", {}) or {}
+        stc = s.get("temporal_coverage", {}) or {}
+        subsources.append({
+            "source_id": s.get("source_id"),
+            "source_name": sref_source.get("source_name") or s.get("source_name", ""),
+            "description": sref_source.get("description", "") or s.get("description", ""),
+            "path": s.get("path", ""),
+            "metric_count": len(smetrics),
+            "metrics": smetrics,
+            "temporal_coverage": {
+                "start": stc.get("start"),
+                "end": stc.get("end"),
+                "granularity": stc.get("granularity"),
+            },
+            "coverage_description": s.get("coverage_description", ""),
+            "geographic_level": s.get("geographic_level"),
+            "interaction_mode": s.get("interaction_mode"),
+        })
+
     # Aggregate temporal coverage
-    temporal_starts = [s["temporal_coverage"]["start"] for s in pack_sources if s.get("temporal_coverage", {}).get("start")]
-    temporal_ends   = [s["temporal_coverage"]["end"]   for s in pack_sources if s.get("temporal_coverage", {}).get("end")]
+    temporal_starts = [s["temporal_coverage"]["start"] for s in pack_sources if s.get("temporal_coverage", {}).get("start") not in (None, "", "unknown")]
+    temporal_ends   = [s["temporal_coverage"]["end"]   for s in pack_sources if s.get("temporal_coverage", {}).get("end") not in (None, "", "unknown")]
     temporal = {
         "start": min(temporal_starts) if temporal_starts else None,
         "end":   max(temporal_ends)   if temporal_ends   else None,
         "granularity": primary.get("temporal_coverage", {}).get("granularity"),
     }
+    if temporal["start"] is None and temporal["end"] is None:
+        try:
+            from mapmover.disaster_filters import get_disaster_metadata
+            disaster_meta = get_disaster_metadata(pack_id)
+            if disaster_meta:
+                temporal["start"] = disaster_meta.get("data_min_year")
+                temporal["end"] = disaster_meta.get("data_max_year")
+                if not temporal.get("granularity") or temporal["granularity"] == "unknown":
+                    temporal["granularity"] = "yearly"
+        except Exception:
+            pass
 
     pack = {
         "pack_id":            pack_id,
@@ -370,6 +448,7 @@ async def get_catalog_pack(pack_id: str, req: Request):
         "llm_summary":        primary.get("llm_summary", ""),
         "source_count":       len(pack_sources),
         "source_ids":         [s["source_id"] for s in pack_sources],
+        "subsources":         subsources,
     }
 
     fmt = req.query_params.get("format", "")
