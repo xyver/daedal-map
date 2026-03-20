@@ -4,7 +4,7 @@ from fastapi import APIRouter
 
 from mapmover.disaster_filters import apply_location_filters, get_default_min_year
 from mapmover.duckdb_helpers import (
-    duckdb_available, make_cache_key, parquet_available,
+    duckdb_available, is_default_preload_range, make_cache_key, make_preload_cache_key, parquet_available,
     select_filtered_event_rows, select_filtered_event_rows_cached, select_rows_by_exact_value,
 )
 from mapmover.logging_analytics import logger
@@ -57,6 +57,16 @@ async def get_tornadoes_geojson(
                     events_path,
                     cache_key=make_cache_key("tornadoes", year=year),
                     year=year,
+                )
+            elif (
+                start is not None and end is not None and loc_prefix is None
+                and affected_loc_id is None and is_default_preload_range(start, end)
+            ):
+                df = select_filtered_event_rows_cached(
+                    events_path,
+                    cache_key=make_preload_cache_key("tornadoes"),
+                    start=start,
+                    end=end,
                 )
             else:
                 min_filters = {"year": min_year} if year is None and (start is None and end is None) and min_year is not None else None

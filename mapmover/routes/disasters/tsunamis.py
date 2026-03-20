@@ -5,7 +5,9 @@ from fastapi import APIRouter
 from mapmover.disaster_filters import apply_location_filters, get_default_min_year
 from mapmover.duckdb_helpers import (
     duckdb_available,
+    is_default_preload_range,
     make_cache_key,
+    make_preload_cache_key,
     parquet_available,
     select_filtered_event_rows,
     select_filtered_event_rows_cached,
@@ -85,7 +87,15 @@ async def get_tsunamis_geojson(
                     year=year,
                 )
             elif start is not None or end is not None:
-                df = select_filtered_event_rows(events_path, start=start, end=end)
+                if loc_prefix is None and affected_loc_id is None and cause is None and is_default_preload_range(start, end):
+                    df = select_filtered_event_rows_cached(
+                        events_path,
+                        cache_key=make_preload_cache_key("tsunamis"),
+                        start=start,
+                        end=end,
+                    )
+                else:
+                    df = select_filtered_event_rows(events_path, start=start, end=end)
             else:
                 min_filters = {"year": min_year} if min_year is not None else None
                 df = select_filtered_event_rows_cached(

@@ -9,7 +9,9 @@ from mapmover.duckdb_helpers import (
     cache_get,
     cache_set,
     duckdb_available,
+    is_default_preload_range,
     make_cache_key,
+    make_preload_cache_key,
     parquet_available,
     path_to_uri,
     run_df,
@@ -149,6 +151,19 @@ async def get_earthquakes_geojson(
                 )
                 if not df.empty:
                     cache_set(ck, df)
+        elif (
+            start is not None and end is not None and limit is None
+            and loc_prefix is None and affected_loc_id is None
+            and is_default_preload_range(start, end)
+        ):
+            ck = make_preload_cache_key("earthquakes", min_magnitude=min_magnitude)
+            df = select_filtered_event_rows_cached(
+                events_path,
+                cache_key=ck,
+                start=start,
+                end=end,
+                min_value_filters={"magnitude": min_magnitude} if min_magnitude is not None else None,
+            )
         else:
             df = _load_earthquakes_duckdb(
                 year=year,

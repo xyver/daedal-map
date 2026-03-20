@@ -3,7 +3,7 @@
 from fastapi import APIRouter
 
 from mapmover.disaster_filters import apply_location_filters, get_default_min_year
-from mapmover.duckdb_helpers import cache_get, cache_set, duckdb_available, make_cache_key, parquet_available, select_filtered_event_rows, select_rows_by_exact_value
+from mapmover.duckdb_helpers import cache_get, cache_set, duckdb_available, is_default_preload_range, make_cache_key, make_preload_cache_key, parquet_available, select_filtered_event_rows, select_rows_by_exact_value
 from mapmover.logging_analytics import logger
 from mapmover.paths import GLOBAL_DIR
 
@@ -274,7 +274,24 @@ async def get_storm_tracks_geojson(
             return msgpack_error("Storm data not available", 404)
 
         use_duckdb = duckdb_available()
-        if use_duckdb:
+        preload_ck = None
+        if (
+            year is None and start is not None and end is not None and basin is None
+            and min_category is not None and is_default_preload_range(start, end)
+        ):
+            preload_ck = make_preload_cache_key("hurricanes_tracks", min_category=min_category)
+            cached_joined = cache_get(preload_ck)
+            if cached_joined is not None:
+                positions_subset = cached_joined.copy()
+                storms_df = None
+                use_duckdb = False
+            else:
+                positions_subset = None
+                storms_df = None
+        else:
+            positions_subset = None
+            storms_df = None
+        if positions_subset is None and use_duckdb:
             storms_df = select_filtered_event_rows(
                 storms_path,
                 year=year,
@@ -288,7 +305,7 @@ async def get_storm_tracks_geojson(
                 storms_df["cat_val"] = storms_df["max_category"].map(lambda x: CAT_ORDER.get(x, 0))
                 storms_df = storms_df[storms_df["cat_val"] >= min_cat_val]
                 storms_df = storms_df.drop(columns=["cat_val"])
-        else:
+        elif positions_subset is None:
             storms_df = pd.read_parquet(storms_path)
             storms_df = _apply_storm_filters_pandas(
                 storms_df,
@@ -300,17 +317,44 @@ async def get_storm_tracks_geojson(
                 min_category=min_category,
             )
 
-        storms_df = storms_df.set_index("storm_id")
-        storm_ids_set = set(storms_df.index.tolist())
+        if positions_subset is None:
+            storms_df = storms_df.set_index("storm_id")
+            storm_ids_set = set(storms_df.index.tolist())
 
-        if use_duckdb:
-            positions_subset = select_filtered_event_rows(
-                positions_path,
-                in_filters={"storm_id": sorted(storm_ids_set)},
-            )
-        else:
-            positions_df = pd.read_parquet(positions_path)
-            positions_subset = positions_df[positions_df["storm_id"].isin(storm_ids_set)].copy()
+            if use_duckdb:
+                positions_subset = select_filtered_event_rows(
+                    positions_path,
+                    in_filters={"storm_id": sorted(storm_ids_set)},
+                )
+            else:
+                positions_df = pd.read_parquet(positions_path)
+                positions_subset = positions_df[positions_df["storm_id"].isin(storm_ids_set)].copy()
+            positions_subset = positions_subset.dropna(subset=["latitude", "longitude"])
+            positions_subset = positions_subset.sort_values(["storm_id", "timestamp"])
+            if preload_ck is not None and not positions_subset.empty:
+                joined = positions_subset.merge(
+                    storms_df.reset_index()[
+                        [
+                            "storm_id",
+                            "name",
+                            "year",
+                            "basin",
+                            "max_wind_kt",
+                            "min_pressure_mb",
+                            "max_category",
+                            "num_positions",
+                            "start_date",
+                            "end_date",
+                            "made_landfall",
+                        ]
+                    ],
+                    on="storm_id",
+                    how="inner",
+                )
+                if not joined.empty:
+                    cache_set(preload_ck, joined)
+                    positions_subset = joined
+
         positions_subset = positions_subset.dropna(subset=["latitude", "longitude"])
         positions_subset = positions_subset.sort_values(["storm_id", "timestamp"])
 
@@ -322,7 +366,7 @@ async def get_storm_tracks_geojson(
 
         features = []
         for storm_id, coords in coords_by_storm.items():
-            storm = storms_df.loc[storm_id]
+            storm = positions_subset[positions_subset["storm_id"] == storm_id].iloc[0] if storms_df is None else storms_df.loc[storm_id]
             features.append(
                 {
                     "type": "Feature",

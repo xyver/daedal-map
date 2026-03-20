@@ -3,7 +3,7 @@
 from fastapi import APIRouter
 
 from mapmover.disaster_filters import apply_location_filters, get_default_min_year
-from mapmover.duckdb_helpers import cache_get, cache_set, duckdb_available, is_s3_mode, make_cache_key, parquet_available, path_to_uri, select_filtered_partitioned_rows, select_rows
+from mapmover.duckdb_helpers import cache_get, cache_set, duckdb_available, is_default_preload_range, is_s3_mode, make_cache_key, make_preload_cache_key, parquet_available, path_to_uri, select_filtered_partitioned_rows, select_rows
 from mapmover.logging_analytics import logger
 from mapmover.paths import COUNTRIES_DIR, GLOBAL_DIR
 
@@ -101,6 +101,12 @@ async def get_wildfires_geojson(
         and not include_perimeter
     )
     _cache_key = make_cache_key("wildfires", year=year, min_area_km2=min_area_km2) if _simple_cache else None
+    if (
+        _cache_key is None
+        and start is not None and end is not None and loc_prefix is None and affected_loc_id is None
+        and is_default_preload_range(start, end)
+    ):
+        _cache_key = make_preload_cache_key("wildfires", min_area_km2=min_area_km2, include_perimeter=include_perimeter)
 
     try:
         if _cache_key is not None:

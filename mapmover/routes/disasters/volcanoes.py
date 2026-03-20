@@ -6,6 +6,7 @@ import pandas as pd
 from mapmover.disaster_filters import apply_location_filters
 from mapmover.duckdb_helpers import (
     duckdb_available, make_cache_key, parquet_available,
+    is_default_preload_range, make_preload_cache_key,
     select_filtered_event_rows, select_filtered_event_rows_cached, select_rows,
 )
 from mapmover.logging_analytics import logger
@@ -105,6 +106,16 @@ async def get_eruptions_geojson(
                 eruptions_path,
                 cache_key=make_cache_key("volcanoes", year=year),
                 year=year,
+            )
+        elif (
+            start is not None and end is not None and min_vei is None and loc_prefix is None
+            and affected_loc_id is None and is_default_preload_range(start, end)
+        ):
+            df = select_filtered_event_rows_cached(
+                eruptions_path,
+                cache_key=make_preload_cache_key("volcanoes", exclude_ongoing=exclude_ongoing),
+                start=start,
+                end=end,
             )
         else:
             df = select_filtered_event_rows(

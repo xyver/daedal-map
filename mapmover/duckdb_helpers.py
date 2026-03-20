@@ -12,6 +12,7 @@ import json
 import os
 import threading
 import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Iterable, Optional
 
@@ -579,6 +580,11 @@ _CACHE: dict[str, tuple[pd.DataFrame, float]] = {}  # key -> (df, expires_at)
 
 DEFAULT_CACHE_TTL = int(os.environ.get("DUCKDB_CACHE_TTL", "300"))  # seconds
 
+_PRELOAD_2020_START = datetime(2019, 12, 31, 0, 0, 0, tzinfo=timezone.utc)
+_PRELOAD_2020_END = datetime(2020, 1, 2, 23, 59, 59, tzinfo=timezone.utc)
+_PRELOAD_2025_START = datetime(2025, 12, 30, 0, 0, 0, tzinfo=timezone.utc)
+_PRELOAD_2025_END = datetime(2026, 1, 2, 23, 59, 59, tzinfo=timezone.utc)
+
 
 def cache_get(key: str) -> pd.DataFrame | None:
     """Return cached DataFrame if still valid, else None.
@@ -637,6 +643,39 @@ def make_cache_key(source: str, **params) -> str:
     relevant = {k: v for k, v in params.items() if v is not None and v is not False}
     parts = [source] + [f"{k}:{v}" for k, v in sorted(relevant.items())]
     return ":".join(parts)
+
+
+def _parse_cache_range_ts(value: str | None) -> datetime | None:
+    if value is None:
+        return None
+    try:
+        s = str(value).strip()
+        if s.lstrip("-").isdigit():
+            return datetime.fromtimestamp(int(s) / 1000.0, tz=timezone.utc)
+        dt = pd.to_datetime(s, utc=True)
+        if pd.isna(dt):
+            return None
+        return dt.to_pydatetime()
+    except Exception:
+        return None
+
+
+def is_default_preload_range(start: str | None, end: str | None) -> bool:
+    """Return True for the frontend's default preload-disasters-2020-2025 window.
+
+    Allows a little slack around midnight boundaries so browser timezone
+    differences still map to the same warm cache bucket.
+    """
+    start_dt = _parse_cache_range_ts(start)
+    end_dt = _parse_cache_range_ts(end)
+    if start_dt is None or end_dt is None:
+        return False
+    return _PRELOAD_2020_START <= start_dt <= _PRELOAD_2020_END and _PRELOAD_2025_START <= end_dt <= _PRELOAD_2025_END
+
+
+def make_preload_cache_key(source: str, **params) -> str:
+    """Canonical cache key for the frontend's 2020-2025 preload workflow."""
+    return make_cache_key(source, preset="preload_2020_2025", **params)
 
 
 def select_filtered_event_rows_cached(
@@ -708,6 +747,8 @@ def prewarm_disaster_sources(global_dir: Path) -> None:
 
     # Animation years the user typically plays through.
     animation_years = list(range(2020, 2026))
+    preload_start = "2020-01-01 00:00:00"
+    preload_end = "2025-12-31 23:59:59"
 
     # --- earthquakes (min_magnitude 5.5 from overlay-controller.js) ----------
     eq_path = global_dir / "disasters/earthquakes/events.parquet"
@@ -722,6 +763,16 @@ def prewarm_disaster_sources(global_dir: Path) -> None:
                 log.info("prewarm earthquakes year=%d: %d rows in %.1fs", yr, len(df), time.monotonic() - t0)
             except Exception as exc:
                 log.warning("prewarm earthquakes year=%d failed: %s", yr, exc)
+    preload_ck = make_preload_cache_key("earthquakes", min_magnitude=5.5)
+    if cache_get(preload_ck) is None:
+        try:
+            t0 = time.monotonic()
+            df = select_filtered_event_rows(eq_path, start=preload_start, end=preload_end, min_value_filters={"magnitude": 5.5})
+            if not df.empty:
+                cache_set(preload_ck, df, permanent=True)
+            log.info("prewarm earthquakes preload-range: %d rows in %.1fs", len(df), time.monotonic() - t0)
+        except Exception as exc:
+            log.warning("prewarm earthquakes preload-range failed: %s", exc)
 
     # --- tsunamis (no extra filters) -----------------------------------------
     ts_path = global_dir / "disasters/tsunamis/events.parquet"
@@ -736,6 +787,16 @@ def prewarm_disaster_sources(global_dir: Path) -> None:
                 log.info("prewarm tsunamis year=%d: %d rows in %.1fs", yr, len(df), time.monotonic() - t0)
             except Exception as exc:
                 log.warning("prewarm tsunamis year=%d failed: %s", yr, exc)
+    preload_ck = make_preload_cache_key("tsunamis")
+    if cache_get(preload_ck) is None:
+        try:
+            t0 = time.monotonic()
+            df = select_filtered_event_rows(ts_path, start=preload_start, end=preload_end)
+            if not df.empty:
+                cache_set(preload_ck, df, permanent=True)
+            log.info("prewarm tsunamis preload-range: %d rows in %.1fs", len(df), time.monotonic() - t0)
+        except Exception as exc:
+            log.warning("prewarm tsunamis preload-range failed: %s", exc)
 
     # --- floods (max year is 2019, no animation years qualify) ----------------
     fl_path = global_dir / "disasters/floods/events_enriched.parquet"
@@ -766,6 +827,18 @@ def prewarm_disaster_sources(global_dir: Path) -> None:
                 log.info("prewarm volcanoes year=%d: %d rows in %.1fs", yr, len(df), time.monotonic() - t0)
             except Exception as exc:
                 log.warning("prewarm volcanoes year=%d failed: %s", yr, exc)
+    preload_ck = make_preload_cache_key("volcanoes", exclude_ongoing=True)
+    if cache_get(preload_ck) is None:
+        try:
+            t0 = time.monotonic()
+            df = select_filtered_event_rows(vol_path, start=preload_start, end=preload_end)
+            if not df.empty and "is_ongoing" in df.columns:
+                df = df[df["is_ongoing"] != True]
+            if not df.empty:
+                cache_set(preload_ck, df, permanent=True)
+            log.info("prewarm volcanoes preload-range: %d rows in %.1fs", len(df), time.monotonic() - t0)
+        except Exception as exc:
+            log.warning("prewarm volcanoes preload-range failed: %s", exc)
 
     # --- tornadoes (min_scale=EF2 is a post-fetch filter; cache raw year slice)
     tor_path = global_dir / "disasters/tornadoes/events.parquet"
@@ -780,6 +853,16 @@ def prewarm_disaster_sources(global_dir: Path) -> None:
                 log.info("prewarm tornadoes year=%d: %d rows in %.1fs", yr, len(df), time.monotonic() - t0)
             except Exception as exc:
                 log.warning("prewarm tornadoes year=%d failed: %s", yr, exc)
+    preload_ck = make_preload_cache_key("tornadoes")
+    if cache_get(preload_ck) is None:
+        try:
+            t0 = time.monotonic()
+            df = select_filtered_event_rows(tor_path, start=preload_start, end=preload_end)
+            if not df.empty:
+                cache_set(preload_ck, df, permanent=True)
+            log.info("prewarm tornadoes preload-range: %d rows in %.1fs", len(df), time.monotonic() - t0)
+        except Exception as exc:
+            log.warning("prewarm tornadoes preload-range failed: %s", exc)
 
     # --- hurricanes (storms.parquet + positions.parquet; route assembles join)
     # Warm DuckDB metadata cache for both files; route handler caches the join.
@@ -808,6 +891,43 @@ def prewarm_disaster_sources(global_dir: Path) -> None:
                 log.info("prewarm hurricanes year=%d: %d storms in %.1fs", yr, len(storms_df), time.monotonic() - t0)
             except Exception as exc:
                 log.warning("prewarm hurricanes year=%d failed: %s", yr, exc)
+    preload_ck = make_preload_cache_key("hurricanes_tracks", min_category="Cat1")
+    if cache_get(preload_ck) is None:
+        try:
+            t0 = time.monotonic()
+            storms_df = select_filtered_event_rows(hur_storms_path, start=preload_start, end=preload_end)
+            if not storms_df.empty:
+                cat_order = {"TD": 0, "TS": 1, "Cat1": 2, "Cat2": 3, "Cat3": 4, "Cat4": 5, "Cat5": 6}
+                storms_df = storms_df[storms_df["max_category"].map(lambda x: cat_order.get(x, 0) >= 2)]
+                if not storms_df.empty:
+                    storm_ids = storms_df["storm_id"].tolist()
+                    pos_df = select_filtered_event_rows(hur_positions_path, in_filters={"storm_id": storm_ids})
+                    pos_df = pos_df.dropna(subset=["latitude", "longitude"])
+                    if not pos_df.empty:
+                        joined = pos_df.merge(
+                            storms_df[
+                                [
+                                    "storm_id",
+                                    "name",
+                                    "year",
+                                    "basin",
+                                    "max_wind_kt",
+                                    "min_pressure_mb",
+                                    "max_category",
+                                    "num_positions",
+                                    "start_date",
+                                    "end_date",
+                                    "made_landfall",
+                                ]
+                            ],
+                            on="storm_id",
+                            how="inner",
+                        )
+                        if not joined.empty:
+                            cache_set(preload_ck, joined, permanent=True)
+            log.info("prewarm hurricanes preload-range: %d joined rows in %.1fs", len(joined) if 'joined' in locals() else 0, time.monotonic() - t0)
+        except Exception as exc:
+            log.warning("prewarm hurricanes preload-range failed: %s", exc)
 
     # --- wildfires (per-year global files 2020-2024; route caches assembled df)
     # Warm DuckDB metadata cache for the per-year parquet files.
@@ -833,5 +953,29 @@ def prewarm_disaster_sources(global_dir: Path) -> None:
                 log.info("prewarm wildfires year=%d: %d rows in %.1fs", yr, len(df), time.monotonic() - t0)
             except Exception as exc:
                 log.warning("prewarm wildfires year=%d failed: %s", yr, exc)
+    preload_ck = make_preload_cache_key("wildfires", min_area_km2=500, include_perimeter=True)
+    if cache_get(preload_ck) is None:
+        try:
+            t0 = time.monotonic()
+            year_files = [wf_base / f"fires_{yr}_enriched.parquet" for yr in range(2020, 2025)]
+            df = select_filtered_partitioned_rows(
+                year_files,
+                min_value_filters={"area_km2": 500},
+            )
+            if not df.empty:
+                import pandas as _pd
+                df["timestamp"] = _pd.to_datetime(df["timestamp"], errors="coerce")
+                df = df[(df["timestamp"] >= _pd.to_datetime(preload_start)) & (df["timestamp"] <= _pd.to_datetime(preload_end))]
+                if "land_cover" not in df.columns:
+                    df["land_cover"] = ""
+                if "source" not in df.columns:
+                    df["source"] = "global_fire_atlas"
+                if "iso3" in df.columns:
+                    df = df[~df["iso3"].isin(["USA", "CAN"])]
+                if not df.empty:
+                    cache_set(preload_ck, df, permanent=True)
+            log.info("prewarm wildfires preload-range: %d rows in %.1fs", len(df), time.monotonic() - t0)
+        except Exception as exc:
+            log.warning("prewarm wildfires preload-range failed: %s", exc)
 
     log.info("Pre-warmer complete")
