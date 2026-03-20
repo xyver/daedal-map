@@ -121,6 +121,109 @@ def _load_catalog() -> dict:
     return _catalog_cache
 
 
+def _aggregate_metric_frame(df: pd.DataFrame, group_cols: list[str]) -> pd.DataFrame:
+    """Aggregate a disaster metric frame to a coarser spatial level."""
+    agg_map = {}
+    for col in df.columns:
+        if col in group_cols or col == "source":
+            continue
+        if col.startswith("max_"):
+            agg_map[col] = "max"
+        elif col.startswith("avg_"):
+            agg_map[col] = "mean"
+        elif col in {"event_count", "deaths", "injuries", "damage_usd", "damage_millions"}:
+            agg_map[col] = "sum"
+        elif col.startswith("total_"):
+            agg_map[col] = "sum"
+        elif col in {"years_observed"}:
+            agg_map[col] = "max"
+        elif col in {"window_start_year", "window_years"}:
+            agg_map[col] = "first"
+        else:
+            if pd.api.types.is_numeric_dtype(df[col]):
+                agg_map[col] = "sum"
+
+    if not agg_map:
+        return df[group_cols].drop_duplicates().reset_index(drop=True)
+
+    out = df.groupby(group_cols, as_index=False).agg(agg_map)
+    if "source" in df.columns:
+        out["source"] = df["source"].iloc[0]
+    return out
+
+
+def _load_disaster_aggregate_data(source_id: str, item: dict) -> tuple[Optional[pd.DataFrame], Optional[dict]]:
+    """Load disaster aggregate parquet for event sources when query intent is choropleth/aggregate."""
+    source_dir = _get_source_path(source_id)
+    agg_dir = source_dir / "aggregates" / "admin2"
+    use_rolling = bool(item.get("aggregate_use_rolling"))
+    requested_window = item.get("aggregate_window_years")
+
+    candidates = []
+    if use_rolling and requested_window:
+        candidates.append(agg_dir / f"rolling_{int(requested_window)}y.parquet")
+    if use_rolling:
+        candidates.extend([agg_dir / "rolling_20y.parquet", agg_dir / "rolling_10y.parquet"])
+    candidates.append(agg_dir / "yearly.parquet")
+
+    parquet_path = None
+    df = None
+    last_error = None
+    for candidate in candidates:
+        if parquet_path is not None:
+            break
+        if not is_s3_mode() and not candidate.exists():
+            continue
+        try:
+            maybe_df = select_rows(candidate)
+            if maybe_df.empty and candidate.exists():
+                maybe_df = pd.read_parquet(candidate)
+            parquet_path = candidate
+            df = maybe_df
+        except Exception as exc:
+            last_error = exc
+            continue
+
+    if parquet_path is None or df is None:
+        if last_error:
+            logger.warning(f"[aggregate] failed to load aggregate parquet for {source_id}: {last_error}")
+        return None, None
+
+    metadata = load_source_metadata(source_id) or {}
+    metadata = dict(metadata)
+    metadata["geographic_level"] = item.get("aggregate_rollup_level") or "admin_2"
+    metadata["aggregate_parquet"] = str(parquet_path)
+
+    if "window_end_year" in df.columns and "year" not in df.columns:
+        df = df.rename(columns={"window_end_year": "year"})
+
+    # If using rolling windows without an explicit year filter, default to latest window per loc_id.
+    year, year_start, year_end = _normalize_year_filters(item)
+    if "year" in df.columns and use_rolling and year is None and year_start is None and year_end is None:
+        df = df.sort_values(["loc_id", "year"]).groupby("loc_id", as_index=False).tail(1)
+
+    # Historical rollups over all years.
+    if item.get("aggregate_all_years") and "year" in df.columns:
+        group_cols = ["loc_id"]
+        df = _aggregate_metric_frame(df, group_cols)
+
+    # Roll admin2 aggregates up to admin0 when explicitly requested.
+    if item.get("aggregate_rollup_level") == "admin_0" and "loc_id" in df.columns:
+        df = df.copy()
+        df["loc_id"] = df["loc_id"].astype(str).str.split("-").str[0]
+        group_cols = ["loc_id"]
+        if "year" in df.columns:
+            group_cols.append("year")
+        df = _aggregate_metric_frame(df, group_cols)
+        metadata["geographic_level"] = "admin_0"
+
+    logger.info(
+        f"[aggregate] load {source_id}: path={path_to_uri(parquet_path) if is_s3_mode() else parquet_path} "
+        f"rows={len(df)} level={metadata.get('geographic_level')}"
+    )
+    return df, metadata
+
+
 def _get_source_data_type(source_id: str) -> str:
     """
     Get data_type for a source from catalog.
@@ -756,6 +859,13 @@ def find_metric_column(df: pd.DataFrame, metric: str) -> Optional[str]:
     metric_words = set(metric_lower.split())
 
     alias_candidates = {
+        "event count": ["event_count"],
+        "frequency": ["event_count"],
+        "tornado count": ["event_count", "tornado_count"],
+        "earthquake count": ["event_count"],
+        "hurricane count": ["event_count"],
+        "wildfire count": ["event_count"],
+        "tsunami count": ["event_count"],
         "railways length": [
             "railways_km", "railway_km", "railways_length_km", "railways_length", "railways"
         ],
@@ -777,6 +887,13 @@ def find_metric_column(df: pd.DataFrame, metric: str) -> Optional[str]:
         "coastline": ["coastline_km"],
     }
     alias_term_bundles = {
+        "event count": [{"event", "count"}],
+        "frequency": [{"event", "count"}],
+        "tornado count": [{"event", "count"}, {"tornado", "count"}],
+        "earthquake count": [{"event", "count"}, {"earthquake", "count"}],
+        "hurricane count": [{"event", "count"}, {"hurricane", "count"}],
+        "wildfire count": [{"event", "count"}, {"wildfire", "count"}],
+        "tsunami count": [{"event", "count"}, {"tsunami", "count"}],
         "railways length": [{"railways"}, {"railway"}, {"railways", "km"}],
         "railway length": [{"railways"}, {"railway"}, {"railway", "km"}],
         "life expectancy": [{"life", "expectancy"}],
@@ -1683,6 +1800,8 @@ def execute_order(order: dict) -> dict:
 
     # Check if this is an events order (explicit mode or data_type from catalog)
     def is_event_item(item):
+        if item.get("mode") == "aggregate":
+            return False
         if item.get("mode") == "events":
             return True
         source_id = item.get("source_id")
@@ -1723,7 +1842,12 @@ def execute_order(order: dict) -> dict:
         source_id = item.get("source_id")
         if source_id and source_id not in sources_used:
             try:
-                _, metadata = load_source_data(source_id)
+                if item.get("mode") == "aggregate":
+                    aggregate_df, metadata = _load_disaster_aggregate_data(source_id, item)
+                    if aggregate_df is None:
+                        _, metadata = load_source_data(source_id)
+                else:
+                    _, metadata = load_source_data(source_id)
                 sources_used[source_id] = metadata
                 geo_levels.add(metadata.get("geographic_level", "country"))
             except Exception:
@@ -1762,7 +1886,12 @@ def execute_order(order: dict) -> dict:
 
         t_item_start = time.perf_counter()
         try:
-            df, metadata = load_source_data(source_id)
+            if item.get("mode") == "aggregate":
+                df, metadata = _load_disaster_aggregate_data(source_id, item)
+                if df is None or metadata is None:
+                    df, metadata = load_source_data(source_id)
+            else:
+                df, metadata = load_source_data(source_id)
         except Exception as e:
             logger.error(f"Error loading {source_id}: {e}", exc_info=True)
             continue
@@ -2030,6 +2159,8 @@ def execute_order(order: dict) -> dict:
     # This tells frontend whether to render as geometry overlay or choropleth
     response_data_type = "geometry" if primary_level in SPECIAL_GEOMETRY_LEVELS else "metrics"
 
+    data_feature_count = len(year_data or {}) if multi_year_mode else len(boxes or {})
+
     response = {
         "type": "data",
         "data_type": response_data_type,
@@ -2040,7 +2171,7 @@ def execute_order(order: dict) -> dict:
             "features": features
         },
         "summary": summary or f"Showing {len(features)} locations",
-        "count": len(features),
+        "count": data_feature_count,
         "sources": source_info,
         "metric_sources": metric_source_map,
         "aggregation_trace": aggregation_trace,

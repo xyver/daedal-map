@@ -872,7 +872,7 @@ export const ChatManager = {
     switch (response.type) {
       case 'order':
         this.addMessage('Added to your order. Click "Display on Map" when ready.', 'assistant');
-        orderPanel.setOrder(response.order, response.summary);
+        orderPanel.setOrder(response.order, response.summary, response.full_order || response.order);
         break;
 
       case 'already_loaded':

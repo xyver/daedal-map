@@ -463,7 +463,16 @@ def detect_event_mode(items: list, hints: dict = None) -> list:
         "how many", "how much", "count", "total", "number of",
         "statistics", "stats", "average", "sum",
         "per year", "annually", "yearly", "over time",
-        "trend", "compare"
+        "trend", "compare", "frequency", "exposure",
+        "per capita", "historically", "highest", "most",
+        "last 10 years", "last 20 years", "last 30 years",
+        "past 10 years", "past 20 years", "past 30 years",
+        "rolling", "between the 1990s", "between the 2010s"
+    ]
+
+    geography_aggregate_terms = [
+        "counties", "county", "countries", "country",
+        "regions", "region", "areas"
     ]
 
     # Determine intent from query
@@ -476,8 +485,15 @@ def detect_event_mode(items: list, hints: dict = None) -> list:
         event_nouns = ["earthquake", "quake", "volcano", "eruption", "wildfire",
                       "fire", "hurricane", "cyclone", "storm", "tsunami", "tornado"]
         has_event_noun = any(noun in query for noun in event_nouns)
-        # Default: if disaster noun present without aggregate words, show events
-        wants_events = has_event_noun
+        has_geo_agg = any(term in query for term in geography_aggregate_terms)
+        # If user is asking for regions/counties/countries plus a disaster noun,
+        # prefer aggregate choropleth behavior over raw event display.
+        if has_event_noun and has_geo_agg:
+            wants_aggregate = True
+            wants_events = False
+        else:
+            # Default: if disaster noun present without aggregate words, show events
+            wants_events = has_event_noun
 
     updated_items = []
 
@@ -501,6 +517,39 @@ def detect_event_mode(items: list, hints: dict = None) -> list:
                 # Remove metric if it's just a placeholder
                 if metric in ("*", "all", "all_metrics", ""):
                     item.pop("metric", None)
+        elif event_file_key and wants_aggregate:
+            item["mode"] = "aggregate"
+            item.pop("event_file", None)
+
+            metric = item.get("metric", "")
+            metric_lower = str(metric).lower() if metric is not None else ""
+
+            # Default aggregate metric for broad hazard-frequency requests.
+            if metric_lower in ("", "*", "all", "all_metrics"):
+                item["metric"] = "event_count"
+            elif metric_lower in {"tornado_count", "earthquake_count", "hurricane_count", "wildfire_count", "tsunami_count", "volcano_count", "flood_count"}:
+                item["metric"] = "event_count"
+            elif "frequency" in query and metric_lower not in {"event_count", "deaths", "injuries"}:
+                item["metric"] = "event_count"
+
+            # Annotate rolling-window intent so executor can choose aggregate files directly.
+            if item.get("aggregate_use_rolling") is None and ("rolling" in query or "last 10 years" in query or "past 10 years" in query):
+                item["aggregate_use_rolling"] = True
+                item["aggregate_window_years"] = 10
+            elif item.get("aggregate_use_rolling") is None and ("last 20 years" in query or "past 20 years" in query):
+                item["aggregate_use_rolling"] = True
+                item["aggregate_window_years"] = 20
+
+            # Trend/history queries often want accumulated historical aggregate output
+            # rather than raw yearly/event display.
+            if "historically" in query:
+                item["aggregate_all_years"] = True
+
+            # Country-level wording should roll admin2 aggregates up to admin0.
+            if "countries" in query or "country" in query:
+                item["aggregate_rollup_level"] = "admin_0"
+            elif "counties" in query or "county" in query:
+                item["aggregate_rollup_level"] = "admin_2"
 
         updated_items.append(item)
 

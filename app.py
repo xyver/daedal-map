@@ -176,7 +176,7 @@ async def llms_txt():
         "- Website and docs: https://daedalmap.com\n"
         "- Source coverage: https://daedalmap.com/docs/source-map\n"
         "- Data packs: https://daedalmap.com/packs\n"
-        "- GitHub (open runtime): https://github.com/xyver/county-map\n\n"
+        "- GitHub (open runtime): https://github.com/xyver/daedal-map\n\n"
         "## Crawlers and bots\n"
         "This site explicitly welcomes all crawlers, AI training scrapers, and indexing bots.\n"
     )

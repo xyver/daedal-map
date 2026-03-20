@@ -191,59 +191,65 @@ async def get_wildfires_geojson(
 
         if loc_prefix is None or loc_prefix.startswith("USA"):
             if parquet_available(usa_fires_path):
-                usa_df = select_rows(usa_fires_path)
-                if usa_df.empty:
-                    usa_df = pd.read_parquet(usa_fires_path)
-                usa_df["timestamp"] = pd.to_datetime(usa_df["timestamp"], errors="coerce")
-                usa_df["year"] = usa_df["timestamp"].dt.year
-                if year is not None:
-                    usa_df = usa_df[usa_df["year"] == year]
-                elif years_to_load:
-                    usa_df = usa_df[usa_df["year"].isin(years_to_load)]
+                try:
+                    usa_df = select_rows(usa_fires_path)
+                    if usa_df.empty:
+                        usa_df = pd.read_parquet(usa_fires_path)
+                    usa_df["timestamp"] = pd.to_datetime(usa_df["timestamp"], errors="coerce")
+                    usa_df["year"] = usa_df["timestamp"].dt.year
+                    if year is not None:
+                        usa_df = usa_df[usa_df["year"] == year]
+                    elif years_to_load:
+                        usa_df = usa_df[usa_df["year"].isin(years_to_load)]
 
-                if min_area_km2 is not None and "area_km2" in usa_df.columns:
-                    usa_df = usa_df[usa_df["area_km2"] >= min_area_km2]
-                elif min_area_km2 is not None and "burned_acres" in usa_df.columns:
-                    usa_df = usa_df[usa_df["burned_acres"] * 0.00404686 >= min_area_km2]
+                    if min_area_km2 is not None and "area_km2" in usa_df.columns:
+                        usa_df = usa_df[usa_df["area_km2"] >= min_area_km2]
+                    elif min_area_km2 is not None and "burned_acres" in usa_df.columns:
+                        usa_df = usa_df[usa_df["burned_acres"] * 0.00404686 >= min_area_km2]
 
-                if "land_cover" not in usa_df.columns:
-                    usa_df["land_cover"] = ""
-                if "area_km2" not in usa_df.columns and "burned_acres" in usa_df.columns:
-                    usa_df["area_km2"] = usa_df["burned_acres"] * 0.00404686
-                if "duration_days" not in usa_df.columns:
-                    usa_df["duration_days"] = None
-                if "source" not in usa_df.columns:
-                    usa_df["source"] = "NIFC"
-                if "has_progression" not in usa_df.columns:
-                    usa_df["has_progression"] = False
+                    if "land_cover" not in usa_df.columns:
+                        usa_df["land_cover"] = ""
+                    if "area_km2" not in usa_df.columns and "burned_acres" in usa_df.columns:
+                        usa_df["area_km2"] = usa_df["burned_acres"] * 0.00404686
+                    if "duration_days" not in usa_df.columns:
+                        usa_df["duration_days"] = None
+                    if "source" not in usa_df.columns:
+                        usa_df["source"] = "NIFC"
+                    if "has_progression" not in usa_df.columns:
+                        usa_df["has_progression"] = False
 
-                if len(usa_df) > 0:
-                    all_dfs.append(usa_df)
-                    source_used.append("USA")
+                    if len(usa_df) > 0:
+                        all_dfs.append(usa_df)
+                        source_used.append("USA")
+                except Exception as exc:
+                    logger.warning("Wildfires USA source unavailable for overlay request: %s", exc)
 
         if loc_prefix is None or loc_prefix.startswith("CAN"):
             if parquet_available(can_fires_path):
-                can_df = select_rows(can_fires_path)
-                if can_df.empty:
-                    can_df = pd.read_parquet(can_fires_path)
-                can_df["timestamp"] = pd.to_datetime(can_df["timestamp"], errors="coerce")
-                can_df["year"] = can_df["timestamp"].dt.year
-                if year is not None:
-                    can_df = can_df[can_df["year"] == year]
-                elif years_to_load:
-                    can_df = can_df[can_df["year"].isin(years_to_load)]
+                try:
+                    can_df = select_rows(can_fires_path)
+                    if can_df.empty:
+                        can_df = pd.read_parquet(can_fires_path)
+                    can_df["timestamp"] = pd.to_datetime(can_df["timestamp"], errors="coerce")
+                    can_df["year"] = can_df["timestamp"].dt.year
+                    if year is not None:
+                        can_df = can_df[can_df["year"] == year]
+                    elif years_to_load:
+                        can_df = can_df[can_df["year"].isin(years_to_load)]
 
-                if min_area_km2 is not None and "area_km2" in can_df.columns:
-                    can_df = can_df[can_df["area_km2"] >= min_area_km2]
+                    if min_area_km2 is not None and "area_km2" in can_df.columns:
+                        can_df = can_df[can_df["area_km2"] >= min_area_km2]
 
-                if "land_cover" not in can_df.columns:
-                    can_df["land_cover"] = ""
-                if "source" not in can_df.columns:
-                    can_df["source"] = "CNFDB"
+                    if "land_cover" not in can_df.columns:
+                        can_df["land_cover"] = ""
+                    if "source" not in can_df.columns:
+                        can_df["source"] = "CNFDB"
 
-                if len(can_df) > 0:
-                    all_dfs.append(can_df)
-                    source_used.append("CAN")
+                    if len(can_df) > 0:
+                        all_dfs.append(can_df)
+                        source_used.append("CAN")
+                except Exception as exc:
+                    logger.warning("Wildfires CAN source unavailable for overlay request: %s", exc)
 
         if loc_prefix is None or (not loc_prefix.startswith("USA") and not loc_prefix.startswith("CAN")):
             if parquet_available(global_by_year_path) or is_s3_mode():

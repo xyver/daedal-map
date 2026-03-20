@@ -78,7 +78,7 @@ S3_ENDPOINT_URL=https://<account>.r2.cloudflarestorage.com
 AWS_ACCESS_KEY_ID=...
 AWS_SECRET_ACCESS_KEY=...
 AWS_DEFAULT_REGION=auto
-S3_LOCAL_CACHE=C:\path\to\county-map-cache
+S3_LOCAL_CACHE=C:\path\to\county-map-data
 ```
 
 If you want auth locally:
@@ -180,6 +180,10 @@ Useful local modes:
 3. Hosted-style S3 mode
 - local server, but object-storage-backed data path
 - best for reproducing hosted runtime behavior before deploy
+
+## Contact
+
+Questions, feedback, or self-host issues: support@daedalmap.com
 
 ## License
 

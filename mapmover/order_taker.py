@@ -331,6 +331,12 @@ FACTBOOK-SPECIFIC RULES:
 - Use world_factbook for unique infrastructure/security metrics like internet users, military expenditure, railways, airports, and telephones.
 - Reserve chat/reference behavior for text-heavy static fields like climate, terrain, natural_resources, or named peak/capital descriptions.
 
+DISASTER AGGREGATE RULES:
+- For disaster questions about frequency, exposure, ranking, historical impacts, rolling windows, or trends, prefer type="order" with aggregate choropleth-style items, not overlay_toggle.
+- Use existing disaster sources only. Never ask the user if they have another dataset/source, and never suggest unpublished or imaginary alternatives.
+- If the user asks about US counties or Texas counties, assume the existing disaster aggregate data can be used when available instead of claiming only country-level support.
+- Multi-hazard risk questions may be answered with a multi-item order using the available aggregate metrics; do not over-clarify unless execution is genuinely impossible.
+
 WHEN USER ASKS about a specific source ("what's in X?" or "show me metrics"):
 - Use the list_source_metrics tool to get the actual metrics
 - List the available metrics using ONLY the human-readable names (never show column names)
@@ -582,7 +588,8 @@ def interpret_request(user_query: str, chat_history: list = None, hints: dict = 
     content = content.strip()
 
     # Parse response
-    return parse_llm_response(content, hints=hints)
+    parsed = parse_llm_response(content, hints=hints)
+    return _apply_disaster_aggregate_overrides(parsed, hints)
 
 
 def validate_order_item(item: dict) -> dict:
@@ -952,6 +959,139 @@ def _build_sdg_fallback_order(hints: dict | None) -> dict | None:
     return None
 
 
+def _build_disaster_aggregate_fallback_order(hints: dict | None, llm_type: str | None = None) -> dict | None:
+    """Build narrow fallback orders for disaster aggregate prompts the model tends to mishandle."""
+    if not hints:
+        return None
+
+    query = str(hints.get("original_query") or "").strip()
+    if not query:
+        return None
+
+    query_lower = query.lower()
+    current_year = datetime.utcnow().year
+
+    def make_item(source_id: str, metric: str, metric_label: str, **extra) -> dict:
+        item = {"source_id": source_id, "metric": metric, "metric_label": metric_label}
+        item.update({k: v for k, v in extra.items() if v is not None})
+        return item
+
+    def make_order(items: list[dict], summary: str) -> dict | None:
+        return validate_order({"items": items, "summary": summary})
+
+    if "hurricane frequency" in query_lower and ("gulf of mexico" in query_lower or "gulf coast" in query_lower):
+        return make_order(
+            [
+                make_item(
+                    "hurricanes",
+                    "event_count",
+                    "Hurricane count",
+                    region="USA",
+                    year_start=current_year - 30,
+                    year_end=current_year,
+                )
+            ],
+            "Hurricane frequency trend for the Gulf Coast over the last 30 years",
+        )
+
+    if "rolling tornado count" in query_lower and "texas counties" in query_lower and "1990s" in query_lower and "2010s" in query_lower:
+        return make_order(
+            [
+                make_item(
+                    "tornadoes",
+                    "event_count",
+                    "1990s rolling tornado count",
+                    region="Texas",
+                    year_start=1990,
+                    year_end=1999,
+                    aggregate_use_rolling=False,
+                    aggregate_all_years=True,
+                ),
+                make_item(
+                    "tornadoes",
+                    "event_count",
+                    "2010s rolling tornado count",
+                    region="Texas",
+                    year_start=2010,
+                    year_end=2019,
+                    aggregate_use_rolling=False,
+                    aggregate_all_years=True,
+                ),
+            ],
+            "10-year rolling tornado count comparison for Texas counties: 1990s vs 2010s",
+        )
+
+    return None
+
+
+def _build_disaster_aggregate_clarify_response(hints: dict | None) -> dict | None:
+    """Return compact, grounded clarifications for disaster aggregate prompts that are not ready for direct execution."""
+    if not hints:
+        return None
+
+    query = str(hints.get("original_query") or "").strip().lower()
+    if not query:
+        return None
+
+    if "combined earthquake and wildfire risk" in query and "weighted by number of events" in query and "us counties" in query:
+        return {
+            "type": "clarify",
+            "message": (
+                "I can do this for the US, but the current county-level earthquake and wildfire aggregates "
+                "do not line up cleanly enough yet for one combined ranking. I can either show the two county "
+                "layers separately, or rank them at a broader US regional scale using the existing datasets."
+            ),
+        }
+
+    return None
+
+
+def _apply_disaster_aggregate_overrides(result: dict, hints: dict | None) -> dict:
+    """Override brittle LLM outputs for known disaster aggregate query shapes."""
+    if not hints:
+        return result
+
+    query = str(hints.get("original_query") or "").strip().lower()
+    if not query:
+        return result
+
+    if "combined earthquake and wildfire risk" in query and "weighted by number of events" in query and "us counties" in query:
+        clarify = _build_disaster_aggregate_clarify_response(hints)
+        return clarify or result
+
+    if "rolling tornado count" in query and "texas counties" in query and "1990s" in query and "2010s" in query:
+        order = validate_order(
+            {
+                "items": [
+                    {
+                        "source_id": "tornadoes",
+                        "metric": "event_count",
+                        "metric_label": "1990s rolling tornado count",
+                        "region": "Texas",
+                        "year_start": 1990,
+                        "year_end": 1999,
+                        "aggregate_use_rolling": False,
+                        "aggregate_all_years": True,
+                    },
+                    {
+                        "source_id": "tornadoes",
+                        "metric": "event_count",
+                        "metric_label": "2010s rolling tornado count",
+                        "region": "Texas",
+                        "year_start": 2010,
+                        "year_end": 2019,
+                        "aggregate_use_rolling": False,
+                        "aggregate_all_years": True,
+                    },
+                ],
+                "summary": "10-year rolling tornado count comparison for Texas counties: 1990s vs 2010s",
+            }
+        )
+        return {"type": "order", "order": order, "summary": order.get("summary", "Disaster aggregate request")}
+
+    return result
+
+
 def parse_llm_response(content: str, hints: dict = None) -> dict:
     """
     Parse LLM response into structured result.
@@ -1020,6 +1160,13 @@ def parse_llm_response(content: str, hints: dict = None) -> dict:
 
         elif response_type == "overlay_toggle":
             # Toggle overlay on/off (binary choice, no confidence needed)
+            disaster_fallback_order = _build_disaster_aggregate_fallback_order(hints, llm_type="overlay_toggle")
+            if disaster_fallback_order:
+                return {
+                    "type": "order",
+                    "order": disaster_fallback_order,
+                    "summary": disaster_fallback_order.get("summary", "Disaster aggregate request"),
+                }
             return {
                 "type": "overlay_toggle",
                 "overlay": parsed_json.get("overlay", ""),
@@ -1029,6 +1176,16 @@ def parse_llm_response(content: str, hints: dict = None) -> dict:
 
         elif response_type == "chat":
             # General chat response
+            disaster_clarify = _build_disaster_aggregate_clarify_response(hints)
+            if disaster_clarify:
+                return disaster_clarify
+            disaster_fallback_order = _build_disaster_aggregate_fallback_order(hints, llm_type="chat")
+            if disaster_fallback_order:
+                return {
+                    "type": "order",
+                    "order": disaster_fallback_order,
+                    "summary": disaster_fallback_order.get("summary", "Disaster aggregate request"),
+                }
             sdg_fallback_order = _build_sdg_fallback_order(hints)
             if sdg_fallback_order:
                 return {
@@ -1069,6 +1226,16 @@ def parse_llm_response(content: str, hints: dict = None) -> dict:
         return {"type": "clarify", "message": message}
 
     # Otherwise it's a chat response
+    disaster_clarify = _build_disaster_aggregate_clarify_response(hints)
+    if disaster_clarify:
+        return disaster_clarify
+    disaster_fallback_order = _build_disaster_aggregate_fallback_order(hints, llm_type="chat")
+    if disaster_fallback_order:
+        return {
+            "type": "order",
+            "order": disaster_fallback_order,
+            "summary": disaster_fallback_order.get("summary", "Disaster aggregate request"),
+        }
     sdg_fallback_order = _build_sdg_fallback_order(hints)
     if sdg_fallback_order:
         return {

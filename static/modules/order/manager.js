@@ -106,13 +106,16 @@ export class OrderPanel {
    * @param {Object} order - The order object { items, summary, ... }
    * @param {string} summary - Summary text
    */
-  setOrder(order, summary) {
+  setOrder(order, summary, executionOrder = null) {
     if (!order || !order.items || order.items.length === 0) {
       return;
     }
 
+    const orderForExecution = executionOrder || order;
+    const orderForDisplay = { ...order, executionOrder: orderForExecution };
+
     if (!this.currentOrder || !this.currentOrder.items || this.currentOrder.items.length === 0) {
-      this.currentOrder = order;
+      this.currentOrder = orderForDisplay;
       delete this.currentOrder.navigationLocations;
     } else {
       // Append new items, deduplicate by source_id + metric + region
@@ -122,7 +125,7 @@ export class OrderPanel {
         )
       );
 
-      const newItems = order.items.filter(item => {
+      const newItems = orderForDisplay.items.filter(item => {
         const key = `${item.source_id || item.source}|${item.metric}|${item.region}`;
         return !existingKeys.has(key);
       });
@@ -131,6 +134,7 @@ export class OrderPanel {
         this.currentOrder.items = this.currentOrder.items.concat(newItems);
         this.currentOrder.summary = summary || this.currentOrder.summary;
       }
+      this.currentOrder.executionOrder = orderForExecution;
       delete this.currentOrder.navigationLocations;
     }
 
@@ -457,7 +461,7 @@ export class OrderPanel {
     }
 
     try {
-      await this.onConfirm(this.currentOrder);
+      await this.onConfirm(this.currentOrder.executionOrder || this.currentOrder);
       // On success: clear order, switch to loaded tab
       this.currentOrder = null;
       this.render();

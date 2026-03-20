@@ -47,7 +47,7 @@ def get_s3_cache_root(project_root: Path) -> Path:
     env_root = os.environ.get("S3_LOCAL_CACHE")
     if env_root:
         return Path(env_root)
-    return project_root / ".data_s3_cache"
+    return project_root.parent / "county-map-data"
 
 
 def _normalize_prefix(prefix: str) -> str:

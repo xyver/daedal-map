@@ -38,6 +38,23 @@ from .storage_mode import ensure_s3_data_root, get_s3_cache_root, get_storage_mo
 # Base Path Detection
 # =============================================================================
 
+def _is_reparse_point(path: Path) -> bool:
+    """Return True for symlinks/junctions that escape the local workspace."""
+    try:
+        if hasattr(path, "is_junction") and path.is_junction():
+            return True
+        return path.is_symlink()
+    except OSError:
+        return False
+
+
+def _path_exists_safe(path: Path) -> bool:
+    try:
+        return path.exists()
+    except OSError:
+        return False
+
+
 def _get_project_root() -> Path:
     """
     Determine the project root directory.
@@ -90,7 +107,9 @@ def _get_data_root() -> Path:
 
     # Check for full data folder as sibling (local development)
     full_data = _get_global_root() / "county-map-data"
-    if full_data.exists():
+    if _path_exists_safe(full_data) and _is_reparse_point(full_data) and os.environ.get("S3_BUCKET"):
+        return ensure_s3_data_root(full_data)
+    if _path_exists_safe(full_data):
         return full_data
 
     raise RuntimeError(

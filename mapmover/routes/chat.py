@@ -238,7 +238,7 @@ async def chat_endpoint(req: Request):
                     "source_id": result.get("source_id"),
                     "geojson": filtered_geojson,
                     "summary": result.get("summary", ""),
-                    "count": delta_count,
+                    "count": result.get("count", delta_count),
                     "sources": result.get("sources", []),
                 }
 

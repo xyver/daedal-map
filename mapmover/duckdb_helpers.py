@@ -67,7 +67,7 @@ def _get_cache_root() -> Path | None:
     # Use the same fallback as storage_mode.get_s3_cache_root() so that
     # path_to_uri() works without an explicit S3_LOCAL_CACHE env var.
     if is_s3_mode():
-        return Path(__file__).parent.parent / ".data_s3_cache"
+        return Path(__file__).resolve().parent.parent.parent / "county-map-data"
     return None
 
 
