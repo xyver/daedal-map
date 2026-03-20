@@ -16,6 +16,7 @@ from mapmover.duckdb_helpers import (
     path_to_uri,
     run_df,
     select_filtered_event_rows,
+    select_filtered_event_rows_cached,
     select_linked_loc_ids,
 )
 from mapmover.logging_analytics import logger
