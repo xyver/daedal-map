@@ -31,6 +31,43 @@ def _configured_host(url: str) -> str:
     return (parsed.netloc or parsed.path or "").split("/", 1)[0].lower()
 
 
+def _admin_error(req: Request, message: str, status_code: int):
+    if req.query_params.get("format") == "json":
+        return JSONResponse({"error": message}, status_code=status_code)
+    return msgpack_error(message, status_code)
+
+
+def _require_admin(req: Request):
+    """
+    Require a verified admin/master user for hosted runtime/admin operations.
+
+    For now we fail closed when the service-role key is absent so the hosted
+    surface cannot silently fall back to permissive local/dev behavior.
+    """
+    auth_user = get_authenticated_user(req)
+    if not auth_user:
+        return None, _admin_error(req, "Unauthorized", 401)
+
+    service_key = os.getenv("SUPABASE_SERVICE_KEY", "").strip()
+    if not service_key:
+        return None, _admin_error(req, "Admin operations unavailable", 403)
+
+    try:
+        from supabase_client import SupabaseClient
+
+        supa = SupabaseClient()
+        context = supa.get_user_entitlement_context(auth_user.get("id"))
+    except Exception as exc:
+        logger.warning(f"Admin entitlement check failed: {exc}")
+        return None, _admin_error(req, "Entitlement check failed", 500)
+
+    if not context or context.get("error"):
+        return None, _admin_error(req, "Forbidden", 403)
+    if context.get("plan_id") != "master" and not context.get("is_admin"):
+        return None, _admin_error(req, "Forbidden", 403)
+    return context, None
+
+
 def _pack_display_meta(pack_id: str, primary: dict, pack_sources: list[dict]) -> dict:
     """Return display-oriented pack title/description overrides for combo packs."""
     ref_source = (primary.get("reference", {}) or {}).get("source", {}) or {}
@@ -521,8 +558,12 @@ async def get_catalog_overlays(req: Request):
 
 
 @router.get("/api/runtime/packs/state")
-async def get_runtime_packs_state():
+async def get_runtime_packs_state(req: Request):
     """Return runtime-local pack installation and activation state."""
+    _context, error = _require_admin(req)
+    if error:
+        return error
+
     from mapmover.data_loading import load_full_catalog
     from mapmover.pack_state import get_runtime_pack_summary
     from mapmover.runtime_config import get_runtime_config
@@ -545,6 +586,10 @@ async def get_runtime_packs_state():
 @router.get("/api/runtime/packs/release-markers")
 async def get_runtime_pack_release_markers(req: Request):
     """Return optional pack release markers for release-lane visibility."""
+    _context, error = _require_admin(req)
+    if error:
+        return error
+
     from mapmover.paths import APP_ROOT
     global _release_marker_cache, _release_marker_cache_time
 
@@ -608,6 +653,10 @@ async def get_runtime_pack_release_markers(req: Request):
 @router.post("/api/runtime/packs/active")
 async def set_runtime_active_packs(req: Request):
     """Set the runtime-local active pack ids and refresh the active catalog."""
+    _context, error = _require_admin(req)
+    if error:
+        return error
+
     from mapmover.data_loading import load_full_catalog
     from mapmover.pack_state import materialize_active_data_root, set_active_pack_ids
 
@@ -628,6 +677,10 @@ async def set_runtime_active_packs(req: Request):
 @router.post("/api/runtime/packs/install-local")
 async def install_runtime_pack_local(req: Request):
     """Bootstrap a local installed pack from the current full data tree."""
+    _context, error = _require_admin(req)
+    if error:
+        return error
+
     from mapmover.data_loading import load_full_catalog
     from mapmover.pack_manager import install_pack_from_local_catalog
 
@@ -658,6 +711,10 @@ async def install_runtime_pack_local(req: Request):
 @router.post("/api/runtime/packs/uninstall")
 async def uninstall_runtime_pack(req: Request):
     """Remove an installed runtime pack and refresh the active catalog if needed."""
+    _context, error = _require_admin(req)
+    if error:
+        return error
+
     from mapmover.data_loading import load_full_catalog
     from mapmover.pack_manager import uninstall_pack
 
@@ -679,6 +736,10 @@ async def uninstall_runtime_pack(req: Request):
 @router.post("/api/runtime/packs/install-manifest")
 async def install_runtime_pack_manifest(req: Request):
     """Install a staged pack artifact from a local manifest path."""
+    _context, error = _require_admin(req)
+    if error:
+        return error
+
     from mapmover.pack_manager import install_pack_from_manifest
 
     try:
@@ -705,6 +766,10 @@ async def install_runtime_pack_manifest(req: Request):
 @router.post("/api/runtime/packs/install-ref")
 async def install_runtime_pack_ref(req: Request):
     """Stage and install a pack artifact from a manifest reference."""
+    _context, error = _require_admin(req)
+    if error:
+        return error
+
     from mapmover.pack_manager import install_pack_from_manifest_ref
 
     try:

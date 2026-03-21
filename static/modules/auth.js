@@ -9,9 +9,9 @@ const AUTH_EVENT = 'countymap-auth-changed';
 const LOGGED_IN_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 const GUEST_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 const SITE_BASE = 'https://www.daedalmap.com';
-const SHARED_COOKIE_DOMAIN = '.daedalmap.com';
-const SHARED_ACCESS_COOKIE = 'dm_access_token';
-const SHARED_REFRESH_COOKIE = 'dm_refresh_token';
+const LEGACY_SHARED_COOKIE_DOMAIN = '.daedalmap.com';
+const LEGACY_SHARED_ACCESS_COOKIE = 'dm_access_token';
+const LEGACY_SHARED_REFRESH_COOKIE = 'dm_refresh_token';
 
 let authClient = null;
 let authConfig = null;
@@ -49,41 +49,31 @@ function readHashSessionTokens() {
   };
 }
 
-function readCookie(name) {
-  const prefix = `${name}=`;
-  return document.cookie
-    .split(';')
-    .map((part) => part.trim())
-    .find((part) => part.startsWith(prefix))
-    ?.slice(prefix.length) || '';
+function readHashHandoffCode() {
+  const raw = String(window.location.hash || '').replace(/^#/, '');
+  if (!raw || !raw.includes('handoff_code=')) return null;
+  const params = new URLSearchParams(raw);
+  const code = params.get('handoff_code');
+  return code ? String(code).trim() : null;
 }
 
-function readSharedCookieTokens() {
-  const accessToken = decodeURIComponent(readCookie(SHARED_ACCESS_COOKIE) || '');
-  const refreshToken = decodeURIComponent(readCookie(SHARED_REFRESH_COOKIE) || '');
-  if (!accessToken || !refreshToken) return null;
+function readHashLogoutSignal() {
+  const raw = String(window.location.hash || '').replace(/^#/, '');
+  if (!raw || !raw.includes('logout=')) return null;
+  const params = new URLSearchParams(raw);
+  if (params.get('logout') !== '1') return null;
   return {
-    access_token: accessToken,
-    refresh_token: refreshToken
+    returnTo: params.get('return_to') || ''
   };
 }
 
-function writeSharedCookie(name, value, maxAgeSeconds = 60 * 60 * 24 * 30) {
-  document.cookie = `${name}=${encodeURIComponent(value)}; domain=${SHARED_COOKIE_DOMAIN}; path=/; max-age=${maxAgeSeconds}; samesite=lax; secure`;
+function clearLegacySharedCookie(name) {
+  document.cookie = `${name}=; domain=${LEGACY_SHARED_COOKIE_DOMAIN}; path=/; max-age=0; samesite=lax; secure`;
 }
 
-function clearSharedCookie(name) {
-  document.cookie = `${name}=; domain=${SHARED_COOKIE_DOMAIN}; path=/; max-age=0; samesite=lax; secure`;
-}
-
-function syncSharedCookies(session) {
-  if (session?.access_token && session?.refresh_token) {
-    writeSharedCookie(SHARED_ACCESS_COOKIE, session.access_token);
-    writeSharedCookie(SHARED_REFRESH_COOKIE, session.refresh_token);
-    return;
-  }
-  clearSharedCookie(SHARED_ACCESS_COOKIE);
-  clearSharedCookie(SHARED_REFRESH_COOKIE);
+function clearLegacySharedCookies() {
+  clearLegacySharedCookie(LEGACY_SHARED_ACCESS_COOKIE);
+  clearLegacySharedCookie(LEGACY_SHARED_REFRESH_COOKIE);
 }
 
 async function importHashSession(client) {
@@ -101,20 +91,70 @@ async function importHashSession(client) {
   }
 }
 
-async function importSharedCookieSession(client) {
-  const tokens = readSharedCookieTokens();
-  if (!tokens) return null;
+async function importHandoffCodeSession(client) {
+  const code = readHashHandoffCode();
+  if (!code) return null;
   try {
-    const { data, error } = await client.auth.setSession(tokens);
+    const response = await fetch(`${SITE_BASE}/api/auth/handoff/exchange`, {
+      method: 'POST',
+      mode: 'cors',
+      credentials: 'omit',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code })
+    });
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+    const payload = await response.json();
+    const accessToken = payload?.access_token;
+    const refreshToken = payload?.refresh_token;
+    if (!accessToken || !refreshToken) {
+      throw new Error('Incomplete handoff payload');
+    }
+    const { data, error } = await client.auth.setSession({
+      access_token: accessToken,
+      refresh_token: refreshToken
+    });
     if (error) {
-      console.warn('[Auth] Shared cookie session import failed:', error.message);
-      return null;
+      throw error;
     }
     return data?.session || null;
   } catch (error) {
-    console.warn('[Auth] Shared cookie session import failed:', error?.message || error);
+    console.warn('[Auth] Handoff exchange failed:', error?.message || error);
     return null;
+  } finally {
+    window.history.replaceState(null, '', window.location.pathname + window.location.search);
   }
+}
+
+async function consumeLogoutSignal(client) {
+  const signal = readHashLogoutSignal();
+  if (!signal) return false;
+  try {
+    await client.auth.signOut();
+  } catch (error) {
+    console.warn('[Auth] Logout bridge failed:', error?.message || error);
+  } finally {
+    currentSession = null;
+    currentProfile = null;
+    _lastAuthUserId = null;
+    window.history.replaceState(null, '', window.location.pathname + window.location.search);
+  }
+
+  const returnTo = String(signal.returnTo || '').trim();
+  if (returnTo) {
+    try {
+      const dest = new URL(returnTo, window.location.origin);
+      const allowedOrigins = new Set([window.location.origin, SITE_BASE]);
+      if (allowedOrigins.has(dest.origin)) {
+        window.location.replace(dest.toString());
+        return true;
+      }
+    } catch (_) {
+      // Fall through to default signed-out state.
+    }
+  }
+  return false;
 }
 
 function emitAuthChanged() {
@@ -200,15 +240,20 @@ export const AuthManager = {
             storage: window.localStorage
           }
         });
+        const logoutRedirected = await consumeLogoutSignal(authClient);
+        if (logoutRedirected) {
+          return;
+        }
         // Handle cross-domain session handoff from daedalmap.com explicitly.
-        // The private site redirects back here with access/refresh tokens in the
-        // URL hash. Import them into the app session, then clean the hash.
-        const handoffSession = await importHashSession(authClient) || await importSharedCookieSession(authClient);
+        // The private site redirects back here with a short-lived one-time code.
+        // Exchange it for a session, then clean the hash. Direct Supabase hash
+        // imports remain supported for provider/magic-link flows landing here.
+        const handoffSession = await importHandoffCodeSession(authClient) || await importHashSession(authClient);
         const { data, error } = await authClient.auth.getSession();
         if (!error) {
           currentSession = handoffSession || data.session;
           _lastAuthUserId = currentSession?.user?.id ?? null;
-          syncSharedCookies(currentSession);
+          clearLegacySharedCookies();
           await fetchProfile();
         }
         authClient.auth.onAuthStateChange(async (_event, session) => {
@@ -216,7 +261,7 @@ export const AuthManager = {
           const userChanged = newUserId !== _lastAuthUserId;
           _lastAuthUserId = newUserId;
           currentSession = session;
-          syncSharedCookies(currentSession);
+          clearLegacySharedCookies();
           await fetchProfile();
           updateDom();
           if (userChanged && (_event === 'SIGNED_IN' || _event === 'SIGNED_OUT')) {
