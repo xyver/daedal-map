@@ -388,9 +388,10 @@ function renderPacksSection(sources, entitledPackIds, isMaster, runtimeState) {
   if (!container) return;
 
   const hasCatalogSources = Array.isArray(sources) && sources.length > 0;
+  const markerFallback = !hasCatalogSources && isMaster && releaseMarkerMap.size > 0;
   const { published, internal } = hasCatalogSources
     ? buildPacksFromSources(sources)
-    : (isMaster && releaseMarkerMap.size > 0 ? buildPacksFromReleaseMarkers() : { published: [], internal: [] });
+    : (markerFallback ? buildPacksFromReleaseMarkers() : { published: [], internal: [] });
   currentPackLookup = new Map([...published, ...internal].map(item => [item.id, item]));
   const hasReleaseMarkers = releaseMarkerMap.size > 0;
   const cloudPrefix = String(runtimeState?.cloud_prefix || '').trim();
@@ -402,9 +403,12 @@ function renderPacksSection(sources, entitledPackIds, isMaster, runtimeState) {
   const releasePublished = hasReleaseMarkers
     ? published.filter(item => item.release_marker?.already_published)
     : (usingPublishedLane ? published : []);
-  const releasePrivate = hasReleaseMarkers
+  const releasePrivate = markerFallback
+    ? internal
+    : hasReleaseMarkers
     ? published.filter(item => !item.release_marker?.already_published)
     : (usingStagingLane ? published : []);
+  const trulyInternal = markerFallback ? [] : internal;
   const defaultActive = published.map(p => p.id);
   const activeIds = runtimeState?.active_pack_ids?.length ? runtimeState.active_pack_ids : defaultActive;
   const active = new Set(activeIds);
@@ -458,8 +462,8 @@ function renderPacksSection(sources, entitledPackIds, isMaster, runtimeState) {
     `;
   }
 
-  if (isMaster && internal.length > 0) {
-    const internalGroups = groupByCategory(internal);
+  if (isMaster && trulyInternal.length > 0) {
+    const internalGroups = groupByCategory(trulyInternal);
     html += `
       <div class="packs-section-header packs-section-internal">
         <h3>Internal / Unreleased</h3>
