@@ -360,11 +360,6 @@ function renderPacksSection(sources, entitledPackIds, isMaster, runtimeState) {
   const container = document.getElementById('packsList');
   if (!container) return;
 
-  if (!sources || sources.length === 0) {
-    container.innerHTML = '<p class="packs-loading">Loading catalog...</p>';
-    return;
-  }
-
   const { published, internal } = buildPacksFromSources(sources);
   currentPackLookup = new Map([...published, ...internal].map(item => [item.id, item]));
   const hasReleaseMarkers = releaseMarkerMap.size > 0;
@@ -444,6 +439,19 @@ function renderPacksSection(sources, entitledPackIds, isMaster, runtimeState) {
     `;
   }
 
+  if (!html.trim()) {
+    const cloudPrefix = String(runtimeState?.cloud_prefix || '').trim();
+    const laneLabel = cloudPrefix || 'current runtime lane';
+    html = `
+      <div class="packs-section-header">
+        <h3>No Packs Available</h3>
+        <span class="packs-section-note">
+          No packs are available from ${laneLabel}. This is expected when the published lane is empty.
+        </span>
+      </div>
+    `;
+  }
+
   container.innerHTML = html;
 }
 
@@ -464,8 +472,10 @@ async function initPacksSection(entitledPackIds, isMaster) {
 
   async function refreshPacksSection() {
     let sources = [];
-    const runtimeState = await loadRuntimePackState();
-    await loadReleaseMarkers();
+    const [runtimeState] = await Promise.all([
+      loadRuntimePackState(),
+      loadReleaseMarkers(),
+    ]);
     let catalogError = null;
     try {
       const data = await fetchMsgpack(apiUrl('/api/catalog/sources'));

@@ -55,6 +55,8 @@ _metadata_cache = {}
 _catalog_cache = None
 _catalog_cache_time = 0.0
 _CATALOG_TTL_SECONDS = 300  # 5 minutes
+_catalog_missing_time = 0.0
+_CATALOG_MISS_TTL_SECONDS = 15
 
 
 def get_data_folder():
@@ -96,18 +98,23 @@ def load_catalog():
     Returns:
         dict: Catalog with sources, or empty dict if not found
     """
-    global _catalog_cache, _catalog_cache_time
+    global _catalog_cache, _catalog_cache_time, _catalog_missing_time
 
     now = time.time()
     if _catalog_cache is not None and (now - _catalog_cache_time) < _CATALOG_TTL_SECONDS:
         return _catalog_cache
 
     catalog_path = get_catalog_path()
+    runtime_mode = str(get_runtime_config().get("runtime_mode", "local")).strip().lower()
 
-    if str(get_runtime_config().get("runtime_mode", "local")).strip().lower() == "cloud":
+    if runtime_mode == "cloud" and not catalog_path.exists() and (now - _catalog_missing_time) < _CATALOG_MISS_TTL_SECONDS:
+        return {"sources": [], "total_sources": 0}
+
+    if runtime_mode == "cloud":
         _refresh_catalog_from_s3(catalog_path)
 
     if not catalog_path or not catalog_path.exists():
+        _catalog_missing_time = now
         logger.warning(f"Catalog not found at {catalog_path}")
         return {"sources": [], "total_sources": 0}
 
