@@ -50,6 +50,10 @@ In `RUNTIME_MODE=cloud`, the runtime:
 - does not sync the full parquet tree at startup
 - should point at the released `published/` namespace, not the mutable review lane
 
+Admin/review surfaces may also read release markers from a separate `control/`
+prefix so admin accounts can still see staging/review pack status even when the
+runtime catalog in `published/` is empty.
+
 That means the same codebase can be used in:
 - full local-data mode
 - hosted-style cloud-data mode
@@ -93,6 +97,7 @@ INSTALL_MODE=local
 RUNTIME_MODE=cloud
 S3_BUCKET=global-map-data
 S3_PREFIX=published
+S3_CONTROL_PREFIX=control
 S3_ENDPOINT_URL=https://<account>.r2.cloudflarestorage.com
 AWS_ACCESS_KEY_ID=...
 AWS_SECRET_ACCESS_KEY=...
@@ -106,6 +111,7 @@ INSTALL_MODE=local
 RUNTIME_MODE=cloud
 S3_BUCKET=global-map-data
 S3_PREFIX=staging
+S3_CONTROL_PREFIX=control
 S3_ENDPOINT_URL=https://<account>.r2.cloudflarestorage.com
 AWS_ACCESS_KEY_ID=...
 AWS_SECRET_ACCESS_KEY=...

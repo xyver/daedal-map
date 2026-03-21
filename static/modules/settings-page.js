@@ -144,6 +144,33 @@ function buildPacksFromSources(sources) {
   return { published, internal };
 }
 
+function buildPacksFromReleaseMarkers() {
+  const siteOrigin = getPackSiteBase();
+  const published = [];
+  const internal = [];
+
+  for (const marker of releaseMarkerMap.values()) {
+    const sourceIds = Array.isArray(marker.source_ids) ? marker.source_ids : [];
+    const sourceCount = sourceIds.length || 1;
+    const item = {
+      id: marker.pack_id,
+      label: prettifyId(marker.pack_id),
+      description: sourceCount > 1 ? `${sourceCount} sources` : (sourceIds[0] || 'Pack in review'),
+      category: 'review',
+      source_count: sourceCount,
+      pack_page: `${siteOrigin}/packs/${marker.pack_id}`,
+      release_marker: marker,
+    };
+    if (marker.already_published) {
+      published.push(item);
+    } else {
+      internal.push(item);
+    }
+  }
+
+  return { published, internal };
+}
+
 function openPackStatusModal(item) {
   const modal = document.getElementById('packStatusModal');
   if (!modal || !item) return;
@@ -360,7 +387,10 @@ function renderPacksSection(sources, entitledPackIds, isMaster, runtimeState) {
   const container = document.getElementById('packsList');
   if (!container) return;
 
-  const { published, internal } = buildPacksFromSources(sources);
+  const hasCatalogSources = Array.isArray(sources) && sources.length > 0;
+  const { published, internal } = hasCatalogSources
+    ? buildPacksFromSources(sources)
+    : (isMaster && releaseMarkerMap.size > 0 ? buildPacksFromReleaseMarkers() : { published: [], internal: [] });
   currentPackLookup = new Map([...published, ...internal].map(item => [item.id, item]));
   const hasReleaseMarkers = releaseMarkerMap.size > 0;
   const cloudPrefix = String(runtimeState?.cloud_prefix || '').trim();

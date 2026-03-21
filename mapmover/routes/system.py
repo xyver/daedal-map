@@ -4,6 +4,7 @@ import csv
 import io
 import json
 import os
+import time
 from pathlib import Path
 
 import msgpack
@@ -20,6 +21,9 @@ from mapmover.settings import get_settings_with_status, init_backup_folders, sav
 
 router = APIRouter()
 BASE_DIR = Path(__file__).resolve().parents[2]
+_release_marker_cache = None
+_release_marker_cache_time = 0.0
+_RELEASE_MARKER_TTL_SECONDS = 60
 
 
 def _pack_display_meta(pack_id: str, primary: dict, pack_sources: list[dict]) -> dict:
@@ -534,6 +538,11 @@ async def get_runtime_packs_state():
 async def get_runtime_pack_release_markers():
     """Return optional pack release markers for release-lane visibility."""
     from mapmover.paths import APP_ROOT
+    global _release_marker_cache, _release_marker_cache_time
+
+    now = time.time()
+    if _release_marker_cache is not None and (now - _release_marker_cache_time) < _RELEASE_MARKER_TTL_SECONDS:
+        return msgpack_response(_release_marker_cache)
 
     candidates = []
     configured = os.getenv("PACK_RELEASE_MARKERS_PATH", "").strip()
@@ -552,11 +561,35 @@ async def get_runtime_pack_release_markers():
                 with candidate.open("r", encoding="utf-8") as fh:
                     payload = json.load(fh)
                 if isinstance(payload, dict):
+                    _release_marker_cache = payload
+                    _release_marker_cache_time = now
                     return msgpack_response(payload)
         except Exception:
             continue
 
-    return msgpack_response({"generated_at": None, "packs": []})
+    try:
+        import boto3
+
+        bucket = os.getenv("S3_BUCKET", "").strip()
+        if bucket:
+            control_prefix = os.getenv("S3_CONTROL_PREFIX", "control").strip().strip("/")
+            key = f"{control_prefix}/pack_release_markers_latest.json" if control_prefix else "pack_release_markers_latest.json"
+            endpoint_url = os.getenv("S3_ENDPOINT_URL") or None
+            region = os.getenv("AWS_DEFAULT_REGION") or os.getenv("AWS_REGION") or "auto"
+            client = boto3.client("s3", endpoint_url=endpoint_url, region_name=region)
+            response = client.get_object(Bucket=bucket, Key=key)
+            payload = json.loads(response["Body"].read().decode("utf-8"))
+            if isinstance(payload, dict):
+                _release_marker_cache = payload
+                _release_marker_cache_time = now
+                return msgpack_response(payload)
+    except Exception:
+        pass
+
+    payload = {"generated_at": None, "packs": []}
+    _release_marker_cache = payload
+    _release_marker_cache_time = now
+    return msgpack_response(payload)
 
 
 @router.post("/api/runtime/packs/active")
