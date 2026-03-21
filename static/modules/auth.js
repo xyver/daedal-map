@@ -33,6 +33,34 @@ async function fetchProfile() {
   }
 }
 
+function readHashSessionTokens() {
+  const raw = String(window.location.hash || '').replace(/^#/, '');
+  if (!raw || !raw.includes('access_token=')) return null;
+  const params = new URLSearchParams(raw);
+  const accessToken = params.get('access_token');
+  const refreshToken = params.get('refresh_token');
+  if (!accessToken || !refreshToken) return null;
+  return {
+    access_token: accessToken,
+    refresh_token: refreshToken
+  };
+}
+
+async function importHashSession(client) {
+  const tokens = readHashSessionTokens();
+  if (!tokens) return null;
+  try {
+    const { data, error } = await client.auth.setSession(tokens);
+    if (error) {
+      console.warn('[Auth] Session handoff failed:', error.message);
+      return null;
+    }
+    return data?.session || null;
+  } finally {
+    window.history.replaceState(null, '', window.location.pathname + window.location.search);
+  }
+}
+
 function emitAuthChanged() {
   window.dispatchEvent(new CustomEvent(AUTH_EVENT, {
     detail: {
@@ -114,19 +142,14 @@ export const AuthManager = {
             storage: window.localStorage
           }
         });
-        // Handle cross-domain session handoff from daedalmap.com.
-        // After login on .com the user is redirected here with tokens in the
-        // URL hash. Supabase detects this automatically via detectSessionInUrl.
-        // We then clean the hash so tokens are not left in browser history.
-        const hash = window.location.hash;
-        if (hash && hash.includes('access_token=')) {
-          window.history.replaceState(null, '', window.location.pathname + window.location.search);
-        }
-
+        // Handle cross-domain session handoff from daedalmap.com explicitly.
+        // The private site redirects back here with access/refresh tokens in the
+        // URL hash. Import them into the app session, then clean the hash.
+        const handoffSession = await importHashSession(authClient);
         const { data, error } = await authClient.auth.getSession();
         if (!error) {
-          currentSession = data.session;
-          _lastAuthUserId = data.session?.user?.id ?? null;
+          currentSession = handoffSession || data.session;
+          _lastAuthUserId = currentSession?.user?.id ?? null;
           await fetchProfile();
         }
         authClient.auth.onAuthStateChange(async (_event, session) => {
