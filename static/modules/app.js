@@ -13,7 +13,7 @@ import { PopupBuilder, setDependencies as setPopupDeps } from './popup-builder.j
 import { ChatManager, OrderManager, setDependencies as setChatDeps } from './chat-panel.js';
 import { TimeSlider, setDependencies as setTimeDeps } from './time-slider.js';
 import { ChoroplethManager, setDependencies as setChoroDeps } from './choropleth.js';
-import { ResizeManager, SidebarResizer, SettingsManager } from './sidebar.js';
+import { ResizeManager, SidebarResizer } from './sidebar.js';
 import { SelectionManager, setDependencies as setSelectionDeps } from './selection-manager.js';
 import { HurricaneHandler, setDependencies as setHurricaneDeps } from './hurricane-handler.js';
 import { OverlaySelector, setDependencies as setOverlayDeps } from './overlay-selector.js';
@@ -131,7 +131,6 @@ export const App = {
     // Initialize components
     ChatManager.init();
     OrderManager.init();
-    SettingsManager.init();
     ResizeManager.init();
     SidebarResizer.init();
 

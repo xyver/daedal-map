@@ -10,14 +10,13 @@ from urllib.parse import urlparse
 
 import msgpack
 from fastapi import APIRouter, Request, Response
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 
 from mapmover.auth_context import build_session_cache_key, get_authenticated_user
 from mapmover import ACCOUNT_URL, CacheSignature, clear_metadata_cache, initialize_catalog, logger, session_manager
 from mapmover.order_queue import order_queue
 from mapmover.routes.disasters.helpers import msgpack_error, msgpack_response
 from mapmover.security import get_client_ip, is_https_request, rate_limiter
-from mapmover.settings import get_settings_with_status, init_backup_folders, save_settings
 
 
 router = APIRouter()
@@ -790,16 +789,9 @@ async def serve_index():
 
 @router.get("/settings", response_class=HTMLResponse)
 async def serve_settings_page(request: Request):
-    """Serve the standalone settings/account page."""
+    """Redirect public app settings/account traffic to the private account site."""
     from mapmover import SITE_URL
-    template_path = BASE_DIR / "templates" / "settings.html"
-    html = template_path.read_text(encoding="utf-8")
-    html = html.replace("{{site_url}}", SITE_URL)
-    forwarded_host = (request.headers.get("x-forwarded-host") or request.headers.get("host") or "").split(",", 1)[0].strip()
-    scheme = "https" if is_https_request(request) else request.url.scheme
-    api_base = f"{scheme}://{forwarded_host}".rstrip("/") if forwarded_host else str(request.base_url).rstrip("/")
-    html = html.replace("{{api_base}}", api_base)
-    return html
+    return RedirectResponse(url=f"{SITE_URL}/account", status_code=302)
 
 
 @router.get("/reference/admin-levels")
@@ -815,16 +807,6 @@ async def get_admin_levels():
         return msgpack_response(data)
     except Exception as e:
         logger.error(f"Error loading admin_levels.json: {e}")
-        return msgpack_error(str(e), 500)
-
-
-@router.get("/api/settings")
-async def get_settings():
-    """Get current application settings."""
-    try:
-        return msgpack_response(get_settings_with_status())
-    except Exception as e:
-        logger.error(f"Error getting settings: {e}")
         return msgpack_error(str(e), 500)
 
 
@@ -894,39 +876,6 @@ async def get_auth_me(req: Request):
         "enabled_shells": ["simple"],
         "max_packs": 2,
     })
-
-
-@router.post("/api/settings")
-async def update_settings(req: Request):
-    """Update application settings."""
-    try:
-        data = await decode_request_body(req)
-        backup_path = data.get("backup_path", "")
-        success = save_settings({"backup_path": backup_path})
-        if not success:
-            return msgpack_error("Failed to save settings", 500)
-
-        return msgpack_response({"success": True, "settings": get_settings_with_status()})
-    except Exception as e:
-        logger.error(f"Error updating settings: {e}")
-        return msgpack_error(str(e), 500)
-
-
-@router.post("/api/settings/init-folders")
-async def initialize_folders(req: Request):
-    """Initialize the backup folder structure."""
-    try:
-        data = await decode_request_body(req)
-        backup_path = data.get("backup_path", "")
-        if not backup_path:
-            return msgpack_error("Backup path is required", 400)
-
-        save_settings({"backup_path": backup_path})
-        folders = init_backup_folders(backup_path)
-        return msgpack_response({"success": True, "folders": folders, "message": f"Initialized folders at {backup_path}"})
-    except Exception as e:
-        logger.error(f"Error initializing folders: {e}")
-        return msgpack_error(str(e), 500)
 
 
 @router.post("/api/orders/queue")

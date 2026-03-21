@@ -317,8 +317,6 @@ body.mobile-limited #mobileMapNotice {
 #sidebarHeader,
 .auth-status-bar,
 #mobileMapNotice,
-#sidebarFooter,
-#settingsView,
 .settings-footer {
   background: rgba(7, 20, 31, 0.72);
 }
@@ -334,7 +332,6 @@ body.mobile-limited #mobileMapNotice {
 }
 
 .auth-status-bar,
-#sidebarFooter,
 .settings-footer {
   border-top: 1px solid rgba(123, 231, 255, 0.08);
   border-bottom: 1px solid rgba(123, 231, 255, 0.06);
@@ -1199,43 +1196,6 @@ body.mobile-limited #mobileMapNotice {
   font-size: 11px;
   color: #888;
   margin-top: 4px;
-}
-
-/* ==========================================================================
-   Sidebar Footer
-   ========================================================================== */
-
-#sidebarFooter {
-  padding: 10px 15px;
-  border-top: 1px solid #3d3d5c;
-  background: #16213e;
-  text-align: center;
-}
-
-#settingsLink {
-  color: #888;
-  text-decoration: none;
-  font-size: 13px;
-  cursor: pointer;
-}
-
-#settingsLink:hover {
-  color: #5dade2;
-}
-
-/* ==========================================================================
-   Settings View
-   ========================================================================== */
-
-#settingsView {
-  display: none;
-  flex-direction: column;
-  height: 100%;
-  overflow-y: auto;
-}
-
-#settingsView.active {
-  display: flex;
 }
 
 .settings-content {
