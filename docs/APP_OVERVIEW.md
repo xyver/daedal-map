@@ -1,5 +1,10 @@
 # App Overview
 
+Read order:
+- start with [../README.md](../README.md) for setup
+- then [LOCAL_AND_HOSTED.md](LOCAL_AND_HOSTED.md) for runtime mode selection
+- use this doc for the higher-level app/runtime model
+
 DaedalMap is a map-first geographic query engine.
 
 The current app combines:
@@ -48,17 +53,24 @@ Important ideas:
 
 Guest use remains important for evaluation and simple exploration.
 
-Login and account ownership now live on `daedalmap.com`, not inside the public app.
+Hosted login and account ownership can live on `daedalmap.com`, but this is optional for the public/self-host runtime.
 
 The public app still:
 - accepts authenticated runtime requests
 - reads user/account context where needed for runtime behavior
-- links users out to the private account surface
+- can link users out to a paired account surface when one is configured
 
-The private site now owns:
+In the hosted DaedalMap deployment, the private site owns:
 - login/signup
 - account overview
 - billing/credits
 - admin runtime/release visibility
 
-This is still evolving.
+For self-host/local use:
+- Supabase is optional
+- the local runtime can operate without a hosted account system
+- `/settings` acts as a local runtime setup page when hosted auth is not configured
+
+This is still evolving, but the intended split is:
+- public repo = self-hostable runtime
+- private repo = hosted account, billing, and product convenience layer

@@ -44,6 +44,24 @@ def load_usa_admin() -> dict:
     return {}
 
 
+def _is_localish_url(url: str) -> bool:
+    value = (url or "").strip().lower()
+    return (
+        not value
+        or "localhost" in value
+        or "127.0.0.1" in value
+        or value.startswith("/")
+    )
+
+
+def _catalog_help_links_text() -> str:
+    lines = []
+    if not _is_localish_url(SITE_URL):
+        lines.append(f"   - Public pack library: {SITE_URL}/packs")
+    lines.append(f"   - Runtime settings: {APP_URL}/settings")
+    return "\n".join(lines)
+
+
 def build_regions_text(conversions: dict) -> str:
     """Build regions text dynamically from conversions.json and usa_admin.json."""
     groupings = conversions.get("regional_groupings", {})
@@ -288,6 +306,7 @@ def build_system_prompt(catalog: dict, conversions: dict) -> str:
     )
     chat_first_text = ", ".join(sorted(chat_first_sources)) if chat_first_sources else "(none)"
     hybrid_text = ", ".join(sorted(hybrid_sources)) if hybrid_sources else "(none)"
+    catalog_help_links_text = _catalog_help_links_text()
 
     return f"""You are an Order Taker for a map data visualization system.
 
@@ -319,8 +338,7 @@ WHEN USER ASKS "what data for [country]" or "what do you have":
 3. Only mention published packs/sources with a pack_id
 4. Be CONCISE - use human-readable names, group related sources
 5. End with:
-   - Public pack library: {SITE_URL}/packs
-   - More packs when logged in: {APP_URL}/settings
+{catalog_help_links_text}
 
 FACTBOOK-SPECIFIC RULES:
 - The World Factbook sources are all country-level (admin_0), similar to SDG country choropleths.

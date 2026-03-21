@@ -8,6 +8,12 @@ Public surfaces:
 
 This repository is the open app/runtime. It is intended to be understandable and usable on its own: you can run it locally, point it at local or hosted data, and extend it with compatible datasets and pack-style workflows.
 
+If you are using the public GitHub repo as a self-host/local runtime, the practical setup contract right now is:
+- a local data location (`DATA_ROOT`, unless you use the default app-data path)
+- an LLM API key (`OPENAI_API_KEY` or `ANTHROPIC_API_KEY`)
+
+Supabase and hosted account wiring are optional for self-host use.
+
 ## What It Does
 
 DaedalMap is built around three ideas:
@@ -83,11 +89,15 @@ pip install -r requirements.txt
 
 ### 2. Add environment variables
 
-Create a `.env` file for local development. Minimum common variables:
+Create a `.env` file for local development. The minimum useful local setup is:
 
 ```env
 ANTHROPIC_API_KEY=your_key_here
+DATA_ROOT=C:/path/to/your/local/data
 ```
+
+You can use `OPENAI_API_KEY` instead of `ANTHROPIC_API_KEY` if that is your preferred provider.
+If you leave `DATA_ROOT` blank, DaedalMap uses the default local app-data path and expects your data to live there.
 
 If you want to test the hosted-style setup locally, also configure:
 
@@ -144,7 +154,7 @@ RUNTIME_MODE=cloud
 PORT=7000
 ```
 
-If you want auth locally:
+If you want optional hosted-style auth locally:
 
 ```env
 SUPABASE_URL=...
@@ -194,6 +204,7 @@ That makes local cloud-mode testing useful for reproducing hosted-runtime behavi
 Important note:
 - the current public repo does not include a bundled `data/` demo tree
 - a source checkout therefore needs either `DATA_ROOT` in `local` mode, or `RUNTIME_MODE=cloud` with cloud storage configured
+- for a usable chat experience, you should also set `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`
 
 ## Data And Pack Direction
 
@@ -215,10 +226,15 @@ These are intentionally distinct.
 
 ## Settings Page
 
-The public app no longer ships a standalone settings page.
-`/settings` now redirects to the private account surface on `daedalmap.com`.
+`/settings` now behaves differently depending on mode:
 
-Some local deployment/filesystem setup concerns were intentionally removed from the visible settings UI for now. Those belong more naturally in local/self-host guidance than in the everyday app settings surface.
+- hosted/account-aware mode: redirects to the paired account surface
+- self-host/local mode: shows local runtime setup guidance
+
+For self-host users, `/settings` is the in-app reminder page for:
+- required LLM key setup
+- current runtime/data/config paths
+- the current state of local data vs future pack install flow
 
 ## Useful Paths In This Repo
 
@@ -233,18 +249,24 @@ Important files and folders:
 ## Documentation In This Repo
 
 Current docs in `docs/`:
+- [docs/LOCAL_AND_HOSTED.md](docs/LOCAL_AND_HOSTED.md) - start here for runtime mode selection and self-host basics
 - [docs/APP_OVERVIEW.md](docs/APP_OVERVIEW.md) - current runtime/app overview
-- [docs/LOCAL_AND_HOSTED.md](docs/LOCAL_AND_HOSTED.md) - local, full-data, and S3-backed runtime modes
 - [docs/DATA_SCHEMAS.md](docs/DATA_SCHEMAS.md) - schema and `loc_id` conventions
 - [docs/public reference.md](docs/public%20reference.md) - source/licensing reference notes
+
+Suggested reading order:
+1. `README.md`
+2. `docs/LOCAL_AND_HOSTED.md`
+3. `docs/APP_OVERVIEW.md`
+4. `docs/DATA_SCHEMAS.md`
 
 ## Local Development Modes
 
 Useful local modes:
 
 1. Full local-data mode
-- points at sibling `county-map-data/`
-- better for real development against fuller data
+- points at your local `DATA_ROOT`
+- best current self-host mode for GitHub users
 
 2. Hosted-style S3 mode
 - local server, but object-storage-backed data path

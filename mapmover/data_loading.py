@@ -195,6 +195,33 @@ def load_source_metadata(source_id: str):
         return None
 
 
+def load_source_reference(source_id: str):
+    """
+    Load reference.json for a specific source.
+
+    Args:
+        source_id: Source identifier
+
+    Returns:
+        dict: Source reference data or None if not found
+    """
+    source_folder = get_source_path(source_id)
+    if not source_folder or not source_folder.exists():
+        return None
+
+    reference_path = source_folder / "reference.json"
+    if not reference_path.exists():
+        return None
+
+    try:
+        with open(reference_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+            return data if isinstance(data, dict) else None
+    except Exception as e:
+        logger.error(f"Error loading reference for {source_id}: {e}")
+        return None
+
+
 def get_source_by_topic(topic: str):
     """
     Find sources that match a topic keyword.

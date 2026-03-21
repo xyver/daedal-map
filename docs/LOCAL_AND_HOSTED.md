@@ -1,5 +1,10 @@
 # Local And Hosted Modes
 
+This is the main runtime-mode guide for self-host and local users.
+
+Read this after the root [README.md](../README.md).
+If you want a higher-level explanation of what the app is and how the runtime is evolving, continue to [APP_OVERVIEW.md](APP_OVERVIEW.md).
+
 DaedalMap currently has a clean runtime matrix built from two axes:
 
 - `INSTALL_MODE`
@@ -35,6 +40,16 @@ Notes:
 - a plain source checkout therefore still needs local data arranged separately
 - if `DATA_ROOT` is left blank, the runtime uses the default local app-data folder:
   `%LOCALAPPDATA%\DaedalMap\data`
+
+For a useful local/self-host run, you should also configure one LLM provider key:
+- `OPENAI_API_KEY`
+- or `ANTHROPIC_API_KEY`
+
+That means the practical public-GitHub setup is:
+1. install Python requirements
+2. set `DATA_ROOT`
+3. set one LLM API key
+4. run `python app.py`
 
 ## 2. Local Install + Cloud Data
 
@@ -103,3 +118,22 @@ Why:
   only needed if you want links to point at a non-default website/docs host
 - `CLOUD_CACHE_ROOT`
   only needed if you want the cloud metadata/support cache stored somewhere custom
+
+Usually set these for a usable local app:
+
+- `DATA_ROOT`
+- `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`
+
+Usually leave these unset unless you explicitly want hosted/account features:
+
+- `SUPABASE_URL`
+- `SUPABASE_ANON_KEY`
+- `SUPABASE_SERVICE_KEY`
+
+Without Supabase config, the app stays in local/self-host mode and `/settings` becomes a local setup page instead of a hosted account redirect.
+
+## Related Docs
+
+- [../README.md](../README.md) - top-level quick start and repo overview
+- [APP_OVERVIEW.md](APP_OVERVIEW.md) - runtime/app mental model
+- [DATA_SCHEMAS.md](DATA_SCHEMAS.md) - data and `loc_id` conventions

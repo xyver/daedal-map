@@ -69,6 +69,15 @@ def _configured_host(url: str) -> str:
     return (parsed.netloc or parsed.path or "").split("/", 1)[0].lower()
 
 
+def _hosted_auth_enabled() -> bool:
+    return bool(os.getenv("SUPABASE_URL") and os.getenv("SUPABASE_ANON_KEY"))
+
+
+def _is_localish_url(url: str) -> bool:
+    host = _configured_host(url)
+    return host in {"", "localhost", "127.0.0.1", "::1"}
+
+
 def _require_local_or_admin(req: Request):
     client = getattr(req, "client", None)
     client_host = getattr(client, "host", "") if client else ""
@@ -136,33 +145,58 @@ def _require_admin(req: Request):
     return context, None
 
 
-def _pack_display_meta(pack_id: str, primary: dict, pack_sources: list[dict]) -> dict:
-    """Return display-oriented pack title/description overrides for combo packs."""
-    ref_source = (primary.get("reference", {}) or {}).get("source", {}) or {}
-    default_name = ref_source.get("source_name") or primary.get("source_name", "")
-    default_description = ref_source.get("description", "") or primary.get("description", "")
+def _best_source_text(*values) -> str:
+    for value in values:
+        text = str(value or "").strip()
+        if text:
+            return text
+    return ""
 
-    if pack_id == "un_sdg":
-        return {
-            "source_name": "UN SDG",
-            "description": (
-                "United Nations Sustainable Development Goals indicator library spanning all "
-                "17 goals, from poverty and health to climate and institutions."
-            ),
-        }
 
-    if pack_id == "world_factbook":
-        return {
-            "source_name": "CIA World Factbook",
-            "description": (
-                "Combined CIA World Factbook pack covering unique annual indicators, overlap "
-                "metrics, and static country geography/reference fields."
-            ),
-        }
+def _load_pack_source_docs(pack_sources: list[dict]) -> list[dict]:
+    from mapmover.data_loading import load_source_metadata, load_source_reference
 
+    docs = []
+    for source in pack_sources:
+        source_id = str(source.get("source_id") or "").strip()
+        if not source_id:
+            continue
+        metadata = load_source_metadata(source_id) or {}
+        reference = load_source_reference(source_id) or {}
+        docs.append({
+            "source_id": source_id,
+            "catalog": source,
+            "metadata": metadata,
+            "reference": reference,
+        })
+    return docs
+
+
+def _pack_display_meta(primary: dict, primary_doc: dict | None) -> dict:
+    """Return display-oriented pack title/description from metadata/reference source files."""
+    metadata = (primary_doc or {}).get("metadata", {}) or {}
+    ref_source = ((primary_doc or {}).get("reference", {}) or {}).get("source", {}) or {}
     return {
-        "source_name": default_name,
-        "description": default_description,
+        "source_name": _best_source_text(
+            ref_source.get("source_name"),
+            metadata.get("source_name"),
+            primary.get("source_name"),
+        ),
+        "description": _best_source_text(
+            ref_source.get("description"),
+            metadata.get("description"),
+            primary.get("description"),
+        ),
+        "source_url": _best_source_text(
+            ref_source.get("source_url"),
+            metadata.get("source_url"),
+            primary.get("source_url"),
+        ),
+        "license": _best_source_text(
+            ref_source.get("license"),
+            metadata.get("license"),
+            primary.get("license"),
+        ),
     }
 
 
@@ -488,8 +522,11 @@ async def get_catalog_packs_list(req: Request):
 
     packs = []
     for pid, s in pack_map.items():
-        display = _pack_display_meta(pid, s, pack_sources_map.get(pid, [s]))
-        tc = _resolve_pack_temporal(pid, pack_sources_map.get(pid, [s]), s)
+        pack_sources = pack_sources_map.get(pid, [s])
+        pack_docs = _load_pack_source_docs(pack_sources)
+        primary_doc = next((doc for doc in pack_docs if doc.get("source_id") == s.get("source_id")), pack_docs[0] if pack_docs else None)
+        display = _pack_display_meta(s, primary_doc)
+        tc = _resolve_pack_temporal(pid, pack_sources, s)
         packs.append({
             "pack_id":        pid,
             "source_name":    display.get("source_name") or s.get("source_name", ""),
@@ -536,26 +573,55 @@ async def get_catalog_pack(pack_id: str, req: Request):
 
     # Use the source whose source_id matches pack_id as primary, else first
     primary = next((s for s in pack_sources if s.get("source_id") == pack_id), pack_sources[0])
-    ref = primary.get("reference", {})
-    ref_source = ref.get("source", {})
-    display = _pack_display_meta(pack_id, primary, pack_sources)
+    pack_docs = _load_pack_source_docs(pack_sources)
+    primary_doc = next((doc for doc in pack_docs if doc.get("source_id") == primary.get("source_id")), pack_docs[0] if pack_docs else None)
+    primary_ref = ((primary_doc or {}).get("reference", {}) or {})
+    primary_ref_source = primary_ref.get("source", {}) or {}
+    primary_meta = ((primary_doc or {}).get("metadata", {}) or {})
+    display = _pack_display_meta(primary, primary_doc)
 
     # Aggregate metrics across all sources in the pack
     all_metrics = {}
-    for s in pack_sources:
-        for k, v in (s.get("reference", {}).get("metrics", {}) or {}).items():
-            all_metrics[k] = v
+    for doc in pack_docs:
+        ref_metrics = ((doc.get("reference", {}) or {}).get("metrics", {}) or {})
+        meta_metrics = (doc.get("metadata", {}) or {}).get("metrics", {}) or {}
+        for key, value in ref_metrics.items():
+            all_metrics[key] = value
+        for key, value in meta_metrics.items():
+            if key in all_metrics:
+                continue
+            if isinstance(value, dict):
+                all_metrics[key] = value.get("description") or value.get("name") or ""
+            else:
+                all_metrics[key] = value
 
     subsources = []
+    docs_by_source = {doc.get("source_id"): doc for doc in pack_docs}
     for s in pack_sources:
-        sref = s.get("reference", {})
-        sref_source = sref.get("source", {})
+        doc = docs_by_source.get(s.get("source_id")) or {}
+        sref = (doc.get("reference", {}) or {})
+        smeta = (doc.get("metadata", {}) or {})
+        sref_source = sref.get("source", {}) or {}
         smetrics = sref.get("metrics", {}) or {}
+        if not smetrics:
+            for key, value in (smeta.get("metrics", {}) or {}).items():
+                if isinstance(value, dict):
+                    smetrics[key] = value.get("description") or value.get("name") or ""
+                else:
+                    smetrics[key] = value
         stc = s.get("temporal_coverage", {}) or {}
         subsources.append({
             "source_id": s.get("source_id"),
-            "source_name": sref_source.get("source_name") or s.get("source_name", ""),
-            "description": sref_source.get("description", "") or s.get("description", ""),
+            "source_name": _best_source_text(
+                sref_source.get("source_name"),
+                smeta.get("source_name"),
+                s.get("source_name", ""),
+            ),
+            "description": _best_source_text(
+                sref_source.get("description"),
+                smeta.get("description"),
+                s.get("description", ""),
+            ),
             "path": s.get("path", ""),
             "metric_count": len(smetrics),
             "metrics": smetrics,
@@ -573,20 +639,20 @@ async def get_catalog_pack(pack_id: str, req: Request):
 
     pack = {
         "pack_id":            pack_id,
-        "source_name":        display.get("source_name") or ref_source.get("source_name") or primary.get("source_name", ""),
-        "description":        display.get("description", "") or ref_source.get("description", ""),
-        "source_url":         ref_source.get("source_url", ""),
-        "license":            ref_source.get("license", ""),
-        "category":           primary.get("category", ""),
-        "data_type":          primary.get("data_type", ""),
-        "scope":              primary.get("scope", ""),
-        "topic_tags":         primary.get("topic_tags") or [],
-        "keywords":           primary.get("keywords") or [],
-        "geographic_level":   primary.get("geographic_level"),
-        "coverage_description": primary.get("coverage_description", ""),
+        "source_name":        display.get("source_name") or primary.get("source_name", ""),
+        "description":        display.get("description", ""),
+        "source_url":         display.get("source_url", ""),
+        "license":            display.get("license", ""),
+        "category":           _best_source_text(primary_meta.get("category"), primary.get("category", "")),
+        "data_type":          _best_source_text(primary_meta.get("data_type"), primary.get("data_type", "")),
+        "scope":              _best_source_text(primary_meta.get("scope"), primary.get("scope", "")),
+        "topic_tags":         primary_meta.get("topic_tags") or primary.get("topic_tags") or [],
+        "keywords":           primary_meta.get("keywords") or primary.get("keywords") or [],
+        "geographic_level":   primary_meta.get("geographic_level") or primary.get("geographic_level"),
+        "coverage_description": _best_source_text(primary_meta.get("coverage_description"), primary.get("coverage_description", "")),
         "temporal_coverage":  temporal,
         "metrics":            all_metrics,
-        "llm_summary":        primary.get("llm_summary", ""),
+        "llm_summary":        _best_source_text(primary_meta.get("llm_summary"), primary.get("llm_summary", "")),
         "source_count":       len(pack_sources),
         "source_ids":         [s["source_id"] for s in pack_sources],
         "subsources":         subsources,
@@ -994,9 +1060,113 @@ async def serve_index():
 
 @router.get("/settings", response_class=HTMLResponse)
 async def serve_settings_page(request: Request):
-    """Redirect public app settings/account traffic to the private account site."""
-    from mapmover import SITE_URL
-    return RedirectResponse(url=f"{SITE_URL}/account", status_code=302)
+    """Serve local runtime setup guidance, or redirect to hosted account settings."""
+    from mapmover.paths import CONFIG_DIR, DATA_ROOT, PACKS_ROOT, SETTINGS_PATH, SITE_URL
+
+    if _hosted_auth_enabled() and not _is_localish_url(SITE_URL):
+        return RedirectResponse(url=f"{SITE_URL}/account", status_code=302)
+
+    llm_ready = bool(os.getenv("ANTHROPIC_API_KEY", "").strip() or os.getenv("OPENAI_API_KEY", "").strip())
+    llm_status = "Configured" if llm_ready else "Missing"
+    llm_note = (
+        "Chat can run with your configured provider key."
+        if llm_ready
+        else "Set OPENAI_API_KEY or ANTHROPIC_API_KEY in .env before using chat."
+    )
+
+    html = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Local Setup - DaedalMap</title>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <style>
+            body {{
+                font-family: Arial, sans-serif;
+                background: #0f1724;
+                color: #e5eef8;
+                margin: 0;
+                padding: 32px 18px 48px;
+            }}
+            .shell {{
+                max-width: 820px;
+                margin: 0 auto;
+            }}
+            .card {{
+                background: #152235;
+                border: 1px solid rgba(147, 197, 253, 0.12);
+                border-radius: 14px;
+                padding: 22px 24px;
+                margin-top: 18px;
+            }}
+            h1, h2 {{
+                margin: 0 0 12px;
+            }}
+            p, li {{
+                line-height: 1.6;
+                color: #bfd0e4;
+            }}
+            ul {{
+                margin: 10px 0 0 18px;
+                padding: 0;
+            }}
+            code {{
+                background: rgba(15, 23, 36, 0.7);
+                border-radius: 6px;
+                padding: 2px 6px;
+                color: #f8fafc;
+            }}
+            .status-ok {{
+                color: #86efac;
+                font-weight: 700;
+            }}
+            .status-warn {{
+                color: #fbbf24;
+                font-weight: 700;
+            }}
+            a {{
+                color: #7dd3fc;
+            }}
+        </style>
+    </head>
+    <body>
+        <div class="shell">
+            <h1>Local Runtime Setup</h1>
+            <p>This self-host runtime does not require a hosted DaedalMap account. For a usable local setup, configure your LLM key and point the runtime at local data.</p>
+
+            <div class="card">
+                <h2>Required Settings</h2>
+                <ul>
+                    <li><code>OPENAI_API_KEY</code> or <code>ANTHROPIC_API_KEY</code>: <span class="{"status-ok" if llm_ready else "status-warn"}">{llm_status}</span></li>
+                    <li><code>DATA_ROOT</code>: point this at your local data tree if you are not using the default app-data location</li>
+                </ul>
+                <p>{llm_note}</p>
+            </div>
+
+            <div class="card">
+                <h2>Current Runtime Paths</h2>
+                <ul>
+                    <li><code>DATA_ROOT</code>: {DATA_ROOT}</li>
+                    <li><code>PACKS_ROOT</code>: {PACKS_ROOT}</li>
+                    <li><code>CONFIG_DIR</code>: {CONFIG_DIR}</li>
+                    <li><code>SETTINGS_PATH</code>: {SETTINGS_PATH}</li>
+                </ul>
+            </div>
+
+            <div class="card">
+                <h2>Notes</h2>
+                <ul>
+                    <li>Hosted account, billing, and admin controls are optional and are not required for self-host/local use.</li>
+                    <li>Pack download/install flow is still being built. For now, local data should come from your existing data tree under <code>DATA_ROOT</code>.</li>
+                    <li>See <a href="/">the app</a> to return to the map runtime.</li>
+                </ul>
+            </div>
+        </div>
+    </body>
+    </html>
+    """
+    return HTMLResponse(html)
 
 
 @router.get("/reference/admin-levels")
@@ -1018,10 +1188,15 @@ async def get_admin_levels():
 @router.get("/api/auth/config")
 async def get_auth_config():
     """Return safe public auth configuration for the frontend."""
+    from mapmover.paths import ACCOUNT_URL, SITE_URL
+
+    enabled = _hosted_auth_enabled()
     return {
-        "enabled": bool(os.getenv("SUPABASE_URL") and os.getenv("SUPABASE_ANON_KEY")),
+        "enabled": enabled,
         "supabase_url": os.getenv("SUPABASE_URL", ""),
         "supabase_anon_key": os.getenv("SUPABASE_ANON_KEY", ""),
+        "site_url": SITE_URL,
+        "account_url": ACCOUNT_URL if enabled else "/settings",
     }
 
 

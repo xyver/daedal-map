@@ -1,14 +1,13 @@
 /**
  * Frontend auth manager for token-aware runtime behavior.
  *
- * Login and account UX live on daedalmap.com.
- * The public app only reads session context and routes users to the private site.
+ * Hosted deployments can delegate login/account UX to an external site.
+ * Self-host/local deployments can stay fully local and use /settings instead.
  */
 
 const AUTH_EVENT = 'countymap-auth-changed';
 const LOGGED_IN_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 const GUEST_MAX_AGE_MS = 24 * 60 * 60 * 1000;
-const SITE_BASE = 'https://www.daedalmap.com';
 const LEGACY_SHARED_COOKIE_DOMAIN = '.daedalmap.com';
 const LEGACY_SHARED_ACCESS_COOKIE = 'dm_access_token';
 const LEGACY_SHARED_REFRESH_COOKIE = 'dm_refresh_token';
@@ -19,6 +18,14 @@ let currentSession = null;
 let currentProfile = null;
 let initialized = false;
 let _lastAuthUserId = null;
+
+function getSiteBase() {
+  return String(authConfig?.site_url || '').trim().replace(/\/$/, '') || window.location.origin;
+}
+
+function getAccountUrl() {
+  return String(currentProfile?.account_url || authConfig?.account_url || '/settings').trim() || '/settings';
+}
 
 async function fetchProfile() {
   try {
@@ -109,7 +116,7 @@ async function importHandoffCodeSession(client) {
   const code = readWindowNameHandoffCode() || readHashHandoffCode();
   if (!code) return null;
   try {
-    const response = await fetch(`${SITE_BASE}/api/auth/handoff/exchange`, {
+    const response = await fetch(`${getSiteBase()}/api/auth/handoff/exchange`, {
       method: 'POST',
       mode: 'cors',
       credentials: 'omit',
@@ -156,14 +163,14 @@ async function consumeLogoutSignal(client) {
     window.history.replaceState(null, '', window.location.pathname + window.location.search);
   }
 
-  const returnTo = String(signal.returnTo || '').trim();
-  if (returnTo) {
-    try {
-      const dest = new URL(returnTo, window.location.origin);
-      const allowedOrigins = new Set([window.location.origin, SITE_BASE]);
-      if (allowedOrigins.has(dest.origin)) {
-        window.location.replace(dest.toString());
-        return true;
+    const returnTo = String(signal.returnTo || '').trim();
+    if (returnTo) {
+      try {
+        const dest = new URL(returnTo, window.location.origin);
+        const allowedOrigins = new Set([window.location.origin, getSiteBase()]);
+        if (allowedOrigins.has(dest.origin)) {
+          window.location.replace(dest.toString());
+          return true;
       }
     } catch (_) {
       // Fall through to default signed-out state.
@@ -202,38 +209,41 @@ function updateDom() {
   if (!btn || !status) return;
 
   if (!authConfig?.enabled) {
-    btn.textContent = 'Account';
-    btn.disabled = true;
+    btn.textContent = 'Local Setup';
+    btn.disabled = false;
     btn.classList.remove('logged-in');
-    status.textContent = 'Guest mode: auth not configured.';
+    status.innerHTML = 'Local mode: no hosted account required. Set your LLM key and local data path in <a href="/settings">settings</a>.';
     return;
   }
 
   if (isAuthenticated()) {
     const email = getCurrentUser()?.email || 'Signed in';
-    const accountUrl = currentProfile?.account_url || `${SITE_BASE}/account`;
+    const accountUrl = getAccountUrl();
     btn.textContent = 'Account';
     btn.disabled = false;
     btn.classList.add('logged-in');
-    status.innerHTML = `${email}: authenticated runtime access enabled. <a href="${accountUrl}" target="_blank" rel="noopener">Manage account on daedalmap.com</a>`;
+    status.innerHTML = `${email}: authenticated runtime access enabled. <a href="${accountUrl}" target="_blank" rel="noopener">Open account settings</a>`;
   } else {
     btn.textContent = 'Sign In';
     btn.disabled = false;
     btn.classList.remove('logged-in');
-    status.innerHTML = `Guest mode: local-only workspace and cache. <a href="${SITE_BASE}/login" target="_blank" rel="noopener">Create account</a>`;
+    status.innerHTML = `Guest mode: local-only workspace and cache. <a href="${getSiteBase()}/login" target="_blank" rel="noopener">Create account</a>`;
   }
 }
 
 async function handleAuthClick() {
-  if (!authConfig?.enabled) return;
+  if (!authConfig?.enabled) {
+    window.location.href = '/settings';
+    return;
+  }
   if (isAuthenticated()) {
-    window.location.href = `${SITE_BASE}/account`;
+    window.location.href = getAccountUrl();
     return;
   }
   const returnTo = encodeURIComponent(window.location.href);
   // Signed-out users enter through the private account route so .com can
   // drive login and then hand the session back to the app.
-  window.location.href = `${SITE_BASE}/account?return=${returnTo}`;
+  window.location.href = `${getSiteBase()}/account?return=${returnTo}`;
 }
 
 export const AuthManager = {
@@ -259,8 +269,8 @@ export const AuthManager = {
         if (logoutRedirected) {
           return;
         }
-        // Handle cross-domain session handoff from daedalmap.com explicitly.
-        // The private site redirects back here with a short-lived one-time code.
+        // Handle cross-origin session handoff explicitly when a hosted account
+        // site is configured. The handoff uses a short-lived one-time code.
         // Exchange it for a session, then clean the hash. Direct Supabase hash
         // imports remain supported for provider/magic-link flows landing here.
         const handoffSession = await importHandoffCodeSession(authClient) || await importHashSession(authClient);
