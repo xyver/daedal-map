@@ -1883,17 +1883,20 @@ body {
 .speed-label-left,
 .speed-label-right,
 .loop-control,
+.seq-sublabel,
+.hover-detail,
+.geometry-hover-type,
+.geometry-popup-type {
+  color: var(--map-muted);
+}
+
 .popup-subtitle,
 .stat-label,
 .stat-detail,
 .related-subtitle,
 .related-link-type,
-.seq-sublabel,
-.hover-detail,
-.geometry-hover-type,
-.geometry-popup-type,
 .popup-footer {
-  color: var(--map-muted);
+  color: rgba(230, 243, 255, 0.68);
 }
 
 .time-slider-year,
