@@ -8,7 +8,7 @@
 const AUTH_EVENT = 'countymap-auth-changed';
 const LOGGED_IN_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 const GUEST_MAX_AGE_MS = 24 * 60 * 60 * 1000;
-const SITE_BASE = 'https://daedalmap.com';
+const SITE_BASE = 'https://www.daedalmap.com';
 const SHARED_COOKIE_DOMAIN = '.daedalmap.com';
 const SHARED_ACCESS_COOKIE = 'dm_access_token';
 const SHARED_REFRESH_COOKIE = 'dm_refresh_token';
@@ -172,15 +172,10 @@ function updateDom() {
 async function handleAuthClick() {
   if (!authConfig?.enabled) return;
   const returnTo = encodeURIComponent(window.location.href);
-  if (isAuthenticated()) {
-    window.location.href = `${SITE_BASE}/settings/account?return=${returnTo}`;
-    return;
-  }
-  // Always enter through the account route on daedalmap.com.
-  // It can redirect unauthenticated users to /login, and it can also
-  // hand an existing .com session back to the app without exposing a
-  // separate login chooser in the public runtime.
-  window.location.href = `${SITE_BASE}/account?return=${returnTo}`;
+  // Use the private account-settings route as the single auth entry point.
+  // It already handles signed-in and signed-out states, and it preserves
+  // the app return target for cross-domain handoff back to app.daedalmap.com.
+  window.location.href = `${SITE_BASE}/settings/account?return=${returnTo}`;
 }
 
 export const AuthManager = {
