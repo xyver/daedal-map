@@ -9,6 +9,9 @@ const AUTH_EVENT = 'countymap-auth-changed';
 const LOGGED_IN_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 const GUEST_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 const SITE_BASE = 'https://daedalmap.com';
+const SHARED_COOKIE_DOMAIN = '.daedalmap.com';
+const SHARED_ACCESS_COOKIE = 'dm_access_token';
+const SHARED_REFRESH_COOKIE = 'dm_refresh_token';
 
 let authClient = null;
 let authConfig = null;
@@ -46,6 +49,43 @@ function readHashSessionTokens() {
   };
 }
 
+function readCookie(name) {
+  const prefix = `${name}=`;
+  return document.cookie
+    .split(';')
+    .map((part) => part.trim())
+    .find((part) => part.startsWith(prefix))
+    ?.slice(prefix.length) || '';
+}
+
+function readSharedCookieTokens() {
+  const accessToken = decodeURIComponent(readCookie(SHARED_ACCESS_COOKIE) || '');
+  const refreshToken = decodeURIComponent(readCookie(SHARED_REFRESH_COOKIE) || '');
+  if (!accessToken || !refreshToken) return null;
+  return {
+    access_token: accessToken,
+    refresh_token: refreshToken
+  };
+}
+
+function writeSharedCookie(name, value, maxAgeSeconds = 60 * 60 * 24 * 30) {
+  document.cookie = `${name}=${encodeURIComponent(value)}; domain=${SHARED_COOKIE_DOMAIN}; path=/; max-age=${maxAgeSeconds}; samesite=lax; secure`;
+}
+
+function clearSharedCookie(name) {
+  document.cookie = `${name}=; domain=${SHARED_COOKIE_DOMAIN}; path=/; max-age=0; samesite=lax; secure`;
+}
+
+function syncSharedCookies(session) {
+  if (session?.access_token && session?.refresh_token) {
+    writeSharedCookie(SHARED_ACCESS_COOKIE, session.access_token);
+    writeSharedCookie(SHARED_REFRESH_COOKIE, session.refresh_token);
+    return;
+  }
+  clearSharedCookie(SHARED_ACCESS_COOKIE);
+  clearSharedCookie(SHARED_REFRESH_COOKIE);
+}
+
 async function importHashSession(client) {
   const tokens = readHashSessionTokens();
   if (!tokens) return null;
@@ -58,6 +98,22 @@ async function importHashSession(client) {
     return data?.session || null;
   } finally {
     window.history.replaceState(null, '', window.location.pathname + window.location.search);
+  }
+}
+
+async function importSharedCookieSession(client) {
+  const tokens = readSharedCookieTokens();
+  if (!tokens) return null;
+  try {
+    const { data, error } = await client.auth.setSession(tokens);
+    if (error) {
+      console.warn('[Auth] Shared cookie session import failed:', error.message);
+      return null;
+    }
+    return data?.session || null;
+  } catch (error) {
+    console.warn('[Auth] Shared cookie session import failed:', error?.message || error);
+    return null;
   }
 }
 
@@ -145,11 +201,12 @@ export const AuthManager = {
         // Handle cross-domain session handoff from daedalmap.com explicitly.
         // The private site redirects back here with access/refresh tokens in the
         // URL hash. Import them into the app session, then clean the hash.
-        const handoffSession = await importHashSession(authClient);
+        const handoffSession = await importHashSession(authClient) || await importSharedCookieSession(authClient);
         const { data, error } = await authClient.auth.getSession();
         if (!error) {
           currentSession = handoffSession || data.session;
           _lastAuthUserId = currentSession?.user?.id ?? null;
+          syncSharedCookies(currentSession);
           await fetchProfile();
         }
         authClient.auth.onAuthStateChange(async (_event, session) => {
@@ -157,6 +214,7 @@ export const AuthManager = {
           const userChanged = newUserId !== _lastAuthUserId;
           _lastAuthUserId = newUserId;
           currentSession = session;
+          syncSharedCookies(currentSession);
           await fetchProfile();
           updateDom();
           if (userChanged && (_event === 'SIGNED_IN' || _event === 'SIGNED_OUT')) {
