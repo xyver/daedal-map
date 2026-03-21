@@ -14,7 +14,7 @@ from mapmover.auth_context import build_session_cache_key, get_authenticated_use
 from mapmover import ACCOUNT_URL, CacheSignature, clear_metadata_cache, initialize_catalog, logger, session_manager
 from mapmover.order_queue import order_queue
 from mapmover.routes.disasters.helpers import msgpack_error, msgpack_response
-from mapmover.security import get_client_ip, rate_limiter
+from mapmover.security import get_client_ip, is_https_request, rate_limiter
 from mapmover.settings import get_settings_with_status, init_backup_folders, save_settings
 
 
@@ -753,7 +753,9 @@ async def serve_settings_page(request: Request):
     template_path = BASE_DIR / "templates" / "settings.html"
     html = template_path.read_text(encoding="utf-8")
     html = html.replace("{{site_url}}", SITE_URL)
-    api_base = str(request.base_url).rstrip("/")
+    forwarded_host = (request.headers.get("x-forwarded-host") or request.headers.get("host") or "").split(",", 1)[0].strip()
+    scheme = "https" if is_https_request(request) else request.url.scheme
+    api_base = f"{scheme}://{forwarded_host}".rstrip("/") if forwarded_host else str(request.base_url).rstrip("/")
     html = html.replace("{{api_base}}", api_base)
     return html
 
