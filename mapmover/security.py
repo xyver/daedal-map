@@ -6,9 +6,22 @@ import os
 import threading
 import time
 from collections import defaultdict, deque
+from urllib.parse import urlparse
 from typing import Deque
 
 from fastapi import Request
+from mapmover.runtime_config import get_runtime_config
+
+
+def _normalize_origin(value: str) -> str:
+    value = (value or "").strip()
+    if not value:
+        return ""
+    parsed = urlparse(value if "://" in value else f"https://{value}")
+    if not parsed.netloc:
+        return ""
+    scheme = parsed.scheme or "https"
+    return f"{scheme}://{parsed.netloc}".rstrip("/")
 
 
 def get_allowed_origins() -> list[str]:
@@ -17,12 +30,18 @@ def get_allowed_origins() -> list[str]:
     if configured:
         return [origin.strip() for origin in configured.split(",") if origin.strip()]
 
-    return [
-        "https://app.daedalmap.com",
-        "https://daedalmap.io",
-        "https://www.daedalmap.io",
-        "https://daedalmap.com",
-        "https://www.daedalmap.com",
+    runtime_cfg = get_runtime_config().get("app", {})
+    configured_origins = [
+        _normalize_origin(runtime_cfg.get("app_url", "")),
+        _normalize_origin(runtime_cfg.get("site_url", "")),
+    ]
+    configured_origins.extend(
+        _normalize_origin(origin)
+        for origin in os.getenv("APP_URL_ALIASES", "").split(",")
+        if origin.strip()
+    )
+
+    defaults = [
         "http://localhost:7000",
         "http://localhost:8080",
         "http://localhost:8000",
@@ -32,6 +51,7 @@ def get_allowed_origins() -> list[str]:
         "http://127.0.0.1:8000",
         "http://127.0.0.1:8001",
     ]
+    return [origin for origin in dict.fromkeys([*configured_origins, *defaults]) if origin]
 
 
 def is_https_request(request: Request) -> bool:

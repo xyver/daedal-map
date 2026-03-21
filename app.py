@@ -165,7 +165,7 @@ async def robots_txt():
 async def llms_txt():
     content = (
         "# DaedalMap App\n\n"
-        "DaedalMap is an open geographic query engine. This is the hosted app at daedalmap.io.\n\n"
+        "DaedalMap is an open geographic query engine. This is the hosted app at app.daedalmap.com.\n\n"
         "## What it does\n"
         "- Accepts plain language questions about places, regions, and geographic events\n"
         "- Returns answers as interactive maps without requiring GIS expertise\n"

@@ -6,6 +6,7 @@ import json
 import os
 import time
 from pathlib import Path
+from urllib.parse import urlparse
 
 import msgpack
 from fastapi import APIRouter, Request, Response
@@ -24,6 +25,11 @@ BASE_DIR = Path(__file__).resolve().parents[2]
 _release_marker_cache = None
 _release_marker_cache_time = 0.0
 _RELEASE_MARKER_TTL_SECONDS = 60
+
+
+def _configured_host(url: str) -> str:
+    parsed = urlparse((url or "").strip())
+    return (parsed.netloc or parsed.path or "").split("/", 1)[0].lower()
 
 
 def _pack_display_meta(pack_id: str, primary: dict, pack_sources: list[dict]) -> dict:
@@ -140,12 +146,15 @@ async def submit_feedback(request: Request):
 
     user_id = body.get("user_id") or None
 
-    # Derive source from Origin header (app.daedalmap.com vs daedalmap.com vs local)
+    # Derive source from configured app/site URLs rather than hardcoded domains.
     origin = request.headers.get("origin", "") or request.headers.get("referer", "")
-    if "app.daedalmap.com" in origin or "daedalmap.io" in origin:
-        source = "app.daedalmap.com"
-    elif "daedalmap.com" in origin:
-        source = "daedalmap.com"
+    origin_lower = origin.lower()
+    app_host = _configured_host(APP_URL)
+    site_host = _configured_host(ACCOUNT_URL)
+    if app_host and app_host in origin_lower:
+        source = app_host
+    elif site_host and site_host in origin_lower:
+        source = site_host
     else:
         source = "local"
 
