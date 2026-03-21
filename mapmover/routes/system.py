@@ -10,7 +10,7 @@ from urllib.parse import urlparse
 
 import msgpack
 from fastapi import APIRouter, Request, Response
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from mapmover.auth_context import build_session_cache_key, get_authenticated_user
 from mapmover import ACCOUNT_URL, CacheSignature, clear_metadata_cache, initialize_catalog, logger, session_manager
@@ -543,14 +543,19 @@ async def get_runtime_packs_state():
 
 
 @router.get("/api/runtime/packs/release-markers")
-async def get_runtime_pack_release_markers():
+async def get_runtime_pack_release_markers(req: Request):
     """Return optional pack release markers for release-lane visibility."""
     from mapmover.paths import APP_ROOT
     global _release_marker_cache, _release_marker_cache_time
 
+    def _response(payload: dict):
+        if req.query_params.get("format") == "json":
+            return JSONResponse(payload)
+        return msgpack_response(payload)
+
     now = time.time()
     if _release_marker_cache is not None and (now - _release_marker_cache_time) < _RELEASE_MARKER_TTL_SECONDS:
-        return msgpack_response(_release_marker_cache)
+        return _response(_release_marker_cache)
 
     candidates = []
     configured = os.getenv("PACK_RELEASE_MARKERS_PATH", "").strip()
@@ -571,7 +576,7 @@ async def get_runtime_pack_release_markers():
                 if isinstance(payload, dict):
                     _release_marker_cache = payload
                     _release_marker_cache_time = now
-                    return msgpack_response(payload)
+                    return _response(payload)
         except Exception:
             continue
 
@@ -590,14 +595,14 @@ async def get_runtime_pack_release_markers():
             if isinstance(payload, dict):
                 _release_marker_cache = payload
                 _release_marker_cache_time = now
-                return msgpack_response(payload)
+                return _response(payload)
     except Exception:
         pass
 
     payload = {"generated_at": None, "packs": []}
     _release_marker_cache = payload
     _release_marker_cache_time = now
-    return msgpack_response(payload)
+    return _response(payload)
 
 
 @router.post("/api/runtime/packs/active")
