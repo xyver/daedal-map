@@ -24,6 +24,28 @@ def _normalize_origin(value: str) -> str:
     return f"{scheme}://{parsed.netloc}".rstrip("/")
 
 
+def _origin_variants(value: str) -> list[str]:
+    origin = _normalize_origin(value)
+    if not origin:
+        return []
+
+    parsed = urlparse(origin)
+    host = parsed.hostname or ""
+    if not host:
+        return [origin]
+
+    variants = [origin]
+    port = f":{parsed.port}" if parsed.port else ""
+
+    if host.startswith("www."):
+        bare_host = host[4:]
+        variants.append(f"{parsed.scheme}://{bare_host}{port}")
+    elif host.count(".") >= 1 and host not in {"localhost", "127.0.0.1"}:
+        variants.append(f"{parsed.scheme}://www.{host}{port}")
+
+    return [item for item in dict.fromkeys(variants) if item]
+
+
 def get_allowed_origins() -> list[str]:
     """Return the configured CORS allowlist for browser callers."""
     configured = os.getenv("CORS_ALLOWED_ORIGINS", "").strip()
@@ -31,14 +53,18 @@ def get_allowed_origins() -> list[str]:
         return [origin.strip() for origin in configured.split(",") if origin.strip()]
 
     runtime_cfg = get_runtime_config().get("app", {})
-    configured_origins = [
-        _normalize_origin(runtime_cfg.get("app_url", "")),
-        _normalize_origin(runtime_cfg.get("site_url", "")),
-    ]
+    configured_origins: list[str] = []
+    for origin in (
+        runtime_cfg.get("app_url", ""),
+        runtime_cfg.get("site_url", ""),
+    ):
+        configured_origins.extend(_origin_variants(origin))
+
     configured_origins.extend(
-        _normalize_origin(origin)
+        variant
         for origin in os.getenv("APP_URL_ALIASES", "").split(",")
         if origin.strip()
+        for variant in _origin_variants(origin)
     )
 
     defaults = [
