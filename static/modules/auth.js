@@ -57,6 +57,20 @@ function readHashHandoffCode() {
   return code ? String(code).trim() : null;
 }
 
+function readWindowNameHandoffCode() {
+  const raw = String(window.name || '').trim();
+  if (!raw.startsWith('dm_handoff:')) return null;
+  const code = raw.slice('dm_handoff:'.length).trim();
+  return code || null;
+}
+
+function clearWindowNameHandoffCode() {
+  const raw = String(window.name || '').trim();
+  if (raw.startsWith('dm_handoff:')) {
+    window.name = '';
+  }
+}
+
 function readHashLogoutSignal() {
   const raw = String(window.location.hash || '').replace(/^#/, '');
   if (!raw || !raw.includes('logout=')) return null;
@@ -92,7 +106,7 @@ async function importHashSession(client) {
 }
 
 async function importHandoffCodeSession(client) {
-  const code = readHashHandoffCode();
+  const code = readWindowNameHandoffCode() || readHashHandoffCode();
   if (!code) return null;
   try {
     const response = await fetch(`${SITE_BASE}/api/auth/handoff/exchange`, {
@@ -123,6 +137,7 @@ async function importHandoffCodeSession(client) {
     console.warn('[Auth] Handoff exchange failed:', error?.message || error);
     return null;
   } finally {
+    clearWindowNameHandoffCode();
     window.history.replaceState(null, '', window.location.pathname + window.location.search);
   }
 }
