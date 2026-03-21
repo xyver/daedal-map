@@ -26,6 +26,33 @@ _release_marker_cache_time = 0.0
 _RELEASE_MARKER_TTL_SECONDS = 60
 
 
+def _hosted_pack_surface_locked() -> bool:
+    from mapmover.paths import INSTALL_MODE, RUNTIME_MODE
+
+    return RUNTIME_MODE == "cloud" or str(INSTALL_MODE).strip().lower() != "local"
+
+
+def _pack_install_error(message: str, status_code: int = 403):
+    return msgpack_error(message, status_code)
+
+
+def _require_hosted_pack_local_disabled() -> Response | None:
+    if _hosted_pack_surface_locked():
+        return _pack_install_error("Local-path pack installs are disabled in hosted mode", 403)
+    return None
+
+
+def _require_hosted_https_ref(ref_value: str | None, field_name: str) -> Response | None:
+    if not _hosted_pack_surface_locked() or not ref_value:
+        return None
+    parsed = urlparse(str(ref_value).strip())
+    if parsed.scheme.lower() != "https":
+        return _pack_install_error(f"{field_name} must use https in hosted mode", 403)
+    if not parsed.netloc:
+        return _pack_install_error(f"{field_name} must be an absolute https URL in hosted mode", 403)
+    return None
+
+
 def _configured_host(url: str) -> str:
     parsed = urlparse((url or "").strip())
     return (parsed.netloc or parsed.path or "").split("/", 1)[0].lower()
@@ -46,10 +73,20 @@ def _require_admin(req: Request):
     """
     auth_user = get_authenticated_user(req)
     if not auth_user:
+        logger.warning(
+            "Denied hosted admin request: anonymous caller path=%s ip=%s",
+            req.url.path,
+            get_client_ip(req),
+        )
         return None, _admin_error(req, "Unauthorized", 401)
 
     service_key = os.getenv("SUPABASE_SERVICE_KEY", "").strip()
     if not service_key:
+        logger.warning(
+            "Denied hosted admin request: service key missing path=%s user_id=%s",
+            req.url.path,
+            auth_user.get("id"),
+        )
         return None, _admin_error(req, "Admin operations unavailable", 403)
 
     try:
@@ -62,8 +99,20 @@ def _require_admin(req: Request):
         return None, _admin_error(req, "Entitlement check failed", 500)
 
     if not context or context.get("error"):
+        logger.warning(
+            "Denied hosted admin request: entitlement lookup empty path=%s user_id=%s",
+            req.url.path,
+            auth_user.get("id"),
+        )
         return None, _admin_error(req, "Forbidden", 403)
     if context.get("plan_id") != "master" and not context.get("is_admin"):
+        logger.warning(
+            "Denied hosted admin request: insufficient privileges path=%s user_id=%s plan_id=%s is_admin=%s",
+            req.url.path,
+            auth_user.get("id"),
+            context.get("plan_id"),
+            context.get("is_admin"),
+        )
         return None, _admin_error(req, "Forbidden", 403)
     return context, None
 
@@ -668,6 +717,12 @@ async def set_runtime_active_packs(req: Request):
         materialization = materialize_active_data_root(load_full_catalog(), state)
         clear_metadata_cache()
         initialize_catalog()
+        logger.info(
+            "Hosted runtime packs updated: user_id=%s active_pack_ids=%s catalog_mode=%s",
+            (get_authenticated_user(req) or {}).get("id"),
+            state.get("active_pack_ids", []),
+            state.get("catalog_mode"),
+        )
         return msgpack_response({"ok": True, "state": state, "materialization": materialization})
     except Exception as exc:
         logger.error(f"Error updating runtime active packs: {exc}")
@@ -692,6 +747,9 @@ async def install_runtime_pack_local(req: Request):
         replace_existing = bool(body.get("replace_existing", True))
         if not pack_id:
             return msgpack_error("pack_id is required", 400)
+        local_install_error = _require_hosted_pack_local_disabled()
+        if local_install_error:
+            return local_install_error
 
         result = install_pack_from_local_catalog(
             pack_id,
@@ -702,6 +760,12 @@ async def install_runtime_pack_local(req: Request):
         )
         clear_metadata_cache()
         initialize_catalog()
+        logger.info(
+            "Runtime pack installed from local catalog: user_id=%s pack_id=%s activate=%s",
+            (get_authenticated_user(req) or {}).get("id"),
+            pack_id,
+            activate,
+        )
         return msgpack_response({"ok": True, **result})
     except Exception as exc:
         logger.error(f"Error installing runtime pack locally: {exc}")
@@ -727,6 +791,11 @@ async def uninstall_runtime_pack(req: Request):
         result = uninstall_pack(pack_id, load_full_catalog())
         clear_metadata_cache()
         initialize_catalog()
+        logger.info(
+            "Runtime pack uninstalled: user_id=%s pack_id=%s",
+            (get_authenticated_user(req) or {}).get("id"),
+            pack_id,
+        )
         return msgpack_response({"ok": True, **result})
     except Exception as exc:
         logger.error(f"Error uninstalling runtime pack: {exc}")
@@ -749,6 +818,9 @@ async def install_runtime_pack_manifest(req: Request):
         replace_existing = bool(body.get("replace_existing", True))
         if not manifest_path:
             return msgpack_error("manifest_path is required", 400)
+        manifest_install_error = _require_hosted_pack_local_disabled()
+        if manifest_install_error:
+            return manifest_install_error
 
         result = install_pack_from_manifest(
             manifest_path,
@@ -757,6 +829,12 @@ async def install_runtime_pack_manifest(req: Request):
         )
         clear_metadata_cache()
         initialize_catalog()
+        logger.info(
+            "Runtime pack installed from manifest: user_id=%s manifest_path=%s activate=%s",
+            (get_authenticated_user(req) or {}).get("id"),
+            manifest_path,
+            activate,
+        )
         return msgpack_response({"ok": True, **result})
     except Exception as exc:
         logger.error(f"Error installing runtime pack from manifest: {exc}")
@@ -780,6 +858,12 @@ async def install_runtime_pack_ref(req: Request):
         replace_existing = bool(body.get("replace_existing", True))
         if not manifest_ref:
             return msgpack_error("manifest_ref is required", 400)
+        manifest_ref_error = _require_hosted_https_ref(manifest_ref, "manifest_ref")
+        if manifest_ref_error:
+            return manifest_ref_error
+        artifact_ref_error = _require_hosted_https_ref(artifact_base_ref, "artifact_base_ref")
+        if artifact_ref_error:
+            return artifact_ref_error
 
         result = install_pack_from_manifest_ref(
             manifest_ref,
@@ -789,6 +873,12 @@ async def install_runtime_pack_ref(req: Request):
         )
         clear_metadata_cache()
         initialize_catalog()
+        logger.info(
+            "Runtime pack installed from manifest ref: user_id=%s manifest_ref=%s activate=%s",
+            (get_authenticated_user(req) or {}).get("id"),
+            manifest_ref,
+            activate,
+        )
         return msgpack_response({"ok": True, **result})
     except Exception as exc:
         logger.error(f"Error installing runtime pack from manifest ref: {exc}")
@@ -806,6 +896,10 @@ async def admin_catalog_refresh(req: Request):
 
     auth_user = get_authenticated_user(req)
     if not auth_user:
+        logger.warning(
+            "Denied admin catalog refresh: anonymous caller ip=%s",
+            get_client_ip(req),
+        )
         return msgpack_error("Unauthorized", 401)
 
     service_key = os.getenv("SUPABASE_SERVICE_KEY", "").strip()
@@ -815,8 +909,18 @@ async def admin_catalog_refresh(req: Request):
             supa = SupabaseClient()
             context = supa.get_user_entitlement_context(auth_user.get("id"))
             if not context or context.get("error"):
+                logger.warning(
+                    "Denied admin catalog refresh: entitlement lookup empty user_id=%s",
+                    auth_user.get("id"),
+                )
                 return msgpack_error("Forbidden", 403)
             if context.get("plan_id") != "master" and not context.get("is_admin"):
+                logger.warning(
+                    "Denied admin catalog refresh: insufficient privileges user_id=%s plan_id=%s is_admin=%s",
+                    auth_user.get("id"),
+                    context.get("plan_id"),
+                    context.get("is_admin"),
+                )
                 return msgpack_error("Forbidden", 403)
         except Exception as exc:
             logger.warning(f"Admin catalog refresh: entitlement check failed: {exc}")
