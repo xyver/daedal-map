@@ -2,6 +2,7 @@
 
 import csv
 import io
+import ipaddress
 import json
 import os
 import time
@@ -24,6 +25,16 @@ BASE_DIR = Path(__file__).resolve().parents[2]
 _release_marker_cache = None
 _release_marker_cache_time = 0.0
 _RELEASE_MARKER_TTL_SECONDS = 60
+
+
+def _is_loopback_host(value: str) -> bool:
+    host = (value or "").strip().lower()
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
 
 
 def _hosted_pack_surface_locked() -> bool:
@@ -56,6 +67,14 @@ def _require_hosted_https_ref(ref_value: str | None, field_name: str) -> Respons
 def _configured_host(url: str) -> str:
     parsed = urlparse((url or "").strip())
     return (parsed.netloc or parsed.path or "").split("/", 1)[0].lower()
+
+
+def _require_local_or_admin(req: Request):
+    client = getattr(req, "client", None)
+    client_host = getattr(client, "host", "") if client else ""
+    if _is_loopback_host(client_host):
+        return None, None
+    return _require_admin(req)
 
 
 def _admin_error(req: Request, message: str, status_code: int):
@@ -261,8 +280,12 @@ async def submit_feedback(request: Request):
 
 
 @router.get("/debug/cache")
-async def debug_cache():
+async def debug_cache(req: Request):
     """List files in the S3 local cache directory (S3 mode only)."""
+    _context, error = _require_local_or_admin(req)
+    if error:
+        return error
+
     from mapmover.duckdb_helpers import is_cloud_mode
     from mapmover.paths import DATA_ROOT
     cache_dir = DATA_ROOT
@@ -278,8 +301,12 @@ async def debug_cache():
 
 
 @router.get("/debug/s3")
-async def debug_s3():
+async def debug_s3(req: Request):
     """Test DuckDB S3/httpfs connectivity against a known small file in R2."""
+    _context, error = _require_local_or_admin(req)
+    if error:
+        return error
+
     import traceback
     from mapmover.duckdb_helpers import _make_connection, is_cloud_mode, path_to_uri
     from mapmover.paths import DATA_ROOT
@@ -306,8 +333,12 @@ async def debug_s3():
 
 
 @router.get("/debug/geometry")
-async def debug_geometry():
+async def debug_geometry(req: Request):
     """Test geometry loading and SDG order pipeline."""
+    _context, error = _require_local_or_admin(req)
+    if error:
+        return error
+
     import traceback
     import pandas as pd
     from mapmover.paths import DATA_ROOT, GEOMETRY_DIR
@@ -1370,8 +1401,12 @@ async def export_cache_endpoint(req: Request):
 
 
 @router.get("/debug/process")
-async def debug_process():
+async def debug_process(req: Request):
     """Show process-level memory usage broken down by component."""
+    _context, error = _require_local_or_admin(req)
+    if error:
+        return error
+
     import gc
     import sys
     import tracemalloc
@@ -1429,8 +1464,12 @@ async def debug_process():
 
 
 @router.get("/debug/memory")
-async def debug_memory():
+async def debug_memory(req: Request):
     """Show what is in the in-memory caches and estimated RAM usage."""
+    _context, error = _require_local_or_admin(req)
+    if error:
+        return error
+
     import time
     from mapmover.duckdb_helpers import _CACHE, _CACHE_LOCK, DEFAULT_CACHE_TTL
     from mapmover.geometry_handlers import _country_parquet_cache, _country_parquet_cache_lock
@@ -1491,8 +1530,12 @@ async def debug_memory():
 
 
 @router.get("/api/orders/stats")
-async def get_queue_stats_endpoint():
+async def get_queue_stats_endpoint(req: Request):
     """Get queue statistics for monitoring/debugging."""
+    _context, error = _require_local_or_admin(req)
+    if error:
+        return error
+
     try:
         return msgpack_response(order_queue.stats())
     except Exception as e:
