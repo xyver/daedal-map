@@ -24,7 +24,7 @@ import json
 import pandas as pd
 from pathlib import Path
 from . import GLOBAL_DIR
-from .duckdb_helpers import select_distinct_event_loc_ids
+from .duckdb_helpers import parquet_available, select_distinct_event_loc_ids
 
 # Metadata cache
 _DISASTER_METADATA = None
@@ -115,10 +115,10 @@ def apply_location_filters(
     # Filter by affected area (uses event_areas table)
     if affected_loc_id is not None and event_id_col in df.columns:
         areas_path = GLOBAL_DIR / "disasters/event_areas" / f"{disaster_type}.parquet"
-        if areas_path.exists():
+        if parquet_available(areas_path):
             try:
                 affected_events = select_distinct_event_loc_ids(areas_path, affected_loc_id)
-                if not affected_events:
+                if not affected_events and areas_path.exists():
                     areas_df = pd.read_parquet(areas_path)
                     affected_events = areas_df[
                         areas_df['affected_loc_id'].str.startswith(affected_loc_id, na=False)
@@ -146,12 +146,12 @@ def get_affected_event_ids(
         Set of event_id values that affected this location
     """
     areas_path = GLOBAL_DIR / "disasters/event_areas" / f"{disaster_type}.parquet"
-    if not areas_path.exists():
+    if not parquet_available(areas_path):
         return set()
 
     try:
         affected = select_distinct_event_loc_ids(areas_path, affected_loc_id)
-        if not affected:
+        if not affected and areas_path.exists():
             areas_df = pd.read_parquet(areas_path)
             affected = areas_df[
                 areas_df['affected_loc_id'].str.startswith(affected_loc_id, na=False)
@@ -178,7 +178,7 @@ def get_events_for_location(
         Dict with event counts and sample event IDs
     """
     areas_path = GLOBAL_DIR / "disasters/event_areas" / f"{disaster_type}.parquet"
-    if not areas_path.exists():
+    if not parquet_available(areas_path):
         return {"count": 0, "event_ids": []}
 
     try:
@@ -188,7 +188,7 @@ def get_events_for_location(
             exact=not include_children,
             limit=100,
         )
-        if not affected_events:
+        if not affected_events and areas_path.exists():
             areas_df = pd.read_parquet(areas_path)
             if include_children:
                 mask = areas_df['affected_loc_id'].str.startswith(loc_id, na=False)

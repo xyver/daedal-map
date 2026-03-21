@@ -70,19 +70,19 @@
               <div class="profile-fields">
                 <div class="profile-field-group">
                   <label class="settings-label" for="profileEmail">Email</label>
-                  <div class="profile-field-row">
+                  <form id="profileEmailForm" class="profile-field-row">
                     <input type="email" id="profileEmail" class="settings-input" autocomplete="email" placeholder="your@email.com">
-                    <button id="updateEmailBtn" class="settings-action-btn">Update Email</button>
-                  </div>
+                    <button id="updateEmailBtn" class="settings-action-btn" type="submit">Update Email</button>
+                  </form>
                   <p id="profileEmailStatus" class="profile-field-status"></p>
                 </div>
 
                 <div class="profile-field-group">
                   <label class="settings-label">Password</label>
-                  <div class="profile-field-row">
+                  <form id="profilePasswordForm" class="profile-field-row">
                     <input type="password" id="profileNewPassword" class="settings-input" autocomplete="new-password" placeholder="New password (8+ characters)" minlength="8">
-                    <button id="updatePasswordBtn" class="settings-action-btn">Update Password</button>
-                  </div>
+                    <button id="updatePasswordBtn" class="settings-action-btn" type="submit">Update Password</button>
+                  </form>
                   <p id="profilePasswordStatus" class="profile-field-status"></p>
                 </div>
               </div>
@@ -97,7 +97,7 @@
               <div id="packsList"></div>
               <div class="packs-save-bar">
                 <span id="packsSaveStatus" class="packs-save-status"></span>
-                <button id="packsApplyBtn" class="settings-cta-btn packs-apply-btn">Save to Account</button>
+                <button id="packsApplyBtn" class="settings-cta-btn packs-apply-btn">Update Runtime Catalog</button>
               </div>
             </section>
           </div>
@@ -174,6 +174,41 @@
     </main>
   </div>
 
+  <div id="packStatusModal" class="auth-modal hidden" aria-hidden="true">
+    <div id="packStatusBackdrop" class="auth-modal-backdrop"></div>
+    <div class="auth-modal-panel pack-status-modal-panel" role="dialog" aria-modal="true" aria-labelledby="packStatusTitle">
+      <button id="packStatusClose" class="auth-modal-close" title="Close">&times;</button>
+      <div class="auth-modal-header">
+        <h3 id="packStatusTitle">Pack Release Status</h3>
+        <p id="packStatusSubtitle">Review pack progress across staging, QA, and published release lanes.</p>
+      </div>
+
+      <div class="pack-status-body">
+        <div class="pack-status-summary">
+          <div class="pack-status-pill" id="packStatusStage">Loading...</div>
+          <div class="pack-status-copy" id="packStatusCopy"></div>
+        </div>
+
+        <div class="pack-status-tracker" id="packStatusTracker"></div>
+
+        <div class="pack-status-meta">
+          <div class="pack-status-card">
+            <h4>Next Step</h4>
+            <p id="packStatusNext"></p>
+          </div>
+          <div class="pack-status-card">
+            <h4>Release Notes</h4>
+            <ul id="packStatusReasons" class="pack-status-list"></ul>
+          </div>
+          <div class="pack-status-card">
+            <h4>Pack Scope</h4>
+            <ul id="packStatusMeta" class="pack-status-list"></ul>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <div id="authModal" class="auth-modal hidden" aria-hidden="true">
     <div id="authModalBackdrop" class="auth-modal-backdrop"></div>
     <div class="auth-modal-panel" role="dialog" aria-modal="true" aria-labelledby="authModalTitle">
@@ -225,7 +260,10 @@
     </div>
   </div>
 
-  <script>window.__SITE_URL__ = "{{site_url}}";</script>
+  <script>
+    window.__SITE_URL__ = "{{site_url}}";
+    window.__API_BASE__ = "{{api_base}}";
+  </script>
   <script src="https://unpkg.com/@msgpack/msgpack@3.0.0-beta2/dist.es5+umd/msgpack.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script type="module" src="/static/modules/settings-page.js"></script>

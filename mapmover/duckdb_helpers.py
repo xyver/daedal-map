@@ -1,8 +1,8 @@
 """Reusable DuckDB helpers for parquet-backed runtime queries.
 
 In local mode, all functions accept Path objects pointing to local parquet files.
-In S3 mode (STORAGE_MODE=s3), path_to_uri() converts local cache paths to s3://
-URIs and the DuckDB connection is configured with httpfs + R2 credentials.
+In cloud mode, path_to_uri() converts local cache paths to s3:// URIs and the
+DuckDB connection is configured with httpfs + object-storage credentials.
 DuckDB fetches only the row groups it needs via HTTP range requests.
 """
 
@@ -17,6 +17,8 @@ from pathlib import Path
 from typing import Iterable, Optional
 
 import pandas as pd
+
+from .runtime_config import get_runtime_config
 
 try:
     import duckdb
@@ -44,16 +46,17 @@ def can_query_event_source(source_id: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# S3 / httpfs helpers
+# Cloud / httpfs helpers
 # ---------------------------------------------------------------------------
 
-def is_s3_mode() -> bool:
-    return os.environ.get("STORAGE_MODE", "local").strip().lower() == "s3"
+def is_cloud_mode() -> bool:
+    return str(get_runtime_config().get("runtime_mode", "local")).strip().lower() == "cloud"
 
 
 def _get_s3_endpoint() -> str:
     """Return the R2/S3 endpoint without https:// prefix (as DuckDB expects)."""
-    url = os.environ.get("S3_ENDPOINT_URL", "").strip()
+    cloud_cfg = get_runtime_config().get("cloud", {})
+    url = (os.environ.get("S3_ENDPOINT_URL", "").strip() or str(cloud_cfg.get("endpoint_url", "")).strip())
     if url.startswith("https://"):
         url = url[len("https://"):]
     elif url.startswith("http://"):
@@ -62,23 +65,22 @@ def _get_s3_endpoint() -> str:
 
 
 def _get_cache_root() -> Path | None:
-    env = os.environ.get("S3_LOCAL_CACHE", "").strip()
+    env = os.environ.get("CLOUD_CACHE_ROOT", "").strip()
     if env:
         return Path(env)
-    # Use the same fallback as storage_mode.get_s3_cache_root() so that
-    # path_to_uri() works without an explicit S3_LOCAL_CACHE env var.
-    if is_s3_mode():
-        return Path(__file__).resolve().parent.parent.parent / "county-map-data"
+    if is_cloud_mode():
+        return Path(get_runtime_config()["cloud"]["cache_root"])
     return None
 
 
 def path_to_uri(local_path: Path) -> str:
-    """Convert a local cache path to an s3:// URI in S3 mode, or a local path string in local mode."""
-    if not is_s3_mode():
+    """Convert a local cache path to an s3:// URI in cloud mode, or a local path string in local mode."""
+    if not is_cloud_mode():
         return str(local_path)
 
-    bucket = os.environ.get("S3_BUCKET", "").strip()
-    prefix = os.environ.get("S3_PREFIX", "").strip().strip("/")
+    cloud_cfg = get_runtime_config().get("cloud", {})
+    bucket = os.environ.get("S3_BUCKET", "").strip() or str(cloud_cfg.get("bucket", "")).strip()
+    prefix = (os.environ.get("S3_PREFIX", "").strip() or str(cloud_cfg.get("prefix", "")).strip()).strip("/")
     prefix = f"{prefix}/" if prefix else ""
     cache_root = _get_cache_root()
 
@@ -95,16 +97,16 @@ def path_to_uri(local_path: Path) -> str:
 
 def parquet_available(path: Path) -> bool:
     """Return True if the parquet file is accessible.
-    In S3 mode, always returns True (DuckDB will raise if the file is missing on R2).
+    In cloud mode, always returns True (DuckDB will raise if the file is missing remotely).
     In local mode, checks if the file exists on disk.
     """
-    if is_s3_mode():
+    if is_cloud_mode():
         return True
     return path.exists()
 
 
 def _configure_httpfs(con) -> None:
-    """Configure a DuckDB connection for R2/S3 access via httpfs."""
+    """Configure a DuckDB connection for object-storage access via httpfs."""
     con.execute("INSTALL httpfs")
     con.execute("LOAD httpfs")
     endpoint = _get_s3_endpoint()
@@ -130,9 +132,9 @@ def _configure_httpfs(con) -> None:
 
 
 def _make_connection():
-    """Create a DuckDB connection, configured for S3 if in S3 mode."""
+    """Create a DuckDB connection, configured for object storage in cloud mode."""
     con = duckdb.connect()
-    if is_s3_mode():
+    if is_cloud_mode():
         _configure_httpfs(con)
     return con
 
@@ -180,7 +182,7 @@ def _normalize_ts_for_duckdb(val: str | None) -> str | None:
 def parquet_columns(parquet_path: Path) -> set[str]:
     if duckdb is None:
         return set()
-    if not is_s3_mode() and not parquet_path.exists():
+    if not is_cloud_mode() and not parquet_path.exists():
         return set()
     uri = path_to_uri(parquet_path)
     rows = run_rows("DESCRIBE SELECT * FROM read_parquet(?)", [uri])
@@ -213,9 +215,9 @@ def resolve_event_parquet_path(source_dir: Path, event_file_key: str = "events")
         ]
         for name in fallback_names:
             candidate = source_dir / name
-            if is_s3_mode() or candidate.exists():
+            if is_cloud_mode() or candidate.exists():
                 return candidate, metadata
-        if not is_s3_mode():
+        if not is_cloud_mode():
             parquet_candidates = sorted(source_dir.glob("*.parquet"))
             for candidate in parquet_candidates:
                 if candidate.name in ("all_countries.parquet", "all_regions.parquet"):
@@ -228,7 +230,7 @@ def resolve_event_parquet_path(source_dir: Path, event_file_key: str = "events")
         raise ValueError(f"No filename specified for '{event_file_key}' in {source_dir}")
 
     parquet_path = source_dir / filename
-    if not is_s3_mode() and not parquet_path.exists():
+    if not is_cloud_mode() and not parquet_path.exists():
         raise ValueError(f"Event file not found: {parquet_path}")
     return parquet_path, metadata
 
@@ -475,7 +477,7 @@ def select_filtered_partitioned_rows(
     if duckdb is None:
         return pd.DataFrame()
 
-    if is_s3_mode():
+    if is_cloud_mode():
         # In S3 mode, convert paths to s3:// URIs - skip local exists check
         uris = [path_to_uri(Path(p)) for p in parquet_paths]
     else:
@@ -486,7 +488,7 @@ def select_filtered_partitioned_rows(
 
     # Get columns from first reachable file to build WHERE clause
     available_cols: set[str] = set()
-    if is_s3_mode():
+    if is_cloud_mode():
         for uri in uris:
             try:
                 rows = run_rows("DESCRIBE SELECT * FROM read_parquet(?)", [uri])
@@ -535,7 +537,7 @@ def select_filtered_partitioned_rows(
 
     where_clause = " WHERE " + " AND ".join(where) if where else ""
 
-    if is_s3_mode():
+    if is_cloud_mode():
         # Query each file individually so missing S3 files are silently skipped
         dfs = []
         for uri in uris:
@@ -739,7 +741,7 @@ def prewarm_disaster_sources(global_dir: Path) -> None:
     the frontend overlay-controller.js uses (min_magnitude, min_area_km2, etc.)
     so that animation playback hits the cache on the first pass.
     """
-    if not is_s3_mode():
+    if not is_cloud_mode():
         return  # pre-warming only needed for R2 mode
 
     import logging

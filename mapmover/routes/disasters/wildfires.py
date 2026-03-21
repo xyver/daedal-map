@@ -3,7 +3,7 @@
 from fastapi import APIRouter
 
 from mapmover.disaster_filters import apply_location_filters, get_default_min_year
-from mapmover.duckdb_helpers import cache_get, cache_set, duckdb_available, is_default_preload_range, is_s3_mode, make_cache_key, make_preload_cache_key, parquet_available, path_to_uri, select_filtered_partitioned_rows, select_rows
+from mapmover.duckdb_helpers import cache_get, cache_set, duckdb_available, is_cloud_mode, is_default_preload_range, make_cache_key, make_preload_cache_key, parquet_available, path_to_uri, select_filtered_partitioned_rows, select_rows
 from mapmover.logging_analytics import logger
 from mapmover.paths import COUNTRIES_DIR, GLOBAL_DIR
 
@@ -15,7 +15,7 @@ router = APIRouter()
 
 def _resolve_first_existing(*paths):
     """Return the first existing path from a set of data-layout candidates."""
-    if is_s3_mode():
+    if is_cloud_mode():
         return paths[0] if paths else None
     for path in paths:
         if path.exists():
@@ -25,7 +25,7 @@ def _resolve_first_existing(*paths):
 
 def list_wildfire_year_files():
     """Return available yearly wildfire parquet files (year, path), sorted by year."""
-    if is_s3_mode():
+    if is_cloud_mode():
         # In S3 mode, generate the currently published year paths.
         # This avoids probing missing future partitions like 2025 when the
         # wildfire package only goes through 2024.
@@ -152,7 +152,7 @@ async def get_wildfires_geojson(
             COUNTRIES_DIR / "CAN/cnfdb/fires_enriched.parquet",
         )
         global_by_year_path = GLOBAL_DIR / "disasters/wildfires/by_year_enriched"
-        if not is_s3_mode() and not global_by_year_path.exists():
+        if not is_cloud_mode() and not global_by_year_path.exists():
             global_by_year_path = GLOBAL_DIR / "disasters/wildfires/by_year"
 
         base_columns = [
@@ -258,7 +258,7 @@ async def get_wildfires_geojson(
                     logger.warning("Wildfires CAN source unavailable for overlay request: %s", exc)
 
         if loc_prefix is None or (not loc_prefix.startswith("USA") and not loc_prefix.startswith("CAN")):
-            if parquet_available(global_by_year_path) or is_s3_mode():
+            if parquet_available(global_by_year_path) or is_cloud_mode():
                 available_year_files = dict(list_wildfire_year_files())
                 year_files = []
                 for yr in years_to_load:
@@ -506,7 +506,7 @@ async def get_wildfire_progression(event_id: str, year: int = None):
 
     try:
         progression_path = GLOBAL_DIR / "disasters/wildfires"
-        if not is_s3_mode() and not progression_path.exists():
+        if not is_cloud_mode() and not progression_path.exists():
             return msgpack_response(
                 {
                     "type": "FeatureCollection",
@@ -527,7 +527,7 @@ async def get_wildfire_progression(event_id: str, year: int = None):
 
         matches = []
         for prog_file in candidate_files:
-            if not is_s3_mode() and not prog_file.exists():
+            if not is_cloud_mode() and not prog_file.exists():
                 continue
             if duckdb_available():
                 current_df = select_rows(

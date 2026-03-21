@@ -48,7 +48,7 @@ from .data_loading import load_source_metadata
 from .aggregation_system import build_aggregation_spec, apply_temporal_aggregation
 from .duckdb_helpers import (
     can_query_event_source,
-    is_s3_mode,
+    is_cloud_mode,
     parquet_columns,
     path_to_uri,
     quote_ident,
@@ -172,7 +172,7 @@ def _load_disaster_aggregate_data(source_id: str, item: dict) -> tuple[Optional[
     for candidate in candidates:
         if parquet_path is not None:
             break
-        if not is_s3_mode() and not candidate.exists():
+        if not is_cloud_mode() and not candidate.exists():
             continue
         try:
             maybe_df = select_rows(candidate)
@@ -218,7 +218,7 @@ def _load_disaster_aggregate_data(source_id: str, item: dict) -> tuple[Optional[
         metadata["geographic_level"] = "admin_0"
 
     logger.info(
-        f"[aggregate] load {source_id}: path={path_to_uri(parquet_path) if is_s3_mode() else parquet_path} "
+        f"[aggregate] load {source_id}: path={path_to_uri(parquet_path) if is_cloud_mode() else parquet_path} "
         f"rows={len(df)} level={metadata.get('geographic_level')}"
     )
     return df, metadata
@@ -566,7 +566,7 @@ def load_source_data(source_id: str) -> tuple:
     with open(meta_path, encoding='utf-8') as f:
         metadata = json.load(f)
 
-    if is_s3_mode():
+    if is_cloud_mode():
         # In S3 mode, no local parquet files exist - pick preferred filename and let
         # select_rows() fetch from R2 via DuckDB httpfs (path_to_uri handles the s3:// conversion).
         parquet_path = None
@@ -638,12 +638,12 @@ def load_event_data(source_id: str, event_file_key: str = "events") -> tuple:
         ]
         for name in fallback_names:
             candidate = source_dir / name
-            if is_s3_mode() or candidate.exists():
+            if is_cloud_mode() or candidate.exists():
                 df = select_rows(candidate)
-                if df.empty and not is_s3_mode():
+                if df.empty and not is_cloud_mode():
                     df = pd.read_parquet(candidate)
                 return df, metadata
-        if not is_s3_mode():
+        if not is_cloud_mode():
             # Last-resort fallback: use any parquet in source dir (local mode only)
             parquet_candidates = sorted(source_dir.glob("*.parquet"))
             for candidate in parquet_candidates:

@@ -22,20 +22,37 @@ Typical use cases:
 
 ## Current Runtime Shape
 
+DaedalMap now treats runtime behavior as a 2-axis matrix:
+
+- `INSTALL_MODE`
+  - `local` = local app/runtime install
+  - `cloud` = hosted/server deployment
+- `RUNTIME_MODE`
+  - `local` = query local data
+  - `cloud` = query managed cloud-backed data via local cache + DuckDB httpfs
+
+Supported combinations:
+- `local install + local data`
+- `local install + cloud data`
+- `cloud install + cloud data`
+
+Not supported as a first-class runtime shape:
+- `cloud install + local data`
+
 The current hosted/runtime direction is:
 - `Railway` for the public app runtime
 - `Cloudflare R2` for canonical runtime data storage
 - `Supabase` for auth and the future entitlement/control plane
 
-In `STORAGE_MODE=s3`, the runtime:
+In `RUNTIME_MODE=cloud`, the runtime:
 - eagerly syncs only small metadata files to local cache
 - queries parquet directly from object storage via DuckDB `httpfs`
 - does not sync the full parquet tree at startup
+- should point at the released `published/` namespace, not the mutable review lane
 
 That means the same codebase can be used in:
-- bundled demo mode
-- fuller local-data mode
-- hosted-style S3 mode
+- full local-data mode
+- hosted-style cloud-data mode
 
 ## Guest And Logged-In Behavior
 
@@ -72,13 +89,54 @@ ANTHROPIC_API_KEY=your_key_here
 If you want to test the hosted-style setup locally, also configure:
 
 ```env
-STORAGE_MODE=s3
+INSTALL_MODE=local
+RUNTIME_MODE=cloud
 S3_BUCKET=global-map-data
+S3_PREFIX=published
 S3_ENDPOINT_URL=https://<account>.r2.cloudflarestorage.com
 AWS_ACCESS_KEY_ID=...
 AWS_SECRET_ACCESS_KEY=...
 AWS_DEFAULT_REGION=auto
-S3_LOCAL_CACHE=C:\path\to\county-map-data
+```
+
+For local testing against the review lane before publish, use:
+
+```env
+INSTALL_MODE=local
+RUNTIME_MODE=cloud
+S3_BUCKET=global-map-data
+S3_PREFIX=staging
+S3_ENDPOINT_URL=https://<account>.r2.cloudflarestorage.com
+AWS_ACCESS_KEY_ID=...
+AWS_SECRET_ACCESS_KEY=...
+AWS_DEFAULT_REGION=auto
+```
+
+Most local users should leave these blank unless they intentionally want overrides:
+
+```env
+DATA_ROOT=
+APP_URL=
+SITE_URL=
+CLOUD_CACHE_ROOT=
+```
+
+What they mean:
+- `DATA_ROOT`
+  only used in `RUNTIME_MODE=local`; leave blank to use the default local app-data folder
+- `APP_URL`
+  optional advertised app URL; leave blank for normal local runs
+- `SITE_URL`
+  optional website/docs/account URL override; leave blank for normal local runs
+- `CLOUD_CACHE_ROOT`
+  optional local cache folder for cloud metadata/support files; leave blank unless you want a custom cache location
+
+If you are configuring a hosted deployment, set:
+
+```env
+INSTALL_MODE=cloud
+RUNTIME_MODE=cloud
+PORT=7000
 ```
 
 If you want auth locally:
@@ -100,19 +158,37 @@ Open:
 
 ## Data Resolution
 
-The runtime resolves data in this order:
+The runtime resolves behavior from two explicit modes:
 
-1. `DATA_ROOT` if explicitly set
-2. sibling `county-map-data/` folder for local/full-data development
-3. bundled `data/` folder as demo fallback
+1. `INSTALL_MODE`
+   controls deployment defaults like writable directories and default URLs
+2. `RUNTIME_MODE`
+   controls the data plane
 
-In local demo mode, the app can run directly from bundled data.
+Data mode behavior:
 
-In hosted/S3 mode:
+1. `RUNTIME_MODE=local`
+   uses `DATA_ROOT`
+2. `RUNTIME_MODE=cloud`
+   uses the hydrated local cloud cache as `DATA_ROOT`
+
+Default local writable folders on Windows:
+- `CONFIG_DIR=%LOCALAPPDATA%\DaedalMap\config`
+- `STATE_DIR=%LOCALAPPDATA%\DaedalMap\state`
+- `CACHE_DIR=%LOCALAPPDATA%\DaedalMap\cache`
+- `LOG_DIR=%LOCALAPPDATA%\DaedalMap\logs`
+- `PACKS_ROOT=%LOCALAPPDATA%\DaedalMap\packs`
+- `DATA_ROOT=%LOCALAPPDATA%\DaedalMap\data`
+
+In hosted/cloud mode:
 - metadata is cached locally
 - parquet is queried remotely from object storage
 
-That makes local S3-mode testing useful for reproducing hosted-runtime behavior before deploy.
+That makes local cloud-mode testing useful for reproducing hosted-runtime behavior before deploy.
+
+Important note:
+- the current public repo does not include a bundled `data/` demo tree
+- a source checkout therefore needs either `DATA_ROOT` in `local` mode, or `RUNTIME_MODE=cloud` with cloud storage configured
 
 ## Data And Pack Direction
 
@@ -131,8 +207,6 @@ Key concepts:
 - `active runtime catalog`
 
 These are intentionally distinct.
-
-This repo still includes a small bundled `data/` fallback so the app can run as a demo without the full maintained data tree.
 
 ## Settings Page
 
@@ -153,7 +227,6 @@ Important files and folders:
 - `mapmover/` - runtime logic, routes, path helpers, DuckDB helpers
 - `static/` - frontend app modules and styles
 - `templates/` - app HTML, including `/settings`
-- `data/` - bundled demo fallback data
 - `supabase_client.py` - auth/control-plane integration
 - `docs/` - local documentation for schemas, runtime notes, and reference material
 
@@ -169,17 +242,18 @@ Current docs in `docs/`:
 
 Useful local modes:
 
-1. Bundled demo mode
-- simplest startup
-- uses local bundled `data/`
-
-2. Full local-data mode
+1. Full local-data mode
 - points at sibling `county-map-data/`
 - better for real development against fuller data
 
-3. Hosted-style S3 mode
+2. Hosted-style S3 mode
 - local server, but object-storage-backed data path
 - best for reproducing hosted runtime behavior before deploy
+
+3. Installed/runtime-pack mode
+- planned product direction beyond raw source checkout
+- engine/runtime installed separately from data packs
+- pack selection and updates handled outside the repo clone flow
 
 ## Contact
 

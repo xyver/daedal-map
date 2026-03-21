@@ -72,14 +72,14 @@ async def lifespan(app: FastAPI):
     logger.info("Startup complete - data catalog and order processor initialized")
 
     # Fire pre-warmers in background threads so startup is not blocked.
-    # In S3 mode this populates DuckDB httpfs metadata cache, our in-memory
-    # DataFrame cache, and the geometry cache so cold R2 fetches do not hit
+    # In cloud mode this populates DuckDB httpfs metadata cache, our in-memory
+    # DataFrame cache, and the geometry cache so cold object-storage fetches do not hit
     # the first user requests.
     try:
-        from mapmover.duckdb_helpers import is_s3_mode, prewarm_disaster_sources
+        from mapmover.duckdb_helpers import is_cloud_mode, prewarm_disaster_sources
         from mapmover.geometry_handlers import prewarm_geometry
         from mapmover.paths import GLOBAL_DIR
-        if is_s3_mode():
+        if is_cloud_mode():
             t_disaster = threading.Thread(
                 target=prewarm_disaster_sources,
                 args=(GLOBAL_DIR,),
@@ -210,6 +210,15 @@ app.include_router(chat_router)
 
 
 if __name__ == "__main__":
+    import socket
     import uvicorn
+    from mapmover.paths import APP_HOST, APP_PORT
 
-    uvicorn.run(app, host="0.0.0.0", port=7000)
+    def _port_free(port: int) -> bool:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            return s.connect_ex(("127.0.0.1", port)) != 0
+
+    port = APP_PORT if _port_free(APP_PORT) else APP_PORT + 1
+    if port != APP_PORT:
+        print(f"Port {APP_PORT} in use, falling back to {port}")
+    uvicorn.run(app, host=APP_HOST, port=port)

@@ -29,9 +29,9 @@ The runtime turns those into executable map/data operations and renders the resu
 
 The app can operate in multiple modes:
 
-1. bundled demo data
-2. fuller local data tree
-3. S3/R2-backed runtime mode
+1. full local data tree
+2. S3/R2-backed runtime mode
+3. future installable runtime plus pack delivery mode
 
 The same runtime code supports these modes through path and storage helpers.
 

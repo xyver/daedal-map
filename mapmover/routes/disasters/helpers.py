@@ -143,6 +143,8 @@ def safe_bool(row, col, default=False):
 
 def build_geojson_features(df, property_builders: dict, lat_col: str = "latitude", lon_col: str = "longitude"):
     """Build GeoJSON point features from a DataFrame."""
+    if df.empty or lat_col not in df.columns or lon_col not in df.columns:
+        return []
     valid_mask = df[lat_col].notna() & df[lon_col].notna()
     valid_df = df[valid_mask]
 

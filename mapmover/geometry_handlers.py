@@ -27,7 +27,7 @@ except ImportError:
         return json.loads(s)
 
 from .paths import GEOMETRY_DIR, DATA_ROOT, COUNTRIES_DIR
-from .duckdb_helpers import select_rows, is_s3_mode, parquet_columns
+from .duckdb_helpers import is_cloud_mode, parquet_columns, select_rows
 
 logger = logging.getLogger("mapmover")
 
@@ -51,7 +51,7 @@ _world_factbook_static_cache = None
 
 def _parquet_accessible(path: Path) -> bool:
     """Returns True if a parquet file exists locally or is accessible via S3/DuckDB."""
-    if not is_s3_mode():
+    if not is_cloud_mode():
         return path.exists()
     try:
         cols = parquet_columns(path)
@@ -189,13 +189,13 @@ def load_country_parquet(iso3: str, admin_level: int = None):
                 parquet_file,
                 exact_filters={"admin_level": admin_level},
             )
-            if df.empty and not is_s3_mode():
+            if df.empty and not is_cloud_mode():
                 df = pd.read_parquet(
                     parquet_file,
                     filters=[('admin_level', '==', admin_level)]
                 )
         else:
-            if is_s3_mode():
+            if is_cloud_mode():
                 df = select_rows(parquet_file)
             else:
                 df = pd.read_parquet(parquet_file)
@@ -214,7 +214,7 @@ def load_country_parquet(iso3: str, admin_level: int = None):
         # DuckDB/R2 fetch is likely a transient failure, not "this country has no data".
         # Caching empty would poison the cache and serve 0 features for the rest of
         # the container's lifetime. Local mode is fine to cache empty (data truly absent).
-        if df.empty and is_s3_mode():
+        if df.empty and is_cloud_mode():
             logger.warning(f"Empty geometry result for {iso3} (level={admin_level}) in S3 mode - not caching")
             with _country_parquet_cache_lock:
                 _country_parquet_inflight.discard(cache_key)
@@ -1486,7 +1486,7 @@ def prewarm_geometry() -> None:
     """
     import time as _time
 
-    if not is_s3_mode():
+    if not is_cloud_mode():
         return
 
     t0 = _time.monotonic()

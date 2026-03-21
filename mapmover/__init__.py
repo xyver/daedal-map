@@ -19,13 +19,8 @@ Note: Build tools (geometry processing, catalog generation) are in the build/ fo
 
 # Path configuration (import first as other modules may depend on it)
 from .paths import (
-    # Root directories
-    PROJECT_ROOT,
-    GLOBAL_ROOT,
     APP_ROOT,
-    PRIVATE_ROOT,
     DATA_ROOT,
-    RAW_ROOT,
     # Data paths
     COUNTRIES_DIR,
     GLOBAL_DIR,
@@ -35,18 +30,20 @@ from .paths import (
     # App paths
     STATIC_DIR,
     TEMPLATES_DIR,
+    CONFIG_DIR,
+    STATE_DIR,
+    CACHE_DIR,
     LOGS_DIR,
-    CONFIG_PATH,
+    MAP_ASSET_CONFIG_PATH,
+    RUNTIME_CONFIG_PATH,
     SETTINGS_PATH,
-    # Private paths
-    BUILD_DIR,
-    CONVERTERS_DIR,
-    DOWNLOADERS_DIR,
-    # Raw paths
-    RAW_DATA_DIR,
-    SOURCE_DATA_DIR,
-    BACKUPS_DIR,
+    PACKS_ROOT,
+    CLOUD_CACHE_ROOT,
+    INSTALL_MODE,
+    RUNTIME_MODE,
     # Deployment URLs
+    APP_HOST,
+    APP_PORT,
     APP_URL,
     SITE_URL,
     ACCOUNT_URL,
@@ -91,6 +88,7 @@ from .data_loading import (
     get_data_folder,
     get_catalog_path,
     load_catalog,
+    load_full_catalog,
     load_source_metadata,
     get_source_by_topic,
     clear_metadata_cache,
@@ -102,6 +100,28 @@ from .logging_analytics import (
     log_error_to_cloud,
     log_missing_region_to_cloud,
     logger,
+)
+
+from .pack_state import (
+    PACK_STATE_PATH,
+    build_active_catalog,
+    get_runtime_pack_summary,
+    load_pack_state,
+    materialize_active_data_root,
+    save_pack_state,
+    set_active_pack_ids,
+)
+
+from .pack_manager import (
+    install_pack_from_manifest,
+    install_pack_from_manifest_ref,
+    install_pack_from_local_catalog,
+    uninstall_pack,
+)
+
+from .pack_downloader import (
+    PACK_STAGING_ROOT,
+    stage_pack_artifact,
 )
 
 from .geometry_enrichment import (
@@ -170,12 +190,8 @@ from .disaster_filters import (
 __version__ = "2.0.0"
 __all__ = [
     # Paths
-    "PROJECT_ROOT",
-    "GLOBAL_ROOT",
     "APP_ROOT",
-    "PRIVATE_ROOT",
     "DATA_ROOT",
-    "RAW_ROOT",
     "COUNTRIES_DIR",
     "GLOBAL_DIR",
     "GEOMETRY_DIR",
@@ -183,15 +199,22 @@ __all__ = [
     "INDEX_PATH",
     "STATIC_DIR",
     "TEMPLATES_DIR",
+    "CONFIG_DIR",
+    "STATE_DIR",
+    "CACHE_DIR",
     "LOGS_DIR",
-    "CONFIG_PATH",
+    "MAP_ASSET_CONFIG_PATH",
+    "RUNTIME_CONFIG_PATH",
     "SETTINGS_PATH",
-    "BUILD_DIR",
-    "CONVERTERS_DIR",
-    "DOWNLOADERS_DIR",
-    "RAW_DATA_DIR",
-    "SOURCE_DATA_DIR",
-    "BACKUPS_DIR",
+    "PACKS_ROOT",
+    "CLOUD_CACHE_ROOT",
+    "INSTALL_MODE",
+    "RUNTIME_MODE",
+    "APP_HOST",
+    "APP_PORT",
+    "APP_URL",
+    "SITE_URL",
+    "ACCOUNT_URL",
     "get_country_dir",
     "get_country_index",
     "get_dataset_path",
@@ -223,6 +246,7 @@ __all__ = [
     "get_data_folder",
     "get_catalog_path",
     "load_catalog",
+    "load_full_catalog",
     "load_source_metadata",
     "get_source_by_topic",
     "clear_metadata_cache",
@@ -232,6 +256,19 @@ __all__ = [
     "log_error_to_cloud",
     "log_missing_region_to_cloud",
     "logger",
+    "PACK_STATE_PATH",
+    "build_active_catalog",
+    "get_runtime_pack_summary",
+    "load_pack_state",
+    "materialize_active_data_root",
+    "save_pack_state",
+    "set_active_pack_ids",
+    "install_pack_from_local_catalog",
+    "install_pack_from_manifest",
+    "install_pack_from_manifest_ref",
+    "uninstall_pack",
+    "PACK_STAGING_ROOT",
+    "stage_pack_artifact",
     # Geometry
     "get_geometry_lookup",
     "enrich_with_geometry",

@@ -37,8 +37,10 @@ import os
 import time
 from pathlib import Path
 
-from .paths import DATA_ROOT, CATALOG_PATH, GEOMETRY_DIR, COUNTRIES_DIR
+from .pack_state import build_active_catalog
+from .paths import CATALOG_PATH, COUNTRIES_DIR, DATA_ROOT, GEOMETRY_DIR
 from .duckdb_helpers import select_rows
+from .runtime_config import get_runtime_config
 
 logger = logging.getLogger("mapmover")
 
@@ -69,12 +71,13 @@ def _refresh_catalog_from_s3(catalog_path: Path) -> None:
     """Re-download catalog.json from R2 to local disk. Logs and swallows errors."""
     try:
         import boto3 as _boto3
-        bucket = os.environ.get("S3_BUCKET", "").strip()
+        cloud_cfg = get_runtime_config().get("cloud", {})
+        bucket = os.environ.get("S3_BUCKET", "").strip() or str(cloud_cfg.get("bucket", "")).strip()
         if not bucket:
             return
-        prefix = (os.environ.get("S3_PREFIX", "") or "").strip().strip("/")
+        prefix = (os.environ.get("S3_PREFIX", "") or str(cloud_cfg.get("prefix", ""))).strip().strip("/")
         key = f"{prefix}/catalog.json" if prefix else "catalog.json"
-        endpoint_url = os.environ.get("S3_ENDPOINT_URL")
+        endpoint_url = os.environ.get("S3_ENDPOINT_URL") or cloud_cfg.get("endpoint_url")
         region = os.environ.get("AWS_DEFAULT_REGION") or os.environ.get("AWS_REGION") or "auto"
         client = _boto3.client("s3", endpoint_url=endpoint_url, region_name=region)
         catalog_path.parent.mkdir(parents=True, exist_ok=True)
@@ -101,7 +104,7 @@ def load_catalog():
 
     catalog_path = get_catalog_path()
 
-    if os.environ.get("STORAGE_MODE", "").strip().lower() == "s3":
+    if str(get_runtime_config().get("runtime_mode", "local")).strip().lower() == "cloud":
         _refresh_catalog_from_s3(catalog_path)
 
     if not catalog_path or not catalog_path.exists():
@@ -110,13 +113,27 @@ def load_catalog():
 
     try:
         with open(catalog_path, 'r', encoding='utf-8') as f:
-            _catalog_cache = json.load(f)
+            raw_catalog = json.load(f)
+            _catalog_cache = raw_catalog
             _catalog_cache_time = now
-            logger.debug(f"Loaded catalog.json with {len(_catalog_cache.get('sources', []))} sources")
-            return _catalog_cache
+            active_catalog = build_active_catalog(raw_catalog)
+            logger.debug(f"Loaded catalog.json with {len(raw_catalog.get('sources', []))} sources")
+            return active_catalog
     except Exception as e:
         logger.error(f"Error loading catalog.json: {e}")
         return {"sources": [], "total_sources": 0}
+
+
+def load_full_catalog():
+    """Load the full catalog without active-pack filtering."""
+    global _catalog_cache, _catalog_cache_time
+
+    now = time.time()
+    if _catalog_cache is not None and (now - _catalog_cache_time) < _CATALOG_TTL_SECONDS:
+        return _catalog_cache
+
+    _ = load_catalog()
+    return _catalog_cache or {"sources": [], "total_sources": 0}
 
 
 def get_source_path(source_id: str):

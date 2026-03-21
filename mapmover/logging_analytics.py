@@ -7,12 +7,15 @@ import logging
 from datetime import datetime
 from pathlib import Path
 
-# Base directory for file paths
-BASE_DIR = Path(__file__).resolve().parent.parent
+from .paths import LOGS_DIR, ensure_dir
 
 # Set up logging
-logs_dir = BASE_DIR / "logs"
-logs_dir.mkdir(exist_ok=True)
+try:
+    logs_dir = ensure_dir(LOGS_DIR)
+    _local_logs_enabled = True
+except OSError:
+    logs_dir = LOGS_DIR
+    _local_logs_enabled = False
 
 error_log_path = logs_dir / "errors.log"
 
@@ -24,18 +27,17 @@ logger.setLevel(logging.INFO)
 for handler in logger.handlers[:]:
     logger.removeHandler(handler)
 
-# File handler - all logs go to file
-file_handler = logging.FileHandler(error_log_path)
-file_handler.setLevel(logging.INFO)
-file_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
-
 # Console handler (optional but useful for debugging)
 console_handler = logging.StreamHandler()
 console_handler.setLevel(logging.INFO)
 console_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
 
-# Add handlers
-logger.addHandler(file_handler)
+# File handler - only when the runtime log dir is writable
+if _local_logs_enabled:
+    file_handler = logging.FileHandler(error_log_path)
+    file_handler.setLevel(logging.INFO)
+    file_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+    logger.addHandler(file_handler)
 logger.addHandler(console_handler)
 
 # Prevent propagation to root logger (avoids duplicate logs)
@@ -43,7 +45,8 @@ logger.propagate = False
 
 # Query analytics logger - tracks usage patterns
 analytics_dir = logs_dir / "analytics"
-analytics_dir.mkdir(exist_ok=True)
+if _local_logs_enabled:
+    analytics_dir.mkdir(exist_ok=True)
 analytics_log_path = analytics_dir / "query_analytics.jsonl"
 
 # Initialize Supabase client (lazy loaded to avoid import issues)
@@ -97,12 +100,13 @@ def log_conversation(session_id, query, response_text, intent=None,
     }
 
     # Always log locally first
-    try:
-        with open(analytics_log_path, 'a', encoding='utf-8') as f:
-            json.dump(analytics_data, f, ensure_ascii=False)
-            f.write('\n')
-    except Exception as e:
-        logger.error(f"Failed to log analytics locally: {e}")
+    if _local_logs_enabled:
+        try:
+            with open(analytics_log_path, 'a', encoding='utf-8') as f:
+                json.dump(analytics_data, f, ensure_ascii=False)
+                f.write('\n')
+        except Exception as e:
+            logger.error(f"Failed to log analytics locally: {e}")
 
     # Log to Supabase session if configured
     supabase_client = get_supabase()
@@ -136,7 +140,7 @@ def log_missing_geometry(country_names, query=None, dataset=None, region=None):
         return
 
     # Log locally
-    missing_log_path = BASE_DIR / "logs" / "analytics" / "missing_geometries.jsonl"
+    missing_log_path = logs_dir / "analytics" / "missing_geometries.jsonl"
     missing_log_path.parent.mkdir(parents=True, exist_ok=True)
 
     log_entry = {
@@ -148,12 +152,13 @@ def log_missing_geometry(country_names, query=None, dataset=None, region=None):
         "region": region
     }
 
-    try:
-        with open(missing_log_path, 'a', encoding='utf-8') as f:
-            json.dump(log_entry, f, ensure_ascii=False)
-            f.write('\n')
-    except Exception as e:
-        logger.error(f"Failed to log missing geometries locally: {e}")
+    if _local_logs_enabled:
+        try:
+            with open(missing_log_path, 'a', encoding='utf-8') as f:
+                json.dump(log_entry, f, ensure_ascii=False)
+                f.write('\n')
+        except Exception as e:
+            logger.error(f"Failed to log missing geometries locally: {e}")
 
     # Log to Supabase if configured
     supabase_client = get_supabase()
@@ -215,17 +220,18 @@ def log_missing_region_to_cloud(region_name, query=None, dataset=None):
             logger.error(f"Failed to log missing region to Supabase: {e}")
 
     # Also log locally for backup
-    try:
-        log_dir = BASE_DIR / "logs" / "analytics"
-        log_dir.mkdir(parents=True, exist_ok=True)
-        log_file = log_dir / "missing_regions.jsonl"
-        with open(log_file, 'a', encoding='utf-8') as f:
-            entry = {
-                "timestamp": datetime.now().isoformat(),
-                "region_name": region_name,
-                "query": query,
-                "dataset": dataset
-            }
-            f.write(json.dumps(entry) + "\n")
-    except Exception as e:
-        logger.error(f"Failed to log missing region locally: {e}")
+    if _local_logs_enabled:
+        try:
+            log_dir = logs_dir / "analytics"
+            log_dir.mkdir(parents=True, exist_ok=True)
+            log_file = log_dir / "missing_regions.jsonl"
+            with open(log_file, 'a', encoding='utf-8') as f:
+                entry = {
+                    "timestamp": datetime.now().isoformat(),
+                    "region_name": region_name,
+                    "query": query,
+                    "dataset": dataset
+                }
+                f.write(json.dumps(entry) + "\n")
+        except Exception as e:
+            logger.error(f"Failed to log missing region locally: {e}")

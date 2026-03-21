@@ -4,7 +4,7 @@ from fastapi import APIRouter
 
 from mapmover.disaster_filters import apply_location_filters, get_default_min_year
 from mapmover.duckdb_helpers import (
-    duckdb_available, is_s3_mode, make_cache_key, parquet_available,
+    duckdb_available, is_cloud_mode, make_cache_key, parquet_available,
     select_filtered_event_rows, select_filtered_event_rows_cached,
 )
 from mapmover.logging_analytics import logger

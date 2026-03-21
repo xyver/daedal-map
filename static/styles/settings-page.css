@@ -326,6 +326,14 @@ body.settings-page-body {
   color: #63b9ff;
 }
 
+.pack-more-info.pack-more-info-btn {
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  font: inherit;
+}
+
 .packs-loading {
   color: rgba(110, 196, 255, 0.4);
   font-size: 13px;
@@ -373,6 +381,150 @@ body.settings-page-body {
 .packs-apply-btn {
   padding: 8px 20px;
   font-size: 13px;
+}
+
+.pack-status-modal-panel {
+  max-width: 760px;
+}
+
+.pack-status-body {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.pack-status-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.pack-status-pill {
+  display: inline-flex;
+  align-self: flex-start;
+  padding: 6px 12px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  background: rgba(99, 185, 255, 0.12);
+  border: 1px solid rgba(99, 185, 255, 0.25);
+  color: #63b9ff;
+}
+
+.pack-status-pill.stage-ready {
+  color: #ffcf6b;
+  background: rgba(161, 106, 16, 0.2);
+  border-color: rgba(255, 207, 107, 0.26);
+}
+
+.pack-status-pill.stage-blocked {
+  color: #ff9b8f;
+  background: rgba(125, 47, 43, 0.18);
+  border-color: rgba(255, 155, 143, 0.24);
+}
+
+.pack-status-pill.stage-published {
+  color: #72e1b9;
+  background: rgba(43, 125, 95, 0.18);
+  border-color: rgba(114, 225, 185, 0.28);
+}
+
+.pack-status-copy {
+  color: #c7d8ea;
+  line-height: 1.55;
+  font-size: 14px;
+}
+
+.pack-status-tracker {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 12px;
+}
+
+.pack-status-step {
+  background: rgba(7, 20, 36, 0.6);
+  border: 1px solid rgba(110, 196, 255, 0.12);
+  border-radius: 12px;
+  padding: 12px;
+}
+
+.pack-status-step.is-done {
+  border-color: rgba(114, 225, 185, 0.28);
+  background: rgba(15, 48, 40, 0.52);
+}
+
+.pack-status-step.is-current {
+  border-color: rgba(255, 207, 107, 0.3);
+  background: rgba(58, 43, 14, 0.52);
+}
+
+.pack-status-step-num {
+  display: inline-flex;
+  width: 22px;
+  height: 22px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: rgba(99, 185, 255, 0.16);
+  color: #63b9ff;
+  font-size: 11px;
+  font-weight: 700;
+  margin-bottom: 8px;
+}
+
+.pack-status-step-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: #d9e5f3;
+  margin-bottom: 4px;
+}
+
+.pack-status-step-copy {
+  font-size: 11px;
+  line-height: 1.45;
+  color: #7fa6c7;
+}
+
+.pack-status-meta {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+}
+
+.pack-status-card {
+  background: rgba(7, 20, 36, 0.6);
+  border: 1px solid rgba(110, 196, 255, 0.12);
+  border-radius: 12px;
+  padding: 14px;
+}
+
+.pack-status-card h4 {
+  margin: 0 0 8px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: #7fa6c7;
+}
+
+.pack-status-card p {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: #d9e5f3;
+}
+
+.pack-status-list {
+  margin: 0;
+  padding-left: 18px;
+  color: #d9e5f3;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.pack-status-list li + li {
+  margin-top: 4px;
 }
 
 .settings-section + .settings-section {

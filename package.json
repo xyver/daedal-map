@@ -1,15 +1,10 @@
 {
-  "name": "county-map-server",
-  "version": "1.0.0",
-  "description": "Tileserver-GL project with MBTiles and custom styles",
+  "name": "daedalmap-runtime",
+  "version": "2.0.0",
+  "private": true,
+  "description": "Legacy package metadata for the DaedalMap open runtime repository.",
   "scripts": {
-    "start": "concurrently \"npm run dev\" \"venv/bin/uvicorn mapmover:app --host 0.0.0.0 --port 8000 --reload\"",
-    "dev": "npx tileserver-gl --config config.json --port 8080"
-  },
-  "dependencies": {
-    "tileserver-gl": "^5.3.1"
-  },
-  "devDependencies": {
-    "concurrently": "^9.2.0"
+    "start": "python -m uvicorn app:app --host 0.0.0.0 --port 7000",
+    "dev:server": "python -m uvicorn app:app --host 0.0.0.0 --port 7000 --reload"
   }
 }

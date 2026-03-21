@@ -121,6 +121,7 @@ async def get_tsunamis_geojson(
             "tsunamis",
             loc_prefix=loc_prefix,
             affected_loc_id=affected_loc_id,
+            event_id_col="loc_id",
         )
 
         features = build_geojson_features(df, get_tsunami_property_builders())

@@ -106,7 +106,7 @@ def _load_earthquakes_duckdb(
         if not affected_ids:
             return pd.DataFrame()
         placeholders = ", ".join("?" for _ in affected_ids)
-        where.append(f'"event_id" IN ({placeholders})')
+        where.append(f'"loc_id" IN ({placeholders})')
         params.extend(affected_ids)
 
     sql = "SELECT * FROM read_parquet(?)"

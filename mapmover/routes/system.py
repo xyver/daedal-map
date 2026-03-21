@@ -11,7 +11,7 @@ from fastapi import APIRouter, Request, Response
 from fastapi.responses import HTMLResponse
 
 from mapmover.auth_context import build_session_cache_key, get_authenticated_user
-from mapmover import ACCOUNT_URL, CacheSignature, logger, session_manager
+from mapmover import ACCOUNT_URL, CacheSignature, clear_metadata_cache, initialize_catalog, logger, session_manager
 from mapmover.order_queue import order_queue
 from mapmover.routes.disasters.helpers import msgpack_error, msgpack_response
 from mapmover.security import get_client_ip, rate_limiter
@@ -165,14 +165,14 @@ async def submit_feedback(request: Request):
 @router.get("/debug/cache")
 async def debug_cache():
     """List files in the S3 local cache directory (S3 mode only)."""
-    from mapmover.duckdb_helpers import is_s3_mode
+    from mapmover.duckdb_helpers import is_cloud_mode
     from mapmover.paths import DATA_ROOT
     cache_dir = DATA_ROOT
     if not cache_dir.exists():
         return {"error": f"cache dir does not exist: {cache_dir}"}
     files = sorted(str(p.relative_to(cache_dir)) for p in cache_dir.rglob("*") if p.is_file())
     return {
-        "s3_mode": is_s3_mode(),
+        "cloud_mode": is_cloud_mode(),
         "cache_dir": str(cache_dir),
         "file_count": len(files),
         "files": files,
@@ -183,17 +183,17 @@ async def debug_cache():
 async def debug_s3():
     """Test DuckDB S3/httpfs connectivity against a known small file in R2."""
     import traceback
-    from mapmover.duckdb_helpers import is_s3_mode, _make_connection, path_to_uri
+    from mapmover.duckdb_helpers import _make_connection, is_cloud_mode, path_to_uri
     from mapmover.paths import DATA_ROOT
 
-    if not is_s3_mode():
-        return {"s3_mode": False, "error": "Not in S3 mode"}
+    if not is_cloud_mode():
+        return {"cloud_mode": False, "error": "Not in cloud mode"}
 
     # Use a small known file: global/un_sdg/06/all_countries.parquet
     test_path = DATA_ROOT / "global" / "un_sdg" / "06" / "all_countries.parquet"
     uri = path_to_uri(test_path)
 
-    result = {"s3_mode": True, "uri": uri}
+    result = {"cloud_mode": True, "uri": uri}
     try:
         con = _make_connection()
         rows = con.execute("SELECT COUNT(*) FROM read_parquet(?)", [uri]).fetchone()
@@ -311,10 +311,10 @@ async def get_catalog_sources(req: Request):
     data_type, scope, topic_tags.  Full catalog metadata is not included to
     keep the response small.
     """
-    from mapmover.data_loading import load_catalog
+    from mapmover.data_loading import load_full_catalog
 
     entitled = _get_entitled_packs(req)
-    all_sources = load_catalog().get("sources", [])
+    all_sources = load_full_catalog().get("sources", [])
 
     SUMMARY_KEYS = {"source_id", "pack_id", "source_name", "category", "data_type", "scope", "topic_tags"}
 
@@ -341,10 +341,10 @@ async def get_catalog_packs_list(req: Request):
     No auth required - pack_id assignment is the publish gate.
     Supports ?format=json for the .com packs browsing page.
     """
-    from mapmover.data_loading import load_catalog
+    from mapmover.data_loading import load_full_catalog
     from fastapi.responses import JSONResponse
 
-    all_sources = load_catalog().get("sources", [])
+    all_sources = load_full_catalog().get("sources", [])
     published = [s for s in all_sources if s.get("pack_id")]
 
     pack_map = {}
@@ -391,11 +391,11 @@ async def get_catalog_pack(pack_id: str, req: Request):
     Unpublished sources require master/bypass.
     Supports ?format=json for the .com public pack profile pages.
     """
-    from mapmover.data_loading import load_catalog
+    from mapmover.data_loading import load_full_catalog
     from fastapi.responses import JSONResponse
 
     entitled = _get_entitled_packs(req)
-    all_sources = load_catalog().get("sources", [])
+    all_sources = load_full_catalog().get("sources", [])
 
     pack_sources = [s for s in all_sources if s.get("pack_id") == pack_id]
     if not pack_sources:
@@ -508,6 +508,182 @@ async def get_catalog_overlays(req: Request):
     )
 
 
+@router.get("/api/runtime/packs/state")
+async def get_runtime_packs_state():
+    """Return runtime-local pack installation and activation state."""
+    from mapmover.data_loading import load_full_catalog
+    from mapmover.pack_state import get_runtime_pack_summary
+    from mapmover.runtime_config import get_runtime_config
+    from mapmover.paths import DATA_ROOT, INSTALL_MODE, PACKS_ROOT, RUNTIME_MODE
+
+    summary = get_runtime_pack_summary(load_full_catalog())
+    cloud_cfg = get_runtime_config().get("cloud", {})
+    summary.update({
+        "install_mode": INSTALL_MODE,
+        "runtime_mode": RUNTIME_MODE,
+        "data_root": str(DATA_ROOT),
+        "packs_root": str(PACKS_ROOT),
+        "cloud_prefix": str(cloud_cfg.get("prefix", "")).strip(),
+        "staging_prefix": str(os.getenv("S3_STAGING_PREFIX", "staging")).strip(),
+        "published_prefix": str(os.getenv("S3_PUBLISHED_PREFIX", "published")).strip(),
+    })
+    return msgpack_response(summary)
+
+
+@router.get("/api/runtime/packs/release-markers")
+async def get_runtime_pack_release_markers():
+    """Return optional pack release markers for release-lane visibility."""
+    from mapmover.paths import APP_ROOT
+
+    candidates = []
+    configured = os.getenv("PACK_RELEASE_MARKERS_PATH", "").strip()
+    if configured:
+        candidates.append(Path(configured))
+
+    # Local dev convenience: if the private repo is present beside the public app,
+    # surface the latest generated marker file without requiring a second server.
+    candidates.append(
+        APP_ROOT.parent / "county-map-private" / "build" / "qa" / "results" / "pack_release_markers_latest.json"
+    )
+
+    for candidate in candidates:
+        try:
+            if candidate.exists():
+                with candidate.open("r", encoding="utf-8") as fh:
+                    payload = json.load(fh)
+                if isinstance(payload, dict):
+                    return msgpack_response(payload)
+        except Exception:
+            continue
+
+    return msgpack_response({"generated_at": None, "packs": []})
+
+
+@router.post("/api/runtime/packs/active")
+async def set_runtime_active_packs(req: Request):
+    """Set the runtime-local active pack ids and refresh the active catalog."""
+    from mapmover.data_loading import load_full_catalog
+    from mapmover.pack_state import materialize_active_data_root, set_active_pack_ids
+
+    try:
+        body = await decode_request_body(req)
+        active_pack_ids = body.get("active_pack_ids", [])
+        catalog_mode = body.get("catalog_mode") or None
+        state = set_active_pack_ids(active_pack_ids, catalog_mode=catalog_mode)
+        materialization = materialize_active_data_root(load_full_catalog(), state)
+        clear_metadata_cache()
+        initialize_catalog()
+        return msgpack_response({"ok": True, "state": state, "materialization": materialization})
+    except Exception as exc:
+        logger.error(f"Error updating runtime active packs: {exc}")
+        return msgpack_error(str(exc), 500)
+
+
+@router.post("/api/runtime/packs/install-local")
+async def install_runtime_pack_local(req: Request):
+    """Bootstrap a local installed pack from the current full data tree."""
+    from mapmover.data_loading import load_full_catalog
+    from mapmover.pack_manager import install_pack_from_local_catalog
+
+    try:
+        body = await decode_request_body(req)
+        pack_id = str(body.get("pack_id", "")).strip()
+        source_data_root = body.get("source_data_root") or None
+        activate = bool(body.get("activate", False))
+        replace_existing = bool(body.get("replace_existing", True))
+        if not pack_id:
+            return msgpack_error("pack_id is required", 400)
+
+        result = install_pack_from_local_catalog(
+            pack_id,
+            load_full_catalog(),
+            source_data_root=source_data_root,
+            activate=activate,
+            replace_existing=replace_existing,
+        )
+        clear_metadata_cache()
+        initialize_catalog()
+        return msgpack_response({"ok": True, **result})
+    except Exception as exc:
+        logger.error(f"Error installing runtime pack locally: {exc}")
+        return msgpack_error(str(exc), 500)
+
+
+@router.post("/api/runtime/packs/uninstall")
+async def uninstall_runtime_pack(req: Request):
+    """Remove an installed runtime pack and refresh the active catalog if needed."""
+    from mapmover.data_loading import load_full_catalog
+    from mapmover.pack_manager import uninstall_pack
+
+    try:
+        body = await decode_request_body(req)
+        pack_id = str(body.get("pack_id", "")).strip()
+        if not pack_id:
+            return msgpack_error("pack_id is required", 400)
+
+        result = uninstall_pack(pack_id, load_full_catalog())
+        clear_metadata_cache()
+        initialize_catalog()
+        return msgpack_response({"ok": True, **result})
+    except Exception as exc:
+        logger.error(f"Error uninstalling runtime pack: {exc}")
+        return msgpack_error(str(exc), 500)
+
+
+@router.post("/api/runtime/packs/install-manifest")
+async def install_runtime_pack_manifest(req: Request):
+    """Install a staged pack artifact from a local manifest path."""
+    from mapmover.pack_manager import install_pack_from_manifest
+
+    try:
+        body = await decode_request_body(req)
+        manifest_path = body.get("manifest_path")
+        activate = bool(body.get("activate", False))
+        replace_existing = bool(body.get("replace_existing", True))
+        if not manifest_path:
+            return msgpack_error("manifest_path is required", 400)
+
+        result = install_pack_from_manifest(
+            manifest_path,
+            activate=activate,
+            replace_existing=replace_existing,
+        )
+        clear_metadata_cache()
+        initialize_catalog()
+        return msgpack_response({"ok": True, **result})
+    except Exception as exc:
+        logger.error(f"Error installing runtime pack from manifest: {exc}")
+        return msgpack_error(str(exc), 500)
+
+
+@router.post("/api/runtime/packs/install-ref")
+async def install_runtime_pack_ref(req: Request):
+    """Stage and install a pack artifact from a manifest reference."""
+    from mapmover.pack_manager import install_pack_from_manifest_ref
+
+    try:
+        body = await decode_request_body(req)
+        manifest_ref = body.get("manifest_ref")
+        artifact_base_ref = body.get("artifact_base_ref") or None
+        activate = bool(body.get("activate", False))
+        replace_existing = bool(body.get("replace_existing", True))
+        if not manifest_ref:
+            return msgpack_error("manifest_ref is required", 400)
+
+        result = install_pack_from_manifest_ref(
+            manifest_ref,
+            artifact_base_ref=artifact_base_ref,
+            activate=activate,
+            replace_existing=replace_existing,
+        )
+        clear_metadata_cache()
+        initialize_catalog()
+        return msgpack_response({"ok": True, **result})
+    except Exception as exc:
+        logger.error(f"Error installing runtime pack from manifest ref: {exc}")
+        return msgpack_error(str(exc), 500)
+
+
 @router.post("/api/admin/catalog/refresh")
 async def admin_catalog_refresh(req: Request):
     """
@@ -571,12 +747,14 @@ async def serve_index():
 
 
 @router.get("/settings", response_class=HTMLResponse)
-async def serve_settings_page():
+async def serve_settings_page(request: Request):
     """Serve the standalone settings/account page."""
     from mapmover import SITE_URL
     template_path = BASE_DIR / "templates" / "settings.html"
     html = template_path.read_text(encoding="utf-8")
     html = html.replace("{{site_url}}", SITE_URL)
+    api_base = str(request.base_url).rstrip("/")
+    html = html.replace("{{api_base}}", api_base)
     return html
 
 
