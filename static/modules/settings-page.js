@@ -30,6 +30,7 @@ function getPackSiteBase() {
 
 let runtimePackState = null;
 let releaseMarkerMap = new Map();
+let releaseSourceMap = new Map();
 let currentPackLookup = new Map();
 
 function apiUrl(path) {
@@ -90,9 +91,12 @@ async function loadReleaseMarkers() {
   try {
     const data = await fetchMsgpack(apiUrl('/api/runtime/packs/release-markers'));
     const packs = Array.isArray(data?.packs) ? data.packs : [];
+    const sources = Array.isArray(data?.sources) ? data.sources : [];
     releaseMarkerMap = new Map(packs.map(pack => [pack.pack_id, pack]));
+    releaseSourceMap = new Map(sources.map(source => [source.source_id, source]));
   } catch (_) {
     releaseMarkerMap = new Map();
+    releaseSourceMap = new Map();
   }
 }
 
@@ -169,6 +173,36 @@ function buildPacksFromReleaseMarkers() {
   }
 
   return { published, internal };
+}
+
+function buildInternalSourcesFromReleaseMarkers() {
+  const siteOrigin = getPackSiteBase();
+  const internal = [];
+
+  for (const source of releaseSourceMap.values()) {
+    internal.push({
+      id: source.source_id,
+      label: prettifyId(source.source_id),
+      description: source.notes || `${source.release_state} source`,
+      category: 'source inventory',
+      source_count: 1,
+      pack_page: `${siteOrigin}/packs/${source.source_id}`,
+      release_marker: {
+        pack_id: source.source_id,
+        source_ids: [source.source_id],
+        qa_suite: source.qa_suite,
+        qa_suite_exists: Boolean(source.qa_suite_exists),
+        staged_in_s3: Boolean(source.local_available),
+        published_to_s3: Boolean(source.published_to_s3),
+        already_published: false,
+        ready_for_publish: false,
+        next_step: source.hosted_available ? 'Assign pack_id and move through release packaging.' : 'Keep in internal source inventory.',
+        reasons: source.notes ? [source.notes] : [],
+      },
+    });
+  }
+
+  return internal;
 }
 
 function openPackStatusModal(item) {
@@ -389,10 +423,12 @@ function renderPacksSection(sources, entitledPackIds, isMaster, runtimeState) {
 
   const hasCatalogSources = Array.isArray(sources) && sources.length > 0;
   const markerFallback = !hasCatalogSources && isMaster && releaseMarkerMap.size > 0;
+  const controlInternal = isMaster ? buildInternalSourcesFromReleaseMarkers() : [];
   const { published, internal } = hasCatalogSources
     ? buildPacksFromSources(sources)
     : (markerFallback ? buildPacksFromReleaseMarkers() : { published: [], internal: [] });
-  currentPackLookup = new Map([...published, ...internal].map(item => [item.id, item]));
+  const mergedInternal = [...internal, ...controlInternal.filter(item => !internal.some(existing => existing.id === item.id))];
+  currentPackLookup = new Map([...published, ...mergedInternal].map(item => [item.id, item]));
   const hasReleaseMarkers = releaseMarkerMap.size > 0;
   const cloudPrefix = String(runtimeState?.cloud_prefix || '').trim();
   const stagingPrefix = String(runtimeState?.staging_prefix || 'staging').trim();
@@ -408,7 +444,7 @@ function renderPacksSection(sources, entitledPackIds, isMaster, runtimeState) {
     : hasReleaseMarkers
     ? published.filter(item => !item.release_marker?.already_published)
     : (usingStagingLane ? published : []);
-  const trulyInternal = markerFallback ? [] : internal;
+  const trulyInternal = markerFallback ? controlInternal : mergedInternal;
   const defaultActive = published.map(p => p.id);
   const activeIds = runtimeState?.active_pack_ids?.length ? runtimeState.active_pack_ids : defaultActive;
   const active = new Set(activeIds);
