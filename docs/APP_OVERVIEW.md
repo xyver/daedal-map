@@ -7,7 +7,7 @@ The current app combines:
 - map-first rendering and interaction
 - public and maintained data sources
 - runtime data access through local files or object storage
-- optional account-backed persistence and settings
+- optional account-linked runtime access
 
 ## Core Mental Model
 
@@ -22,8 +22,8 @@ The runtime turns those into executable map/data operations and renders the resu
 
 - `/`
   Main app/map surface
-- `/settings`
-  Account/workspace settings surface
+- `/reference/admin-levels`
+  Runtime helper endpoint for map admin-level labels
 
 ## Current Runtime Direction
 
@@ -48,9 +48,17 @@ Important ideas:
 
 Guest use remains important for evaluation and simple exploration.
 
-Logged-in use is where the app is starting to mean more:
-- user-scoped persistence
-- settings-backed workspace behavior
-- future entitlement-aware access
+Login and account ownership now live on `daedalmap.com`, not inside the public app.
+
+The public app still:
+- accepts authenticated runtime requests
+- reads user/account context where needed for runtime behavior
+- links users out to the private account surface
+
+The private site now owns:
+- login/signup
+- account overview
+- billing/credits
+- admin runtime/release visibility
 
 This is still evolving.

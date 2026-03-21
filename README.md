@@ -18,7 +18,7 @@ DaedalMap is built around three ideas:
 Typical use cases:
 - show earthquakes, floods, wildfires, storms, volcanoes, or tsunamis for a place and time window
 - compare population, economic, and disaster context in the same workflow
-- move between hosted demo use, logged-in workspace use, and local/self-hosted operation without changing the basic mental model
+- move between hosted demo use, account-linked runtime access, and local/self-hosted operation without changing the basic mental model
 
 ## Current Runtime Shape
 
@@ -66,12 +66,11 @@ Logged-in users currently get:
 - authenticated session identity
 - user-scoped frontend persistence
 - user-scoped backend session cache
-- a dedicated `/settings` page for account/workspace settings
+- account-owned settings and login on `daedalmap.com`
 
-This is the beginning of a larger account/workspace model, not the final form. The direction is:
-- stronger persistence for signed-in users
-- clearer pack visibility and entitlements
-- more meaningful settings/workspace behavior
+The public app no longer owns the account/settings UI.
+`app.daedalmap.com` stays focused on the runtime and map engine, while `.com`
+owns login, account, billing, and admin/runtime control-plane views.
 
 ## Quick Start
 
@@ -216,13 +215,8 @@ These are intentionally distinct.
 
 ## Settings Page
 
-The app now has a real settings page:
-- `/settings`
-
-This page is intended for:
-- account-backed workspace settings
-- persistence-related behavior
-- user-facing configuration that belongs in the app itself
+The public app no longer ships a standalone settings page.
+`/settings` now redirects to the private account surface on `daedalmap.com`.
 
 Some local deployment/filesystem setup concerns were intentionally removed from the visible settings UI for now. Those belong more naturally in local/self-host guidance than in the everyday app settings surface.
 
@@ -232,7 +226,7 @@ Important files and folders:
 - `app.py` - FastAPI app entrypoint
 - `mapmover/` - runtime logic, routes, path helpers, DuckDB helpers
 - `static/` - frontend app modules and styles
-- `templates/` - app HTML, including `/settings`
+- `templates/` - app HTML shell
 - `supabase_client.py` - auth/control-plane integration
 - `docs/` - local documentation for schemas, runtime notes, and reference material
 

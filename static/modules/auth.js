@@ -171,10 +171,13 @@ function updateDom() {
 
 async function handleAuthClick() {
   if (!authConfig?.enabled) return;
+  if (isAuthenticated()) {
+    window.location.href = `${SITE_BASE}/account`;
+    return;
+  }
   const returnTo = encodeURIComponent(window.location.href);
-  // Use the private account route as the single user-facing auth entry point.
-  // It redirects signed-out users to /login and can hand an existing site
-  // session back to the app via the return target.
+  // Signed-out users enter through the private account route so .com can
+  // drive login and then hand the session back to the app.
   window.location.href = `${SITE_BASE}/account?return=${returnTo}`;
 }
 
