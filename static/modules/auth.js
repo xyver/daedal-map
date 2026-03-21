@@ -176,7 +176,11 @@ async function handleAuthClick() {
     window.location.href = `${SITE_BASE}/settings/account?return=${returnTo}`;
     return;
   }
-  window.location.href = `${SITE_BASE}/login?return=${returnTo}`;
+  // Always enter through the account route on daedalmap.com.
+  // It can redirect unauthenticated users to /login, and it can also
+  // hand an existing .com session back to the app without exposing a
+  // separate login chooser in the public runtime.
+  window.location.href = `${SITE_BASE}/account?return=${returnTo}`;
 }
 
 export const AuthManager = {
