@@ -1,4 +1,4 @@
-import { AuthManager, getCurrentProfile, getCurrentUser, isAuthenticated, onAuthChanged, updateUser } from './auth.js';
+import { AuthManager, getCurrentProfile, onAuthChanged } from './auth.js';
 import { fetchMsgpack, postMsgpack } from './utils/fetch.js';
 
 // ============================================================================
@@ -29,9 +29,6 @@ function getPackSiteBase() {
 }
 
 let runtimePackState = null;
-let releaseMarkerMap = new Map();
-let releaseSourceMap = new Map();
-let currentPackLookup = new Map();
 
 function apiUrl(path) {
   if (!path) return path;
@@ -87,19 +84,6 @@ async function uninstallRuntimePack(packId) {
   return result;
 }
 
-async function loadReleaseMarkers() {
-  try {
-    const data = await fetchMsgpack(apiUrl('/api/runtime/packs/release-markers'));
-    const packs = Array.isArray(data?.packs) ? data.packs : [];
-    const sources = Array.isArray(data?.sources) ? data.sources : [];
-    releaseMarkerMap = new Map(packs.map(pack => [pack.pack_id, pack]));
-    releaseSourceMap = new Map(sources.map(source => [source.source_id, source]));
-  } catch (_) {
-    releaseMarkerMap = new Map();
-    releaseSourceMap = new Map();
-  }
-}
-
 function buildPacksFromSources(sources) {
   const siteOrigin = getPackSiteBase();
   // Published: one card per unique pack_id.
@@ -119,7 +103,6 @@ function buildPacksFromSources(sources) {
   }
 
   const published = [...packMap.entries()].map(([pack_id, src]) => {
-    const marker = releaseMarkerMap.get(pack_id) || null;
     const count = packSourceCount.get(pack_id) || 1;
     const desc = count > 1
       ? (src.topic_tags || []).slice(0, 4).join(', ')
@@ -131,173 +114,9 @@ function buildPacksFromSources(sources) {
       category: src.category || 'other',
       source_count: count,
       pack_page: `${siteOrigin}/packs/${pack_id}`,
-      release_marker: marker,
     };
   });
-
-  // Internal: sources with no pack_id
-  const internal = sources
-    .filter(s => !s.pack_id)
-    .map(src => ({
-      id: src.source_id,
-      label: src.source_name || prettifyId(src.source_id),
-      description: (src.topic_tags || []).slice(0, 3).join(', '),
-      category: src.category || 'other',
-    }));
-
-  return { published, internal };
-}
-
-function buildPacksFromReleaseMarkers() {
-  const siteOrigin = getPackSiteBase();
-  const published = [];
-  const internal = [];
-
-  for (const marker of releaseMarkerMap.values()) {
-    const sourceIds = Array.isArray(marker.source_ids) ? marker.source_ids : [];
-    const sourceCount = sourceIds.length || 1;
-    const item = {
-      id: marker.pack_id,
-      label: prettifyId(marker.pack_id),
-      description: sourceCount > 1 ? `${sourceCount} sources` : (sourceIds[0] || 'Pack in review'),
-      category: 'review',
-      source_count: sourceCount,
-      pack_page: `${siteOrigin}/packs/${marker.pack_id}`,
-      release_marker: marker,
-    };
-    if (marker.already_published) {
-      published.push(item);
-    } else {
-      internal.push(item);
-    }
-  }
-
-  return { published, internal };
-}
-
-function buildInternalSourcesFromReleaseMarkers() {
-  const siteOrigin = getPackSiteBase();
-  const internal = [];
-
-  for (const source of releaseSourceMap.values()) {
-    internal.push({
-      id: source.source_id,
-      label: prettifyId(source.source_id),
-      description: source.notes || `${source.release_state} source`,
-      category: 'source inventory',
-      source_count: 1,
-      pack_page: `${siteOrigin}/packs/${source.source_id}`,
-      release_marker: {
-        pack_id: source.source_id,
-        source_ids: [source.source_id],
-        qa_suite: source.qa_suite,
-        qa_suite_exists: Boolean(source.qa_suite_exists),
-        staged_in_s3: Boolean(source.local_available),
-        published_to_s3: Boolean(source.published_to_s3),
-        already_published: false,
-        ready_for_publish: false,
-        next_step: source.hosted_available ? 'Assign pack_id and move through release packaging.' : 'Keep in internal source inventory.',
-        reasons: source.notes ? [source.notes] : [],
-      },
-    });
-  }
-
-  return internal;
-}
-
-function openPackStatusModal(item) {
-  const modal = document.getElementById('packStatusModal');
-  if (!modal || !item) return;
-
-  const marker = item.release_marker || {};
-  const title = document.getElementById('packStatusTitle');
-  const subtitle = document.getElementById('packStatusSubtitle');
-  const stage = document.getElementById('packStatusStage');
-  const copy = document.getElementById('packStatusCopy');
-  const tracker = document.getElementById('packStatusTracker');
-  const next = document.getElementById('packStatusNext');
-  const reasons = document.getElementById('packStatusReasons');
-  const meta = document.getElementById('packStatusMeta');
-
-  const stageClass = marker.already_published
-    ? 'stage-published'
-    : marker.ready_for_publish
-      ? 'stage-ready'
-      : 'stage-blocked';
-  const stageLabel = marker.already_published
-    ? 'Published'
-    : marker.ready_for_publish
-      ? 'Ready For Publish'
-      : 'In Review';
-  const stageCopy = marker.already_published
-    ? 'This pack has been promoted into the published lane and is ready for normal runtime use.'
-    : marker.ready_for_publish
-      ? 'This pack is staged, has a QA suite, and is ready for publish promotion.'
-      : 'This pack is still moving through staging and QA before it can be promoted.';
-
-  const steps = [
-    { label: 'Catalog', done: true, copy: 'Pack is defined in the runtime catalog.' },
-    { label: 'Staging', done: Boolean(marker.staged_in_s3), copy: 'Files are present in the staging lane.' },
-    { label: 'QA Suite', done: Boolean(marker.qa_suite_exists), copy: marker.qa_suite || 'Needs dedicated QA suite.' },
-    { label: 'Ready', done: Boolean(marker.ready_for_publish || marker.already_published), copy: 'Release gates cleared for publish.' },
-    { label: 'Published', done: Boolean(marker.already_published), copy: 'Pack is promoted into the published lane.' },
-  ];
-  const currentIndex = steps.findIndex(step => !step.done);
-
-  if (title) title.textContent = `${item.label} Release Status`;
-  if (subtitle) subtitle.textContent = item.description || 'Pack release progress through staging, QA, and publication.';
-  if (stage) {
-    stage.className = `pack-status-pill ${stageClass}`;
-    stage.textContent = stageLabel;
-  }
-  if (copy) copy.textContent = stageCopy;
-  if (tracker) {
-    tracker.innerHTML = steps.map((step, index) => {
-      const classes = ['pack-status-step'];
-      if (step.done) classes.push('is-done');
-      if (!step.done && index === currentIndex) classes.push('is-current');
-      return `
-        <div class="${classes.join(' ')}">
-          <div class="pack-status-step-num">${index + 1}</div>
-          <div class="pack-status-step-label">${step.label}</div>
-          <div class="pack-status-step-copy">${step.copy}</div>
-        </div>
-      `;
-    }).join('');
-  }
-  if (next) {
-    next.textContent = marker.next_step || 'No next step recorded yet.';
-  }
-  if (reasons) {
-    const items = (marker.reasons || []).length
-      ? marker.reasons
-      : ['No blocking reasons recorded.'];
-    reasons.innerHTML = items.map(entry => `<li>${entry}</li>`).join('');
-  }
-  if (meta) {
-    const metaItems = [
-      `Pack ID: ${item.id}`,
-      `Sources: ${item.source_count || 1}`,
-      `QA suite: ${marker.qa_suite || 'not assigned'}`,
-      `Staged in S3: ${marker.staged_in_s3 ? 'yes' : 'no'}`,
-      `Published in S3: ${marker.published_to_s3 ? 'yes' : 'no'}`,
-    ];
-    if (item.pack_page) {
-      const pageLabel = marker.already_published ? 'Public page' : 'Future public page';
-      metaItems.push(`${pageLabel}: ${item.pack_page}`);
-    }
-    meta.innerHTML = metaItems.map(entry => `<li>${entry}</li>`).join('');
-  }
-
-  modal.classList.remove('hidden');
-  modal.setAttribute('aria-hidden', 'false');
-}
-
-function closePackStatusModal() {
-  const modal = document.getElementById('packStatusModal');
-  if (!modal) return;
-  modal.classList.add('hidden');
-  modal.setAttribute('aria-hidden', 'true');
+  return { published };
 }
 
 function groupByCategory(items) {
@@ -315,7 +134,6 @@ function describePackState(item, runtimeState, active, installed) {
   const isActive = active.has(item.id);
   const runtimeMode = runtimeState?.runtime_mode || 'local';
   const catalogMode = runtimeState?.catalog_mode || 'unmanaged_data_root';
-  const marker = item.release_marker || null;
 
   if (isInstalled) {
     return {
@@ -333,10 +151,8 @@ function describePackState(item, runtimeState, active, installed) {
   if (runtimeMode === 'cloud' && catalogMode === 'unmanaged_data_root') {
     return {
       tagClass: 'pack-tag',
-      tagText: marker?.already_published ? 'active from published' : 'active from staging',
-      detailText: marker?.already_published
-        ? 'Available directly from the released cloud catalog. Local pack install is a separate step.'
-        : 'Visible from the staging cloud lane for admin/review use. Local pack install is a separate step.',
+      tagText: 'active from cloud',
+      detailText: 'Available directly from the current cloud catalog. Local pack install is a separate step.',
       actionLabel: 'Install locally soon',
       actionClass: 'pack-install-btn',
       actionDisabled: true,
@@ -348,10 +164,8 @@ function describePackState(item, runtimeState, active, installed) {
   if (runtimeMode === 'cloud') {
     return {
       tagClass: 'pack-tag',
-      tagText: marker?.already_published ? 'published in cloud' : 'private in staging',
-      detailText: marker?.already_published
-        ? 'Released in the published cloud lane and ready for normal runtime use.'
-        : 'Visible only in the staging lane until it is promoted to published.',
+      tagText: 'available in cloud',
+      detailText: 'Visible in the current cloud lane. Published versus staging control now lives on daedalmap.com.',
       actionLabel: 'Install locally soon',
       actionClass: 'pack-install-btn',
       actionDisabled: true,
@@ -383,9 +197,7 @@ function renderPackCards(items, active, entitled, installed, runtimeState, isMas
     const installStatusTag = `<span class="${packState.tagClass}">${packState.tagText}</span>`;
     const actionDisabledAttr = packState.actionDisabled || !isEntitled ? 'disabled' : '';
     const actionButton = `<button type="button" class="pack-manage-btn ${packState.actionClass}" data-pack-id="${item.id}" ${actionDisabledAttr}>${packState.actionLabel}</button>`;
-    const infoAction = isMaster
-      ? `<button type="button" class="pack-more-info pack-more-info-btn" data-pack-info="${item.id}">More info</button>`
-      : (item.pack_page ? `<a class="pack-more-info" href="${item.pack_page}" target="_blank" rel="noopener">More info</a>` : '');
+    const infoAction = item.pack_page ? `<a class="pack-more-info" href="${item.pack_page}" target="_blank" rel="noopener">More info</a>` : '';
     return `
       <label class="pack-card ${lockedClass}" for="pack_${item.id}">
         <input type="checkbox" id="pack_${item.id}" class="pack-checkbox" data-pack-id="${item.id}"
@@ -421,30 +233,7 @@ function renderPacksSection(sources, entitledPackIds, isMaster, runtimeState) {
   const container = document.getElementById('packsList');
   if (!container) return;
 
-  const hasCatalogSources = Array.isArray(sources) && sources.length > 0;
-  const markerFallback = !hasCatalogSources && isMaster && releaseMarkerMap.size > 0;
-  const controlInternal = isMaster ? buildInternalSourcesFromReleaseMarkers() : [];
-  const { published, internal } = hasCatalogSources
-    ? buildPacksFromSources(sources)
-    : (markerFallback ? buildPacksFromReleaseMarkers() : { published: [], internal: [] });
-  const mergedInternal = [...internal, ...controlInternal.filter(item => !internal.some(existing => existing.id === item.id))];
-  currentPackLookup = new Map([...published, ...mergedInternal].map(item => [item.id, item]));
-  const hasReleaseMarkers = releaseMarkerMap.size > 0;
-  const cloudPrefix = String(runtimeState?.cloud_prefix || '').trim();
-  const stagingPrefix = String(runtimeState?.staging_prefix || 'staging').trim();
-  const publishedPrefix = String(runtimeState?.published_prefix || 'published').trim();
-  const usingStagingLane = runtimeState?.runtime_mode === 'cloud' && cloudPrefix === stagingPrefix;
-  const usingPublishedLane = runtimeState?.runtime_mode === 'cloud' && cloudPrefix === publishedPrefix;
-
-  const releasePublished = hasReleaseMarkers
-    ? published.filter(item => item.release_marker?.already_published)
-    : (usingPublishedLane ? published : []);
-  const releasePrivate = markerFallback
-    ? internal
-    : hasReleaseMarkers
-    ? published.filter(item => !item.release_marker?.already_published)
-    : (usingStagingLane ? published : []);
-  const trulyInternal = markerFallback ? controlInternal : mergedInternal;
+  const { published } = buildPacksFromSources(sources || []);
   const defaultActive = published.map(p => p.id);
   const activeIds = runtimeState?.active_pack_ids?.length ? runtimeState.active_pack_ids : defaultActive;
   const active = new Set(activeIds);
@@ -476,36 +265,14 @@ function renderPacksSection(sources, entitledPackIds, isMaster, runtimeState) {
     }
   }
 
-  if (releasePublished.length > 0) {
-    const publishedGroups = groupByCategory(releasePublished);
+  if (published.length > 0) {
+    const publishedGroups = groupByCategory(published);
     html += `
       <div class="packs-section-header">
-        <h3>Published</h3>
-        <span class="packs-section-note">Visible to normal users and released from the published lane.</span>
+        <h3>Available Runtime Packs</h3>
+        <span class="packs-section-note">Packs currently visible to this runtime from the active catalog lane.</span>
       </div>
       ${renderCategoryGroups(publishedGroups, active, entitled, installed, runtimeState, isMaster)}
-    `;
-  }
-
-  if (isMaster && releasePrivate.length > 0) {
-    const privateGroups = groupByCategory(releasePrivate);
-    html += `
-      <div class="packs-section-header packs-section-internal">
-        <h3>Private / Admin Review</h3>
-        <span class="packs-section-note">Visible only to admin/master users. These packs are still in staging or not yet released.</span>
-      </div>
-      ${renderCategoryGroups(privateGroups, active, null, installed, runtimeState, isMaster)}
-    `;
-  }
-
-  if (isMaster && trulyInternal.length > 0) {
-    const internalGroups = groupByCategory(trulyInternal);
-    html += `
-      <div class="packs-section-header packs-section-internal">
-        <h3>Internal / Unreleased</h3>
-        <span class="packs-section-note">Master account only</span>
-      </div>
-      ${renderCategoryGroups(internalGroups, active, null, installed, runtimeState, isMaster)}
     `;
   }
 
@@ -544,7 +311,6 @@ async function initPacksSection(entitledPackIds, isMaster) {
     let sources = [];
     const [runtimeState] = await Promise.all([
       loadRuntimePackState(),
-      loadReleaseMarkers(),
     ]);
     let catalogError = null;
     try {
@@ -595,14 +361,6 @@ async function initPacksSection(entitledPackIds, isMaster) {
       });
     });
 
-    document.querySelectorAll('[data-pack-info]').forEach(btn => {
-      btn.addEventListener('click', (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        const item = currentPackLookup.get(btn.dataset.packInfo);
-        openPackStatusModal(item);
-      });
-    });
   }
 
   await refreshPacksSection();
@@ -628,13 +386,8 @@ async function initPacksSection(entitledPackIds, isMaster) {
 }
 
 const els = {
-  locked: document.getElementById('settingsLocked'),
   unlocked: document.getElementById('settingsUnlocked'),
   loginBtn: document.getElementById('settingsLoginBtn'),
-  summaryPlan: document.getElementById('summaryPlan'),
-  summaryShells: document.getElementById('summaryShells'),
-  summaryPackLimit: document.getElementById('summaryPackLimit'),
-  summaryPackCount: document.getElementById('summaryPackCount'),
   backupPathInput: document.getElementById('backupPathInput'),
   saveBtn: document.getElementById('saveSettingsBtn'),
   initFoldersBtn: document.getElementById('initFoldersBtn'),
@@ -668,54 +421,6 @@ function initTabs() {
       activateTab(saved);
     }
   } catch (_) {}
-}
-
-// ============================================================================
-// PROFILE UPDATES
-// ============================================================================
-
-function setFieldStatus(elId, message, isError) {
-  const el = document.getElementById(elId);
-  if (!el) return;
-  el.textContent = message;
-  el.className = `profile-field-status ${isError ? 'error' : 'success'}`;
-  window.setTimeout(() => { el.textContent = ''; el.className = 'profile-field-status'; }, 4000);
-}
-
-async function initProfileSection() {
-  const user = getCurrentUser();
-  const emailInput = document.getElementById('profileEmail');
-  if (emailInput && user?.email) emailInput.value = user.email;
-
-  document.getElementById('profileEmailForm')?.addEventListener('submit', async (event) => {
-    event.preventDefault();
-    const newEmail = document.getElementById('profileEmail')?.value?.trim();
-    if (!newEmail) return;
-    try {
-      const { error } = await updateUser({ email: newEmail });
-      if (error) throw error;
-      setFieldStatus('profileEmailStatus', 'Confirmation sent to new email.', false);
-    } catch (err) {
-      setFieldStatus('profileEmailStatus', err.message || 'Could not update email.', true);
-    }
-  });
-
-  document.getElementById('profilePasswordForm')?.addEventListener('submit', async (event) => {
-    event.preventDefault();
-    const newPw = document.getElementById('profileNewPassword')?.value;
-    if (!newPw || newPw.length < 8) {
-      setFieldStatus('profilePasswordStatus', 'Password must be at least 8 characters.', true);
-      return;
-    }
-    try {
-      const { error } = await updateUser({ password: newPw });
-      if (error) throw error;
-      document.getElementById('profileNewPassword').value = '';
-      setFieldStatus('profilePasswordStatus', 'Password updated.', false);
-    } catch (err) {
-      setFieldStatus('profilePasswordStatus', err.message || 'Could not update password.', true);
-    }
-  });
 }
 
 function showStatus(message, type = 'success') {
@@ -819,64 +524,12 @@ function loadTimezoneSettings() {
   });
 }
 
-function renderAccountSummary() {
-  const profile = getCurrentProfile() || {};
-  const user = getCurrentUser() || {};
-  const userPacks = profile.user_packs || [];
-  const orgPacks = profile.org_packs || [];
-  const uniquePacks = new Set([...userPacks, ...orgPacks]);
-
-  if (els.summaryPlan) els.summaryPlan.textContent = profile.plan_id || 'free';
-  if (els.summaryShells) els.summaryShells.textContent = (profile.enabled_shells || ['simple']).join(', ');
-  if (els.summaryPackLimit) {
-    els.summaryPackLimit.textContent = profile.max_packs == null ? 'unlimited' : String(profile.max_packs);
-  }
-  if (els.summaryPackCount) els.summaryPackCount.textContent = String(uniquePacks.size);
-
-  const authStatus = document.getElementById('authStatusText');
-  if (authStatus && user.email) {
-    authStatus.textContent = `${user.email}: ${profile.plan_id || 'free'} plan, ${uniquePacks.size} entitled pack${uniquePacks.size === 1 ? '' : 's'}.`;
-  }
-}
-
 function initAdminSection() {
-  const profile = getCurrentProfile() || {};
-  const isMaster = profile.plan_id === 'master' || profile.is_admin === true;
-
-  const section = document.getElementById('adminSection');
-  if (section) section.classList.toggle('hidden', !isMaster);
-  if (!isMaster) return;
-
-  const refreshBtn = document.getElementById('adminCatalogRefreshBtn');
-  const status = document.getElementById('adminCatalogRefreshStatus');
-  if (!refreshBtn) return;
-
-  refreshBtn.addEventListener('click', async () => {
-    refreshBtn.disabled = true;
-    if (status) status.textContent = 'Refreshing...';
-    try {
-      const result = await postMsgpack(apiUrl('/api/admin/catalog/refresh'), {});
-      if (status) status.textContent = `Done: ${result.source_count} sources loaded.`;
-    } catch (e) {
-      if (status) status.textContent = `Error: ${e.message}`;
-    } finally {
-      refreshBtn.disabled = false;
-    }
-  });
+  return;
 }
 
 async function renderPage() {
-  const signedIn = isAuthenticated();
-  els.locked?.classList.toggle('hidden', signedIn);
-  els.unlocked?.classList.toggle('hidden', !signedIn);
-
-  if (!signedIn) {
-    return;
-  }
-
   initTabs();
-  renderAccountSummary();
-  await initProfileSection();
   const profile = getCurrentProfile() || {};
   const isMaster = profile.plan_id === 'master' || profile.is_admin === true;
   await initPacksSection(null, isMaster);
@@ -889,7 +542,8 @@ async function init() {
   loadTimezoneSettings();
 
   els.loginBtn?.addEventListener('click', () => {
-    document.getElementById('authBtn')?.click();
+    const siteBase = String(window.__SITE_URL__ || 'https://daedalmap.com').replace(/\/$/, '');
+    window.location.href = `${siteBase}/settings/account?return=${encodeURIComponent(window.location.href)}`;
   });
   els.saveBtn?.addEventListener('click', saveSettings);
   els.initFoldersBtn?.addEventListener('click', initializeFolders);
@@ -897,9 +551,6 @@ async function init() {
   onAuthChanged(() => {
     window.location.reload();
   });
-
-  document.getElementById('packStatusClose')?.addEventListener('click', closePackStatusModal);
-  document.getElementById('packStatusBackdrop')?.addEventListener('click', closePackStatusModal);
 
   await renderPage();
 }

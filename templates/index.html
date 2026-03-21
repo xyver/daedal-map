@@ -38,14 +38,14 @@
     <div id="sidebarHeader">
       <h2>Map Explorer</h2>
       <div id="sidebarHeaderButtons">
-        <button id="authBtn" title="Sign in for persistent chat memory">Login</button>
+        <button id="authBtn" title="Open account settings on daedalmap.com">Account</button>
         <button id="newChatBtn" title="Start new chat session">New Chat</button>
         <button id="closeSidebar" title="Close">&times;</button>
       </div>
     </div>
 
     <div id="authStatusBar" class="auth-status-bar">
-      <span id="authStatusText">Guest mode: local chat cache only.</span>
+      <span id="authStatusText">Guest mode: local-only workspace and cache.</span>
     </div>
 
     <div id="mobileMapNotice" class="mobile-map-notice" aria-live="polite" hidden>
@@ -245,57 +245,6 @@
         <span id="legendMin">0</span>
         <span id="legendMax">100</span>
       </div>
-    </div>
-  </div>
-
-  <div id="authModal" class="auth-modal hidden" aria-hidden="true">
-    <div id="authModalBackdrop" class="auth-modal-backdrop"></div>
-    <div class="auth-modal-panel" role="dialog" aria-modal="true" aria-labelledby="authModalTitle">
-      <button id="authModalClose" class="auth-modal-close" title="Close">&times;</button>
-      <div class="auth-modal-header">
-        <h3 id="authModalTitle">Account Access</h3>
-        <p>Sign in for persistent chat memory, or create an account to start testing authenticated flows.</p>
-      </div>
-
-      <div class="auth-modal-tabs">
-        <button id="authTabSignIn" class="auth-modal-tab active" data-auth-tab="signin">Sign In</button>
-        <button id="authTabSignUp" class="auth-modal-tab" data-auth-tab="signup">Create Account</button>
-      </div>
-
-      <div id="authMessage" class="auth-message" aria-live="polite"></div>
-
-      <form id="signInForm" class="auth-form active">
-        <label class="auth-label" for="signInEmail">Email</label>
-        <input id="signInEmail" class="auth-input" type="email" autocomplete="email" required>
-
-        <label class="auth-label" for="signInPassword">Password</label>
-        <div class="auth-input-wrap">
-          <input id="signInPassword" class="auth-input" type="password" autocomplete="current-password" required>
-          <button type="button" class="auth-pw-toggle" data-target="signInPassword">show</button>
-        </div>
-
-        <button id="signInSubmit" class="auth-primary-btn" type="submit">Sign In</button>
-        <button id="magicLinkBtn" class="auth-secondary-btn" type="button">Email Magic Link Instead</button>
-      </form>
-
-      <form id="signUpForm" class="auth-form">
-        <label class="auth-label" for="signUpEmail">Email</label>
-        <input id="signUpEmail" class="auth-input" type="email" autocomplete="email" required>
-
-        <label class="auth-label" for="signUpPassword">Password</label>
-        <div class="auth-input-wrap">
-          <input id="signUpPassword" class="auth-input" type="password" autocomplete="new-password" minlength="8" required>
-          <button type="button" class="auth-pw-toggle" data-target="signUpPassword">show</button>
-        </div>
-
-        <label class="auth-label" for="signUpPasswordConfirm">Confirm Password</label>
-        <div class="auth-input-wrap">
-          <input id="signUpPasswordConfirm" class="auth-input" type="password" autocomplete="new-password" minlength="8" required>
-          <button type="button" class="auth-pw-toggle" data-target="signUpPasswordConfirm">show</button>
-        </div>
-
-        <button id="signUpSubmit" class="auth-primary-btn" type="submit">Create Account</button>
-      </form>
     </div>
   </div>
 

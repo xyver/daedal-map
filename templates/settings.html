@@ -13,11 +13,12 @@
     <header class="settings-topbar">
       <div>
         <p class="settings-eyebrow">DaedalMap</p>
-        <h1>Account Settings</h1>
+        <h1>Runtime Settings</h1>
       </div>
       <div class="settings-topbar-actions">
         <a class="settings-nav-link" href="/">Back to Map</a>
-        <button id="authBtn" class="settings-auth-btn" title="Sign in or out">Login</button>
+        <a class="settings-nav-link" href="{{site_url}}/settings/account" target="_blank" rel="noreferrer">Account Settings</a>
+        <button id="authBtn" class="settings-auth-btn" title="Open account settings">Account</button>
       </div>
     </header>
 
@@ -27,74 +28,35 @@
 
     <main class="settings-layout">
       <section class="settings-main-card">
-        <div id="settingsLocked" class="settings-lock-state">
-          <h2>Sign in required</h2>
-          <p>This page is for account-backed settings, sticky workspace state, and plan-aware access.</p>
-          <button id="settingsLoginBtn" class="settings-cta-btn">Sign In to Continue</button>
+        <div id="settingsUnlocked" class="settings-unlocked">
 
-          <div class="settings-link-panel">
-            <h3>Learn more</h3>
+          <section class="settings-section">
+            <h2>Runtime Only</h2>
+            <p class="settings-intro">Account, billing, and hosted product settings now live on daedalmap.com. This page is for runtime-facing controls in the open engine.</p>
             <div class="settings-link-grid">
-              <a class="settings-doc-link" href="{{site_url}}/docs/packs" target="_blank" rel="noreferrer">Packs</a>
-              <a class="settings-doc-link" href="{{site_url}}/packs" target="_blank" rel="noreferrer">Pack Library</a>
-              <a class="settings-doc-link" href="{{site_url}}/docs/accounts" target="_blank" rel="noreferrer">Accounts</a>
-              <a class="settings-doc-link" href="{{site_url}}/docs/self-host" target="_blank" rel="noreferrer">Self-Host</a>
+              <a class="settings-doc-link" href="{{site_url}}/settings/account" target="_blank" rel="noreferrer">
+                <strong>Account Settings</strong>
+                <span>Profile, plan, credits, and account-owned settings on the private site.</span>
+              </a>
+              <a class="settings-doc-link" href="{{site_url}}/settings/runtime" target="_blank" rel="noreferrer">
+                <strong>Hosted Runtime Settings</strong>
+                <span>Release visibility, pack readiness, and hosted control-plane state.</span>
+              </a>
             </div>
-          </div>
-        </div>
-
-        <div id="settingsUnlocked" class="settings-unlocked hidden">
+          </section>
 
           <!-- Tab Navigation -->
           <nav class="settings-tabs" role="tablist">
-            <button class="settings-tab active" data-tab="account" role="tab">Account</button>
-            <button class="settings-tab" data-tab="packs" role="tab">Packs</button>
+            <button class="settings-tab active" data-tab="packs" role="tab">Packs</button>
             <button class="settings-tab" data-tab="display" role="tab">Display</button>
             <button class="settings-tab" data-tab="help" role="tab">Help</button>
           </nav>
 
-          <!-- Tab: Account -->
-          <div class="settings-tab-panel active" id="tab-account">
-            <section class="settings-section">
-              <h2>Plan</h2>
-              <div id="accountSummary" class="account-summary-grid">
-                <div class="summary-card"><span class="summary-label">Plan</span><strong id="summaryPlan">free</strong></div>
-                <div class="summary-card"><span class="summary-label">Shells</span><strong id="summaryShells">simple</strong></div>
-                <div class="summary-card"><span class="summary-label">Pack Limit</span><strong id="summaryPackLimit">2</strong></div>
-                <div class="summary-card"><span class="summary-label">Entitled Packs</span><strong id="summaryPackCount">0</strong></div>
-              </div>
-            </section>
-
-            <section class="settings-section">
-              <h2>Profile</h2>
-              <div class="profile-fields">
-                <div class="profile-field-group">
-                  <label class="settings-label" for="profileEmail">Email</label>
-                  <form id="profileEmailForm" class="profile-field-row">
-                    <input type="email" id="profileEmail" class="settings-input" autocomplete="email" placeholder="your@email.com">
-                    <button id="updateEmailBtn" class="settings-action-btn" type="submit">Update Email</button>
-                  </form>
-                  <p id="profileEmailStatus" class="profile-field-status"></p>
-                </div>
-
-                <div class="profile-field-group">
-                  <label class="settings-label">Password</label>
-                  <form id="profilePasswordForm" class="profile-field-row">
-                    <input type="email" id="profilePasswordUsername" class="visually-hidden-input" autocomplete="username" tabindex="-1" aria-hidden="true">
-                    <input type="password" id="profileNewPassword" class="settings-input" autocomplete="new-password" placeholder="New password (8+ characters)" minlength="8">
-                    <button id="updatePasswordBtn" class="settings-action-btn" type="submit">Update Password</button>
-                  </form>
-                  <p id="profilePasswordStatus" class="profile-field-status"></p>
-                </div>
-              </div>
-            </section>
-          </div>
-
           <!-- Tab: Packs -->
-          <div class="settings-tab-panel" id="tab-packs">
+          <div class="settings-tab-panel active" id="tab-packs">
             <section class="settings-section">
-              <h2>My Packs</h2>
-              <p class="settings-intro">Select which packs to include in your active catalog. Only checked packs will appear in the map overlay selector.</p>
+              <h2>Runtime Packs</h2>
+              <p class="settings-intro">Select which packs to include in your active runtime catalog. Only checked packs will appear in the map overlay selector.</p>
               <div id="packsList"></div>
               <div class="packs-save-bar">
                 <span id="packsSaveStatus" class="packs-save-status"></span>
@@ -158,107 +120,9 @@
             </section>
           </div><!-- end tab-help -->
 
-          <!-- Admin section: visible to master/admin only, shown by JS -->
-          <div id="adminSection" class="hidden">
-            <section class="settings-section">
-              <h2>Admin</h2>
-              <p class="settings-intro">Owner-only controls. Not visible to other plan tiers.</p>
-              <div class="profile-field-row">
-                <button id="adminCatalogRefreshBtn" class="settings-action-btn">Force Catalog Refresh</button>
-                <span id="adminCatalogRefreshStatus" class="profile-field-status"></span>
-              </div>
-            </section>
-          </div>
-
         </div><!-- end settingsUnlocked -->
       </section>
     </main>
-  </div>
-
-  <div id="packStatusModal" class="auth-modal hidden" aria-hidden="true">
-    <div id="packStatusBackdrop" class="auth-modal-backdrop"></div>
-    <div class="auth-modal-panel pack-status-modal-panel" role="dialog" aria-modal="true" aria-labelledby="packStatusTitle">
-      <button id="packStatusClose" class="auth-modal-close" title="Close">&times;</button>
-      <div class="auth-modal-header">
-        <h3 id="packStatusTitle">Pack Release Status</h3>
-        <p id="packStatusSubtitle">Review pack progress across staging, QA, and published release lanes.</p>
-      </div>
-
-      <div class="pack-status-body">
-        <div class="pack-status-summary">
-          <div class="pack-status-pill" id="packStatusStage">Loading...</div>
-          <div class="pack-status-copy" id="packStatusCopy"></div>
-        </div>
-
-        <div class="pack-status-tracker" id="packStatusTracker"></div>
-
-        <div class="pack-status-meta">
-          <div class="pack-status-card">
-            <h4>Next Step</h4>
-            <p id="packStatusNext"></p>
-          </div>
-          <div class="pack-status-card">
-            <h4>Release Notes</h4>
-            <ul id="packStatusReasons" class="pack-status-list"></ul>
-          </div>
-          <div class="pack-status-card">
-            <h4>Pack Scope</h4>
-            <ul id="packStatusMeta" class="pack-status-list"></ul>
-          </div>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <div id="authModal" class="auth-modal hidden" aria-hidden="true">
-    <div id="authModalBackdrop" class="auth-modal-backdrop"></div>
-    <div class="auth-modal-panel" role="dialog" aria-modal="true" aria-labelledby="authModalTitle">
-      <button id="authModalClose" class="auth-modal-close" title="Close">&times;</button>
-      <div class="auth-modal-header">
-        <h3 id="authModalTitle">Account Access</h3>
-        <p>Sign in to unlock account settings and persistent workspace behavior.</p>
-      </div>
-
-      <div class="auth-modal-tabs">
-        <button id="authTabSignIn" class="auth-modal-tab active" data-auth-tab="signin">Sign In</button>
-        <button id="authTabSignUp" class="auth-modal-tab" data-auth-tab="signup">Create Account</button>
-      </div>
-
-      <div id="authMessage" class="auth-message" aria-live="polite"></div>
-
-      <form id="signInForm" class="auth-form active">
-        <label class="auth-label" for="signInEmail">Email</label>
-        <input id="signInEmail" class="auth-input" type="email" autocomplete="email" required>
-
-        <label class="auth-label" for="signInPassword">Password</label>
-        <div class="auth-input-wrap">
-          <input id="signInPassword" class="auth-input" type="password" autocomplete="current-password" required>
-          <button type="button" class="auth-pw-toggle" data-target="signInPassword">show</button>
-        </div>
-
-        <button id="signInSubmit" class="auth-primary-btn" type="submit">Sign In</button>
-        <button id="magicLinkBtn" class="auth-secondary-btn" type="button">Email Magic Link Instead</button>
-      </form>
-
-      <form id="signUpForm" class="auth-form">
-        <label class="auth-label" for="signUpEmail">Email</label>
-        <input id="signUpEmail" class="auth-input" type="email" autocomplete="email" required>
-
-        <label class="auth-label" for="signUpPassword">Password</label>
-        <div class="auth-input-wrap">
-          <input id="signUpPassword" class="auth-input" type="password" autocomplete="new-password" minlength="8" required>
-          <button type="button" class="auth-pw-toggle" data-target="signUpPassword">show</button>
-        </div>
-
-        <label class="auth-label" for="signUpPasswordConfirm">Confirm Password</label>
-        <div class="auth-input-wrap">
-          <input id="signUpPasswordConfirm" class="auth-input" type="password" autocomplete="new-password" minlength="8" required>
-          <button type="button" class="auth-pw-toggle" data-target="signUpPasswordConfirm">show</button>
-        </div>
-
-        <button id="signUpSubmit" class="auth-primary-btn" type="submit">Create Account</button>
-      </form>
-    </div>
   </div>
 
   <script>
