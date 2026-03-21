@@ -156,7 +156,7 @@ function updateDom() {
 
   if (isAuthenticated()) {
     const email = getCurrentUser()?.email || 'Signed in';
-    const accountUrl = currentProfile?.account_url || `${SITE_BASE}/settings/account`;
+    const accountUrl = currentProfile?.account_url || `${SITE_BASE}/account`;
     btn.textContent = 'Account';
     btn.disabled = false;
     btn.classList.add('logged-in');
@@ -172,10 +172,10 @@ function updateDom() {
 async function handleAuthClick() {
   if (!authConfig?.enabled) return;
   const returnTo = encodeURIComponent(window.location.href);
-  // Use the private account-settings route as the single auth entry point.
-  // It already handles signed-in and signed-out states, and it preserves
-  // the app return target for cross-domain handoff back to app.daedalmap.com.
-  window.location.href = `${SITE_BASE}/settings/account?return=${returnTo}`;
+  // Use the private account route as the single user-facing auth entry point.
+  // It redirects signed-out users to /login and can hand an existing site
+  // session back to the app via the return target.
+  window.location.href = `${SITE_BASE}/account?return=${returnTo}`;
 }
 
 export const AuthManager = {
