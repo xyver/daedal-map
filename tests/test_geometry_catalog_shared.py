@@ -181,7 +181,7 @@ def test_downloadable_projection_filters_wip_records_and_unavailable_families() 
     assert "candidate_admin_depth" not in coverage
 
 
-def test_downloadable_projection_exposes_only_callable_crosswalks() -> None:
+def test_downloadable_projection_refers_to_the_crosswalk_catalog() -> None:
     published = build_published_geometry_catalog({
         "crosswalks": [
             {"crosswalk_id": "callable", "publication_status": "published", "callable": True},
@@ -194,5 +194,6 @@ def test_downloadable_projection_exposes_only_callable_crosswalks() -> None:
         ],
     })
 
-    assert [item["crosswalk_id"] for item in published["crosswalks"]] == ["callable"]
-    assert [item["reference_system_id"] for item in published["reference_systems"]] == ["ready"]
+    assert "crosswalks" not in published
+    assert "reference_systems" not in published
+    assert published["crosswalk_catalog_path"] == "downloadable/geometry/crosswalk_catalog.json"

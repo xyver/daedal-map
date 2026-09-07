@@ -8,7 +8,6 @@ claims.
 
 from __future__ import annotations
 
-import copy
 import hashlib
 import json
 from typing import Any
@@ -16,6 +15,7 @@ from typing import Any
 
 GEOMETRY_CATALOG_RECORD_KEYS = (
     "country_profiles",
+    "domain_profiles",
     "geometry_collections",
     "geometry_families",
     "geometry_banks",
@@ -29,6 +29,38 @@ GEOMETRY_CATALOG_RECORD_KEYS = (
     "resolver_groups",
     "named_reference_objects",
 )
+
+# The composed catalog is also an internal release/audit artifact.  These
+# fields are intentionally retained there, but are duplicated many times and
+# do not belong in the public directory fetched by browsers and discovery
+# clients.  Their authoritative copies remain in country catalogs and source
+# or release metadata.
+_PUBLIC_BANK_DETAIL_FIELDS = {
+    "attribution_lines",
+    "citation",
+    "license_conditions",
+    "provenance",
+    "source_licenses",
+}
+_PUBLIC_PRODUCT_DETAIL_FIELDS = {"source_licenses"}
+_PUBLIC_FAMILY_DETAIL_FIELDS = {
+    "admin_1_branch_coverage",
+    "coverage_scopes",
+    "nesting_dispositions",
+    "source_license_details",
+    "source_licenses",
+    "source_releases",
+}
+_PUBLIC_COVERAGE_DETAIL_FIELDS = {
+    "admin_1_branch_coverage",
+    "implementation_subfamily_coverage",
+    "jurisdiction_rows",
+}
+_PUBLIC_CROSSWALK_ARTIFACT_DETAIL_FIELDS = {
+    "_source_geometry_bank",
+    "_target_geometry_bank",
+    "source_license",
+}
 
 
 def merge_crosswalk_catalog(
@@ -166,11 +198,57 @@ def _without_candidate_fields(value: Any) -> Any:
     return value
 
 
+def _without_fields(record: dict[str, Any], fields: set[str]) -> dict[str, Any]:
+    return {key: value for key, value in record.items() if key not in fields}
+
+
+def _compact_family_rows(rows: Any) -> list[dict[str, Any]]:
+    return [
+        _without_fields(row, _PUBLIC_FAMILY_DETAIL_FIELDS)
+        for row in (rows or [])
+        if isinstance(row, dict)
+    ]
+
+
+def _compact_public_record(key: str, record: dict[str, Any]) -> dict[str, Any]:
+    """Keep discovery facts while referring detailed evidence to its owner."""
+    result = dict(record)
+    if key == "geometry_banks":
+        result = _without_fields(result, _PUBLIC_BANK_DETAIL_FIELDS)
+    elif key == "geometry_products":
+        result = _without_fields(result, _PUBLIC_PRODUCT_DETAIL_FIELDS)
+    elif key == "crosswalk_artifacts":
+        result = _without_fields(result, _PUBLIC_CROSSWALK_ARTIFACT_DETAIL_FIELDS)
+    elif key in {"country_profiles", "domain_profiles"}:
+        result["family_coverage"] = _compact_family_rows(result.get("family_coverage"))
+        country = _country_code(result.get("country_code"))
+        if country:
+            result["country_catalog_path"] = (
+                f"geometry/countries/{country}/{country}_catalog.json"
+            )
+    return result
+
+
 def build_published_geometry_catalog(catalog: dict[str, Any]) -> dict[str, Any]:
-    """Build the downloadable catalog without internal lifecycle records."""
-    result = copy.deepcopy(catalog)
+    """Build the compact public directory without internal lifecycle records.
+
+    The global document answers what exists and where its deeper catalog lives.
+    Complete provenance/license closures stay in the composed internal catalog,
+    country catalogs, and referenced source/release metadata.
+    """
+    result = {
+        key: value
+        for key, value in catalog.items()
+        if key not in GEOMETRY_CATALOG_RECORD_KEYS
+        and key not in {"reference_systems", "crosswalks"}
+    }
     for key in GEOMETRY_CATALOG_RECORD_KEYS:
-        result[key] = published_geometry_catalog_records(catalog, key)
+        if key in {"reference_systems", "crosswalks"}:
+            continue
+        result[key] = [
+            _compact_public_record(key, record)
+            for record in published_geometry_catalog_records(catalog, key)
+        ]
 
     published_country_codes = {
         _country_code(item.get("country_code"))
@@ -182,9 +260,13 @@ def build_published_geometry_catalog(catalog: dict[str, Any]) -> dict[str, Any]:
         country_code = _country_code(raw_row.get("country_code"))
         if country_code != "GLOBAL" and country_code not in published_country_codes:
             continue
-        row = _without_candidate_fields(raw_row)
+        row = _without_fields(
+            _without_candidate_fields(raw_row), _PUBLIC_COVERAGE_DETAIL_FIELDS,
+        )
         families = [
-            _without_candidate_fields(family)
+            _without_fields(
+                _without_candidate_fields(family), _PUBLIC_FAMILY_DETAIL_FIELDS,
+            )
             for family in raw_row.get("families") or []
             if isinstance(family, dict) and family.get("available") is True
         ]
@@ -203,6 +285,12 @@ def build_published_geometry_catalog(catalog: dict[str, Any]) -> dict[str, Any]:
         coverage_rows.append(row)
     result["country_family_coverage"] = coverage_rows
     result = _without_candidate_fields(result)
+    result["crosswalk_catalog_path"] = "downloadable/geometry/crosswalk_catalog.json"
+    result["detail_model"] = {
+        "global": "directory",
+        "country": "geometry/countries/{ISO3}/{ISO3}_catalog.json",
+        "source_and_release": "referenced metadata and version manifests",
+    }
     result["purpose"] = (
         "Published geometry capability and discovery catalog. Internal candidate and WIP "
         "lifecycle records are excluded."

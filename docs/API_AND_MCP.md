@@ -33,22 +33,24 @@ The four public catalog families are:
 | Catalog | Backing owner | Purpose |
 |---|---|---|
 | Historical | `published/catalog.json` | Published metric and historical data packs |
-| Geometry | `published/geometry/geometry_catalog.json` | Admin spines, sidechains, crosswalks/bridges, and shape-backed geometry families |
+| Geometry | `published/geometry/geometry_catalog.json` plus country catalogs | Global directory of release units and capabilities; country-scoped geometry, vintage, and crosswalk detail is loaded on demand |
 | Feeds | `published/ops_feed_registry.json` | Public/runtime live feeds and Ops overlays |
 | Agent | `published/agent_catalog/api_catalog.json` | Agent/API/MCP-ready packs and tool families |
 
-The complete published data and geometry catalogs also have stable anonymous JSON
+The published data catalog and compact geometry directory also have stable anonymous JSON
 URLs for direct human, script, and agent reads:
 
 - `https://downloads.daedalmap.com/downloadable/catalog.json`
 - `https://downloads.daedalmap.com/downloadable/geometry/geometry_catalog.json`
 
-Use these raw files when the complete published inventory is wanted in one request. Use
-the API catalog endpoints or MCP `get_catalog` / `read_geometry_catalog` when a
-smaller guided discovery response is preferable. The downloadable geometry
-catalog is generated from the canonical catalog and excludes candidate, WIP,
-blocked, and unavailable-family records. Internal WIP catalogs are never
-mirrored to the downloadable lane.
+Use the data catalog when the published pack inventory is wanted in one request.
+Use the geometry directory to discover countries, global domains, families, and
+downloads, then follow its country-catalog or crosswalk-catalog pointer for
+deeper detail. The API catalog endpoints and MCP `get_catalog` /
+`read_geometry_catalog` perform the same focused lookup. The downloadable
+geometry directory excludes candidate, WIP, blocked, unavailable-family, and
+duplicated audit/provenance records. Internal WIP catalogs are never mirrored to
+the downloadable lane.
 
 ## API/MCP Versus Downloads
 

@@ -219,7 +219,7 @@ def render_site_llms_txt(*, app_origin: str = "https://app.daedalmap.com", site_
         f"- Umbrella MCP endpoint: [{app_origin}/mcp]({app_origin}/mcp)\n"
         f"- MCP server metadata: [{app_origin}/mcp/server.json]({app_origin}/mcp/server.json)\n"
         f"- HTTP discovery: [{app_origin}/api/v1/guide]({app_origin}/api/v1/guide), [{app_origin}/api/v1/catalog]({app_origin}/api/v1/catalog), [{app_origin}/api/v1/packs/earthquakes]({app_origin}/api/v1/packs/earthquakes)\n"
-        "- Complete catalog snapshots: [data](https://downloads.daedalmap.com/downloadable/catalog.json), [geometry](https://downloads.daedalmap.com/downloadable/geometry/geometry_catalog.json)\n"
+        "- Catalog directories: [data](https://downloads.daedalmap.com/downloadable/catalog.json), [geometry](https://downloads.daedalmap.com/downloadable/geometry/geometry_catalog.json); geometry links to country detail and the crosswalk registry\n"
         f"- Expanded machine guide: [{site_origin}/llms-full.txt]({site_origin}/llms-full.txt)\n\n"
         "## Product surface\n\n"
         "DaedalMap is a geographic query engine with maintained data packs. The product has four user-facing modes over one engine; the agent lane above is one of them.\n\n"
