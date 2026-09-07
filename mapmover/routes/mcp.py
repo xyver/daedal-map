@@ -341,8 +341,8 @@ def _augment_catalog_with_tool_families(payload: Any, pack_id: str | None) -> An
             "summary_endpoint": "https://app.daedalmap.com/api/v1/historical/catalog",
         },
         "geometry": {
-            "download_url": "https://downloads.daedalmap.com/downloadable/geometry/geometry_catalog.json",
             "summary_endpoint": "https://app.daedalmap.com/api/v1/geometry/catalog",
+            "catalog_path": "geometry/geometry_catalog.json",
         },
     }
     return augmented

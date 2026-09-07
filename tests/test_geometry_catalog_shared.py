@@ -196,4 +196,4 @@ def test_downloadable_projection_refers_to_the_crosswalk_catalog() -> None:
 
     assert "crosswalks" not in published
     assert "reference_systems" not in published
-    assert published["crosswalk_catalog_path"] == "downloadable/geometry/crosswalk_catalog.json"
+    assert published["crosswalk_catalog_path"] == "geometry/crosswalk_catalog.json"

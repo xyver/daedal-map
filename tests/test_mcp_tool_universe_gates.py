@@ -201,8 +201,8 @@ class DataHelperTelemetryTests(unittest.TestCase):
             "https://downloads.daedalmap.com/downloadable/catalog.json",
         )
         self.assertEqual(
-            result["public_catalogs"]["geometry"]["download_url"],
-            "https://downloads.daedalmap.com/downloadable/geometry/geometry_catalog.json",
+            result["public_catalogs"]["geometry"]["catalog_path"],
+            "geometry/geometry_catalog.json",
         )
 
         analytics_mock.assert_called_once()

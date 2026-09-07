@@ -37,20 +37,20 @@ The four public catalog families are:
 | Feeds | `published/ops_feed_registry.json` | Public/runtime live feeds and Ops overlays |
 | Agent | `published/agent_catalog/api_catalog.json` | Agent/API/MCP-ready packs and tool families |
 
-The published data catalog and compact geometry directory also have stable anonymous JSON
-URLs for direct human, script, and agent reads:
+The published data catalog also has a stable anonymous JSON URL for direct
+human, script, and agent reads:
 
 - `https://downloads.daedalmap.com/downloadable/catalog.json`
-- `https://downloads.daedalmap.com/downloadable/geometry/geometry_catalog.json`
+
+Geometry discovery is served through `https://app.daedalmap.com/api/v1/geometry/catalog`.
+The authoritative geometry and country catalogs remain in the private published
+runtime lane; the download bucket contains artifacts and package manifests only.
 
 Use the data catalog when the published pack inventory is wanted in one request.
-Use the geometry directory to discover countries, global domains, families, and
-downloads, then follow its country-catalog or crosswalk-catalog pointer for
-deeper detail. The API catalog endpoints and MCP `get_catalog` /
-`read_geometry_catalog` perform the same focused lookup. The downloadable
-geometry directory excludes candidate, WIP, blocked, unavailable-family, and
-duplicated audit/provenance records. Internal WIP catalogs are never mirrored to
-the downloadable lane.
+Use the geometry endpoint to discover countries, global domains, families, and
+downloads. MCP `get_catalog` and `read_geometry_catalog` provide the same
+focused lookup. Candidate, WIP, and audit/provenance records remain on private
+runtime surfaces and are never mirrored to the downloadable lane.
 
 ## API/MCP Versus Downloads
 

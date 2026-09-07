@@ -49,7 +49,7 @@ def _merge_crosswalks(payload: dict[str, Any]) -> dict[str, Any]:
     crosswalks = None
     if _is_cloud_mode():
         try:
-            crosswalks = read_artifact_json("downloadable/geometry/crosswalk_catalog.json", lane="active")
+            crosswalks = read_artifact_json("geometry/crosswalk_catalog.json", lane="active")
         except Exception:
             crosswalks = None
     if not isinstance(crosswalks, dict) and not force_remote_data_reads():

@@ -285,7 +285,7 @@ def build_published_geometry_catalog(catalog: dict[str, Any]) -> dict[str, Any]:
         coverage_rows.append(row)
     result["country_family_coverage"] = coverage_rows
     result = _without_candidate_fields(result)
-    result["crosswalk_catalog_path"] = "downloadable/geometry/crosswalk_catalog.json"
+    result["crosswalk_catalog_path"] = "geometry/crosswalk_catalog.json"
     result["detail_model"] = {
         "global": "directory",
         "country": "geometry/countries/{ISO3}/{ISO3}_catalog.json",
