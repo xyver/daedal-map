@@ -6,14 +6,12 @@
 /* DaedalMap cross-surface visitor identity and first-touch attribution.
  *
  * One visitor id and one acquisition record, shared by www.daedalmap.com,
- * app.daedalmap.com, and downloads.daedalmap.com, so a single person moving
- * across the three hosts is one row in analytics instead of three.
+ * app.daedalmap.com, and the /downloadable storefront, so a single person
+ * moving between product surfaces is one row in analytics instead of several.
  *
- * This file is the canonical copy. The downloads storefront receives a
- * build-time copy through build_download_storefront.py for the same reason it
- * receives site.css: downloads.daedalmap.com is served from R2 and must not
- * depend on the main site being reachable. Change this file, then rebuild the
- * storefront; never edit the copy.
+ * This file is the canonical copy. The storefront uses it directly because
+ * the main site serves /downloadable. Change this file rather than creating a
+ * storefront copy.
  *
  * Identity boundary, which matters more than anything else here:
  *
