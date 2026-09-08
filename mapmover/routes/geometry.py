@@ -31,6 +31,7 @@ from mapmover.routes.system import _require_admin, _require_local_or_admin
 from mapmover.geometry_handlers import (
     clear_cache as clear_geometry_cache,
     get_countries_geometry as get_countries_geometry_handler,
+    get_display_geometries as get_display_geometries_handler,
     get_geometry_index as get_geometry_index_handler,
     get_location_children as get_location_children_handler,
     get_location_info,
@@ -369,16 +370,8 @@ async def get_selection_geometry_endpoint(req: Request):
         return msgpack_error(str(e), 500)
 
 
-@router.post("/geometry/features")
-async def get_geometry_features_endpoint(req: Request):
-    """Return canonical reusable geometry for explicit ``loc_id`` values.
-
-    This is the mode-neutral geometry-resource endpoint.  It intentionally
-    carries no metric, event state, or temporal claim, letting the browser
-    cache geometry independently from Explore, Research, and Ops payloads.
-    ``/geometry/selection`` remains as a compatibility alias for the
-    selection workflow.
-    """
+async def _explicit_geometry_features(req: Request, handler, *, route_name: str):
+    """Validate and execute one bounded explicit-loc-id geometry request."""
     try:
         body = await decode_request_body(req)
         loc_ids = body.get("loc_ids", [])
@@ -389,11 +382,29 @@ async def get_geometry_features_endpoint(req: Request):
                 f"loc_ids must be a list of at most {MAX_SELECTION_LOC_IDS} ids",
                 413,
             )
-        result = await asyncio.to_thread(get_selection_geometries_handler, loc_ids)
+        result = await asyncio.to_thread(handler, loc_ids)
         return msgpack_response(result)
     except Exception as e:
-        logger.error(f"Error in /geometry/features: {e}")
+        logger.error("Error in %s: %s", route_name, e)
         return msgpack_error(str(e), 500)
+
+
+@router.post("/geometry/features")
+async def get_geometry_features_endpoint(req: Request):
+    """Return exact canonical geometry for explicit ``loc_id`` values."""
+    return await _explicit_geometry_features(
+        req, get_selection_geometries_handler, route_name="/geometry/features"
+    )
+
+
+@router.post("/geometry/display-features")
+async def get_display_geometry_features_endpoint(req: Request):
+    """Return simplified reusable geometry for browser display surfaces."""
+    return await _explicit_geometry_features(
+        req,
+        get_display_geometries_handler,
+        route_name="/geometry/display-features",
+    )
 
 
 @router.post("/geometry/resolve-point")

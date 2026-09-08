@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+import re
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -8,6 +11,7 @@ from ..foundation_helpers import load_country_crosswalk
 from ..paths import COUNTRY_GEOMETRY_DIR, GEOMETRY_DIR
 from .read_posture import prefer_local_geometry_reads
 from ..runtime_config import force_remote_data_reads
+from .published_artifacts import read_artifact_json
 
 
 def parquet_accessible(path: Path | None) -> bool:
@@ -25,6 +29,123 @@ def parquet_accessible(path: Path | None) -> bool:
         return bool(cols)
     except Exception:
         return False
+
+
+def _read_active_json(relative_path: str) -> dict[str, Any] | None:
+    """Read one active-lane JSON control, preferring a coherent local tree."""
+    local_path = GEOMETRY_DIR.parent / relative_path
+    if local_path.exists() and not force_remote_data_reads():
+        try:
+            payload = json.loads(local_path.read_text(encoding="utf-8"))
+            return payload if isinstance(payload, dict) else None
+        except (OSError, json.JSONDecodeError):
+            return None
+    if not prefer_local_geometry_reads() and is_cloud_mode():
+        try:
+            payload = read_artifact_json(relative_path, lane="active")
+            return payload if isinstance(payload, dict) else None
+        except Exception:
+            return None
+    return None
+
+
+@lru_cache(maxsize=256)
+def resolve_country_display_release(iso3: str) -> dict[str, Any] | None:
+    """Resolve and validate the active simplified country Display release.
+
+    The pointer and manifest are controls, not hints: every returned parquet is
+    declared by the admitted manifest and remains under the selected immutable
+    release root. Display and Full are deliberately separate lanes, and this
+    resolver never falls back to the authority/query spine.
+    """
+    country = str(iso3 or "").strip().upper()
+    if not re.fullmatch(r"[A-Z]{3}", country):
+        return None
+    relative_pointer = f"geometry/countries/{country}/releases/display/current.json"
+    pointer = _read_active_json(relative_pointer)
+    release_id = str((pointer or {}).get("release_id") or "").strip()
+    if not re.fullmatch(r"[a-z0-9_]+", release_id):
+        return None
+    if str(pointer.get("country") or "").strip().upper() != country:
+        return None
+    if str(pointer.get("publication_status") or "").strip().lower() != "approved_for_publication":
+        return None
+
+    release_prefix = f"geometry/countries/{country}/releases/display/{release_id}"
+    expected_manifest = f"{release_prefix}/manifest.json"
+    manifest_path = str(pointer.get("manifest_path") or expected_manifest).replace("\\", "/")
+    if manifest_path != expected_manifest:
+        return None
+    manifest = _read_active_json(manifest_path)
+    if not isinstance(manifest, dict):
+        return None
+    if str(manifest.get("profile") or "") != "country_display_release":
+        return None
+    if str(manifest.get("country") or "").strip().upper() != country:
+        return None
+    if str(manifest.get("release_id") or "").strip() != release_id:
+        return None
+
+    artifacts: list[dict[str, Any]] = []
+    for record in manifest.get("artifacts") or []:
+        if not isinstance(record, dict) or record.get("role") != "display_simplified_geometry":
+            continue
+        relative = str(record.get("path") or "").replace("\\", "/").strip("/")
+        if not relative.startswith(f"{release_prefix}/") or not relative.endswith(".parquet"):
+            continue
+        levels = []
+        for value in record.get("admin_levels") or []:
+            try:
+                levels.append(int(value))
+            except (TypeError, ValueError):
+                continue
+        artifacts.append({
+            **record,
+            "path": GEOMETRY_DIR.parent / relative,
+            "relative_path": relative,
+            "admin_levels": levels,
+        })
+    if not artifacts:
+        return None
+    return {
+        "country": country,
+        "release_id": release_id,
+        "pointer": pointer,
+        "manifest": manifest,
+        "artifacts": artifacts,
+    }
+
+
+def resolve_country_display_geometry_sources(
+    iso3: str,
+    *,
+    admin_level: int | None = None,
+    physical_owner: str | None = None,
+) -> list[Path]:
+    """Return declared Display parquets relevant to a level/physical owner."""
+    release = resolve_country_display_release(iso3)
+    if not release:
+        return []
+    owner = str(physical_owner or "").strip()
+    paths: list[Path] = []
+    for artifact in release["artifacts"]:
+        levels = artifact.get("admin_levels") or []
+        if admin_level is not None and int(admin_level) not in levels:
+            continue
+        artifact_owner = str(artifact.get("physical_owner") or "").strip()
+        if owner and artifact_owner not in {"national", owner}:
+            continue
+        # The admitted manifest is the availability contract. Avoid a separate
+        # object-store metadata probe before every visual query; the actual
+        # projected read remains the definitive health check.
+        paths.append(artifact["path"])
+    return paths
+
+
+def resolve_country_display_geometry_source(iso3: str) -> Path | None:
+    """Compatibility helper returning the active Admin0--3 Display bank."""
+    paths = resolve_country_display_geometry_sources(iso3, admin_level=2)
+    return paths[0] if paths else None
 
 
 def resolve_country_geometry_source(iso3: str, *, admin_level: int | None = None) -> dict[str, Any]:

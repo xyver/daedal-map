@@ -287,13 +287,16 @@ async def lifespan(app: FastAPI):
     try:
         from mapmover.control_catalog_prewarm import prewarm_control_catalogs
         from mapmover.data_loading import prewarm_api_catalog
-        from mapmover.default_load_prewarm import prewarm_catalog_default_loads
         from mapmover.duckdb_helpers import is_cloud_mode, prewarm_disaster_sources
         from mapmover.geometry_handlers import prewarm_geometry
+        from mapmover.ops_orchestrator_runtime import prewarm_ops_snapshots
         from mapmover.paths import GLOBAL_DIR
         tasks = ["control_catalogs", "public_pack_catalog", "api_catalog"]
         if is_cloud_mode():
-            tasks.extend(["catalog_default_loads", "geometry"])
+            # Readiness covers bounded, shared visitor dependencies only.
+            # Executing every pack's authored default can hydrate large data
+            # products and is neither a readiness requirement nor bounded.
+            tasks.extend(["geometry_display", "ops_snapshots"])
             # Disaster overlays are broad, multi-source reads. Keep them out
             # of startup readiness; a scheduled warmer can opt in after the
             # process is healthy.
@@ -325,32 +328,42 @@ async def lifespan(app: FastAPI):
             name="prewarm-api-catalog",
         )
         t_api_catalog.start()
-        if is_cloud_mode() and os.environ.get("PREWARM_DISASTERS", "0").strip().lower() in {"1", "true", "yes", "on"}:
-            t_disaster = threading.Thread(
-                target=run_prewarm_task,
-                args=("disasters", prewarm_disaster_sources, GLOBAL_DIR),
-                daemon=True,
-                name="prewarm-disasters",
-            )
-            t_disaster.start()
-
-            t_default_loads = threading.Thread(
-                target=run_prewarm_task,
-                args=("catalog_default_loads", prewarm_catalog_default_loads),
-                daemon=True,
-                name="prewarm-catalog-default-loads",
-            )
-            t_default_loads.start()
-
+        if is_cloud_mode():
             t_geom = threading.Thread(
                 target=run_prewarm_task,
-                args=("geometry", prewarm_geometry),
+                args=("geometry_display", prewarm_geometry),
                 daemon=True,
-                name="prewarm-geometry",
+                name="prewarm-geometry-display",
             )
             t_geom.start()
 
-            logger.info("Pre-warmers started: control-catalogs + public-pack-catalog + api-catalog + disasters + catalog-default-loads + geometry")
+            def maintain_ops_snapshots() -> None:
+                try:
+                    run_prewarm_task("ops_snapshots", prewarm_ops_snapshots)
+                except Exception:
+                    logger.exception("Initial Ops snapshot prewarm failed")
+                while True:
+                    threading.Event().wait(240)
+                    try:
+                        prewarm_ops_snapshots(force_refresh=True)
+                    except Exception:
+                        logger.exception("Ops snapshot refresh-ahead failed")
+
+            threading.Thread(
+                target=maintain_ops_snapshots,
+                daemon=True,
+                name="prewarm-ops-snapshots",
+            ).start()
+
+            if os.environ.get("PREWARM_DISASTERS", "0").strip().lower() in {"1", "true", "yes", "on"}:
+                threading.Thread(
+                    target=run_prewarm_task,
+                    args=("disasters", prewarm_disaster_sources, GLOBAL_DIR),
+                    daemon=True,
+                    name="prewarm-disasters",
+                ).start()
+
+            logger.info("Pre-warmers started: control-catalogs + public-pack-catalog + api-catalog + geometry-display + ops-snapshots")
         else:
             logger.info("Pre-warmers started: control-catalogs + public-pack-catalog + api-catalog")
     except Exception as exc:

@@ -12,6 +12,7 @@ from mapmover.routes import geometry
     (
         geometry.get_selection_geometry_endpoint,
         geometry.get_geometry_features_endpoint,
+        geometry.get_display_geometry_features_endpoint,
     ),
 )
 def test_geometry_loading_does_not_block_event_loop(endpoint) -> None:
@@ -34,5 +35,6 @@ def test_geometry_loading_does_not_block_event_loop(endpoint) -> None:
     with (
         patch.object(geometry, "decode_request_body", decode_request_body),
         patch.object(geometry, "get_selection_geometries_handler", slow_geometry_load),
+        patch.object(geometry, "get_display_geometries_handler", slow_geometry_load),
     ):
         asyncio.run(run_check())

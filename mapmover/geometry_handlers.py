@@ -58,7 +58,11 @@ from .runtime.admin_spine_query import (
     resolve_point as resolve_admin_spine_query_point,
     resolve_points as resolve_admin_spine_query_points,
 )
-from .runtime.geometry_loader import resolve_country_geometry_source
+from .runtime.geometry_loader import (
+    resolve_country_display_geometry_source,
+    resolve_country_display_geometry_sources,
+    resolve_country_geometry_source,
+)
 from .runtime.geometry_compatibility import (
     load_current_alias_target_rows,
     load_legacy_geometry_rows,
@@ -410,6 +414,7 @@ def load_country_parquet_viewport(iso3: str, admin_level: int | None, bbox: tupl
     if parquet_file is None:
         return None
 
+
     columns = _ensure_loc_id_projection(columns)
 
     try:
@@ -485,6 +490,164 @@ def load_country_parquet_viewport(iso3: str, admin_level: int | None, bbox: tupl
     except Exception as e:
         logger.error(f"Error loading viewport geometry for {iso3} level={admin_level}: {e}")
         return None
+
+
+def _display_owner_for_loc_id(loc_id: str | None) -> str | None:
+    """Return the first-level physical shard owner used by Display releases."""
+    parts = str(loc_id or "").strip().split("-")
+    return "-".join(parts[:2]) if len(parts) >= 2 else None
+
+
+def _country_display_sources(
+    iso3: str,
+    *,
+    admin_level: int | None = None,
+    parent_ids: set[str] | None = None,
+    loc_ids: list[str] | None = None,
+) -> tuple[list[Path], dict | None, str]:
+    """Select admitted Display banks, then the GeoBoundaries display fallback.
+
+    The fallback is intentionally the legacy ``geometry/{ISO3}.parquet``
+    display shard. It never consults ``admin_spine`` or a Full release.
+    """
+    owners = {
+        owner
+        for owner in (
+            _display_owner_for_loc_id(value)
+            for value in [*(parent_ids or set()), *(loc_ids or [])]
+        )
+        if owner
+    }
+    release_paths: list[Path] = []
+    root_only = bool(parent_ids) and all("-" not in str(value) for value in parent_ids)
+    if root_only:
+        release_paths = resolve_country_display_geometry_sources(
+            iso3, admin_level=admin_level, physical_owner="national"
+        )
+    elif len(owners) == 1:
+        release_paths = resolve_country_display_geometry_sources(
+            iso3, admin_level=admin_level, physical_owner=next(iter(owners))
+        )
+    if not release_paths:
+        release_paths = resolve_country_display_geometry_sources(iso3, admin_level=admin_level)
+    if release_paths:
+        return release_paths, None, "country_display_release"
+
+    fallback = GEOMETRY_DIR / f"{str(iso3).upper()}.parquet"
+    if _parquet_accessible(fallback):
+        return [fallback], load_country_crosswalk(iso3), "geoboundaries_display_fallback"
+    return [], None, "missing"
+
+
+def load_country_display_rows(
+    iso3: str,
+    *,
+    admin_level: int | None = None,
+    parent_ids: set[str] | None = None,
+    loc_ids: list[str] | None = None,
+    bbox: tuple | None = None,
+    columns: list[str] | None = None,
+):
+    """Read simplified rows for a browser/display payload only.
+
+    Active country Display releases own enriched countries. The original
+    GeoBoundaries country shard remains the global default for countries that
+    do not yet publish a Display family. Full/query banks are never candidates.
+    """
+    normalized = str(iso3 or "").strip().upper()
+    requested_ids = [canonicalize_loc_id(value) for value in (loc_ids or []) if value]
+    if requested_ids:
+        requested_set = set(requested_ids)
+        cached_frames = []
+        with _country_parquet_cache_lock:
+            for key, cached in _country_parquet_cache.items():
+                if not (
+                    isinstance(key, tuple)
+                    and len(key) == 3
+                    and key[0] == "display_admin"
+                    and key[1] == normalized
+                ):
+                    continue
+                if cached is not None and "loc_id" in cached.columns:
+                    rows = cached[cached["loc_id"].isin(requested_set)]
+                    if not rows.empty:
+                        cached_frames.append(rows)
+        if cached_frames:
+            cached_result = pd.concat(cached_frames, ignore_index=True).drop_duplicates(subset=["loc_id"])
+            if requested_set.issubset(set(cached_result["loc_id"].astype(str))):
+                cached_result.attrs["geometry_source_kind"] = "country_display_release_cache"
+                return _project_frame(cached_result, columns)
+    paths, crosswalk_data, source_kind = _country_display_sources(
+        normalized,
+        admin_level=admin_level,
+        parent_ids=parent_ids,
+        loc_ids=requested_ids,
+    )
+    if not paths:
+        return pd.DataFrame()
+
+    frames: list[pd.DataFrame] = []
+    for parquet_file in paths:
+        try:
+            available = parquet_columns(parquet_file, raw_geoparquet=True)
+            read_columns = [column for column in (columns or []) if column in available] or None
+            in_filters = {}
+            if parent_ids:
+                query_parents = sorted(parent_ids)
+                if crosswalk_data:
+                    local_to_geo, _ = build_crosswalk_maps(crosswalk_data)
+                    query_parents = [local_to_geo.get(value, value) for value in query_parents]
+                in_filters["parent_id"] = query_parents
+            if requested_ids:
+                query_ids = requested_ids
+                if crosswalk_data:
+                    local_to_geo, _ = build_crosswalk_maps(crosswalk_data)
+                    query_ids = [local_to_geo.get(value, value) for value in requested_ids]
+                in_filters["loc_id"] = query_ids
+            compare_filters = None
+            if bbox:
+                min_lon, min_lat, max_lon, max_lat = bbox
+                if all(column in available for column in ("bbox_min_lon", "bbox_max_lon", "bbox_min_lat", "bbox_max_lat")):
+                    compare_filters = [
+                        ("bbox_max_lon", ">=", min_lon),
+                        ("bbox_min_lon", "<=", max_lon),
+                        ("bbox_max_lat", ">=", min_lat),
+                        ("bbox_min_lat", "<=", max_lat),
+                    ]
+            if parquet_file.exists():
+                filters = []
+                if admin_level is not None:
+                    filters.append(("admin_level", "==", admin_level))
+                for column, values in in_filters.items():
+                    filters.append((column, "in", list(values)))
+                filters.extend(compare_filters or [])
+                frame = pd.read_parquet(parquet_file, columns=read_columns, filters=filters)
+            else:
+                frame = select_rows(
+                    parquet_file,
+                    columns=read_columns,
+                    exact_filters={"admin_level": admin_level} if admin_level is not None else None,
+                    in_filters=in_filters or None,
+                    compare_filters=compare_filters,
+                    raw_geoparquet=True,
+                )
+            if frame is not None and not frame.empty:
+                frames.append(frame)
+        except Exception:
+            logger.warning("Display geometry read failed for %s from %s", normalized, parquet_file, exc_info=True)
+
+    nonempty = [frame for frame in frames if frame is not None and not frame.empty]
+    result = pd.concat(nonempty, ignore_index=True).drop_duplicates(subset=["loc_id"]) if nonempty else pd.DataFrame()
+    if result.empty:
+        return result
+    if crosswalk_data and "loc_id" in result.columns:
+        _, geo_to_local = build_crosswalk_maps(crosswalk_data)
+        result = result.copy()
+        result["source_loc_id"] = result["loc_id"]
+        result["local_loc_id"] = result["loc_id"].map(geo_to_local)
+        result["loc_id"] = result["local_loc_id"].fillna(result["loc_id"])
+    result.attrs["geometry_source_kind"] = source_kind
+    return result
 
 
 def _resolve_geometry_source(iso3: str):
@@ -1076,14 +1239,12 @@ def get_geometry_index(parent_loc_id: str | None = None, admin_level: int | None
         else:
             target_level = admin_level if admin_level is not None else len(parts)
 
-        if target_level >= 3:
-            df = _load_deep_geometry_index_rows(
-                iso3,
-                admin_level=target_level,
-                parent_loc_id=parent_loc_id,
-            )
-        else:
-            df = load_country_parquet(iso3, admin_level=target_level, columns=GEOMETRY_INDEX_COLUMNS)
+        df = load_country_display_rows(
+            iso3,
+            admin_level=target_level,
+            parent_ids={parent_loc_id},
+            columns=GEOMETRY_INDEX_COLUMNS,
+        )
         if df is None or df.empty:
             return {"rows": [], "count": 0, "parent_loc_id": parent_loc_id, "admin_level": target_level}
 
@@ -1093,23 +1254,16 @@ def get_geometry_index(parent_loc_id: str | None = None, admin_level: int | None
         target_level = admin_level if admin_level is not None else 0
         if target_level == 0:
             df = load_global_country_display_frame()
-        elif target_level >= 3 and bbox is not None:
-            countries = get_countries_in_bbox(*bbox)
-            frames = []
-            for iso3 in countries:
-                deep_df = _load_deep_geometry_index_rows(
-                    iso3,
-                    admin_level=target_level,
-                    bbox=bbox,
-                )
-                if deep_df is not None and not deep_df.empty:
-                    frames.append(deep_df)
-            df = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
         elif bbox is not None:
             countries = get_countries_in_bbox(*bbox)
             frames = []
             for iso3 in countries:
-                viewport_df = load_country_parquet_viewport(iso3, target_level, bbox, columns=GEOMETRY_INDEX_COLUMNS)
+                viewport_df = load_country_display_rows(
+                    iso3,
+                    admin_level=target_level,
+                    bbox=bbox,
+                    columns=GEOMETRY_INDEX_COLUMNS,
+                )
                 if viewport_df is not None and not viewport_df.empty:
                     frames.append(viewport_df)
             df = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
@@ -2219,18 +2373,16 @@ def get_location_children(loc_id: str):
 
     iso3 = parts[0]
 
-    resolved = resolve_country_geometry_source(iso3)
-    parquet_file = resolved.get("parquet_file")
-    # Cloud drill-down reads only the active branch instead of hydrating and
-    # retaining every polygon in the country.
-    df = None if is_cloud_mode() else load_country_parquet(iso3)
-    if parquet_file is None or (df is None and not is_cloud_mode()):
+    display_paths, _crosswalk, _source_kind = _country_display_sources(
+        iso3, parent_ids={loc_id}
+    )
+    if not display_paths:
         return {
             "geojson": {"type": "FeatureCollection", "features": []},
             "count": 0,
             "level": "none",
             "parent_loc_id": loc_id,
-            "error": f"No geometry data for {iso3}. Download GADM data first."
+            "error": f"No display geometry data for {iso3}."
         }
 
     # Find children with geometry, drilling through hierarchy-only levels
@@ -2240,13 +2392,7 @@ def get_location_children(loc_id: str):
 
     for _ in range(max_depth):
         # Get all direct children of current parent set
-        if is_cloud_mode():
-            children = select_rows(parquet_file, in_filters={"parent_id": current_parents})
-            if resolved.get("crosswalk") and not children.empty:
-                _, reverse_map = build_crosswalk_maps(resolved["crosswalk"])
-                children["local_loc_id"] = children["loc_id"].map(reverse_map)
-        else:
-            children = df[df["parent_id"].isin(current_parents)]
+        children = load_country_display_rows(iso3, parent_ids=current_parents)
 
         if len(children) == 0:
             return {
@@ -2305,8 +2451,9 @@ def get_location_places(loc_id: str):
 
     iso3 = parts[0]
 
-    # Load country parquet
-    df = load_country_parquet(iso3)
+    # This is a visual endpoint; use the admitted Display family (or the
+    # GeoBoundaries display fallback), never a Full/query spine.
+    df = load_country_display_rows(iso3)
     if df is None:
         return {
             "geojson": {"type": "FeatureCollection", "features": []},
@@ -3130,9 +3277,9 @@ def load_subcounty_geometry(
 def get_states_in_bbox(min_lon: float, min_lat: float, max_lon: float, max_lat: float):
     """
     Return state abbreviations whose bounds intersect the query bbox.
-    Uses the USA geometry.parquet to find states (admin_level=1).
+    Uses the USA Display release to find states (admin_level=1).
     """
-    df = load_country_parquet("USA", admin_level=1)
+    df = load_country_display_rows("USA", admin_level=1)
     if df is None or len(df) == 0:
         return []
 
@@ -3363,10 +3510,10 @@ def _get_crosswalk_reverse(iso3: str) -> dict:
 def get_regions_in_bbox(iso3: str, min_lon: float, min_lat: float, max_lon: float, max_lat: float):
     """
     Return local region/state codes whose bounds intersect the query bbox.
-    Uses the country's geometry.parquet to find admin_level=1 regions, then
+    Uses the country's active Display family to find admin_level=1 regions, then
     resolves geo loc_ids back to local codes via the crosswalk reverse map.
     """
-    df = load_country_parquet(iso3, admin_level=1)
+    df = load_country_display_rows(iso3, admin_level=1)
     if df is None or len(df) == 0:
         logger.debug(f"No admin_level=1 data found for {iso3}")
         return []
@@ -3511,25 +3658,15 @@ def get_viewport_geometry(admin_level: int, bbox: tuple, debug: bool = False):
 
     all_features = []
 
-    # For admin levels 3+, try sub-county geometry files for each country
-    countries_with_subcounty = []
-    if admin_level >= 3:
-        for iso3 in countries:
-            subcounty_features = _load_subcounty_for_viewport(iso3, admin_level, buffered_bbox, debug)
-            if subcounty_features:
-                all_features.extend(subcounty_features)
-                countries_with_subcounty.append(iso3)
-        # Remove countries that were handled via subcounty geometry
-        countries = [c for c in countries if c not in countries_with_subcounty]
-
     for iso3 in countries:
-        # Load only the visible slice for this level from parquet (bbox pushdown).
-        df = load_country_parquet_viewport(iso3, admin_level, buffered_bbox)
+        # Browser rendering always follows the active simplified Display
+        # release; countries without one retain the GeoBoundaries display bank.
+        df = load_country_display_rows(iso3, admin_level=admin_level, bbox=buffered_bbox)
 
         if df is None or len(df) == 0:
             # Fallback: try one level up if no data at this level
             if admin_level > 0:
-                df = load_country_parquet_viewport(iso3, admin_level - 1, buffered_bbox)
+                df = load_country_display_rows(iso3, admin_level=admin_level - 1, bbox=buffered_bbox)
             if df is None or len(df) == 0:
                 continue
 
@@ -3555,7 +3692,7 @@ def get_viewport_geometry(admin_level: int, bbox: tuple, debug: bool = False):
     # Per-level feature cap to limit browser memory and S3 transfer volume.
     # Tighter caps at deep zoom where shapes are small and viewport covers fewer.
     MAX_FEATURES_BY_LEVEL = {
-        0: 300,   # Countries - global.csv is local anyway
+        0: 300,   # Countries - compact global Admin0 Display bootstrap
         1: 500,   # States / provinces
         2: 1000,  # Counties / districts
         3: 500,   # Tracts / ZCTAs
@@ -3617,6 +3754,8 @@ def clear_cache():
     _global_countries_cache = None
     _country_bounds_cache = None
     _subcounty_geometry_cache = {}
+    from .runtime.geometry_loader import resolve_country_display_release
+    resolve_country_display_release.cache_clear()
     logger.info("Geometry cache cleared")
 
 
@@ -3643,28 +3782,32 @@ def prewarm_geometry() -> None:
     except Exception as exc:
         logger.warning("prewarm geometry Admin0 Display failed: %s", exc)
 
-    # NWS is the only current live feed with a bounded, repeatedly reused
-    # national administrative geometry set.  Loading the exact county bank
-    # once prevents each retained alert frame from paying an R2/DuckDB lookup.
-    county_geom_file = resolve_country_geometry_source("USA", admin_level=2)["parquet_file"]
-    county_cache_key = ("exact_county", "USA")
+    # NWS is the only current live feed with a repeatedly reused national
+    # county display set. Follow the admitted Display release; never hydrate
+    # the larger Full authority spine merely to draw an Ops overlay.
+    county_geom_file = resolve_country_display_geometry_source("USA")
+    county_cache_key = ("display_admin", "USA", 2)
     try:
         with _country_parquet_cache_lock:
             cached = _country_parquet_cache.get(county_cache_key)
         if cached is None and county_geom_file is not None:
-            counties = select_rows(county_geom_file, exact_filters={"admin_level": 2})
+            counties = select_rows(
+                county_geom_file,
+                exact_filters={"admin_level": 2},
+                raw_geoparquet=True,
+            )
             if counties is not None and not counties.empty:
                 with _country_parquet_cache_lock:
                     _cache_country_frame(county_cache_key, counties)
-                logger.info("prewarm geometry USA county bank: %d rows in %.1fs", len(counties), _time.monotonic() - t0)
+                logger.info("prewarm geometry USA Admin2 Display: %d rows in %.1fs", len(counties), _time.monotonic() - t0)
             else:
-                logger.warning("prewarm geometry USA county bank: empty result")
+                logger.warning("prewarm geometry USA Admin2 Display: empty result")
         elif cached is not None:
-            logger.info("prewarm geometry USA county bank: reused %d rows", len(cached))
+            logger.info("prewarm geometry USA Admin2 Display: reused %d rows", len(cached))
         else:
-            logger.warning("prewarm geometry USA county bank: authority spine unavailable")
+            logger.warning("prewarm geometry USA Admin2 Display release unavailable")
     except Exception as exc:
-        logger.warning("prewarm geometry USA county bank failed: %s", exc)
+        logger.warning("prewarm geometry USA Admin2 Display failed: %s", exc)
 
     logger.info("Geometry pre-warmer complete")
 
@@ -3815,6 +3958,61 @@ def get_selection_geometries(loc_ids: list):
                 features.extend(sub_geojson.get("features", []))
 
     logger.debug(f"Loaded {len(features)} geometries for selection from {len(requested_ids)} loc_ids")
+
+    return {"type": "FeatureCollection", "features": features}
+
+
+def get_display_geometries(loc_ids: list):
+    """Return reusable browser shapes without opening Full/query geometry.
+
+    Administrative country roots use the compact global Admin0 bank. Enriched
+    sub-country ids follow their admitted Display release; all other countries
+    use the GeoBoundaries display shard. Explicit sidechain families keep their
+    own already-display-oriented banks.
+    """
+    requested_ids = list(dict.fromkeys(
+        canonicalize_loc_id(value) for value in (loc_ids or []) if str(value or "").strip()
+    ))
+    if not requested_ids:
+        return {"type": "FeatureCollection", "features": []}
+
+    features: list[dict] = []
+    found: set[str] = set()
+    country_ids = [value for value in requested_ids if "-" not in value]
+    if country_ids:
+        frame = load_global_country_display_frame()
+        if frame is not None and not frame.empty:
+            rows = frame[frame["loc_id"].isin(country_ids)]
+            features.extend(df_to_geojson(rows, polygon_only=True).get("features", []))
+            found.update(rows["loc_id"].astype(str))
+
+    by_country: dict[str, list[str]] = {}
+    for loc_id in requested_ids:
+        if loc_id in found or "-" not in loc_id:
+            continue
+        family = classify_loc_id_family(loc_id)
+        if family in {"admin_geometry", "admin_local"}:
+            by_country.setdefault(loc_id.split("-", 1)[0].upper(), []).append(loc_id)
+
+    for iso3, country_ids in by_country.items():
+        rows = load_country_display_rows(iso3, loc_ids=country_ids)
+        if rows is not None and not rows.empty:
+            features.extend(df_to_geojson(rows, polygon_only=True).get("features", []))
+            found.update(rows["loc_id"].astype(str))
+
+    # Overlay/reference families are already visual banks and are not members
+    # of a country's Admin Display release.
+    sidechain_ids = [
+        value for value in requested_ids
+        if value not in found and classify_loc_id_family(value) not in {"admin_geometry", "admin_local"}
+    ]
+    sidechains_by_country: dict[str, list[str]] = {}
+    for loc_id in sidechain_ids:
+        sidechains_by_country.setdefault(loc_id.split("-", 1)[0].upper(), []).append(loc_id)
+    for iso3, family_ids in sidechains_by_country.items():
+        rows = load_geometry_rows_by_loc_ids(iso3, family_ids)
+        if rows is not None and not rows.empty:
+            features.extend(df_to_geojson(rows, polygon_only=True).get("features", []))
 
     return {"type": "FeatureCollection", "features": features}
 

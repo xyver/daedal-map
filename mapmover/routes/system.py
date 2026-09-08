@@ -189,7 +189,9 @@ def _start_runtime_prewarm_threads() -> list[str]:
     try:
         from mapmover.duckdb_helpers import is_cloud_mode
         if is_cloud_mode():
-            task_names.extend(["disasters", "catalog_default_loads", "geometry"])
+            task_names.extend(["geometry_display", "ops_snapshots"])
+            if os.environ.get("PREWARM_DISASTERS", "0").strip().lower() in {"1", "true", "yes", "on"}:
+                task_names.append("disasters")
     except Exception:
         pass
     begin_prewarm(task_names)
@@ -207,35 +209,36 @@ def _start_runtime_prewarm_threads() -> list[str]:
         logger.warning("Runtime refresh: public pack catalog prewarm failed: %s", exc)
 
     try:
-        from mapmover.default_load_prewarm import prewarm_catalog_default_loads
         from mapmover.duckdb_helpers import is_cloud_mode, prewarm_disaster_sources
         from mapmover.geometry_handlers import prewarm_geometry
+        from mapmover.ops_orchestrator_runtime import prewarm_ops_snapshots
         from mapmover.paths import GLOBAL_DIR
 
         if is_cloud_mode():
             threading.Thread(
                 target=run_prewarm_task,
-                args=("disasters", prewarm_disaster_sources, GLOBAL_DIR),
+                args=("geometry_display", prewarm_geometry),
                 daemon=True,
-                name="prewarm-disasters-refresh",
+                name="prewarm-geometry-display-refresh",
             ).start()
-            started.append("disasters")
+            started.append("geometry_display")
 
             threading.Thread(
                 target=run_prewarm_task,
-                args=("catalog_default_loads", prewarm_catalog_default_loads),
+                args=("ops_snapshots", prewarm_ops_snapshots),
                 daemon=True,
-                name="prewarm-catalog-default-loads-refresh",
+                name="prewarm-ops-snapshots-refresh",
             ).start()
-            started.append("catalog_default_loads")
+            started.append("ops_snapshots")
 
-            threading.Thread(
-                target=run_prewarm_task,
-                args=("geometry", prewarm_geometry),
-                daemon=True,
-                name="prewarm-geometry-refresh",
-            ).start()
-            started.append("geometry")
+            if os.environ.get("PREWARM_DISASTERS", "0").strip().lower() in {"1", "true", "yes", "on"}:
+                threading.Thread(
+                    target=run_prewarm_task,
+                    args=("disasters", prewarm_disaster_sources, GLOBAL_DIR),
+                    daemon=True,
+                    name="prewarm-disasters-refresh",
+                ).start()
+                started.append("disasters")
     except Exception as exc:
         logger.warning("Runtime refresh: background prewarm launch failed: %s", exc)
     return started

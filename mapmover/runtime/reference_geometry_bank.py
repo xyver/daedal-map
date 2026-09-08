@@ -118,7 +118,11 @@ def _read_shape_partition(path: Path, loc_ids: list[str]) -> pd.DataFrame:
         f"FROM read_parquet(?) WHERE \"loc_id\" IN ({placeholders})"
     )
     try:
-        return run_df(sql, [path_to_uri(path), *loc_ids])
+        return run_df(
+            sql,
+            [path_to_uri(path), *loc_ids],
+            raw_geoparquet=geometry_expression.startswith('"geometry" AS'),
+        )
     except Exception as exc:
         if "Out of Memory" not in str(exc):
             raise

@@ -27,7 +27,7 @@ from mapmover.runtime.loc_id_resolution import resolve_point_to_loc_id_stack
 from mapmover.runtime.preprocess_user_intents import normalize_query_for_location_matching
 from mapmover.runtime_config import get_runtime_config
 from mapmover.paths import DATA_ROOT
-from mapmover.ops_feed_registry import ops_feed_record
+from mapmover.ops_feed_registry import ops_feed_ids, ops_feed_record
 
 try:
     import boto3
@@ -53,7 +53,18 @@ except ImportError:
 PRIVATE_ROOT = Path(__file__).resolve().parents[2] / "county-map-private"
 REFERENCE_ROOT = Path(__file__).resolve().parent / "reference"
 CURRENCY_MAP_PATH = REFERENCE_ROOT / "country_currency_map.csv"
-LIVE_STATE_SNAPSHOT_TTL_SECONDS = 60.0
+
+
+def _bounded_float_env(name: str, default: float, minimum: float) -> float:
+    try:
+        return max(minimum, float(os.environ.get(name, str(default))))
+    except (TypeError, ValueError):
+        return default
+
+
+LIVE_STATE_SNAPSHOT_TTL_SECONDS = _bounded_float_env(
+    "OPS_SNAPSHOT_CACHE_TTL_SECONDS", 300.0, 60.0
+)
 LIVE_STATE_HISTORY_TTL_SECONDS = 60.0
 DEFAULT_OPS_HISTORY_RETENTION_HOURS = 72
 DEFAULT_OPS_HISTORY_DISPLAY_HOURS = 72
@@ -2778,6 +2789,50 @@ def _build_map_items(feed_snapshots: list[dict]) -> list[dict]:
     return items
 
 
+def prewarm_ops_snapshots(
+    feeds: list[str] | tuple[str, ...] | None = None,
+    *,
+    force_refresh: bool = False,
+) -> dict:
+    """Warm the bounded current snapshot for every default Ops watch feed."""
+    targets = list(dict.fromkeys(
+        _normalize_ops_feed_id(feed)
+        for feed in (feeds or ops_feed_ids(flag="default_watch"))
+        if _normalize_ops_feed_id(feed)
+    ))
+    if force_refresh:
+        with _LIVE_STATE_CACHE_LOCK:
+            for key in list(_LIVE_STATE_CACHE):
+                if key[1] == "snapshot":
+                    _LIVE_STATE_CACHE.pop(key, None)
+
+    started = time.monotonic()
+    warmed: list[str] = []
+    missing: list[str] = []
+    max_workers = max(1, min(len(targets), 8))
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_map = {executor.submit(load_current_state_snapshot, feed): feed for feed in targets}
+        for future in as_completed(future_map):
+            feed = future_map[future]
+            try:
+                snapshot = future.result()
+            except Exception:
+                logger.warning("Ops snapshot prewarm failed for %s", feed, exc_info=True)
+                snapshot = None
+            (warmed if isinstance(snapshot, dict) else missing).append(feed)
+
+    result = {
+        "requested": len(targets),
+        "warmed": sorted(warmed),
+        "missing": sorted(missing),
+        "elapsed_seconds": round(time.monotonic() - started, 3),
+    }
+    if targets and not warmed:
+        raise RuntimeError(f"No Ops snapshots could be warmed: {', '.join(sorted(missing))}")
+    logger.info("Ops snapshot prewarm complete: %s", result)
+    return result
+
+
 def build_ops_report(
     *,
     watch: dict,
@@ -2794,7 +2849,9 @@ def build_ops_report(
 
     def _load_feed_state(feed: str) -> tuple[dict | None, list[dict]]:
         snapshot = load_current_state_snapshot(feed)
-        should_load_history = feed in history_feed_set or _ops_default_load_mode(snapshot) == OPS_DEFAULT_LOAD_HISTORY
+        # Initial Ops reports are snapshot-only. Retained histories belong to
+        # the explicit timeline/deeper-load path and must not delay first paint.
+        should_load_history = feed in history_feed_set
         history_entries = load_current_state_history(feed) if should_load_history else []
         return snapshot, history_entries
 

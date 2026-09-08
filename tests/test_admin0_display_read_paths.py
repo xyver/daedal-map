@@ -116,6 +116,28 @@ class Admin0DisplayReadPathTests(unittest.TestCase):
         self.assertIsNotNone(match)
         self.assertEqual("HKG", match.get("loc_id"))
 
+    def test_explicit_browser_geometry_uses_country_display_rows(self) -> None:
+        county = pd.DataFrame([{
+            "loc_id": "USA-CA-001",
+            "parent_id": "USA-CA",
+            "admin_level": 2,
+            "geometry": json.dumps({
+                "type": "Polygon",
+                "coordinates": [[[0, 0], [1, 0], [1, 1], [0, 0]]],
+            }),
+        }])
+        with patch.object(
+            geometry_handlers, "load_country_display_rows", return_value=county
+        ) as display_loader, patch.object(
+            geometry_handlers, "load_geometry_rows_by_loc_ids", side_effect=EXACT_MUST_NOT_LOAD
+        ), patch.object(
+            geometry_handlers, "load_admin_spine_query_rows", side_effect=EXACT_MUST_NOT_LOAD
+        ):
+            payload = geometry_handlers.get_display_geometries(["USA-CA-001"])
+
+        self.assertEqual(1, len(payload["features"]))
+        display_loader.assert_called_once_with("USA", loc_ids=["USA-CA-001"])
+
 
 class Admin0CountryUniverseTests(unittest.TestCase):
     """The exact bank recognizes the universe the Geometry Catalog overlay shows.

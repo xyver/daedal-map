@@ -37,17 +37,14 @@ class GeometryFetchRuntimeTests(unittest.TestCase):
         )
 
         with (
-            patch("mapmover.runtime.marine_geometry.load_marine_geometry", return_value=marine_df),
             patch(
-                "mapmover.data_loading.resolve_country_geometry_source",
-                return_value={
-                    "parquet_file": "dummy.parquet",
-                    "crosswalk": None,
-                    "uses_crosswalk": False,
-                    "source_kind": "country_base",
-                },
+                "mapmover.geometry_handlers.load_country_display_rows",
+                return_value=land_df,
             ),
-            patch("mapmover.data_loading.select_rows", return_value=land_df),
+            patch(
+                "mapmover.geometry_handlers.load_geometry_rows_by_loc_ids",
+                return_value=marine_df,
+            ),
         ):
             geojson = fetch_geometries_by_loc_ids(["EEZ-USA", "USA-VA-600"])
 

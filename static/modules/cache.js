@@ -189,7 +189,7 @@ export const GeometryCache = {
     const resolved = this.getByLocIds(normalized);
     const missing = normalized.filter((locId) => !resolved.has(locId));
     if (missing.length) {
-      const data = await postMsgpack('/geometry/features', { loc_ids: missing });
+      const data = await postMsgpack('/geometry/display-features', { loc_ids: missing });
       const features = Array.isArray(data?.features) ? data.features : [];
       this.add(features);
       for (const feature of features) {

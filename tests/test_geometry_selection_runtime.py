@@ -86,7 +86,7 @@ class GeometrySelectionRuntimeTests(unittest.TestCase):
             "mapmover.geometry_handlers.get_countries_in_bbox",
             return_value=["CAN", "USA"],
         ), patch(
-            "mapmover.geometry_handlers.load_country_parquet_viewport",
+            "mapmover.geometry_handlers.load_country_display_rows",
             side_effect=viewport_rows,
         ):
             result = get_geometry_index(admin_level=1, bbox=(-90.0, 45.0, -70.0, 60.0))

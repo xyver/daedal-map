@@ -39,18 +39,12 @@ from pathlib import Path
 from copy import deepcopy
 
 from .catalog_surface import catalog_product_surface, get_catalog_surface_override
-from .foundation_helpers import load_country_crosswalk
 from .pack_state import build_active_catalog
 from pack_registry_shared import pack_routing_hints
 from .paths import CATALOG_PATH, COUNTRIES_DIR, DATA_ROOT, GEOMETRY_DIR, WIP_CATALOG_PATH
 from .duckdb_helpers import select_rows
 from .request_risk_gate import block_gate, safe_gate
 from .runtime.geometry_loader import resolve_country_geometry_source
-from .runtime.geography_reference import (
-    build_crosswalk_maps,
-    canonicalize_loc_id,
-    translate_loc_id_to_geometry_id,
-)
 from .runtime_config import force_remote_data_reads, get_data_plane_mode, get_runtime_config
 
 logger = logging.getLogger("mapmover")
@@ -1148,188 +1142,11 @@ def load_geometry_for_country(iso3: str):
 
 
 def fetch_geometries_by_loc_ids(loc_ids: list) -> dict:
+    """Fetch simplified shapes for the map's ``show borders`` action.
+
+    All browser geometry now shares the same Display-family resolver. Exact
+    geometry remains available through geometry tools and query endpoints.
     """
-    Fetch geometries from parquet files for a list of loc_ids.
-    Uses 3-tier geometry fallback: country folder -> crosswalk -> GADM.
-    Used for "show borders" functionality.
+    from .geometry_handlers import get_display_geometries
 
-    Args:
-        loc_ids: List of location IDs (e.g., ["USA-WA-073", "USA-OR-067"])
-
-    Returns:
-        GeoJSON FeatureCollection with geometries
-    """
-    import pandas as pd
-    import json as json_module
-
-    if not loc_ids:
-        return {"type": "FeatureCollection", "features": []}
-
-    from .runtime.marine_geometry import is_marine_loc_id, load_marine_geometry
-
-    all_features = []
-    canonical_lids = [canonicalize_loc_id(loc_id) for loc_id in loc_ids]
-
-    # Marine overlay loc_ids (EEZ-<ISO3>, X* water bodies) live in their own
-    # geometry banks, not the country/admin grouping. Resolve them first so a
-    # marine metrics source (e.g. ocean_sst) renders.
-    marine_lids = [lid for lid in canonical_lids if is_marine_loc_id(lid)]
-    if marine_lids:
-        try:
-            marine_gdf = load_marine_geometry(marine_lids)
-            for _, row in marine_gdf.iterrows():
-                geom = row.get("geometry")
-                if geom is None:
-                    continue
-                if hasattr(geom, "__geo_interface__"):
-                    geom_dict = geom.__geo_interface__
-                elif isinstance(geom, str):
-                    geom_dict = json_module.loads(geom)
-                else:
-                    continue
-                all_features.append({
-                    "type": "Feature",
-                    "geometry": geom_dict,
-                    "properties": {
-                        "loc_id": row.get("loc_id"),
-                        "name": row.get("name"),
-                        "admin_level": None,
-                        "parent_id": None,
-                    },
-                })
-        except Exception as exc:
-            logger.warning(f"Error loading marine geometry: {exc}")
-
-    # Group the remaining (admin/country) loc_ids by country (first part before
-    # dash, or whole ID for country-level).
-    country_loc_ids = {}
-    for loc_id in canonical_lids:
-        if is_marine_loc_id(loc_id):
-            continue
-        parts = loc_id.split("-")
-        country = parts[0] if parts else loc_id
-        if country not in country_loc_ids:
-            country_loc_ids[country] = []
-        country_loc_ids[country].append(loc_id)
-
-    for country, lids in country_loc_ids.items():
-        resolved = resolve_country_geometry_source(country)
-        parquet_path = resolved["parquet_file"]
-        crosswalk = resolved["crosswalk"]
-        uses_crosswalk = bool(resolved["uses_crosswalk"])
-
-        if parquet_path is None:
-            logger.warning(f"No geometry found for {country}")
-            continue
-
-        remaining_lids = set(lids)
-        requested_ids = set(remaining_lids)
-        if uses_crosswalk and crosswalk:
-            requested_ids.update(
-                translate_loc_id_to_geometry_id(loc_id)
-                for loc_id in list(remaining_lids)
-            )
-
-        # Keep every exact geometry request on the shared bounded loader.  The
-        # old fallback hydrated an entire country whenever a requested id was
-        # absent, turning an ordinary miss into a 500 MB+ allocation.  The
-        # shared loader also understands reference-family banks and retired
-        # aliases, so data downloads and map selection now use the same lookup
-        # contract as the geometry tools.
-        from .geometry_handlers import load_geometry_rows_by_loc_ids
-
-        gdf = load_geometry_rows_by_loc_ids(
-            country,
-            sorted(requested_ids),
-            columns=["loc_id", "local_loc_id", "source_loc_id", "name", "admin_level", "parent_id", "geometry"],
-        )
-        if uses_crosswalk and crosswalk and gdf is not None and not gdf.empty and "local_loc_id" not in gdf.columns:
-            _, reverse_map = build_crosswalk_maps(crosswalk)
-            gdf["local_loc_id"] = gdf["loc_id"].map(reverse_map)
-
-        if gdf is None or len(gdf) == 0:
-            logger.warning(f"No geometry rows found for {country}")
-            continue
-
-        found_lids = set()
-
-        try:
-            # First try direct match
-            filtered = gdf[gdf['loc_id'].isin(remaining_lids)]
-
-            if len(filtered) > 0:
-                for _, row in filtered.iterrows():
-                    # Handle geometry - could be string or shapely geometry
-                    geom = row.get('geometry')
-                    if geom is None:
-                        continue
-
-                    # Convert to dict if needed
-                    if hasattr(geom, '__geo_interface__'):
-                        geom_dict = geom.__geo_interface__
-                    elif isinstance(geom, str):
-                        geom_dict = json_module.loads(geom)
-                    else:
-                        continue
-
-                    feature = {
-                        "type": "Feature",
-                        "geometry": geom_dict,
-                        "properties": {
-                            "loc_id": row.get("loc_id"),
-                            "name": row.get("name"),
-                            "admin_level": row.get("admin_level"),
-                            "parent_id": row.get("parent_id"),
-                        }
-                    }
-                    all_features.append(feature)
-                    found_lids.add(row.get("loc_id"))
-
-            remaining_lids -= found_lids
-
-            # If crosswalk exists and we still have unmatched loc_ids, try translation
-            if crosswalk and remaining_lids:
-                mappings, _ = build_crosswalk_maps(crosswalk)
-                for loc_id in list(remaining_lids):
-                    gadm_id = mappings.get(loc_id)
-                    if gadm_id:
-                        match = gdf[gdf['loc_id'] == gadm_id]
-                        if len(match) > 0:
-                            row = match.iloc[0]
-                            geom = row.get('geometry')
-                            if geom is None:
-                                continue
-
-                            if hasattr(geom, '__geo_interface__'):
-                                geom_dict = geom.__geo_interface__
-                            elif isinstance(geom, str):
-                                geom_dict = json_module.loads(geom)
-                            else:
-                                continue
-
-                            feature = {
-                                "type": "Feature",
-                                "geometry": geom_dict,
-                                "properties": {
-                                    "loc_id": loc_id,  # Use original loc_id
-                                    "name": row.get("name"),
-                                    "admin_level": row.get("admin_level"),
-                                    "parent_id": row.get("parent_id"),
-                                    "_crosswalk_from": gadm_id,  # Track translation
-                                }
-                            }
-                            all_features.append(feature)
-                            remaining_lids.discard(loc_id)
-
-            if remaining_lids:
-                logger.debug(f"No geometry found for {len(remaining_lids)} loc_ids in {country}: {list(remaining_lids)[:5]}")
-
-        except Exception as e:
-            logger.error(f"Error processing geometry for {country}: {e}")
-
-    logger.info(f"Fetched {len(all_features)} geometries for {len(loc_ids)} loc_ids")
-
-    return {
-        "type": "FeatureCollection",
-        "features": all_features
-    }
+    return get_display_geometries(loc_ids)

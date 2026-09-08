@@ -431,16 +431,36 @@ def lease_query_connection() -> _QueryConnectionLease:
     return _QueryConnectionLease(connection, generation)
 
 
-def run_df(sql: str, params: list) -> pd.DataFrame:
+def _execute_df(con, sql: str, params: list, *, raw_geoparquet: bool = False) -> pd.DataFrame:
+    if not raw_geoparquet:
+        return con.execute(sql, params).df()
+    con.execute("SET enable_geoparquet_conversion=false")
+    try:
+        return con.execute(sql, params).df()
+    finally:
+        con.execute("SET enable_geoparquet_conversion=true")
+
+
+def _execute_rows(con, sql: str, params: list, *, raw_geoparquet: bool = False) -> list[tuple]:
+    if not raw_geoparquet:
+        return con.execute(sql, params).fetchall()
+    con.execute("SET enable_geoparquet_conversion=false")
+    try:
+        return con.execute(sql, params).fetchall()
+    finally:
+        con.execute("SET enable_geoparquet_conversion=true")
+
+
+def run_df(sql: str, params: list, *, raw_geoparquet: bool = False) -> pd.DataFrame:
     if duckdb is None:
         return pd.DataFrame()
     if not is_cloud_mode():
         con = _get_thread_connection()
-        return con.execute(sql, params).df()
+        return _execute_df(con, sql, params, raw_geoparquet=raw_geoparquet)
     con, generation = _acquire_query_connection()
     discard = False
     try:
-        return con.execute(sql, params).df()
+        return _execute_df(con, sql, params, raw_geoparquet=raw_geoparquet)
     except Exception as exc:
         if _looks_like_connection_error(exc):
             discard = True
@@ -449,16 +469,16 @@ def run_df(sql: str, params: list) -> pd.DataFrame:
         _release_query_connection(con, generation=generation, discard=discard)
 
 
-def run_rows(sql: str, params: list) -> list[tuple]:
+def run_rows(sql: str, params: list, *, raw_geoparquet: bool = False) -> list[tuple]:
     if duckdb is None:
         return []
     if not is_cloud_mode():
         con = _get_thread_connection()
-        return con.execute(sql, params).fetchall()
+        return _execute_rows(con, sql, params, raw_geoparquet=raw_geoparquet)
     con, generation = _acquire_query_connection()
     discard = False
     try:
-        return con.execute(sql, params).fetchall()
+        return _execute_rows(con, sql, params, raw_geoparquet=raw_geoparquet)
     except Exception as exc:
         if _looks_like_connection_error(exc):
             discard = True
@@ -483,7 +503,7 @@ def _normalize_ts_for_duckdb(val: str | None) -> str | None:
     return val
 
 
-def parquet_columns(parquet_path: Path) -> set[str]:
+def parquet_columns(parquet_path: Path, *, raw_geoparquet: bool = False) -> set[str]:
     if duckdb is None:
         return set()
     cloud_mode = is_cloud_mode()
@@ -493,7 +513,7 @@ def parquet_columns(parquet_path: Path) -> set[str]:
         try:
             stat = parquet_path.stat()
             signature = (int(stat.st_mtime_ns), int(stat.st_size))
-            cache_key = str(parquet_path.resolve())
+            cache_key = f"{parquet_path.resolve()}|raw={int(raw_geoparquet)}"
         except OSError:
             return set()
         with _PARQUET_COLUMNS_CACHE_LOCK:
@@ -506,6 +526,7 @@ def parquet_columns(parquet_path: Path) -> set[str]:
             os.environ.get("S3_PREFIX", ""),
             os.environ.get("S3_PUBLISHED_PREFIX", ""),
             str(parquet_path),
+            f"raw={int(raw_geoparquet)}",
         ))
         try:
             cache_seconds = max(1, int(os.environ.get("PARQUET_SCHEMA_CACHE_SECONDS", "300")))
@@ -517,7 +538,9 @@ def parquet_columns(parquet_path: Path) -> set[str]:
             if cached and cached[0] > now:
                 return set(cached[1])
     uri = path_to_uri(parquet_path)
-    rows = run_rows("DESCRIBE SELECT * FROM read_parquet(?)", [uri])
+    rows = run_rows(
+        "DESCRIBE SELECT * FROM read_parquet(?)", [uri], raw_geoparquet=raw_geoparquet
+    )
     columns = {row[0] for row in rows}
     with _PARQUET_COLUMNS_CACHE_LOCK:
         if not cloud_mode:
@@ -778,12 +801,13 @@ def select_rows(
     starts_with_filters: dict | None = None,
     order_by: str | None = None,
     limit: int | None = None,
+    raw_geoparquet: bool = False,
 ) -> pd.DataFrame:
     if duckdb is None or not parquet_available(parquet_path):
         return pd.DataFrame()
 
     uri = path_to_uri(parquet_path)
-    available_cols = parquet_columns(parquet_path)
+    available_cols = parquet_columns(parquet_path, raw_geoparquet=raw_geoparquet)
     selected = [c for c in (columns or []) if c in available_cols]
     select_expr = ", ".join(quote_ident(c) for c in selected) if selected else "*"
 
@@ -837,7 +861,7 @@ def select_rows(
     if limit is not None and int(limit) > 0:
         sql += " LIMIT ?"
         params.append(int(limit))
-    return run_df(sql, params)
+    return run_df(sql, params, raw_geoparquet=raw_geoparquet)
 
 
 def count_rows(

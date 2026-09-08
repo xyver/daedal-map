@@ -1,13 +1,49 @@
 import unittest
+import json
+import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
 import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
+from shapely.geometry import box
 
 from mapmover import duckdb_helpers as helpers
 
 
 class DuckdbProjectionRuntimeTests(unittest.TestCase):
+    def test_raw_geoparquet_read_is_scoped_to_one_query(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "legacy-display.parquet"
+            table = pa.table({"loc_id": ["TST-1"], "geometry": [box(0, 0, 1, 1).wkb]})
+            metadata = {
+                b"geo": json.dumps({
+                    "version": "1.1.0",
+                    "primary_column": "geometry",
+                    "columns": {"geometry": {
+                        "encoding": "WKB",
+                        "geometry_types": ["Polygon"],
+                        "crs": "OGC:CRS84",
+                    }},
+                }).encode("utf-8")
+            }
+            pq.write_table(table.replace_schema_metadata(metadata), path)
+
+            rows = helpers.select_rows(
+                path,
+                columns=["loc_id", "geometry"],
+                in_filters={"loc_id": ["TST-1"]},
+                raw_geoparquet=True,
+            )
+            setting = helpers.run_rows(
+                "SELECT current_setting('enable_geoparquet_conversion')", []
+            )[0][0]
+
+        self.assertEqual(1, len(rows))
+        self.assertIsInstance(rows.iloc[0]["geometry"], (bytes, bytearray, memoryview))
+        self.assertIn(str(setting).lower(), {"true", "1"})
+
     def test_filtered_event_rows_projects_requested_and_filter_columns(self):
         with patch.object(helpers, "duckdb", object()), \
              patch.object(helpers, "parquet_available", return_value=True), \

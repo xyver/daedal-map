@@ -433,6 +433,42 @@ class OpsRouteRuntimeTest(unittest.TestCase):
         history.assert_not_called()
         self.assertEqual(72, timeline["history_hours"])
 
+    def test_initial_report_does_not_preload_declared_history(self):
+        snapshot = {
+            "collector": "hurricanes_live",
+            "published_at": "2026-08-12T00:00:00+00:00",
+            "last_checked_at": "2026-08-12T00:00:00+00:00",
+            "last_changed_at": "2026-08-12T00:00:00+00:00",
+            "payload_hash": "current",
+            "collector_status": "quiet",
+            "ops_default_load": "history",
+            "payload_summary": {"storms": []},
+        }
+        with patch.object(
+            ops_orchestrator_runtime, "load_current_state_snapshot", return_value=snapshot
+        ), patch.object(ops_orchestrator_runtime, "load_current_state_history") as history:
+            ops_orchestrator_runtime.build_ops_report(
+                watch={"watch_id": "default"},
+                effective_feeds=["hurricanes_live"],
+            )
+
+        history.assert_not_called()
+
+    def test_snapshot_prewarmer_uses_default_watch_without_history(self):
+        snapshot = {"collector": "earthquakes", "payload_summary": {}}
+        with patch.object(
+            ops_orchestrator_runtime, "ops_feed_ids", return_value=("earthquakes",)
+        ), patch.object(
+            ops_orchestrator_runtime, "load_current_state_snapshot", return_value=snapshot
+        ) as current, patch.object(
+            ops_orchestrator_runtime, "load_current_state_history"
+        ) as history:
+            result = ops_orchestrator_runtime.prewarm_ops_snapshots()
+
+        self.assertEqual(["earthquakes"], result["warmed"])
+        current.assert_called_once_with("earthquakes")
+        history.assert_not_called()
+
     def test_timeline_allows_external_provider_only_request(self):
         timeline = ops_orchestrator_runtime.build_ops_timeline_payload(effective_feeds=[])
         self.assertEqual(72, timeline["history_hours"])
