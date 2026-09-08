@@ -331,7 +331,11 @@ def _reference_graph_candidates(identifiers: list[str], *, country_scope: str = 
     try:
         from .reference_graph import identify_aliases
 
-        alias_rows = identify_aliases(identifiers, limit=max(100, len(identifiers) * 25))
+        alias_rows = identify_aliases(
+            identifiers,
+            limit=max(100, len(identifiers) * 25),
+            iso3=country_scope or None,
+        )
     except Exception:
         alias_rows = []
     grouped: dict[str, dict[str, list[str]]] = defaultdict(lambda: defaultdict(list))
@@ -388,12 +392,177 @@ def _invalid_identification_contract(*, code: str, message: str, reason: str, qu
     }
 
 
+def _dataset_interpretations(
+    identifiers: list[str],
+    *,
+    dataset_context: dict[str, Any],
+    candidates: list[dict[str, Any]],
+    expected_level: str | None,
+) -> list[dict[str, Any]]:
+    """Combine cheap dataset clues with exact identifier verification.
+
+    These scores are discovery guidance, not identity assertions. Exact match
+    and geometry counts remain separate so a friendly confidence label can
+    never hide incomplete maintained coverage.
+    """
+    if not dataset_context:
+        return []
+
+    column_name = str(dataset_context.get("column_name") or "").strip()
+    raw_column_names = dataset_context.get("column_names")
+    column_names = [
+        str(value).strip()
+        for value in (raw_column_names if isinstance(raw_column_names, list) else [])
+        if str(value).strip()
+    ]
+    row_geography = str(dataset_context.get("row_geography") or "").strip().lower()
+    normalized_column = re.sub(r"[^a-z0-9]+", "_", column_name.lower()).strip("_")
+    normalized_columns = {
+        re.sub(r"[^a-z0-9]+", "_", value.lower()).strip("_")
+        for value in column_names
+    }
+    local_format_match_rate = dataset_context.get("local_format_match_rate")
+    try:
+        local_format_match_rate = max(0.0, min(1.0, float(local_format_match_rate)))
+    except (TypeError, ValueError):
+        local_format_match_rate = None
+
+    by_system = {str(item.get("system") or ""): item for item in candidates}
+    all_five_digits = bool(identifiers) and all(
+        value.isdigit() and len(value) == 5 for value in identifiers
+    )
+    census_county_shape = bool(identifiers) and all(
+        census_geoid_level(value) == "admin_2" for value in identifiers
+    )
+    has_state_component = bool(normalized_columns & {
+        "statefp", "state_fips", "statefips", "stusps", "state_abbr",
+    })
+    has_county_component = bool(normalized_columns & {
+        "countyfp", "county_fips", "countyfips", "county_code", "county_name",
+    })
+    header_says_zip = bool(re.search(r"(?:^|_)(?:zip|zipcode|zip_code|zcta|postal_code)(?:$|_)", normalized_column))
+    header_says_county = "county" in normalized_column
+    header_says_geoid = bool(re.search(r"(?:^|_)geoid\d*(?:$|_)", normalized_column))
+    hint_says_county = "county" in row_geography
+    hint_says_zip = "zip" in row_geography or "zcta" in row_geography
+
+    def verified_evidence(system: str) -> tuple[float, float, list[str]]:
+        candidate = by_system.get(system) or {}
+        match_rate = float(candidate.get("match_rate") or 0.0)
+        match_count = int(candidate.get("match_count") or 0)
+        geometry_count = int(candidate.get("geometry_available_count") or 0)
+        geometry_rate = geometry_count / match_count if match_count else 0.0
+        evidence: list[str] = []
+        if match_count:
+            evidence.append(f"{match_count}/{len(identifiers)} sampled identifiers matched exactly")
+            evidence.append(f"{geometry_count}/{match_count} exact matches have maintained geometry")
+        else:
+            evidence.append("format alternative; exact maintained matches were not checked in this call")
+        return match_rate, geometry_rate, evidence
+
+    interpretations: list[dict[str, Any]] = []
+    if all_five_digits:
+        match_rate, geometry_rate, evidence = verified_evidence(US_CENSUS_GEOID_SYSTEM)
+        score = 0.0
+        if census_county_shape:
+            score += 0.25
+            evidence.append("values have the five-digit state-plus-county GEOID shape")
+        if header_says_county:
+            score += 0.25
+            evidence.append("the selected column name explicitly says county")
+        elif header_says_geoid:
+            score += 0.15
+            evidence.append("the selected column is named GEOID")
+        if has_state_component and has_county_component:
+            score += 0.20
+            evidence.append("state and county component columns corroborate the combined identifier")
+        if hint_says_county:
+            score += 0.15
+            evidence.append("the caller described the row geography as county")
+        score += 0.10 * match_rate + 0.05 * geometry_rate
+        if expected_level and expected_level != "admin_2":
+            score *= 0.35
+        interpretations.append({
+            "system": US_CENSUS_GEOID_SYSTEM,
+            "geo_level": "admin_2",
+            "label": "US Census county GEOID",
+            "confidence_score": round(min(1.0, score), 3),
+            "confidence": "high" if score >= 0.8 else "medium" if score >= 0.5 else "low",
+            "verified": bool(match_rate),
+            "match_rate": match_rate if match_rate else None,
+            "geometry_availability_rate": round(geometry_rate, 6) if match_rate else None,
+            "evidence": evidence,
+        })
+
+        match_rate, geometry_rate, evidence = verified_evidence("overlay_zcta")
+        score = 0.20
+        evidence.append("five-digit values can also resemble ZIP/ZCTA identifiers")
+        if header_says_zip:
+            score += 0.35
+            evidence.append("the selected column name says ZIP, postal, or ZCTA")
+        if hint_says_zip:
+            score += 0.20
+            evidence.append("the caller described the row geography as ZIP/ZCTA")
+        if has_state_component and has_county_component:
+            score -= 0.15
+            evidence.append("separate state and county fields make the ZIP/ZCTA reading less likely")
+        score += 0.20 * match_rate + 0.05 * geometry_rate
+        score = max(0.0, min(1.0, score))
+        interpretations.append({
+            "system": "overlay_zcta",
+            "geo_level": "zcta",
+            "label": "US ZIP Code Tabulation Area (ZCTA)",
+            "confidence_score": round(score, 3),
+            "confidence": "high" if score >= 0.8 else "medium" if score >= 0.5 else "low",
+            "verified": bool(match_rate),
+            "match_rate": match_rate if match_rate else None,
+            "geometry_availability_rate": round(geometry_rate, 6) if match_rate else None,
+            "evidence": evidence,
+        })
+
+    for candidate in candidates:
+        system = str(candidate.get("system") or "")
+        if system == "admin.native_id" and any(
+            item["system"] == US_CENSUS_GEOID_SYSTEM for item in interpretations
+        ):
+            continue
+        if not system or any(item["system"] == system for item in interpretations):
+            continue
+        match_rate, geometry_rate, evidence = verified_evidence(system)
+        geo_level = (candidate.get("geo_levels") or [None])[0]
+        score = min(1.0, 0.55 * match_rate + 0.15 * geometry_rate)
+        if local_format_match_rate is not None:
+            score = min(1.0, score + 0.05 * local_format_match_rate)
+            evidence.append(f"{local_format_match_rate:.0%} of populated values fit the locally detected format")
+        if hint_says_county or (has_state_component and has_county_component):
+            if geo_level == "admin_2" or "county" in system:
+                score = min(1.0, score + 0.15)
+            else:
+                score *= 0.25
+                evidence.append("county row/companion-column context makes this exact-code collision unlikely")
+        interpretations.append({
+            "system": system,
+            "geo_level": geo_level,
+            "label": system.replace("_", " "),
+            "confidence_score": round(score, 3),
+            "confidence": "high" if score >= 0.8 else "medium" if score >= 0.5 else "low",
+            "verified": bool(match_rate),
+            "match_rate": match_rate,
+            "geometry_availability_rate": round(geometry_rate, 6),
+            "evidence": evidence,
+        })
+
+    interpretations.sort(key=lambda item: (-float(item["confidence_score"]), str(item["system"])))
+    return interpretations[:3]
+
+
 def identify_reference_system(
     identifiers: list[Any],
     *,
     expected: dict[str, Any] | None = None,
     country_scope: str | None = None,
     validation_scope: str = "sample",
+    dataset_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Rank maintained reference systems for a bounded identifier set."""
     if not isinstance(identifiers, list):
@@ -422,6 +591,15 @@ def identify_reference_system(
             question_id="expected_declaration",
             prompt="What system, geography level, vintage, and country does the dataset declare?",
             maps_to="expected",
+        )
+    if dataset_context is not None and not isinstance(dataset_context, dict):
+        return _invalid_identification_contract(
+            code="invalid_dataset_context_type",
+            message="dataset_context must be an object containing bounded column and row-geography clues",
+            reason="dataset_context_malformed",
+            question_id="dataset_context",
+            prompt="Provide dataset context as an object, or omit it.",
+            maps_to="dataset_context",
         )
     if validation_scope not in {"sample", "all_distinct_identifiers"}:
         return _invalid_identification_contract(
@@ -664,6 +842,16 @@ def identify_reference_system(
     else:
         status = "partial_match"
 
+    public_candidates = [
+        {key: value for key, value in candidate.items() if not key.startswith("_")}
+        for candidate in candidates
+    ]
+    dataset_interpretations = _dataset_interpretations(
+        values,
+        dataset_context=dataset_context or {},
+        candidates=public_candidates,
+        expected_level=expected_level,
+    )
     selected = full_matches[0] if full_matches and status == "matched" else None
     country_catalog_evidence = _country_supporting_identifier_evidence(
         values, country_scope=country,
@@ -809,10 +997,6 @@ def identify_reference_system(
             }],
         }
 
-    public_candidates = [
-        {key: value for key, value in candidate.items() if not key.startswith("_")}
-        for candidate in candidates
-    ]
     return {
         "ok": status in {"matched", "ambiguous", "partial_match"},
         "status": status,
@@ -828,6 +1012,8 @@ def identify_reference_system(
             "country_scope": country or None,
         },
         "candidates": public_candidates,
+        "dataset_context": dataset_context or None,
+        "dataset_interpretations": dataset_interpretations,
         "concurring_systems": concurring_systems,
         "recommended_binding": recommended_binding,
         "country_catalog_evidence": country_catalog_evidence,

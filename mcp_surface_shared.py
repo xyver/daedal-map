@@ -265,7 +265,7 @@ def build_tool_definitions() -> list[dict]:
         {
             "name": "identify_reference_system",
             "title": "Identify Geographic Reference System",
-            "description": "Free geography utility. Checks a bounded sample of identifiers against maintained reference indexes and geometry banks. LLM clients must extract identifier values from the user's natural-language request and pass them as strings; do not put the prose question in the arguments, and preserve leading zeros. Use it when a caller has geography keys but is unsure which system, level, or bank they belong to, or wants to verify a declaration such as 2020 US Census tract GEOIDs. Returns ranked candidates, deterministic warnings, machine-readable clarification questions when evidence is incomplete or ambiguous, exact match and shape-availability counts, and a recommended geography_binding for estimate_conversion_job. It does not convert the full dataset or return polygons. No payment required.",
+            "description": "Free geography utility. Checks a bounded sample of identifiers plus optional dataset/column context against maintained reference indexes and geometry banks. LLM clients must extract identifier values from the user's natural-language request and pass them as strings; do not put the prose question in the arguments, and preserve leading zeros. Use it when a caller is unsure which system or level their keys belong to. It returns one to three interpretations with confidence and preserves ambiguity until the user confirms one by retrying with expected.system. A caller who already knows the system can provide expected on the first call and receive a verified geography_binding directly. It does not convert the full dataset or return polygons. No payment required.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -279,7 +279,7 @@ def build_tool_definitions() -> list[dict]:
                     "expected": {
                         "type": "object",
                         "properties": {
-                            "system": {"type": "string", "description": "Expected reference system, such as us_census_geoid, loc_id, zcta, or a catalog reference system."},
+                            "system": {"type": "string", "description": "Caller-declared reference system, such as us_census_geoid, loc_id, zcta, or a catalog reference system. Supply it immediately when known, or after choosing an identification result."},
                             "geo_level": {"anyOf": [{"type": "string"}, {"type": "integer"}], "description": "Expected geography level, such as tract or admin_3."},
                             "vintage": {"type": "string", "description": "Expected source/reference vintage, such as 2020."},
                             "country_scope": {"type": "string", "description": "Expected ISO3 country scope."},
@@ -287,6 +287,19 @@ def build_tool_definitions() -> list[dict]:
                         "additionalProperties": False,
                     },
                     "country_scope": {"type": "string", "description": "Optional ISO3 country hint used to narrow candidate banks."},
+                    "dataset_context": {
+                        "type": "object",
+                        "description": "Bounded, non-row dataset clues used to rank plausible interpretations without replacing exact identifier verification.",
+                        "properties": {
+                            "file_name": {"type": "string"},
+                            "sheet_name": {"type": "string"},
+                            "column_name": {"type": "string"},
+                            "column_names": {"type": "array", "items": {"type": "string"}, "maxItems": 1000},
+                            "row_geography": {"type": "string", "description": "Optional plain-language clue such as county, tract, or ZIP area."},
+                            "local_format_match_rate": {"type": "number", "minimum": 0, "maximum": 1},
+                        },
+                        "additionalProperties": False,
+                    },
                     "validation_scope": {"type": "string", "enum": ["sample", "all_distinct_identifiers"], "description": "Describes whether the supplied identifiers are a sample or the complete distinct-key set. The tool validates every supplied identifier."},
                     "request_id": {"type": "string", "description": "Optional caller-supplied request id for tracing."},
                 },

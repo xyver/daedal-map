@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from datetime import date
 from functools import lru_cache
 
@@ -774,6 +775,27 @@ def resolve_public_loc_id(loc_id: str) -> dict[str, Any]:
     finally:
         connection.close()
     if not rows:
+        # ZCTA public IDs originally used ``USA-Z-12345``. Current releases
+        # publish opaque preferred-public IDs, but the exact Census reference
+        # remains durable. Resolve the retired namespace through that official
+        # identifier rather than fabricating a canonical loc_id from the code.
+        legacy_zcta = re.fullmatch(r"USA-Z-(\d{5})", requested)
+        if legacy_zcta:
+            rows = resolve_alias(
+                "usa.census.2020.zcta5.geoid",
+                legacy_zcta.group(1),
+                iso3="USA",
+                limit=25,
+            )
+        legacy_tribal = re.fullmatch(r"USA-TRIBAL-(\d{4})", requested)
+        if legacy_tribal:
+            rows = resolve_alias(
+                "usa.census.2025.aiannhce",
+                legacy_tribal.group(1),
+                iso3="USA",
+                limit=25,
+            )
+    if not rows:
         return {"ok": True, "status": "unchanged", **base}
 
     targets = sorted({str(row.get("loc_id") or "").strip() for row in rows if str(row.get("loc_id") or "").strip()})
@@ -856,17 +878,29 @@ def public_alias_reference_systems(*, iso3: str | None = None) -> list[dict[str,
         connection.close()
 
 
-def identify_aliases(external_ids: list[str], *, limit: int = 500) -> list[dict[str, Any]]:
-    """Return exact alias rows across all reference systems in one scan."""
+def identify_aliases(
+    external_ids: list[str], *, limit: int = 500, iso3: str | None = None,
+) -> list[dict[str, Any]]:
+    """Return exact alias rows, narrowed to one country graph when supplied."""
     requested = list(dict.fromkeys(str(item).strip() for item in external_ids if str(item).strip()))
     if not requested or not reference_graph_available():
         return []
-    root = active_reference_graph_root()
+    country = str(iso3 or "").strip().upper()
+    roots_by_country = reference_graph_roots()
+    roots = [roots_by_country[country]] if country in roots_by_country else (
+        [] if country else [
+            *roots_by_country.values(),
+            *([global_reference_graph_root()] if global_reference_graph_root() else []),
+        ]
+    )
+    source = _table_source_for_roots("aliases", roots)
+    if not source:
+        return []
     placeholders = ", ".join("?" for _ in requested)
     connection = _connection()
     try:
         cursor = connection.execute(
-            f"""SELECT * FROM read_parquet({_table_source('aliases')}, union_by_name=True)
+            f"""SELECT * FROM read_parquet({source}, union_by_name=True)
                 WHERE external_id IN ({placeholders})
                 ORDER BY reference_system, external_id, loc_id LIMIT ?""",
             [*requested, max(1, int(limit))],

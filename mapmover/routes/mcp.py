@@ -3035,6 +3035,7 @@ async def _execute_identify_reference_system_tool(request: Request, arguments: d
             expected=payload.get("expected"),
             country_scope=payload.get("country_scope"),
             validation_scope=str(payload.get("validation_scope") or "sample"),
+            dataset_context=payload.get("dataset_context"),
         )
         stages = {"identifier_lookup_ms": _elapsed_ms(runtime_started)}
     except Exception as exc:

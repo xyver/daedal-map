@@ -74,19 +74,40 @@ class LocIdVerificationTests(unittest.TestCase):
 
 
 class ConcurringSystemTests(unittest.TestCase):
-    def test_systems_naming_the_same_referent_are_not_ambiguous(self) -> None:
-        """Two names for one answer is agreement, not a question for the user.
+    def test_dataset_context_ranks_county_above_five_digit_zcta_shape(self) -> None:
+        payload = identify_reference_system(
+            ["06037"],
+            country_scope="USA",
+            dataset_context={
+                "column_name": "GEOID",
+                "column_names": ["GEOID", "STUSPS", "STATEFP", "COUNTYFP", "NAME"],
+                "row_geography": "county dataset",
+                "local_format_match_rate": 1.0,
+            },
+        )
+
+        interpretations = payload["dataset_interpretations"]
+        self.assertEqual(interpretations[0]["system"], "us_census_geoid")
+        self.assertEqual(interpretations[0]["geo_level"], "admin_2")
+        self.assertEqual(interpretations[0]["confidence"], "high")
+        self.assertEqual(payload["status"], "ambiguous")
+        self.assertIsNone(payload["recommended_binding"])
+        zcta = next(item for item in interpretations if item["system"] == "overlay_zcta")
+        self.assertLess(zcta["confidence_score"], interpretations[0]["confidence_score"])
+
+    def test_concurring_county_names_do_not_hide_other_exact_systems(self) -> None:
+        """Agreement on one answer does not erase a separate exact collision.
 
         A five-digit US county code is recognized by both the census GEOID
         adapter and the reference graph's native admin id, and both return
-        USA-NY-061. Reporting that as ambiguous asked the caller to choose
-        between options that resolve identically.
+        USA-NY-061. Legislative systems also use 36061 for different identities,
+        so discovery remains ambiguous until the user declares Census.
         """
         payload = identify_reference_system(["36061"], country_scope="USA")
 
-        self.assertEqual(payload["status"], "matched")
-        self.assertIn("us_census_geoid", payload["concurring_systems"])
-        self.assertGreater(len(payload["concurring_systems"]), 1)
+        self.assertEqual(payload["status"], "ambiguous")
+        self.assertIsNone(payload["recommended_binding"])
+        self.assertIn("us_census_geoid", {item["system"] for item in payload["candidates"]})
 
     def test_the_binding_prefers_the_system_carrying_more_evidence(self) -> None:
         """Not the alphabetically first one.
@@ -94,7 +115,11 @@ class ConcurringSystemTests(unittest.TestCase):
         The census adapter knows the level and vintage; a bare native id knows
         neither, so it is the weaker binding even though it sorts first.
         """
-        payload = identify_reference_system(["36061"], country_scope="USA")
+        payload = identify_reference_system(
+            ["36061"],
+            expected={"system": "us_census_geoid", "geo_level": "admin_2"},
+            country_scope="USA",
+        )
 
         self.assertEqual(payload["recommended_binding"]["system"], "us_census_geoid")
 

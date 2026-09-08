@@ -288,13 +288,13 @@ class ReferenceExchangeRuntimeTests(unittest.TestCase):
         payload = identify_reference_system(["36061"], country_scope="USA")
         systems = {candidate["system"] for candidate in payload["candidates"]}
 
-        self.assertEqual(payload["status"], "matched")
-        self.assertEqual(payload["recommended_binding"]["system"], "us_census_geoid")
-        # The point is that no ZCTA is invented for a county code. Systems that
-        # recognize 36061 and agree it is USA-NY-061 are concurring evidence,
-        # not a competing reading, so they are reported rather than excluded.
+        self.assertEqual(payload["status"], "ambiguous")
+        self.assertIsNone(payload["recommended_binding"])
+        # No ZCTA is invented for a county code. Current legislative reference
+        # systems genuinely reuse this five-digit value, so the caller must
+        # confirm Census rather than receiving a silent county binding.
         self.assertNotIn("overlay_zcta", systems)
-        self.assertIn("us_census_geoid", payload["concurring_systems"])
+        self.assertIn("us_census_geoid", systems)
 
     def test_retired_usa_family_ids_fetch_canonical_graph_shapes(self) -> None:
         payload = get_geometry_references(

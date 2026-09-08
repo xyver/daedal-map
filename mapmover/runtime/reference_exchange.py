@@ -2169,6 +2169,14 @@ def get_geometry_references(
     # is unchanged.  Inputs that miss the exact bank still go through the graph
     # resolver, which preserves preferred-public-loc_id aliases.
     requested_ids = [canonicalize_loc_id(str(loc_id)) for loc_id in loc_ids if str(loc_id).strip()]
+    retired_public_ids = {
+        value for value in requested_ids
+        if (
+            value.startswith("USA-Z-") and len(value) == 11 and value[6:].isdigit()
+        ) or (
+            value.startswith("USA-TRIBAL-") and len(value) == 15 and value[11:].isdigit()
+        )
+    }
     direct_features: list[dict[str, Any]] = []
     if include_polygon:
         direct_features = (get_selection_geometries(requested_ids) or {}).get("features") or []
@@ -2206,7 +2214,7 @@ def get_geometry_references(
             "loc_id": requested,
             "resolved_from_public_alias": False,
         }
-        if requested in direct_ids else resolve_loc_id_input(requested)
+        if requested in direct_ids and requested not in retired_public_ids else resolve_loc_id_input(requested)
         for requested in requested_ids
     ]
     canonical_ids = [str(item.get("loc_id")) for item in resolutions if item.get("ok") and item.get("loc_id")]
@@ -2288,6 +2296,14 @@ def get_geometry_references(
 def get_geometry_availability(loc_ids: list[str]) -> dict[str, Any]:
     """Return a lightweight shape-availability preflight for one or more loc_ids."""
     requested_ids = [canonicalize_loc_id(str(loc_id)) for loc_id in loc_ids if str(loc_id).strip()]
+    retired_public_ids = {
+        value for value in requested_ids
+        if (
+            value.startswith("USA-Z-") and len(value) == 11 and value[6:].isdigit()
+        ) or (
+            value.startswith("USA-TRIBAL-") and len(value) == 15 and value[11:].isdigit()
+        )
+    }
     rows = get_selection_geometry_metadata(requested_ids)
     direct_ids = {
         canonicalize_loc_id(str(row.get("loc_id") or row.get("source_loc_id") or ""))
@@ -2301,7 +2317,7 @@ def get_geometry_availability(loc_ids: list[str]) -> dict[str, Any]:
             "loc_id": requested,
             "resolved_from_public_alias": False,
         }
-        if requested in direct_ids else resolve_loc_id_input(requested)
+        if requested in direct_ids and requested not in retired_public_ids else resolve_loc_id_input(requested)
         for requested in requested_ids
     ]
     canonical_ids = [str(item.get("loc_id")) for item in resolutions if item.get("ok") and item.get("loc_id")]
