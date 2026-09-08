@@ -16,6 +16,7 @@ const CURSOR_STEP_MS = 5 * 60 * 1000;
 const NWS_BACKGROUND_BATCH_SIZE = 24;
 const INTERACTIVE_GRACE_MS = 250;
 const NWS_SCRUB_DEBOUNCE_MS = 120;
+const HURRICANE_SCRUB_DEBOUNCE_MS = 80;
 const HISTORY_PRELOAD_METHODS = {
   nws_alerts: '_preloadNwsFrames',
   live_point: '_preloadPointFrames',
@@ -93,6 +94,8 @@ export const OpsTimeline = {
   hurricaneReplayData: new Map(),
   hurricaneWarmupPromise: null,
   hurricaneWarmupRun: 0,
+  hurricaneFrameTimers: new Map(),
+  hurricaneFrameTokens: new Map(),
   backgroundPrefetchTimers: [],
   backgroundPrefetchRun: 0,
   selectedDisplayPayloads: new Map(),
@@ -105,6 +108,12 @@ export const OpsTimeline = {
     this.enabled = Boolean(this.element);
     this.onFrame = typeof onFrame === 'function' ? onFrame : null;
     if (!this.enabled && this.element) this.element.hidden = true;
+  },
+
+  _cancelHurricaneFrameRequests() {
+    for (const timer of this.hurricaneFrameTimers.values()) clearTimeout(timer);
+    this.hurricaneFrameTimers.clear();
+    this.hurricaneFrameTokens.clear();
   },
 
   clear() {
@@ -120,6 +129,7 @@ export const OpsTimeline = {
     this.pointFrameCache.clear();
     this.pointRequestTokens.clear();
     this.hurricaneReplayData.clear();
+    this._cancelHurricaneFrameRequests();
     this.selectedDisplayPayloads.clear();
     this.selectedDisplayKeys.clear();
     this.hurricaneWarmupRun += 1;
@@ -229,6 +239,7 @@ export const OpsTimeline = {
       rangeEnd,
       historyHours: Math.max(1, Math.round((currentMs - rangeStart) / 3_600_000)),
     };
+    this._cancelHurricaneFrameRequests();
     this.hurricaneReplayData.clear();
     for (const [feedId, replay] of Object.entries(timeline?.hurricane_replay || {})) {
       if (replay?.type === 'hurricane_replay') {
@@ -310,24 +321,11 @@ export const OpsTimeline = {
         if (ms > this.timeline.currentMs) pointOverlay?.setOpsTimelineFrame?.({ type: 'FeatureCollection', features: [] });
         else pointOverlay?.setOpsTimelineFrame?.({ type: 'FeatureCollection', features: [] });
       } else if (this.hurricaneReplayData.has(feedId)) {
-        if (this._isPastHurricaneReplayEnd(feedId, ms)) {
-          this.selectedDisplayPayloads.delete(feedId);
-          this.selectedDisplayKeys.delete(feedId);
-          updatedFeedIds.add(feedId);
-          clearFeedIds.add(feedId);
-          continue;
-        }
-        const replayPayload = this._buildHurricaneReplayDisplayPayload(feedId, ms, selected);
-        if (replayPayload) {
-          const renderKey = String(replayPayload.ops_render_key || '');
-          if (renderKey && this.selectedDisplayKeys.get(feedId) === renderKey) {
-            this.selectedDisplayPayloads.set(feedId, replayPayload);
-          } else {
-            this.selectedDisplayPayloads.set(feedId, replayPayload);
-            if (renderKey) this.selectedDisplayKeys.set(feedId, renderKey);
-            updatedFeedIds.add(feedId);
-          }
-        }
+        // Rebuilding hurricane lines, uncertainty geometry, wind footprints,
+        // and the MapLibre source on every range-input event overwhelms the
+        // render loop during a drag. Queue only the newest cursor position and
+        // keep the last valid track painted until that replacement is ready.
+        this._scheduleHurricaneReplayFrame(feedId, ms, selected);
       } else if (selected?.display_payload?.ops_timeline_provider) {
         specialFrames.push(selected.display_payload);
       } else if (selected?.display_payload) {
@@ -634,6 +632,50 @@ export const OpsTimeline = {
   _isPastHurricaneReplayEnd(feedId, selectedMs) {
     const endMs = this._hurricaneReplayEndMs(feedId);
     return Number.isFinite(endMs) && selectedMs > endMs;
+  },
+
+  _scheduleHurricaneReplayFrame(feedId, selectedMs, selectedFrame = null) {
+    const existingTimer = this.hurricaneFrameTimers.get(feedId);
+    if (existingTimer) clearTimeout(existingTimer);
+    const token = (this.hurricaneFrameTokens.get(feedId) || 0) + 1;
+    this.hurricaneFrameTokens.set(feedId, token);
+    const timer = setTimeout(() => {
+      this.hurricaneFrameTimers.delete(feedId);
+      if (
+        token !== this.hurricaneFrameTokens.get(feedId)
+        || selectedMs !== this.selectedMs
+        || !this.timeline
+      ) return;
+
+      if (this._isPastHurricaneReplayEnd(feedId, selectedMs)) {
+        this.selectedDisplayPayloads.delete(feedId);
+        this.selectedDisplayKeys.delete(feedId);
+        this.onFrame?.(Array.from(this.selectedDisplayPayloads.values()), {
+          at: new Date(selectedMs).toISOString(),
+          opsTimelineUpdate: true,
+          opsTimelineFeedIds: [feedId],
+          preserveMissing: false,
+        });
+        return;
+      }
+
+      const replayPayload = this._buildHurricaneReplayDisplayPayload(feedId, selectedMs, selectedFrame);
+      // A cursor before a storm's first retained fix has no replacement
+      // frame. Holding the last painted state during a drag avoids a blank
+      // flash; a later valid cursor position will replace it normally.
+      if (!replayPayload) return;
+      const renderKey = String(replayPayload.ops_render_key || '');
+      if (renderKey && this.selectedDisplayKeys.get(feedId) === renderKey) return;
+      this.selectedDisplayPayloads.set(feedId, replayPayload);
+      if (renderKey) this.selectedDisplayKeys.set(feedId, renderKey);
+      this.onFrame?.(Array.from(this.selectedDisplayPayloads.values()), {
+        at: new Date(selectedMs).toISOString(),
+        opsTimelineUpdate: true,
+        opsTimelineFeedIds: [feedId],
+        preserveMissing: true,
+      });
+    }, HURRICANE_SCRUB_DEBOUNCE_MS);
+    this.hurricaneFrameTimers.set(feedId, timer);
   },
 
   _buildHurricaneReplayDisplayPayload(feedId, selectedMs, selectedFrame = null) {
