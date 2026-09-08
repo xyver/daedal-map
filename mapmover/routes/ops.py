@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import re
 from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
 
@@ -251,6 +252,24 @@ def _local_nws_timeline_frame_at(raw_at: object) -> dict | None:
         "payload_hash": selected.get("payload_hash"),
         "start_at": (_snapshot_time(selected) or target).isoformat(),
         "geojson": build_nws_alerts_payload_for_snapshot(materialized),
+    }
+
+
+def _local_nws_timeline_frame_by_hash(raw_hash: object) -> dict | None:
+    """Build one NWS display frame without re-reading its timeline index."""
+    payload_hash = str(raw_hash or "").strip().lower()
+    if not re.fullmatch(r"[a-f0-9]{64}", payload_hash):
+        return None
+    stored = load_current_state_timeline_frame(
+        "usa_nws_alerts", f"timeline_frames/{payload_hash}.json"
+    )
+    if not isinstance(stored, dict):
+        return None
+    observed_at = _snapshot_time(stored)
+    return {
+        "payload_hash": payload_hash,
+        "start_at": observed_at.isoformat() if observed_at is not None else None,
+        "geojson": build_nws_alerts_payload_for_snapshot(stored),
     }
 
 
@@ -663,7 +682,14 @@ async def local_ops_timeline_nws_frame_endpoint(req: Request):
     """Return one retained NWS display frame for the shared Ops cursor."""
     try:
         body = await decode_request_body(req)
-        frame = _local_nws_timeline_frame_at(body.get("at"))
+        # The timeline metadata already gives the browser an immutable frame
+        # hash. Prefer it so an interactive scrub does one hot-store lookup,
+        # rather than fetching and scanning the full timeline index again.
+        frame = (
+            _local_nws_timeline_frame_by_hash(body.get("payload_hash"))
+            if body.get("payload_hash")
+            else _local_nws_timeline_frame_at(body.get("at"))
+        )
         if frame is None:
             return msgpack_error("No retained NWS frame at that time", 404)
         return msgpack_response({"type": "local_ops_nws_frame", "frame": frame})

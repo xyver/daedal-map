@@ -15,6 +15,7 @@ import { formatOpsTime } from './ops-time-display.js';
 const CURSOR_STEP_MS = 5 * 60 * 1000;
 const NWS_BACKGROUND_BATCH_SIZE = 24;
 const INTERACTIVE_GRACE_MS = 250;
+const NWS_SCRUB_DEBOUNCE_MS = 120;
 const HISTORY_PRELOAD_METHODS = {
   nws_alerts: '_preloadNwsFrames',
   live_point: '_preloadPointFrames',
@@ -61,6 +62,13 @@ function buildNwsLifecycleFrame(bundle, ms) {
   return { type: 'FeatureCollection', features, county_geometry_references, detail_at: new Date(ms).toISOString() };
 }
 
+function hasNwsLifecycleChanges(bundle) {
+  const intervals = Array.isArray(bundle?.intervals) ? bundle.intervals : [];
+  if (!intervals.length) return false;
+  const starts = new Set(intervals.map((interval) => String(interval?.start_at || '')).filter(Boolean));
+  return starts.size > 1 || intervals.some((interval) => Boolean(interval?.end_at));
+}
+
 export const OpsTimeline = {
   enabled: false,
   element: null,
@@ -73,8 +81,9 @@ export const OpsTimeline = {
   nwsFrameCache: new Map(),
   nwsLifecycleBundle: null,
   nwsInteractiveRequestedAt: 0,
-  nwsFrameRequestInFlight: false,
-  nwsPendingFrameRequest: null,
+  nwsFrameRequestController: null,
+  nwsFrameRequestToken: 0,
+  nwsFrameRequestTimer: 0,
   pointFrameCache: new Map(),
   // Point feeds are independent overlays. A single global request token would
   // let an AirNow request cancel an in-flight buoy frame (or the reverse),
@@ -103,8 +112,11 @@ export const OpsTimeline = {
     this.selectedMs = null;
     this.nwsFrameCache.clear();
     this.nwsLifecycleBundle = null;
-    this.nwsFrameRequestInFlight = false;
-    this.nwsPendingFrameRequest = null;
+    if (this.nwsFrameRequestTimer) clearTimeout(this.nwsFrameRequestTimer);
+    this.nwsFrameRequestTimer = 0;
+    this.nwsFrameRequestController?.abort?.();
+    this.nwsFrameRequestController = null;
+    this.nwsFrameRequestToken += 1;
     this.pointFrameCache.clear();
     this.pointRequestTokens.clear();
     this.hurricaneReplayData.clear();
@@ -366,39 +378,37 @@ export const OpsTimeline = {
       void NwsAlertsOverlay.setOpsTimelineFrame?.(loaded.geojson);
       return;
     }
-    this.nwsPendingFrameRequest = { frame, selectedMs, key };
-    if (this.nwsFrameRequestInFlight) return;
-    await this._drainNwsFrameRequestQueue();
+    // Slider input can emit dozens of positions while the user drags. Abort
+    // the obsolete request and wait briefly for the thumb to settle. This
+    // keeps a slow Railway hot-store lookup from blocking every newer cursor
+    // position behind it while Aurora and local raster frames continue moving.
+    if (this.nwsFrameRequestTimer) clearTimeout(this.nwsFrameRequestTimer);
+    this.nwsFrameRequestController?.abort?.();
+    const token = ++this.nwsFrameRequestToken;
+    this.nwsFrameRequestTimer = setTimeout(() => {
+      this.nwsFrameRequestTimer = 0;
+      void this._fetchNwsFrame({ frame, selectedMs, key, token });
+    }, NWS_SCRUB_DEBOUNCE_MS);
   },
 
-  async _drainNwsFrameRequestQueue() {
-    if (this.nwsFrameRequestInFlight) return;
-    this.nwsFrameRequestInFlight = true;
+  async _fetchNwsFrame({ frame, selectedMs, key, token }) {
+    if (token !== this.nwsFrameRequestToken || selectedMs !== this.selectedMs) return;
+    const controller = new AbortController();
+    this.nwsFrameRequestController = controller;
     try {
-      while (this.nwsPendingFrameRequest) {
-        const request = this.nwsPendingFrameRequest;
-        this.nwsPendingFrameRequest = null;
-        if (request.selectedMs !== this.selectedMs) continue;
-        let loaded = this.nwsFrameCache.get(request.key);
-        if (!loaded) {
-          try {
-            const response = await postMsgpack('/api/local/ops/timeline/nws-frame', {
-              at: request.frame.start_at || new Date(request.selectedMs).toISOString(),
-            });
-            loaded = response?.frame;
-            if (loaded) this.nwsFrameCache.set(request.key, loaded);
-          } catch (error) {
-            console.warn('OpsTimeline: retained NWS frame failed', error);
-            continue;
-          }
-        }
-        if (request.selectedMs === this.selectedMs && loaded?.geojson) {
-          void NwsAlertsOverlay.setOpsTimelineFrame?.(loaded.geojson);
-        }
+      const response = await postMsgpack('/api/local/ops/timeline/nws-frame', {
+        payload_hash: frame?.payload_hash,
+        at: frame?.start_at || new Date(selectedMs).toISOString(),
+      }, { signal: controller.signal, silent: true });
+      const loaded = response?.frame;
+      if (loaded) this.nwsFrameCache.set(key, loaded);
+      if (token === this.nwsFrameRequestToken && selectedMs === this.selectedMs && loaded?.geojson) {
+        void NwsAlertsOverlay.setOpsTimelineFrame?.(loaded.geojson);
       }
+    } catch (error) {
+      if (error?.name !== 'AbortError') console.warn('OpsTimeline: retained NWS frame failed', error);
     } finally {
-      this.nwsFrameRequestInFlight = false;
-      if (this.nwsPendingFrameRequest) void this._drainNwsFrameRequestQueue();
+      if (this.nwsFrameRequestController === controller) this.nwsFrameRequestController = null;
     }
   },
 
@@ -461,7 +471,10 @@ export const OpsTimeline = {
       try {
         const response = await postMsgpack('/api/local/ops/timeline/nws-bundle', {}, { silent: true });
         if (run !== this.backgroundPrefetchRun || timeline !== this.timeline) return;
-        if (response?.bundle?.intervals && response?.bundle?.definitions) {
+        if (
+          response?.bundle?.definitions &&
+          hasNwsLifecycleChanges(response.bundle)
+        ) {
           this.nwsLifecycleBundle = response.bundle;
           this._renderSelectedFrame(this.selectedMs || timeline.currentMs, { preserveCurrent: true });
           return;

@@ -168,6 +168,36 @@ class OpsRouteRuntimeTest(unittest.TestCase):
         history.assert_not_called()
         self.assertEqual("nws-indexed", frame["geojson"]["features"][0]["properties"]["alert_id"])
 
+    def test_nws_timeline_frame_hash_skips_timeline_index(self):
+        payload_hash = "b" * 64
+        stored_frame = {
+            "collector": "usa_nws_alerts",
+            "published_at": "2026-09-07T12:00:00+00:00",
+            "payload_hash": payload_hash,
+            "payload_summary": {"alerts": [{
+                "alert_id": "nws-hash",
+                "event": "Flash Flood Warning",
+                "point": [-90, 35],
+            }]},
+        }
+        with patch.object(
+            ops_routes, "load_current_state_timeline_frame", return_value=stored_frame
+        ) as frame_loader, patch.object(
+            ops_routes, "load_current_state_timeline_index"
+        ) as index_loader:
+            frame = ops_routes._local_nws_timeline_frame_by_hash(payload_hash)
+
+        index_loader.assert_not_called()
+        frame_loader.assert_called_once_with(
+            "usa_nws_alerts", f"timeline_frames/{payload_hash}.json"
+        )
+        self.assertEqual("nws-hash", frame["geojson"]["features"][0]["properties"]["alert_id"])
+
+    def test_nws_timeline_frame_hash_rejects_invalid_identity(self):
+        with patch.object(ops_routes, "load_current_state_timeline_frame") as frame_loader:
+            self.assertIsNone(ops_routes._local_nws_timeline_frame_by_hash("../../snapshot"))
+        frame_loader.assert_not_called()
+
     def test_nws_timeline_frame_accepts_published_hash_key(self):
         key = "timeline_frames/" + ("a" * 64) + ".json"
         with patch.object(ops_orchestrator_runtime, "_read_json_object", return_value={"collector": "usa_nws_alerts"}) as reader:
