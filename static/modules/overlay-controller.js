@@ -476,7 +476,10 @@ const OVERLAY_ENDPOINTS = {
   },
   wildfires: {
     baseUrl: '/api/wildfires/geojson',
-    params: { min_area_km2: '500', include_perimeter: 'true' },  // 500km2 (~193 sq mi) = large fires
+    // Keep the overview lightweight. Final perimeters can contain millions of
+    // coordinates and are already fetched lazily by the wildfire popup when a
+    // user chooses one fire.
+    params: { min_area_km2: '500', include_perimeter: 'false' },  // 500km2 (~193 sq mi) = large fires
     eventType: 'wildfire',
     yearField: 'year',
     // The published historical Fire Atlas lane currently ends in 2024. Clamp

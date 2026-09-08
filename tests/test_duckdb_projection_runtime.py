@@ -78,6 +78,23 @@ class DuckdbProjectionRuntimeTests(unittest.TestCase):
         self.assertIn('SELECT "name", "event_id", "timestamp"', sql)
         self.assertIn("LIMIT ?", sql)
 
+    def test_partitioned_rows_projects_after_loading_shared_schema(self):
+        with patch.object(helpers, "duckdb", object()), \
+             patch.object(helpers, "is_cloud_mode", return_value=False), \
+             patch.object(Path, "exists", return_value=True), \
+             patch.object(helpers, "parquet_columns", return_value={"event_id", "timestamp", "area_km2", "unused"}), \
+             patch.object(helpers, "run_df", return_value=pd.DataFrame()) as run_df:
+            helpers.select_filtered_partitioned_rows(
+                [Path("fires_2025.parquet"), Path("fires_2026.parquet")],
+                columns=["event_id"],
+                start="2025-01-01",
+                min_value_filters={"area_km2": 500},
+            )
+
+        sql = run_df.call_args.args[0]
+        self.assertIn('SELECT "event_id", "area_km2", "timestamp"', sql)
+        self.assertNotIn("SELECT *", sql)
+
     def test_empty_in_filter_fails_closed_without_querying(self):
         with patch.object(helpers, "duckdb", object()), \
              patch.object(helpers, "parquet_available", return_value=True), \

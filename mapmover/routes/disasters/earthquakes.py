@@ -42,6 +42,23 @@ from .helpers import (
 router = APIRouter()
 
 
+EARTHQUAKE_MAP_COLUMNS = (
+    "event_id",
+    "magnitude",
+    "depth_km",
+    "felt_radius_km",
+    "damage_radius_km",
+    "place",
+    "timestamp",
+    "year",
+    "loc_id",
+    "latitude",
+    "longitude",
+    "mainshock_id",
+    "sequence_id",
+)
+
+
 @router.get("/api/earthquakes/live")
 async def get_live_earthquakes(
     hours: int = 24,
@@ -124,6 +141,7 @@ def _load_earthquakes_duckdb(
     sequence_id: str = None,
     event_id: str = None,
     mainshock_id: str = None,
+    columns=None,
 ) -> pd.DataFrame:
     """Load filtered earthquake rows via DuckDB."""
     events_path = GLOBAL_DIR / "disasters/earthquakes/events.parquet"
@@ -161,10 +179,13 @@ def _load_earthquakes_duckdb(
         if not affected_ids:
             return pd.DataFrame()
         placeholders = ", ".join("?" for _ in affected_ids)
-        where.append(f'"loc_id" IN ({placeholders})')
+        where.append(f'"event_id" IN ({placeholders})')
         params.extend(affected_ids)
 
-    sql = "SELECT * FROM read_parquet(?)"
+    available_cols = parquet_columns(events_path)
+    selected = [str(column) for column in (columns or []) if str(column) in available_cols]
+    select_expr = ", ".join(f'"{column}"' for column in dict.fromkeys(selected)) or "*"
+    sql = f"SELECT {select_expr} FROM read_parquet(?)"
     if where:
         sql += " WHERE " + " AND ".join(where)
 
@@ -263,6 +284,7 @@ async def get_earthquakes_geojson(
                 df = _load_earthquakes_duckdb(
                     year=year, start=start, end=end, min_magnitude=min_magnitude,
                     limit=limit, loc_prefix=loc_prefix, affected_loc_id=affected_loc_id,
+                    columns=EARTHQUAKE_MAP_COLUMNS,
                 )
                 if not df.empty:
                     cache_set(ck, df)
@@ -276,6 +298,7 @@ async def get_earthquakes_geojson(
                     events_path,
                     cache_key=ck,
                     permanent=True,
+                    columns=EARTHQUAKE_MAP_COLUMNS,
                     start=start,
                     end=end,
                     min_value_filters={"magnitude": min_magnitude} if min_magnitude is not None else None,
@@ -289,6 +312,7 @@ async def get_earthquakes_geojson(
                     limit=limit,
                     loc_prefix=loc_prefix,
                     affected_loc_id=affected_loc_id,
+                    columns=EARTHQUAKE_MAP_COLUMNS,
                 )
         else:
             df = _load_earthquakes_duckdb(
@@ -299,6 +323,7 @@ async def get_earthquakes_geojson(
                 limit=limit,
                 loc_prefix=loc_prefix,
                 affected_loc_id=affected_loc_id,
+                columns=EARTHQUAKE_MAP_COLUMNS,
             )
         if df.empty and not duckdb_available():
             df = pd.read_parquet(events_path)

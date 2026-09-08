@@ -24,12 +24,28 @@ import json
 import pandas as pd
 from pathlib import Path
 from . import GLOBAL_DIR
-from .duckdb_helpers import parquet_available, select_distinct_event_ids
+from .duckdb_helpers import is_cloud_mode, parquet_available, select_distinct_event_ids
 from .runtime.geography_reference import translate_loc_id_to_geometry_id
 
 # Metadata cache
 _DISASTER_METADATA = None
 _METADATA_PATH = Path(__file__).parent / "disaster_metadata.json"
+
+
+def _resolve_event_areas_path(disaster_type: str, affected_loc_id: str) -> Path:
+    """Resolve the narrowest canonical event-area artifact for a location."""
+    normalized_type = str(disaster_type or "").strip().lower()
+    normalized_loc = str(affected_loc_id or "").strip().upper()
+    if normalized_type == "wildfires":
+        source = "usa" if normalized_loc.startswith("USA") else "can" if normalized_loc.startswith("CAN") else None
+        if source:
+            canonical = GLOBAL_DIR / "disasters" / "wildfires" / "sources" / source / "event_areas.parquet"
+            compatibility = GLOBAL_DIR / "disasters" / "event_areas" / f"wildfires_{source}.parquet"
+            if is_cloud_mode() or canonical.exists():
+                return canonical
+            if compatibility.exists():
+                return compatibility
+    return GLOBAL_DIR / "disasters" / "event_areas" / f"{normalized_type}.parquet"
 
 
 def _load_metadata() -> dict:
@@ -115,10 +131,10 @@ def apply_location_filters(
 
     # Filter by affected area (uses event_areas table)
     if affected_loc_id is not None and event_id_col in df.columns:
-        areas_path = GLOBAL_DIR / "disasters/event_areas" / f"{disaster_type}.parquet"
+        affected_loc_id = translate_loc_id_to_geometry_id(affected_loc_id)
+        areas_path = _resolve_event_areas_path(disaster_type, affected_loc_id)
         if parquet_available(areas_path):
             try:
-                affected_loc_id = translate_loc_id_to_geometry_id(affected_loc_id)
                 affected_events = set(select_distinct_event_ids(areas_path, affected_loc_id))
                 if not affected_events and areas_path.exists():
                     areas_df = pd.read_parquet(areas_path)
@@ -146,12 +162,12 @@ def get_affected_event_ids(
     Returns:
         Set of event_id values that affected this location
     """
-    areas_path = GLOBAL_DIR / "disasters/event_areas" / f"{disaster_type}.parquet"
+    affected_loc_id = translate_loc_id_to_geometry_id(affected_loc_id)
+    areas_path = _resolve_event_areas_path(disaster_type, affected_loc_id)
     if not parquet_available(areas_path):
         return set()
 
     try:
-        affected_loc_id = translate_loc_id_to_geometry_id(affected_loc_id)
         affected = set(select_distinct_event_ids(areas_path, affected_loc_id))
         if not affected and areas_path.exists():
             areas_df = pd.read_parquet(areas_path)
@@ -178,12 +194,12 @@ def get_events_for_location(
     Returns:
         Dict with event counts and sample event IDs
     """
-    areas_path = GLOBAL_DIR / "disasters/event_areas" / f"{disaster_type}.parquet"
+    loc_id = translate_loc_id_to_geometry_id(loc_id)
+    areas_path = _resolve_event_areas_path(disaster_type, loc_id)
     if not parquet_available(areas_path):
         return {"count": 0, "event_ids": []}
 
     try:
-        loc_id = translate_loc_id_to_geometry_id(loc_id)
         affected_events = set(select_distinct_event_ids(
             areas_path,
             loc_id,

@@ -974,6 +974,7 @@ def select_peak_positions_by_storm_ids(positions_path: Path, storm_ids: Iterable
 
     df = select_filtered_event_rows(
         positions_path,
+        columns=["storm_id", "timestamp", "latitude", "longitude", "wind_kt"],
         in_filters={"storm_id": storm_ids},
     )
     if df.empty:
@@ -1009,12 +1010,6 @@ def select_filtered_partitioned_rows(
     if duckdb is None:
         return pd.DataFrame()
 
-    if columns is None:
-        select_expr = "*"
-    else:
-        selected = list(dict.fromkeys(str(col) for col in columns if str(col) in available_cols))
-        select_expr = ", ".join(quote_ident(col) for col in selected) or "*"
-
     if is_cloud_mode():
         # In S3 mode, convert paths to s3:// URIs - skip local exists check
         uris = [path_to_uri(Path(p)) for p in parquet_paths]
@@ -1036,6 +1031,27 @@ def select_filtered_partitioned_rows(
                 continue
     else:
         available_cols = parquet_columns(Path(uris[0]))
+
+    # Resolve the shared schema before building the projection. Previously
+    # ``available_cols`` was referenced above its assignment whenever callers
+    # supplied ``columns``, so partitioned datasets could only be read with
+    # SELECT * in practice.
+    if columns is None:
+        select_expr = "*"
+    else:
+        required = [
+            *(str(col) for col in columns),
+            *(str(col) for col in (exact_filters or {})),
+            *(str(col) for col in (in_filters or {})),
+            *(str(col) for col in (like_filters or {})),
+            *(str(col) for col in (min_value_filters or {})),
+        ]
+        if year is not None:
+            required.append("year")
+        if start is not None or end is not None:
+            required.append("timestamp")
+        selected = list(dict.fromkeys(col for col in required if col in available_cols))
+        select_expr = ", ".join(quote_ident(col) for col in selected) or "*"
 
     # Build WHERE clause and filter params (not including the URI placeholder)
     where: list[str] = []
@@ -1372,13 +1388,46 @@ def prewarm_disaster_sources(global_dir: Path) -> None:
     preload_start = f"{preload_start_year:04d}-01-01 00:00:00"
     preload_end = f"{preload_end_year:04d}-12-31 23:59:59"
 
+    earthquake_columns = (
+        "event_id", "magnitude", "depth_km", "felt_radius_km", "damage_radius_km",
+        "place", "timestamp", "year", "loc_id", "latitude", "longitude",
+        "mainshock_id", "sequence_id",
+    )
+    tornado_columns = (
+        "event_id", "tornado_scale", "tornado_length_mi", "tornado_width_yd",
+        "felt_radius_km", "damage_radius_km", "timestamp", "time", "year",
+        "deaths_direct", "injuries_direct", "damage_property", "location", "loc_id",
+        "latitude", "longitude", "end_latitude", "end_longitude", "sequence_id",
+        "sequence_position", "sequence_count", "display_start_timestamp",
+        "display_end_timestamp", "display_animation_kind",
+    )
+    hurricane_storm_columns = (
+        "storm_id", "name", "year", "basin", "max_wind_kt", "min_pressure_mb",
+        "max_category", "num_positions", "start_date", "end_date", "made_landfall",
+        "loc_id", "display_start_timestamp", "display_end_timestamp",
+        "display_animation_kind",
+    )
+    hurricane_position_columns = ("storm_id", "timestamp", "latitude", "longitude")
+    wildfire_columns = (
+        "event_id", "timestamp", "latitude", "longitude", "area_km2", "burned_acres",
+        "duration_days", "source", "has_progression", "loc_id", "parent_loc_id",
+        "sibling_level", "iso3", "loc_confidence", "land_cover",
+        "display_start_timestamp", "display_end_timestamp", "display_animation_kind",
+    )
+
     # --- earthquakes (min_magnitude 5.5 from overlay-controller.js) ----------
     eq_path = global_dir / "disasters/earthquakes/events.parquet"
     preload_ck = make_preload_cache_key("earthquakes", min_magnitude=5.5)
     if cache_get(preload_ck) is None:
         try:
             t0 = time.monotonic()
-            df = select_filtered_event_rows(eq_path, start=preload_start, end=preload_end, min_value_filters={"magnitude": 5.5})
+            df = select_filtered_event_rows(
+                eq_path,
+                columns=earthquake_columns,
+                start=preload_start,
+                end=preload_end,
+                min_value_filters={"magnitude": 5.5},
+            )
             if not df.empty:
                 cache_set(preload_ck, df, permanent=True)
             log.info("prewarm earthquakes preload-range: %d rows in %.1fs", len(df), time.monotonic() - t0)
@@ -1453,7 +1502,12 @@ def prewarm_disaster_sources(global_dir: Path) -> None:
     if cache_get(preload_ck) is None:
         try:
             t0 = time.monotonic()
-            df = select_filtered_event_rows(tor_path, start=preload_start, end=preload_end)
+            df = select_filtered_event_rows(
+                tor_path,
+                columns=tornado_columns,
+                start=preload_start,
+                end=preload_end,
+            )
             if not df.empty:
                 cache_set(preload_ck, df, permanent=True)
             log.info("prewarm tornadoes preload-range: %d rows in %.1fs", len(df), time.monotonic() - t0)
@@ -1475,7 +1529,10 @@ def prewarm_disaster_sources(global_dir: Path) -> None:
             # canonical rolling ten-year preload window. Without this, the cached
             # joined frame was ~303k rows instead of ~14k, and every hurricane
             # request paid pandas-on-300k cost.
-            storms_df = select_filtered_event_rows(hur_storms_path)
+            storms_df = select_filtered_event_rows(
+                hur_storms_path,
+                columns=hurricane_storm_columns,
+            )
             if not storms_df.empty and "year" in storms_df.columns:
                 storms_df = storms_df[
                     (storms_df["year"] >= preload_start_year) & (storms_df["year"] <= preload_end_year)
@@ -1485,7 +1542,11 @@ def prewarm_disaster_sources(global_dir: Path) -> None:
                 storms_df = storms_df[storms_df["max_category"].map(lambda x: cat_order.get(x, 0) >= 2)]
                 if not storms_df.empty:
                     storm_ids = storms_df["storm_id"].tolist()
-                    pos_df = select_filtered_event_rows(hur_positions_path, in_filters={"storm_id": storm_ids})
+                    pos_df = select_filtered_event_rows(
+                        hur_positions_path,
+                        columns=hurricane_position_columns,
+                        in_filters={"storm_id": storm_ids},
+                    )
                     pos_df = pos_df.dropna(subset=["latitude", "longitude"])
                     if not pos_df.empty:
                         joined = pos_df.merge(
@@ -1525,8 +1586,7 @@ def prewarm_disaster_sources(global_dir: Path) -> None:
         log.info("prewarm wildfires skipped (set PREWARM_WILDFIRES=1 for background warming)")
         log.info("Pre-warmer complete")
         return
-    wf_base = global_dir / "disasters/wildfires/by_year_enriched"
-    preload_ck = make_preload_cache_key("wildfires", min_area_km2=500, include_perimeter=True)
+    preload_ck = make_preload_cache_key("wildfires", min_area_km2=500, include_perimeter=False)
     if cache_get(preload_ck) is None:
         try:
             t0 = time.monotonic()
@@ -1534,8 +1594,9 @@ def prewarm_disaster_sources(global_dir: Path) -> None:
 
             wildfire_frames: list[pd.DataFrame] = []
             # The browser's default request has no location filter, so it
-            # deliberately combines the regional source files with the global
-            # partitions. A global-only warm result would be fast but wrong.
+            # deliberately combines the regional source files with the compact
+            # canonical global events index. The enriched year partitions are
+            # detail assets and must stay out of overview/prewarm scans.
             regional_sources = (
                 ("NIFC", global_dir / "disasters/wildfires/sources/usa/fires_enriched.parquet", COUNTRIES_DIR / "USA/disasters/wildfires/fires_enriched.parquet"),
                 ("CNFDB", global_dir / "disasters/wildfires/sources/can/fires_enriched.parquet", COUNTRIES_DIR / "CAN/wildfires/fires_enriched.parquet"),
@@ -1549,6 +1610,7 @@ def prewarm_disaster_sources(global_dir: Path) -> None:
                     # prewarm running indefinitely in hosted mode.
                     regional_df = select_filtered_event_rows(
                         source_path,
+                        columns=wildfire_columns,
                         start=preload_start,
                         end=preload_end,
                         min_value_filters={"area_km2": 500},
@@ -1568,12 +1630,9 @@ def prewarm_disaster_sources(global_dir: Path) -> None:
                 except Exception as exc:
                     log.warning("prewarm wildfires %s source failed: %s", source_name, exc)
 
-            year_files = [
-                wf_base / f"fires_{yr}_enriched.parquet"
-                for yr in range(preload_start_year, min(preload_end_year, 2024) + 1)
-            ]
-            global_df = select_filtered_partitioned_rows(
-                year_files,
+            global_df = select_filtered_event_rows(
+                global_dir / "disasters/wildfires/events.parquet",
+                columns=wildfire_columns,
                 start=preload_start,
                 end=preload_end,
                 min_value_filters={"area_km2": 500},

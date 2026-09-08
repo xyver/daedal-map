@@ -15,6 +15,14 @@ router = APIRouter()
 
 CAT_ORDER = {"TD": 0, "TS": 1, "Cat1": 2, "Cat2": 3, "Cat3": 4, "Cat4": 5, "Cat5": 6}
 
+HURRICANE_MAP_STORM_COLUMNS = (
+    "storm_id", "name", "year", "basin", "max_wind_kt", "min_pressure_mb",
+    "max_category", "num_positions", "start_date", "end_date", "made_landfall",
+    "loc_id", "display_start_timestamp", "display_end_timestamp",
+    "display_animation_kind",
+)
+HURRICANE_TRACK_POSITION_COLUMNS = ("storm_id", "timestamp", "latitude", "longitude")
+
 
 def _apply_storm_filters_pandas(storms_df, *, year=None, start=None, end=None, min_year=None, basin=None, min_category=None):
     if year is not None:
@@ -98,6 +106,7 @@ async def get_storms_geojson(
         if use_duckdb:
             storms_df = select_filtered_event_rows(
                 storms_path,
+                columns=HURRICANE_MAP_STORM_COLUMNS,
                 year=year,
                 min_value_filters={"year": min_year} if year is None and start is None and end is None and min_year is not None else None,
                 exact_filters={"basin": basin.upper()} if basin is not None else None,
@@ -314,6 +323,7 @@ async def get_storm_tracks_geojson(
             # via _apply_storm_filters_pandas, which knows the storm schema.
             storms_df = select_filtered_event_rows(
                 storms_path,
+                columns=HURRICANE_MAP_STORM_COLUMNS,
                 year=year,
                 min_value_filters={"year": min_year} if year is None and start is None and end is None and min_year is not None else None,
                 exact_filters={"basin": basin.upper()} if basin is not None else None,
@@ -343,6 +353,7 @@ async def get_storm_tracks_geojson(
             if use_duckdb:
                 positions_subset = select_filtered_event_rows(
                     positions_path,
+                    columns=HURRICANE_TRACK_POSITION_COLUMNS,
                     in_filters={"storm_id": sorted(storm_ids_set)},
                 )
             else:
@@ -368,6 +379,9 @@ async def get_storm_tracks_geojson(
                             "start_date",
                             "end_date",
                             "made_landfall",
+                            "display_start_timestamp",
+                            "display_end_timestamp",
+                            "display_animation_kind",
                         ]
                     ],
                     on="storm_id",

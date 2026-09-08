@@ -4,7 +4,7 @@ from fastapi import APIRouter
 import pandas as pd
 
 from mapmover.disaster_filters import apply_location_filters, get_default_min_year
-from mapmover.duckdb_helpers import cache_get, cache_set, duckdb_available, is_cloud_mode, is_default_preload_range, make_cache_key, make_preload_cache_key, parquet_available, path_to_uri, select_filtered_partitioned_rows, select_rows
+from mapmover.duckdb_helpers import cache_get, cache_set, duckdb_available, is_cloud_mode, is_default_preload_range, make_cache_key, make_preload_cache_key, parquet_available, path_to_uri, select_filtered_event_rows, select_filtered_partitioned_rows, select_rows
 from mapmover.logging_analytics import logger
 from mapmover.paths import COUNTRIES_DIR, GLOBAL_DIR
 
@@ -334,6 +334,7 @@ async def get_wildfires_geojson(
             COUNTRIES_DIR / "CAN/wildfires/fires_enriched.parquet",
         )
         global_by_year_path = GLOBAL_DIR / "disasters/wildfires/by_year_enriched"
+        global_summary_path = GLOBAL_DIR / "disasters/wildfires/events.parquet"
         if not is_cloud_mode() and not global_by_year_path.exists():
             global_by_year_path = GLOBAL_DIR / "disasters/wildfires/by_year"
 
@@ -352,7 +353,13 @@ async def get_wildfires_geojson(
             "sibling_level",
             "iso3",
             "loc_confidence",
+            "display_start_timestamp",
+            "display_end_timestamp",
+            "display_animation_kind",
         ]
+        query_columns = base_columns + ["land_cover"]
+        if include_perimeter:
+            query_columns.append("perimeter")
 
         start_ts_parsed = None
         end_ts_parsed = None
@@ -374,15 +381,37 @@ async def get_wildfires_geojson(
             end_year = max_year if max_year else 2024
             years_to_load = list(range(min_year, end_year + 1))
 
+        # Regional wildfire summaries are not partitioned by year, so push the
+        # requested rolling window into DuckDB instead of downloading every
+        # USA/Canada row and slicing it in pandas.
+        query_start = start
+        query_end = end
+        if query_start is None and years_to_load:
+            query_start = f"{min(years_to_load):04d}-01-01 00:00:00"
+        if query_end is None and years_to_load:
+            query_end = f"{max(years_to_load):04d}-12-31 23:59:59"
+
         all_dfs = []
         source_used = []
 
         if loc_prefix is None or loc_prefix.startswith("USA"):
             if parquet_available(usa_fires_path):
                 try:
-                    usa_df = select_rows(usa_fires_path)
-                    if usa_df.empty:
-                        usa_df = pd.read_parquet(usa_fires_path)
+                    if duckdb_available():
+                        usa_df = select_filtered_event_rows(
+                            usa_fires_path,
+                            columns=query_columns,
+                            start=query_start,
+                            end=query_end,
+                            min_value_filters={"area_km2": min_area_km2} if min_area_km2 is not None else None,
+                            like_filters={"loc_id": f"{loc_prefix}%"} if loc_prefix else None,
+                        )
+                    else:
+                        available = set(pq.read_schema(usa_fires_path).names)
+                        usa_df = pd.read_parquet(
+                            usa_fires_path,
+                            columns=[column for column in query_columns if column in available],
+                        )
                     usa_df["timestamp"] = pd.to_datetime(usa_df["timestamp"], errors="coerce")
                     usa_df["year"] = usa_df["timestamp"].dt.year
                     if year is not None:
@@ -415,9 +444,21 @@ async def get_wildfires_geojson(
         if loc_prefix is None or loc_prefix.startswith("CAN"):
             if parquet_available(can_fires_path):
                 try:
-                    can_df = select_rows(can_fires_path)
-                    if can_df.empty:
-                        can_df = pd.read_parquet(can_fires_path)
+                    if duckdb_available():
+                        can_df = select_filtered_event_rows(
+                            can_fires_path,
+                            columns=query_columns,
+                            start=query_start,
+                            end=query_end,
+                            min_value_filters={"area_km2": min_area_km2} if min_area_km2 is not None else None,
+                            like_filters={"loc_id": f"{loc_prefix}%"} if loc_prefix else None,
+                        )
+                    else:
+                        available = set(pq.read_schema(can_fires_path).names)
+                        can_df = pd.read_parquet(
+                            can_fires_path,
+                            columns=[column for column in query_columns if column in available],
+                        )
                     can_df["timestamp"] = pd.to_datetime(can_df["timestamp"], errors="coerce")
                     can_df["year"] = can_df["timestamp"].dt.year
                     if year is not None:
@@ -440,7 +481,31 @@ async def get_wildfires_geojson(
                     logger.warning("Wildfires CAN source unavailable for overlay request: %s", exc)
 
         if loc_prefix is None or (not loc_prefix.startswith("USA") and not loc_prefix.startswith("CAN")):
-            if parquet_available(global_by_year_path) or is_cloud_mode():
+            global_df = pd.DataFrame()
+
+            # The canonical events table is the compact overview index for the
+            # Fire Atlas source. The enriched year partitions are detail assets
+            # and total more than a gigabyte; only touch them when an explicit
+            # caller asks to inline final perimeter geometry.
+            if not include_perimeter and parquet_available(global_summary_path):
+                if duckdb_available():
+                    global_df = select_filtered_event_rows(
+                        global_summary_path,
+                        columns=query_columns,
+                        start=query_start,
+                        end=query_end,
+                        min_value_filters={"area_km2": min_area_km2} if min_area_km2 is not None else None,
+                        like_filters={"loc_id": f"{loc_prefix}%"} if loc_prefix else None,
+                    )
+                else:
+                    filters = [("area_km2", ">=", min_area_km2)] if min_area_km2 is not None else None
+                    available = set(pq.read_schema(global_summary_path).names)
+                    global_df = pq.read_table(
+                        global_summary_path,
+                        columns=[column for column in query_columns if column in available],
+                        filters=filters,
+                    ).to_pandas()
+            elif parquet_available(global_by_year_path) or is_cloud_mode():
                 available_year_files = dict(list_wildfire_year_files())
                 year_files = []
                 for yr in years_to_load:
@@ -448,24 +513,23 @@ async def get_wildfires_geojson(
                     if year_file is not None:
                         year_files.append(year_file)
 
-                global_df = pd.DataFrame()
                 if year_files and duckdb_available():
                     global_df = select_filtered_partitioned_rows(
                         year_files,
+                        columns=query_columns,
+                        start=start,
+                        end=end,
                         min_value_filters={"area_km2": min_area_km2} if min_area_km2 is not None else None,
                     )
 
                 if global_df.empty and year_files:
                     all_tables = []
-                    columns = base_columns + (["land_cover"] if "land_cover" not in base_columns else [])
-                    if include_perimeter:
-                        columns.append("perimeter")
                     for year_file in year_files:
                         filters = [("area_km2", ">=", min_area_km2)] if min_area_km2 is not None else None
                         try:
                             table = pq.read_table(
                                 year_file,
-                                columns=[c for c in columns if c != "land_cover"],
+                                columns=[c for c in query_columns if c != "land_cover"],
                                 filters=filters,
                             )
                             if table.num_rows > 0:
@@ -481,24 +545,24 @@ async def get_wildfires_geojson(
                         combined = pa.concat_tables(all_tables)
                         global_df = combined.to_pandas()
 
-                if not global_df.empty:
-                    global_df["timestamp"] = pd.to_datetime(global_df["timestamp"], errors="coerce")
-                    global_df["year"] = global_df["timestamp"].dt.year
+            if not global_df.empty:
+                global_df["timestamp"] = pd.to_datetime(global_df["timestamp"], errors="coerce")
+                global_df["year"] = global_df["timestamp"].dt.year
 
-                    if "land_cover" not in global_df.columns:
-                        global_df["land_cover"] = ""
-                    if "source" not in global_df.columns:
-                        global_df["source"] = "global_fire_atlas"
+                if "land_cover" not in global_df.columns:
+                    global_df["land_cover"] = ""
+                if "source" not in global_df.columns:
+                    global_df["source"] = "global_fire_atlas"
 
-                    if "iso3" in global_df.columns:
-                        before_filter = len(global_df)
-                        global_df = global_df[~global_df["iso3"].isin(["USA", "CAN"])]
-                        filtered_out = before_filter - len(global_df)
-                        if filtered_out > 0:
-                            logger.debug(f"Filtered {filtered_out:,} USA/CAN fires from global data")
+                if "iso3" in global_df.columns:
+                    before_filter = len(global_df)
+                    global_df = global_df[~global_df["iso3"].isin(["USA", "CAN"])]
+                    filtered_out = before_filter - len(global_df)
+                    if filtered_out > 0:
+                        logger.debug(f"Filtered {filtered_out:,} USA/CAN fires from global data")
 
-                    all_dfs.append(global_df)
-                    source_used.append("global")
+                all_dfs.append(global_df)
+                source_used.append("global")
 
         if not all_dfs:
             return msgpack_response(
