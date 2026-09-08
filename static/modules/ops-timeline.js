@@ -18,7 +18,7 @@ const CURSOR_STEP_MS = 5 * 60 * 1000;
 const NWS_BACKGROUND_BATCH_SIZE = 24;
 const INTERACTIVE_GRACE_MS = 250;
 const NWS_SCRUB_DEBOUNCE_MS = 120;
-const HURRICANE_SCRUB_DEBOUNCE_MS = 80;
+const HURRICANE_SCRUB_DELAY_MS = 0;
 const DISPLAY_SCRUB_DEBOUNCE_MS = 80;
 const HISTORY_PRELOAD_METHODS = {
   nws_alerts: '_preloadNwsFrames',
@@ -379,10 +379,10 @@ export const OpsTimeline = {
         const pointOverlay = getLivePointOverlay(frames[0].overlay_id);
         if (!preserveCurrent) pointOverlay?.setOpsTimelineFrame?.({ type: 'FeatureCollection', features: [] });
       } else if (this.hurricaneReplayData.has(feedId)) {
-        // Rebuilding hurricane lines, uncertainty geometry, wind footprints,
-        // and the MapLibre source on every range-input event overwhelms the
-        // render loop during a drag. Queue only the newest cursor position and
-        // keep the last valid track painted until that replacement is ready.
+        // Hurricane replay is compact and local. The shared RAF plus
+        // latest-cursor scheduler already coalesces pointer noise, so publish
+        // its newest frame without a trailing debounce that makes a fast drag
+        // look unresponsive.
         this._scheduleHurricaneReplayFrame(feedId, ms, selected, { preserveCurrent });
       } else if (selected?.display_payload?.ops_timeline_provider) {
         specialFrames.push(selected.display_payload);
@@ -746,7 +746,7 @@ export const OpsTimeline = {
         opsTimelineFeedIds: [feedId],
         preserveMissing: true,
       });
-    }, { delayMs: HURRICANE_SCRUB_DEBOUNCE_MS });
+    }, { delayMs: HURRICANE_SCRUB_DELAY_MS });
   },
 
   _buildHurricaneReplayDisplayPayload(feedId, selectedMs, selectedFrame = null) {

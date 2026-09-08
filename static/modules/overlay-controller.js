@@ -303,6 +303,20 @@ function emitCategoryBatchStatusMessage(categoryBatch = {}) {
     .filter(Boolean);
   if (!overlayIds.length || !ChatManager?.addMessage) return;
   const mode = OverlaySelector?.currentLaneMode || 'explore';
+  if (
+    categoryBatch.active
+    && mode === 'ops'
+    && typeof OverlayController?.buildOpsCategorySummaryMessage === 'function'
+  ) {
+    const summary = OverlayController.buildOpsCategorySummaryMessage(
+      categoryBatch.categoryId,
+      overlayIds,
+    );
+    if (summary && !shouldSuppressDuplicateStatusMessage(mode, summary)) {
+      ChatManager.addMessage(summary, 'assistant', { mode });
+    }
+    return;
+  }
   const messages = overlayIds.map((overlayId) => {
     if (categoryBatch.active && mode === 'ops' && typeof OverlayController?.buildOpsFeedSummaryMessage === 'function') {
       return OverlayController.buildOpsFeedSummaryMessage(overlayId, [overlayId]);
@@ -1411,15 +1425,77 @@ export const OverlayController = {
       try {
         // The selector has already updated the complete active set
         // synchronously. Refresh it once, rather than once per category leaf.
+        let snapshotReady = !isActive;
         if (isActive) {
-          await this._hydrateActiveOpsFeedSet(`${formatSurfaceLabel(categoryId)} Ops snapshot`);
+          snapshotReady = Boolean(await this._hydrateActiveOpsFeedSet(`${formatSurfaceLabel(categoryId)} Ops snapshot`));
         }
         if (run !== this.opsCategoryBatchRefreshRun) return;
         this._refreshOpsTimelineForActiveOverlays(`${formatSurfaceLabel(categoryId)} Ops timeline`);
+        if (snapshotReady) {
+          emitCategoryBatchStatusMessage(categoryBatch);
+        } else if (ChatManager?.addMessage) {
+          ChatManager.addMessage(
+            `${formatSurfaceLabel(categoryId)} feeds are active, but current counts are still unavailable. Try Refresh feeds or ask chat to retry.`,
+            'assistant',
+            { mode: 'ops' },
+          );
+        }
       } catch (error) {
         console.warn(`OverlayController: Failed to refresh Ops ${categoryId} batch`, error);
       }
     }, 0);
+  },
+
+  buildOpsCategorySummaryMessage(categoryId, overlayIds = []) {
+    const countSpecs = {
+      hurricanes_live: { label: 'Hurricanes', singular: 'active storm', plural: 'active storms', field: 'storm_count', preferPayloadCount: true },
+      earthquakes: { label: 'Earthquakes', singular: 'current event', plural: 'current events', field: 'event_count' },
+      wildfires: { label: 'Wildfires', singular: 'active fire', plural: 'active fires', field: 'active_count', fallbackField: 'event_count' },
+      tsunamis: { label: 'Tsunamis', singular: 'current event', plural: 'current events', field: 'event_count' },
+      volcanoes: { label: 'Volcanoes', singular: 'ongoing event', plural: 'ongoing events', field: 'ongoing_count', fallbackField: 'event_count' },
+    };
+    const lines = [];
+    for (const rawOverlayId of overlayIds || []) {
+      const overlayId = String(rawOverlayId || '').trim();
+      const spec = countSpecs[overlayId];
+      if (!spec) continue;
+      const snapshot = this._getOpsReportFeedSnapshot(overlayId);
+      const summary = snapshot?.summary && typeof snapshot.summary === 'object'
+        ? snapshot.summary
+        : {};
+      const payloadCount = this.opsSnapshotPayloads.get(overlayId)?.count;
+      const primaryCount = spec.preferPayloadCount && Number.isFinite(payloadCount)
+        ? payloadCount
+        : summary?.[spec.field];
+      let count = primaryCount === null || primaryCount === undefined || primaryCount === ''
+        ? Number.NaN
+        : Number(primaryCount);
+      if (!Number.isFinite(count) && spec.fallbackField) {
+        const fallbackCount = summary?.[spec.fallbackField];
+        count = fallbackCount === null || fallbackCount === undefined || fallbackCount === ''
+          ? Number.NaN
+          : Number(fallbackCount);
+      }
+      if (!Number.isFinite(count)) {
+        const prepared = this._buildFilteredOpsPayload(
+          overlayId,
+          this.opsSnapshotPayloads.get(overlayId),
+        );
+        count = Number(prepared?.currentSnapshotCount);
+      }
+      if (!Number.isFinite(count)) {
+        lines.push(`- ${spec.label}: count unavailable`);
+        continue;
+      }
+      const countText = count.toLocaleString();
+      const noun = count === 1 ? spec.singular : spec.plural;
+      lines.push(`- ${spec.label}: ${countText} ${noun}`);
+    }
+    if (!lines.length) return '';
+    const categoryLabel = String(categoryId || '').trim().toLowerCase() === 'disasters'
+      ? 'Disaster feeds are active'
+      : `${formatSurfaceLabel(categoryId || 'Selected feeds')} are active`;
+    return `${categoryLabel}:\n\n${lines.join('\n')}\n\nAsk chat for details, a region, or recent history.`;
   },
 
   async _hydrateActiveOpsFeedSet(label = 'Ops snapshot') {
@@ -2211,7 +2287,7 @@ export const OverlayController = {
       const batch = options?.categoryBatch;
       if (batch && Array.isArray(batch.overlayIds)) {
         const lastOverlayId = batch.overlayIds[batch.overlayIds.length - 1];
-        if (overlayId === lastOverlayId) {
+        if (overlayId === lastOverlayId && !this._isOpsMode()) {
           emitCategoryBatchStatusMessage(batch);
         }
       }
