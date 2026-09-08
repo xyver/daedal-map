@@ -79,6 +79,25 @@ class OpsRouteRuntimeTest(unittest.TestCase):
             ops_routes._requested_timeline_feeds(requested, route_context),
         )
 
+    def test_replaced_lazy_timeline_frames_keep_preload_contract(self):
+        timeline = {"feeds": {}, "preload_history": {}}
+        contract = {
+            "provider": "nws_alerts",
+            "preload_history": True,
+            "cache_posture": "background_full",
+        }
+        frames = [{"start_at": "2026-09-07T12:00:00+00:00", "payload_hash": "abc"}]
+
+        with patch.object(
+            ops_routes, "ops_timeline_preload_history_contract", return_value=contract
+        ):
+            ops_routes._replace_timeline_provider_frames(
+                timeline, "usa_nws_alerts", frames
+            )
+
+        self.assertEqual(frames, timeline["feeds"]["usa_nws_alerts"])
+        self.assertEqual(contract, timeline["preload_history"]["usa_nws_alerts"])
+
     def test_strict_registry_requires_runtime_contract_fields(self):
         payload = {
             "schema_version": 2,

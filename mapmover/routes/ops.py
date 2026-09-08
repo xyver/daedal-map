@@ -25,6 +25,7 @@ from mapmover.ops_orchestrator_runtime import (
     load_current_state_timeline_frame,
     load_current_state_timeline_index,
     load_nws_recent_timeline_bundle,
+    ops_timeline_preload_history_contract,
 )
 from mapmover.ops_ticker import (
     build_cached_aurora_payload,
@@ -92,6 +93,16 @@ def _requested_timeline_feeds(requested_timeline_feeds, route_context) -> list[s
         feed for feed in requested
         if feed and feed in timeline_feed_scope
     ))
+
+
+def _replace_timeline_provider_frames(timeline: dict, feed: str, frames: list[dict]) -> None:
+    """Install lazy-provider frames without dropping their cache contract."""
+    if not frames:
+        return
+    timeline.setdefault("feeds", {})[feed] = frames
+    contract = ops_timeline_preload_history_contract(feed)
+    if contract is not None:
+        timeline.setdefault("preload_history", {})[feed] = contract
 
 
 def _snapshot_time(snapshot: dict) -> datetime | None:
@@ -657,15 +668,13 @@ async def local_ops_timeline_endpoint(req: Request):
         timeline = build_ops_timeline_payload(effective_feeds=timeline_feeds)
         if "usa_nws_alerts" in timeline_feeds:
             frames = _local_nws_timeline_frames()
-            if frames:
-                timeline.setdefault("feeds", {})["usa_nws_alerts"] = frames
+            _replace_timeline_provider_frames(timeline, "usa_nws_alerts", frames)
         for feed in timeline_feeds:
             overlay_id = _point_overlay_id_for_collector(feed)
             if not overlay_id:
                 continue
             frames = _local_point_timeline_frames(overlay_id)
-            if frames:
-                timeline.setdefault("feeds", {})[feed] = frames
+            _replace_timeline_provider_frames(timeline, feed, frames)
         return msgpack_response({
             "type": "local_ops_timeline",
             "watch_id": route_context.watch.get("watch_id"),

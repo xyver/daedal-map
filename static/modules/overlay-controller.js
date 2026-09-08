@@ -1154,6 +1154,8 @@ export const OverlayController = {
   opsWildfirePerimeters: new Map(),
   opsWildfireViewportTimer: null,
   opsWildfireViewportMoveHandler: null,
+  opsCategoryBatchRefreshTimer: null,
+  opsCategoryBatchRefreshRun: 0,
   defaultLoadExecutor: null,
 
   // Startup/runtime mode flags
@@ -1394,6 +1396,30 @@ export const OverlayController = {
       feedIds: this._activeOpsTimelineFeedIds(),
       label,
     });
+  },
+
+  _scheduleOpsCategoryBatchRefresh(categoryBatch = {}) {
+    if (!this._isOpsMode()) return;
+    if (this.opsCategoryBatchRefreshTimer) {
+      clearTimeout(this.opsCategoryBatchRefreshTimer);
+    }
+    const run = ++this.opsCategoryBatchRefreshRun;
+    const categoryId = String(categoryBatch?.categoryId || 'overlays').trim() || 'overlays';
+    const isActive = categoryBatch?.active === true;
+    this.opsCategoryBatchRefreshTimer = setTimeout(async () => {
+      this.opsCategoryBatchRefreshTimer = null;
+      try {
+        // The selector has already updated the complete active set
+        // synchronously. Refresh it once, rather than once per category leaf.
+        if (isActive) {
+          await this._hydrateActiveOpsFeedSet(`${formatSurfaceLabel(categoryId)} Ops snapshot`);
+        }
+        if (run !== this.opsCategoryBatchRefreshRun) return;
+        this._refreshOpsTimelineForActiveOverlays(`${formatSurfaceLabel(categoryId)} Ops timeline`);
+      } catch (error) {
+        console.warn(`OverlayController: Failed to refresh Ops ${categoryId} batch`, error);
+      }
+    }, 0);
   },
 
   async _hydrateActiveOpsFeedSet(label = 'Ops snapshot') {
@@ -3450,6 +3476,10 @@ export const OverlayController = {
    */
   async handleOverlayChange(overlayId, isActive, options = {}) {
     console.log(`OverlayController: ${overlayId} ${isActive ? 'ON' : 'OFF'}`);
+    const opsCategoryBatch = this._isOpsMode() && options?.categoryBatch;
+    if (opsCategoryBatch) {
+      this._scheduleOpsCategoryBatchRefresh(opsCategoryBatch);
+    }
 
     // Live forecast/observation overlays are driven by their own modules
     // (no catalog data, no TimeSlider). Route and stop here.
@@ -3464,14 +3494,14 @@ export const OverlayController = {
       } else {
         OpsTimeline.setExternalProvider('aurora', [], null);
       }
-      this._refreshOpsTimelineForActiveOverlays();
+      if (!opsCategoryBatch) this._refreshOpsTimelineForActiveOverlays();
       refreshTickerForOverlayState();
       emitOverlayStatusMessage(overlayId, isActive, options);
       return;
     }
     if (overlayId === 'nws_alerts') {
       await NwsAlertsOverlay.setEnabled(isActive);
-      this._refreshOpsTimelineForActiveOverlays();
+      if (!opsCategoryBatch) this._refreshOpsTimelineForActiveOverlays();
       refreshTickerForOverlayState();
       emitOverlayStatusMessage(overlayId, isActive, options);
       return;
@@ -3543,13 +3573,25 @@ export const OverlayController = {
     const livePointOverlay = getLivePointOverlay(overlayId);
     if (livePointOverlay) {
       await livePointOverlay.setEnabled(isActive);
-      this._refreshOpsTimelineForActiveOverlays();
+      if (!opsCategoryBatch) this._refreshOpsTimelineForActiveOverlays();
       refreshTickerForOverlayState();
       emitOverlayStatusMessage(overlayId, isActive, options);
       return;
     }
 
     if (this._isOpsMode() && this._isOpsSnapshotManagedOverlay(overlayId)) {
+      if (opsCategoryBatch) {
+        // Paint an already-available current snapshot immediately. Missing
+        // snapshots are supplied by the one coalesced batch refresh above;
+        // do not launch a full watch/timeline request for every category leaf.
+        if (isActive && this.opsSnapshotPayloads.has(overlayId)) {
+          this.renderOpsSnapshotOverlay(overlayId);
+        } else if (!isActive) {
+          this.hideOverlay(overlayId);
+        }
+        refreshTickerForOverlayState();
+        return;
+      }
       if (isActive) {
         // A toggle is also a freshness boundary. Re-read the enabled feed set
         // before composing the status copy or the first cursor frame, so a

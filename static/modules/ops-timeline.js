@@ -12,12 +12,14 @@ import { NwsAlertsOverlay } from './overlay-nws-alerts.js';
 import { getLivePointOverlay } from './live-point-overlay.js';
 import { formatOpsTime } from './ops-time-display.js';
 import { LatestTaskScheduler } from './utils/latest-task-scheduler.js';
+import { selectTimelineFrame } from './utils/timeline-frame-selection.js';
 
 const CURSOR_STEP_MS = 5 * 60 * 1000;
 const NWS_BACKGROUND_BATCH_SIZE = 24;
 const INTERACTIVE_GRACE_MS = 250;
 const NWS_SCRUB_DEBOUNCE_MS = 120;
 const HURRICANE_SCRUB_DEBOUNCE_MS = 80;
+const DISPLAY_SCRUB_DEBOUNCE_MS = 80;
 const HISTORY_PRELOAD_METHODS = {
   nws_alerts: '_preloadNwsFrames',
   live_point: '_preloadPointFrames',
@@ -39,6 +41,15 @@ function formatCursor(ms) {
 function frameCacheKey(frame, overlayId = '') {
   const prefix = overlayId ? `${String(overlayId)}:` : '';
   return `${prefix}${String(frame?.start_at || '')}:${String(frame?.payload_hash || '')}`;
+}
+
+function displayFrameKey(frame) {
+  return String(
+    frame?.payload_hash
+    || frame?.display_payload?.snapshot_hash
+    || frame?.start_at
+    || ''
+  );
 }
 
 function buildNwsLifecycleFrame(bundle, ms) {
@@ -96,6 +107,10 @@ export const OpsTimeline = {
   pendingSelectAt: null,
   selectRenderRequest: 0,
   scrubActive: false,
+  loadController: null,
+  loadPromise: null,
+  loadKey: '',
+  loadRun: 0,
 
   init({ onFrame } = {}) {
     this.element = document.getElementById('opsTimelineContainer');
@@ -168,14 +183,43 @@ export const OpsTimeline = {
 
   async load({ sessionId, watchId, watchContext, timelineFeeds = [] } = {}) {
     if (!this.enabled) return null;
-    const response = await postMsgpack('/api/local/ops/timeline', {
-      sessionId,
-      watch_id: watchId,
-      watch_context: watchContext,
-      timeline_feeds: timelineFeeds,
-    });
-    await this.setTimeline(response?.timeline);
-    return response;
+    const normalizedFeeds = Array.from(new Set(
+      (Array.isArray(timelineFeeds) ? timelineFeeds : [])
+        .map((feedId) => String(feedId || '').trim())
+        .filter(Boolean)
+    )).sort();
+    const loadKey = JSON.stringify([String(sessionId || ''), String(watchId || ''), normalizedFeeds]);
+    if (this.loadPromise && loadKey === this.loadKey) return this.loadPromise;
+
+    this.loadController?.abort?.();
+    const controller = new AbortController();
+    const run = ++this.loadRun;
+    this.loadController = controller;
+    this.loadKey = loadKey;
+    const loadPromise = (async () => {
+      try {
+        const response = await postMsgpack('/api/local/ops/timeline', {
+          sessionId,
+          watch_id: watchId,
+          watch_context: watchContext,
+          timeline_feeds: normalizedFeeds,
+        }, { signal: controller.signal, silent: true });
+        if (run !== this.loadRun || controller.signal.aborted) return null;
+        await this.setTimeline(response?.timeline);
+        return response;
+      } catch (error) {
+        if (error?.name === 'AbortError') return null;
+        throw error;
+      } finally {
+        if (run === this.loadRun) {
+          this.loadController = null;
+          this.loadPromise = null;
+          this.loadKey = '';
+        }
+      }
+    })();
+    this.loadPromise = loadPromise;
+    return loadPromise;
   },
 
   async setTimeline(timeline) {
@@ -294,20 +338,31 @@ export const OpsTimeline = {
     });
   },
 
+  _scheduleCursorTask(providerKey, selectedMs, task, { delayMs = 0 } = {}) {
+    const timeline = this.timeline;
+    return this.cursorTasks.schedule(providerKey, async (context) => {
+      if (
+        !context.isCurrent()
+        || selectedMs !== this.selectedMs
+        || !timeline
+        || timeline !== this.timeline
+      ) return;
+      await task(context);
+    }, { delayMs });
+  },
+
   _renderSelectedFrame(ms, { preserveCurrent = false } = {}) {
     if (!this.timeline || !Number.isFinite(ms)) return;
     const specialFrames = [];
-    const updatedFeedIds = new Set();
-    const clearFeedIds = new Set();
+    const displaySelections = [];
     for (const [feedId, frames] of Object.entries(this.timeline.feeds || {})) {
       if (!Array.isArray(frames)) continue;
-      let selected = null;
-      for (const frame of frames) {
-        const start = toMs(frame?.start_at);
-        const end = toMs(frame?.end_at);
-        if (start === null || start > ms) break;
-        selected = (end === null || ms < end) ? frame : null;
+      if (feedId.startsWith('external:')) {
+        const provider = this.externalProviders.get(feedId.slice('external:'.length));
+        provider?.renderAt?.(ms);
+        continue;
       }
+      const selected = selectTimelineFrame(frames, ms);
       if (selected?.timeline_provider === 'nws_alerts') {
         if (ms > this.timeline.currentMs) {
           if (!preserveCurrent) void NwsAlertsOverlay.setOpsTimelineFrame?.({ type: 'FeatureCollection', features: [] });
@@ -332,37 +387,54 @@ export const OpsTimeline = {
       } else if (selected?.display_payload?.ops_timeline_provider) {
         specialFrames.push(selected.display_payload);
       } else if (selected?.display_payload) {
-        const displayPayload = selected.display_payload;
-        this.selectedDisplayPayloads.set(feedId, displayPayload);
-        this.selectedDisplayKeys.delete(feedId);
-        updatedFeedIds.add(feedId);
+        displaySelections.push({
+          feedId,
+          payload: selected.display_payload,
+          renderKey: displayFrameKey(selected),
+        });
       } else if (!feedId.startsWith('external:') && !preserveCurrent) {
-        this.selectedDisplayPayloads.delete(feedId);
-        this.selectedDisplayKeys.delete(feedId);
-        updatedFeedIds.add(feedId);
-        clearFeedIds.add(feedId);
-      }
-      if (feedId.startsWith('external:')) {
-        const provider = this.externalProviders.get(feedId.slice('external:'.length));
-        provider?.renderAt?.(ms);
+        displaySelections.push({ feedId, payload: null, renderKey: '__empty__' });
       }
     }
-    // Keep the last painted frame on screen until a feed has a real
-    // replacement. Slider ticks between storm fixes update the label/thumb
-    // only; they must not become empty timeline renders.
-    if (updatedFeedIds.size > 0) {
-      this.onFrame?.(Array.from(this.selectedDisplayPayloads.values()), {
-        at: new Date(ms).toISOString(),
-        opsTimelineUpdate: true,
-        opsTimelineFeedIds: Array.from(updatedFeedIds),
-        preserveMissing: clearFeedIds.size === 0,
-      });
-    }
+    this._scheduleDisplayPayloadFrames(displaySelections, ms, { preserveCurrent });
     for (const frame of specialFrames) {
       if (frame.ops_timeline_provider === 'nws_alerts') {
         void NwsAlertsOverlay.setOpsTimelineFrame?.(frame.geojson);
       }
     }
+  },
+
+  _scheduleDisplayPayloadFrames(selections, selectedMs, { preserveCurrent = false } = {}) {
+    if (!Array.isArray(selections) || !selections.length) return;
+    // Inline disaster frames used to repaint every active model on every
+    // five-minute input tick, even while the selected source snapshot was
+    // unchanged. In a group that synchronous work starved deferred providers
+    // such as NWS and hurricane replay. Publish one latest batch after the
+    // cursor settles, scoped to feeds whose frame identity actually changed.
+    this._scheduleCursorTask('display-payloads', selectedMs, () => {
+      const updatedFeedIds = [];
+      let cleared = false;
+      for (const selection of selections) {
+        const feedId = String(selection?.feedId || '');
+        if (!feedId || this.selectedDisplayKeys.get(feedId) === selection.renderKey) continue;
+        if (selection.payload) {
+          this.selectedDisplayPayloads.set(feedId, selection.payload);
+        } else {
+          if (preserveCurrent) continue;
+          this.selectedDisplayPayloads.delete(feedId);
+          cleared = true;
+        }
+        this.selectedDisplayKeys.set(feedId, selection.renderKey);
+        updatedFeedIds.push(feedId);
+      }
+      if (!updatedFeedIds.length) return;
+      this.onFrame?.(Array.from(this.selectedDisplayPayloads.values()), {
+        at: new Date(selectedMs).toISOString(),
+        opsTimelineUpdate: true,
+        opsTimelineFeedIds: updatedFeedIds,
+        preserveMissing: !cleared,
+      });
+    }, { delayMs: preserveCurrent ? DISPLAY_SCRUB_DEBOUNCE_MS : 0 });
   },
 
   async _loadNwsFrame(frame, selectedMs) {
@@ -384,7 +456,7 @@ export const OpsTimeline = {
     // the obsolete request and wait briefly for the thumb to settle. This
     // keeps a slow Railway hot-store lookup from blocking every newer cursor
     // position behind it while Aurora and local raster frames continue moving.
-    this.cursorTasks.schedule('nws', async ({ signal, isCurrent }) => {
+    this._scheduleCursorTask('nws', selectedMs, async ({ signal, isCurrent }) => {
       try {
         const response = await postMsgpack('/api/local/ops/timeline/nws-frame', {
           payload_hash: frame?.payload_hash,
@@ -408,8 +480,8 @@ export const OpsTimeline = {
     // otherwise this fast path can queue hundreds of obsolete renders during
     // one pointer drag and appear frozen on whichever frame completes last.
     this.nwsInteractiveRequestedAt = Date.now();
-    this.cursorTasks.schedule('nws', async ({ isCurrent }) => {
-      if (!isCurrent() || selectedMs !== this.selectedMs || !this.nwsLifecycleBundle) return;
+    this._scheduleCursorTask('nws', selectedMs, async () => {
+      if (!this.nwsLifecycleBundle) return;
       const frame = buildNwsLifecycleFrame(this.nwsLifecycleBundle, selectedMs);
       await NwsAlertsOverlay.setOpsTimelineFrame?.(frame);
     }, { delayMs: NWS_SCRUB_DEBOUNCE_MS });
@@ -428,7 +500,7 @@ export const OpsTimeline = {
     }
     // Keys isolate point providers, so an AirNow scrub cannot cancel a buoy
     // frame (or vice versa) while both share the same cursor.
-    this.cursorTasks.schedule(`point:${overlayId}`, async ({ signal, isCurrent }) => {
+    this._scheduleCursorTask(`point:${overlayId}`, selectedMs, async ({ signal, isCurrent }) => {
       try {
         const response = await postMsgpack('/api/local/ops/timeline/point-frame', {
           overlay_id: overlayId,
@@ -645,9 +717,7 @@ export const OpsTimeline = {
   },
 
   _scheduleHurricaneReplayFrame(feedId, selectedMs, selectedFrame = null, { preserveCurrent = false } = {}) {
-    this.cursorTasks.schedule(`hurricane:${feedId}`, ({ isCurrent }) => {
-      if (!isCurrent() || selectedMs !== this.selectedMs || !this.timeline) return;
-
+    this._scheduleCursorTask(`hurricane:${feedId}`, selectedMs, () => {
       if (this._isPastHurricaneReplayEnd(feedId, selectedMs)) {
         if (preserveCurrent) return;
         this.selectedDisplayPayloads.delete(feedId);
