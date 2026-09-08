@@ -95,6 +95,7 @@ export const OpsTimeline = {
   selectedDisplayKeys: new Map(),
   pendingSelectAt: null,
   selectRenderRequest: 0,
+  scrubActive: false,
 
   init({ onFrame } = {}) {
     this.element = document.getElementById('opsTimelineContainer');
@@ -118,6 +119,7 @@ export const OpsTimeline = {
     if (this.selectRenderRequest) cancelAnimationFrame(this.selectRenderRequest);
     this.selectRenderRequest = 0;
     this.pendingSelectAt = null;
+    this.scrubActive = false;
     for (const timer of this.backgroundPrefetchTimers) clearTimeout(timer);
     this.backgroundPrefetchTimers = [];
     this.backgroundPrefetchRun += 1;
@@ -256,7 +258,22 @@ export const OpsTimeline = {
     this.input.disabled = this._hasPendingRequiredHistoryWarmup();
     const nowPercent = ((currentMs - rangeStart) / (rangeEnd - rangeStart)) * 100;
     this.element.style.setProperty('--ops-now-position', `${Math.max(0, Math.min(100, nowPercent))}%`);
-    this.input.addEventListener('input', () => this.selectAt(Number(this.input.value)));
+    this.input.addEventListener('pointerdown', () => {
+      this.scrubActive = true;
+    });
+    this.input.addEventListener('input', () => this.selectAt(Number(this.input.value), {
+      // A drag can briefly cross a feed's first/last valid frame. Keep the
+      // last painted state until the user commits the cursor on release.
+      preserveCurrent: this.scrubActive,
+    }));
+    this.input.addEventListener('change', () => {
+      this.scrubActive = false;
+      this.selectAt(Number(this.input.value));
+    });
+    this.input.addEventListener('pointercancel', () => {
+      this.scrubActive = false;
+      this.selectAt(Number(this.input.value));
+    });
     this.element.querySelectorAll('[data-ops-now]').forEach((control) => {
       control.addEventListener('click', () => this.selectAt(this.timeline.currentMs));
     });
@@ -292,23 +309,26 @@ export const OpsTimeline = {
         selected = (end === null || ms < end) ? frame : null;
       }
       if (selected?.timeline_provider === 'nws_alerts') {
-        if (ms > this.timeline.currentMs) void NwsAlertsOverlay.setOpsTimelineFrame?.({ type: 'FeatureCollection', features: [] });
-        else if (this.nwsLifecycleBundle) void NwsAlertsOverlay.setOpsTimelineFrame?.(buildNwsLifecycleFrame(this.nwsLifecycleBundle, ms));
+        if (ms > this.timeline.currentMs) {
+          if (!preserveCurrent) void NwsAlertsOverlay.setOpsTimelineFrame?.({ type: 'FeatureCollection', features: [] });
+        }
+        else if (this.nwsLifecycleBundle) this._scheduleNwsLifecycleFrame(ms);
         else void this._loadNwsFrame(selected, ms);
       } else if (selected?.timeline_provider === 'live_point') {
         const pointOverlay = getLivePointOverlay(selected.overlay_id);
-        if (ms > this.timeline.currentMs) pointOverlay?.setOpsTimelineFrame?.({ type: 'FeatureCollection', features: [] });
+        if (ms > this.timeline.currentMs) {
+          if (!preserveCurrent) pointOverlay?.setOpsTimelineFrame?.({ type: 'FeatureCollection', features: [] });
+        }
         else void this._loadPointFrame(selected, ms);
       } else if (frames[0]?.timeline_provider === 'live_point') {
         const pointOverlay = getLivePointOverlay(frames[0].overlay_id);
-        if (ms > this.timeline.currentMs) pointOverlay?.setOpsTimelineFrame?.({ type: 'FeatureCollection', features: [] });
-        else pointOverlay?.setOpsTimelineFrame?.({ type: 'FeatureCollection', features: [] });
+        if (!preserveCurrent) pointOverlay?.setOpsTimelineFrame?.({ type: 'FeatureCollection', features: [] });
       } else if (this.hurricaneReplayData.has(feedId)) {
         // Rebuilding hurricane lines, uncertainty geometry, wind footprints,
         // and the MapLibre source on every range-input event overwhelms the
         // render loop during a drag. Queue only the newest cursor position and
         // keep the last valid track painted until that replacement is ready.
-        this._scheduleHurricaneReplayFrame(feedId, ms, selected);
+        this._scheduleHurricaneReplayFrame(feedId, ms, selected, { preserveCurrent });
       } else if (selected?.display_payload?.ops_timeline_provider) {
         specialFrames.push(selected.display_payload);
       } else if (selected?.display_payload) {
@@ -316,7 +336,7 @@ export const OpsTimeline = {
         this.selectedDisplayPayloads.set(feedId, displayPayload);
         this.selectedDisplayKeys.delete(feedId);
         updatedFeedIds.add(feedId);
-      } else if (!feedId.startsWith('external:')) {
+      } else if (!feedId.startsWith('external:') && !preserveCurrent) {
         this.selectedDisplayPayloads.delete(feedId);
         this.selectedDisplayKeys.delete(feedId);
         updatedFeedIds.add(feedId);
@@ -378,6 +398,20 @@ export const OpsTimeline = {
       } catch (error) {
         if (error?.name !== 'AbortError') console.warn('OpsTimeline: retained NWS frame failed', error);
       }
+    }, { delayMs: NWS_SCRUB_DEBOUNCE_MS });
+  },
+
+  _scheduleNwsLifecycleFrame(selectedMs) {
+    // The compact lifecycle bundle avoids a network request, but county
+    // materialization and MapLibre source updates are still asynchronous.
+    // Route it through the same latest-cursor scheduler as retained frames;
+    // otherwise this fast path can queue hundreds of obsolete renders during
+    // one pointer drag and appear frozen on whichever frame completes last.
+    this.nwsInteractiveRequestedAt = Date.now();
+    this.cursorTasks.schedule('nws', async ({ isCurrent }) => {
+      if (!isCurrent() || selectedMs !== this.selectedMs || !this.nwsLifecycleBundle) return;
+      const frame = buildNwsLifecycleFrame(this.nwsLifecycleBundle, selectedMs);
+      await NwsAlertsOverlay.setOpsTimelineFrame?.(frame);
     }, { delayMs: NWS_SCRUB_DEBOUNCE_MS });
   },
 
@@ -610,11 +644,12 @@ export const OpsTimeline = {
     return Number.isFinite(endMs) && selectedMs > endMs;
   },
 
-  _scheduleHurricaneReplayFrame(feedId, selectedMs, selectedFrame = null) {
+  _scheduleHurricaneReplayFrame(feedId, selectedMs, selectedFrame = null, { preserveCurrent = false } = {}) {
     this.cursorTasks.schedule(`hurricane:${feedId}`, ({ isCurrent }) => {
       if (!isCurrent() || selectedMs !== this.selectedMs || !this.timeline) return;
 
       if (this._isPastHurricaneReplayEnd(feedId, selectedMs)) {
+        if (preserveCurrent) return;
         this.selectedDisplayPayloads.delete(feedId);
         this.selectedDisplayKeys.delete(feedId);
         this.onFrame?.(Array.from(this.selectedDisplayPayloads.values()), {

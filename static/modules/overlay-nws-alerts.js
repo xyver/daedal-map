@@ -532,7 +532,7 @@ export const NwsAlertsOverlay = {
     this.opsTimelineFrameAt = String(response?.detail_at || '').trim() || null;
     const frame = decorateAlertFeatures(raw);
     this.lastData = frame;
-    await this._render(frame);
+    await this._render(frame, { timelineRenderToken });
     return true;
   },
 
@@ -547,10 +547,17 @@ export const NwsAlertsOverlay = {
   },
 
   async _render(fc, options = {}) {
+    const renderIsCurrent = () => (
+      (!options.historicalRenderToken || options.historicalRenderToken === this._historicalRenderToken)
+      && (!options.timelineRenderToken || options.timelineRenderToken === this.opsTimelineRenderToken)
+    );
+    if (!renderIsCurrent()) return;
     const map = MapAdapter?.map;
     if (!map) return;
     if (!map.isStyleLoaded()) {
-      map.once('load', () => this._render(fc, options));
+      map.once('load', () => {
+        if (renderIsCurrent()) void this._render(fc, options);
+      });
       return;
     }
     // SVG pin images are the preferred marker.  A renderer-native circle is
@@ -563,9 +570,7 @@ export const NwsAlertsOverlay = {
       pinImagesReady = false;
       console.warn('NwsAlertsOverlay: pin SVGs unavailable; using circle markers', error);
     }
-    if (options.historicalRenderToken && options.historicalRenderToken !== this._historicalRenderToken) {
-      return;
-    }
+    if (!renderIsCurrent()) return;
     const source = map.getSource(SRC_ID);
     if (source) {
       source.setData(fc);
