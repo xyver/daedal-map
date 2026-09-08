@@ -6,6 +6,30 @@
 import { CONFIG } from './config.js';
 import { fetchMsgpack, postMsgpack } from './utils/fetch.js';
 
+const GEOMETRY_POSITION_ESTIMATED_BYTES = 64;
+const GEOMETRY_FEATURE_BASE_ESTIMATED_BYTES = 1024;
+
+export function countGeometryPositions(coordinates) {
+  if (!Array.isArray(coordinates) || coordinates.length === 0) return 0;
+  if (typeof coordinates[0] === 'number') return 1;
+  let count = 0;
+  for (const child of coordinates) count += countGeometryPositions(child);
+  return count;
+}
+
+export function estimateGeometryFeatureBytes(feature) {
+  const positions = countGeometryPositions(feature?.geometry?.coordinates);
+  let propertyBytes = 0;
+  try {
+    propertyBytes = JSON.stringify(feature?.properties || {}).length * 2;
+  } catch (_error) {
+    propertyBytes = 0;
+  }
+  return GEOMETRY_FEATURE_BASE_ESTIMATED_BYTES
+    + (positions * GEOMETRY_POSITION_ESTIMATED_BYTES)
+    + propertyBytes;
+}
+
 // ============================================================================
 // GEOMETRY CACHE - In-memory cache for viewport-loaded features
 // ============================================================================
@@ -16,7 +40,37 @@ export const GeometryCache = {
   inFlightByLevel: new Map(),  // level -> Map(requestKey -> { west, south, east, north, startedAt })
   inFlightLocIdsByLevel: new Map(),  // level -> Set(loc_id)
   maxFeatures: CONFIG.viewport.maxFeatures,
+  maxEstimatedBytes: CONFIG.viewport.maxEstimatedBytes,
+  estimatedBytes: 0,
   expiryMs: CONFIG.viewport.cacheExpiryMs,
+
+  configureLimits({ maxFeatures, maxEstimatedBytes } = {}) {
+    if (Number.isFinite(maxFeatures) && maxFeatures > 0) {
+      this.maxFeatures = Math.floor(maxFeatures);
+    }
+    if (Number.isFinite(maxEstimatedBytes) && maxEstimatedBytes > 0) {
+      this.maxEstimatedBytes = Math.floor(maxEstimatedBytes);
+    }
+    this.cleanup();
+  },
+
+  getStats() {
+    return {
+      featureCount: this.features.size,
+      estimatedBytes: this.estimatedBytes,
+      maxFeatures: this.maxFeatures,
+      maxEstimatedBytes: this.maxEstimatedBytes,
+      expiryMs: this.expiryMs
+    };
+  },
+
+  _deleteFeature(locId, { invalidateCoverage = true } = {}) {
+    const entry = this.features.get(locId);
+    if (!entry) return false;
+    this.estimatedBytes = Math.max(0, this.estimatedBytes - (entry.estimatedBytes || 0));
+    if (invalidateCoverage) this.coverageByLevel.delete(entry.level);
+    return this.features.delete(locId);
+  },
 
   _normalizeBbox(bbox) {
     if (!bbox) return null;
@@ -81,11 +135,16 @@ export const GeometryCache = {
       const locId = f.properties?.loc_id;
       if (!locId) continue;
 
+      this._deleteFeature(locId, { invalidateCoverage: false });
+      const estimatedBytes = estimateGeometryFeatureBytes(f);
+
       this.features.set(locId, {
         feature: f,
         lastSeen: now,
-        level: f.properties?.admin_level || 0
+        level: f.properties?.admin_level || 0,
+        estimatedBytes
       });
+      this.estimatedBytes += estimatedBytes;
     }
     this.cleanup();
   },
@@ -99,17 +158,19 @@ export const GeometryCache = {
     // Remove expired
     for (const [id, entry] of this.features) {
       if (now - entry.lastSeen > this.expiryMs) {
-        this.features.delete(id);
+        this._deleteFeature(id);
       }
     }
 
-    // Cap at max features (remove oldest)
-    if (this.features.size > this.maxFeatures) {
+    // Enforce both a count backstop and a complexity-aware decoded-memory
+    // estimate. A few intricate polygons can outweigh tens of thousands of
+    // simple ones, so feature count alone is not a useful safety boundary.
+    if (this.features.size > this.maxFeatures || this.estimatedBytes > this.maxEstimatedBytes) {
       const sorted = [...this.features.entries()]
         .sort((a, b) => a[1].lastSeen - b[1].lastSeen);
-      const toRemove = sorted.slice(0, this.features.size - this.maxFeatures);
-      for (const [id] of toRemove) {
-        this.features.delete(id);
+      for (const [id] of sorted) {
+        if (this.features.size <= this.maxFeatures && this.estimatedBytes <= this.maxEstimatedBytes) break;
+        this._deleteFeature(id);
       }
     }
 
@@ -306,6 +367,7 @@ export const GeometryCache = {
    */
   clear() {
     this.features.clear();
+    this.estimatedBytes = 0;
     this.coverageByLevel.clear();
     this.inFlightByLevel.clear();
     this.inFlightLocIdsByLevel.clear();

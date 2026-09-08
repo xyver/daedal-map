@@ -5,6 +5,7 @@
 
 import { CONFIG } from './config.js';
 import { GeometryCache, LocationInfoCache } from './cache.js';
+import { DisplayRuntime } from './display-runtime.js';
 import { cancelActiveRequests, fetchMsgpack, postMsgpack } from './utils/fetch.js';
 import { ViewportLoader, setDependencies as setViewportDeps } from './viewport-loader.js';
 import { MapAdapter, setDependencies as setMapDeps } from './map-adapter.js';
@@ -849,6 +850,30 @@ export const App = {
     setSceneRasterDeps({ MapAdapter });
 
     await AuthManager.init();
+    const displaySnapshot = DisplayRuntime.init({
+      onHidden: () => {
+        this.clearMetricPrefetch();
+        ViewportLoader.suspendForHiddenTab();
+      },
+      onVisible: () => {
+        MapAdapter.map?.resize?.();
+        ViewportLoader.resumeFromHiddenTab();
+        if (this.activeMetricOrderContext) {
+          this.scheduleNextMetricLevelPrefetch();
+        }
+      }
+    });
+    const displayProfile = CONFIG.displayProfiles?.[displaySnapshot.profileName]
+      || CONFIG.displayProfiles?.hostedSafe;
+    GeometryCache.configureLimits(displayProfile);
+    if (displayProfile?.geometryBatchSize) {
+      CONFIG.viewport.geometryBatchSize = displayProfile.geometryBatchSize;
+    }
+    document.documentElement.dataset.displayProfile = displaySnapshot.profileName;
+    console.info('Display runtime profile:', displaySnapshot.profileName, {
+      cache: GeometryCache.getStats(),
+      capabilities: displaySnapshot
+    });
     Promise.resolve(this.preloadPublicPackCatalog()).catch((error) => {
       console.warn('Could not warm public pack catalog during app startup:', error);
     });
@@ -3709,4 +3734,5 @@ if (typeof window !== 'undefined') {
   window.OverlayController = OverlayController;  // For debugging: OverlayController.getCacheStats()
   window.ViewportLoader = ViewportLoader;
   window.TimeSlider = TimeSlider;  // For settings to update live timezone
+  window.DisplayRuntime = DisplayRuntime;  // Diagnostics: profile, tab state, long tasks, heap where supported
 }

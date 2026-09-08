@@ -30,9 +30,31 @@ export const CONFIG = {
   viewport: {
     debounceMs: 300,        // Short debounce to batch rapid pan/zoom (300ms)
     cacheExpiryMs: 600000,  // Evict geometry after 10 minutes without access
-    maxFeatures: 20000,     // Bound browser geometry memory; deep requests are viewport-scoped
+    maxFeatures: 20000,     // Safe fallback; the display capability profile may raise it
+    maxEstimatedBytes: 160 * 1024 * 1024,
     geometryBatchSize: 500, // Must remain below the server's selection request limit
     spinnerDelayMs: 500     // Show spinner after 500ms if still loading
+  },
+
+  // Browser display budgets are independent from MCP/query limits. Geometry
+  // cache bytes are conservative estimates of decoded JS object weight, not
+  // transfer bytes or MapLibre/GPU allocation measurements.
+  displayProfiles: {
+    hostedSafe: {
+      maxFeatures: 20000,
+      maxEstimatedBytes: 160 * 1024 * 1024,
+      geometryBatchSize: 500
+    },
+    hostedEnhanced: {
+      maxFeatures: 50000,
+      maxEstimatedBytes: 256 * 1024 * 1024,
+      geometryBatchSize: 500
+    },
+    localPower: {
+      maxFeatures: 100000,
+      maxEstimatedBytes: 512 * 1024 * 1024,
+      geometryBatchSize: 750
+    }
   },
 
   // Colors

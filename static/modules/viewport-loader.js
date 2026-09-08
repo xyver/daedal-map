@@ -45,6 +45,31 @@ export const ViewportLoader = {
   lastZoom: null,  // Track zoom level to distinguish zoom from pan
   lastRenderedLevel: 0,
   orderModeLevelHoldUntil: 0,
+  tabSuspended: false,
+
+  suspendForHiddenTab() {
+    this.tabSuspended = true;
+    if (this.loadTimeout) {
+      clearTimeout(this.loadTimeout);
+      this.loadTimeout = null;
+      this.loadResolve?.(false);
+      this.loadResolve = null;
+    }
+    if (this.abortController) {
+      this.abortController.abort();
+      this.abortController = null;
+    }
+  },
+
+  resumeFromHiddenTab() {
+    if (!this.tabSuspended) return;
+    this.tabSuspended = false;
+    if (this.orderMode) {
+      this.onViewportChange();
+    } else {
+      this.load(this.currentAdminLevel);
+    }
+  },
 
   holdOrderModeLevel(level = this.currentAdminLevel, durationMs = 1200) {
     this.currentAdminLevel = level;
@@ -267,6 +292,9 @@ export const ViewportLoader = {
    * Uses short debounce (300ms) to batch rapid viewport changes
    */
   async load(adminLevel) {
+    if (this.tabSuspended || (typeof document !== 'undefined' && document.hidden)) {
+      return false;
+    }
     if (this.loadTimeout) {
       clearTimeout(this.loadTimeout);
       this.loadTimeout = null;
@@ -297,7 +325,7 @@ export const ViewportLoader = {
    * Actually perform the load
    */
   async doLoad(adminLevel) {
-    if (!MapAdapter?.map) return;
+    if (!MapAdapter?.map || this.tabSuspended) return;
     let missingLocIds = [];
     let requestKey = null;
 
@@ -449,7 +477,7 @@ export const ViewportLoader = {
    * Handle zoom/move change - check if admin level should change based on viewport area
    */
   onViewportChange() {
-    if (!this.enabled || !MapAdapter?.map) return;
+    if (!this.enabled || !MapAdapter?.map || this.tabSuspended) return;
 
     const bounds = MapAdapter.map.getBounds();
     const area = this.getViewportArea(bounds);
