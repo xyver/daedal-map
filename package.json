@@ -6,6 +6,7 @@
   "scripts": {
     "start": "python -m uvicorn app:app --host 0.0.0.0 --port 7000",
     "dev:server": "python -m uvicorn app:app --host 0.0.0.0 --port 7000 --reload",
+    "test:js": "node --test tests/*.test.mjs",
     "x402:test:dataset": "node --env-file=.env examples/x402_query_dataset_test.mjs"
   },
   "dependencies": {

@@ -11,6 +11,7 @@ import { postMsgpack } from './utils/fetch.js';
 import { NwsAlertsOverlay } from './overlay-nws-alerts.js';
 import { getLivePointOverlay } from './live-point-overlay.js';
 import { formatOpsTime } from './ops-time-display.js';
+import { LatestTaskScheduler } from './utils/latest-task-scheduler.js';
 
 const CURSOR_STEP_MS = 5 * 60 * 1000;
 const NWS_BACKGROUND_BATCH_SIZE = 24;
@@ -82,20 +83,12 @@ export const OpsTimeline = {
   nwsFrameCache: new Map(),
   nwsLifecycleBundle: null,
   nwsInteractiveRequestedAt: 0,
-  nwsFrameRequestController: null,
-  nwsFrameRequestToken: 0,
-  nwsFrameRequestTimer: 0,
   pointFrameCache: new Map(),
-  // Point feeds are independent overlays. A single global request token would
-  // let an AirNow request cancel an in-flight buoy frame (or the reverse),
-  // leaving one station layer visually stuck on an older cursor value.
-  pointRequestTokens: new Map(),
   pointInteractiveRequestedAt: 0,
   hurricaneReplayData: new Map(),
   hurricaneWarmupPromise: null,
   hurricaneWarmupRun: 0,
-  hurricaneFrameTimers: new Map(),
-  hurricaneFrameTokens: new Map(),
+  cursorTasks: new LatestTaskScheduler(),
   backgroundPrefetchTimers: [],
   backgroundPrefetchRun: 0,
   selectedDisplayPayloads: new Map(),
@@ -110,26 +103,14 @@ export const OpsTimeline = {
     if (!this.enabled && this.element) this.element.hidden = true;
   },
 
-  _cancelHurricaneFrameRequests() {
-    for (const timer of this.hurricaneFrameTimers.values()) clearTimeout(timer);
-    this.hurricaneFrameTimers.clear();
-    this.hurricaneFrameTokens.clear();
-  },
-
   clear() {
     this.timeline = null;
     this.selectedMs = null;
     this.nwsFrameCache.clear();
     this.nwsLifecycleBundle = null;
-    if (this.nwsFrameRequestTimer) clearTimeout(this.nwsFrameRequestTimer);
-    this.nwsFrameRequestTimer = 0;
-    this.nwsFrameRequestController?.abort?.();
-    this.nwsFrameRequestController = null;
-    this.nwsFrameRequestToken += 1;
     this.pointFrameCache.clear();
-    this.pointRequestTokens.clear();
     this.hurricaneReplayData.clear();
-    this._cancelHurricaneFrameRequests();
+    this.cursorTasks.cancelAll();
     this.selectedDisplayPayloads.clear();
     this.selectedDisplayKeys.clear();
     this.hurricaneWarmupRun += 1;
@@ -239,7 +220,9 @@ export const OpsTimeline = {
       rangeEnd,
       historyHours: Math.max(1, Math.round((currentMs - rangeStart) / 3_600_000)),
     };
-    this._cancelHurricaneFrameRequests();
+    // Every provider belongs to this timeline generation. A response queued
+    // against the previous frame index must never publish into the new one.
+    this.cursorTasks.cancelAll();
     this.hurricaneReplayData.clear();
     for (const [feedId, replay] of Object.entries(timeline?.hurricane_replay || {})) {
       if (replay?.type === 'hurricane_replay') {
@@ -372,6 +355,7 @@ export const OpsTimeline = {
     this.nwsInteractiveRequestedAt = Date.now();
     let loaded = this.nwsFrameCache.get(key);
     if (loaded?.geojson) {
+      this.cursorTasks.cancel('nws');
       if (this.selectedMs !== selectedMs) return;
       void NwsAlertsOverlay.setOpsTimelineFrame?.(loaded.geojson);
       return;
@@ -380,59 +364,51 @@ export const OpsTimeline = {
     // the obsolete request and wait briefly for the thumb to settle. This
     // keeps a slow Railway hot-store lookup from blocking every newer cursor
     // position behind it while Aurora and local raster frames continue moving.
-    if (this.nwsFrameRequestTimer) clearTimeout(this.nwsFrameRequestTimer);
-    this.nwsFrameRequestController?.abort?.();
-    const token = ++this.nwsFrameRequestToken;
-    this.nwsFrameRequestTimer = setTimeout(() => {
-      this.nwsFrameRequestTimer = 0;
-      void this._fetchNwsFrame({ frame, selectedMs, key, token });
-    }, NWS_SCRUB_DEBOUNCE_MS);
-  },
-
-  async _fetchNwsFrame({ frame, selectedMs, key, token }) {
-    if (token !== this.nwsFrameRequestToken || selectedMs !== this.selectedMs) return;
-    const controller = new AbortController();
-    this.nwsFrameRequestController = controller;
-    try {
-      const response = await postMsgpack('/api/local/ops/timeline/nws-frame', {
-        payload_hash: frame?.payload_hash,
-        at: frame?.start_at || new Date(selectedMs).toISOString(),
-      }, { signal: controller.signal, silent: true });
-      const loaded = response?.frame;
-      if (loaded) this.nwsFrameCache.set(key, loaded);
-      if (token === this.nwsFrameRequestToken && selectedMs === this.selectedMs && loaded?.geojson) {
-        void NwsAlertsOverlay.setOpsTimelineFrame?.(loaded.geojson);
+    this.cursorTasks.schedule('nws', async ({ signal, isCurrent }) => {
+      try {
+        const response = await postMsgpack('/api/local/ops/timeline/nws-frame', {
+          payload_hash: frame?.payload_hash,
+          at: frame?.start_at || new Date(selectedMs).toISOString(),
+        }, { signal, silent: true });
+        const result = response?.frame;
+        if (result) this.nwsFrameCache.set(key, result);
+        if (isCurrent() && selectedMs === this.selectedMs && result?.geojson) {
+          void NwsAlertsOverlay.setOpsTimelineFrame?.(result.geojson);
+        }
+      } catch (error) {
+        if (error?.name !== 'AbortError') console.warn('OpsTimeline: retained NWS frame failed', error);
       }
-    } catch (error) {
-      if (error?.name !== 'AbortError') console.warn('OpsTimeline: retained NWS frame failed', error);
-    } finally {
-      if (this.nwsFrameRequestController === controller) this.nwsFrameRequestController = null;
-    }
+    }, { delayMs: NWS_SCRUB_DEBOUNCE_MS });
   },
 
   async _loadPointFrame(frame, selectedMs) {
     const overlayId = String(frame?.overlay_id || '');
     const key = `${overlayId}:${String(frame?.start_at || '')}:${String(frame?.payload_hash || '')}`;
     if (!overlayId || !key) return;
-    const token = (this.pointRequestTokens.get(overlayId) || 0) + 1;
-    this.pointRequestTokens.set(overlayId, token);
     this.pointInteractiveRequestedAt = Date.now();
     let loaded = this.pointFrameCache.get(key);
-    if (!loaded) {
+    if (loaded?.geojson) {
+      this.cursorTasks.cancel(`point:${overlayId}`);
+      if (this.selectedMs === selectedMs) void getLivePointOverlay(overlayId)?.setOpsTimelineFrame?.(loaded.geojson);
+      return;
+    }
+    // Keys isolate point providers, so an AirNow scrub cannot cancel a buoy
+    // frame (or vice versa) while both share the same cursor.
+    this.cursorTasks.schedule(`point:${overlayId}`, async ({ signal, isCurrent }) => {
       try {
         const response = await postMsgpack('/api/local/ops/timeline/point-frame', {
           overlay_id: overlayId,
           at: frame.start_at || new Date(selectedMs).toISOString(),
-        });
-        loaded = response?.frame;
-        if (loaded) this.pointFrameCache.set(key, loaded);
+        }, { signal, silent: true });
+        const result = response?.frame;
+        if (result) this.pointFrameCache.set(key, result);
+        if (isCurrent() && this.selectedMs === selectedMs && result?.geojson) {
+          void getLivePointOverlay(overlayId)?.setOpsTimelineFrame?.(result.geojson);
+        }
       } catch (error) {
-        console.warn('OpsTimeline: retained point frame failed', error);
-        return;
+        if (error?.name !== 'AbortError') console.warn('OpsTimeline: retained point frame failed', error);
       }
-    }
-    if (token !== this.pointRequestTokens.get(overlayId) || this.selectedMs !== selectedMs || !loaded?.geojson) return;
-    void getLivePointOverlay(overlayId)?.setOpsTimelineFrame?.(loaded.geojson);
+    });
   },
 
   _hasPendingRequiredHistoryWarmup() {
@@ -635,17 +611,8 @@ export const OpsTimeline = {
   },
 
   _scheduleHurricaneReplayFrame(feedId, selectedMs, selectedFrame = null) {
-    const existingTimer = this.hurricaneFrameTimers.get(feedId);
-    if (existingTimer) clearTimeout(existingTimer);
-    const token = (this.hurricaneFrameTokens.get(feedId) || 0) + 1;
-    this.hurricaneFrameTokens.set(feedId, token);
-    const timer = setTimeout(() => {
-      this.hurricaneFrameTimers.delete(feedId);
-      if (
-        token !== this.hurricaneFrameTokens.get(feedId)
-        || selectedMs !== this.selectedMs
-        || !this.timeline
-      ) return;
+    this.cursorTasks.schedule(`hurricane:${feedId}`, ({ isCurrent }) => {
+      if (!isCurrent() || selectedMs !== this.selectedMs || !this.timeline) return;
 
       if (this._isPastHurricaneReplayEnd(feedId, selectedMs)) {
         this.selectedDisplayPayloads.delete(feedId);
@@ -674,8 +641,7 @@ export const OpsTimeline = {
         opsTimelineFeedIds: [feedId],
         preserveMissing: true,
       });
-    }, HURRICANE_SCRUB_DEBOUNCE_MS);
-    this.hurricaneFrameTimers.set(feedId, timer);
+    }, { delayMs: HURRICANE_SCRUB_DEBOUNCE_MS });
   },
 
   _buildHurricaneReplayDisplayPayload(feedId, selectedMs, selectedFrame = null) {
