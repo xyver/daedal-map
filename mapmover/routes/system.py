@@ -5259,6 +5259,7 @@ async def debug_memory(req: Request):
     import time
     from mapmover.duckdb_helpers import _CACHE, _CACHE_LOCK, DEFAULT_CACHE_TTL
     from mapmover.geometry_handlers import _country_parquet_cache, _country_parquet_cache_lock
+    from mapmover.runtime.published_artifacts import artifact_cache_status
 
     now = time.monotonic()
 
@@ -5311,7 +5312,13 @@ async def debug_memory(req: Request):
             "note": "permanent, no TTL",
             "entries": geom_entries,
         },
+        "artifact_disk_cache": artifact_cache_status(),
+        "session_cache": {
+            **session_manager.stats(),
+            "note": "counts only; result and sent-key byte accounting is not implemented yet",
+        },
         "combined_cache_mb": round(disaster_total_mb + geom_total_mb, 2),
+        "combined_cache_note": "DataFrame RAM only; excludes artifact disk, sessions, DuckDB buffers, and process overhead",
     }
 
 

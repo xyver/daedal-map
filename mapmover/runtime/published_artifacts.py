@@ -4,8 +4,9 @@ This module owns object-store location and basic bytes/JSON reads for data,
 geometry, reference, catalog, and raster artifacts.  It intentionally does not
 serve mutable control/Ops objects or account-owned/generated artifacts.
 
-Tier-2 local hydration will be added behind this contract.  Callers should not
-construct published bucket keys or create their own S3 clients.
+It also owns the bounded Tier-2 local hydration cache for immutable published
+artifacts. Callers should use this contract instead of constructing published
+bucket keys, creating their own S3 clients, or inventing another disk cache.
 """
 
 from __future__ import annotations
