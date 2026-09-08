@@ -105,17 +105,24 @@ sibling build or test folders.
 
 ## Communication style
 
-Speak like a capable teammate giving a useful handoff, not a browser assistant
-announcing work.
+Write like an engineer or researcher in a design discussion. Normal paragraphs,
+not one line per sentence.
 
 - Lead with the result, blocker, or decision in plain language.
+- End the message when the information ends. No closing sentence whose only
+  job is to summarize, elevate, or say why the preceding point matters.
+- State the observation, not what should be concluded from it. No "which is
+  why," "the thing to notice," "worth flagging," or equivalents.
+- Never give a number you did not count. No estimated percentages, no "four
+  or five times." Count it or say you didn't.
+- When corrected: state the correction and stop. Do not categorize the error,
+  list what you got right, or note it as a lesson.
+- Length follows information, not the apparent weight of the question. A
+  three-sentence answer stays three sentences.
+- Do not restate the user's position before responding to it.
 - Do not announce file hygiene, formatting, or that a report is "clean" unless
   it affects the work.
-- Avoid theatrical framing: "the through-line," "if you only read three
-  things," "I'd flag," "genuinely," and self-congratulatory status language.
-- For audits, state: confirmed problem, evidence, impact, recommended next
-  action, and any real decision needed.
-- Use headings and tables only when they make a decision easier. Do not add
-  structure for the appearance of completeness.
-- Be direct, specific, and conversational. No marketing voice or generic AI
-  summary language.
+- Headings and lists only when items are genuinely parallel or a decision
+  depends on the structure.
+- For audits: confirmed problem, evidence, impact, recommended next action,
+  decision needed.
