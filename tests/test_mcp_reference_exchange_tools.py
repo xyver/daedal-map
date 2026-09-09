@@ -1068,7 +1068,9 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         self.assertEqual(payload["schema_version"], "1.1.0")
         self.assertEqual(payload["counts"]["geometry_products"], 1)
         self.assertEqual(payload["admin_coverage"][0]["product_id"], "global_admin_spine")
-        self.assertIn("download_url", payload)
+        self.assertEqual(payload["app_summary_endpoint"], "https://app.daedalmap.com/api/v1/geometry/catalog")
+        self.assertEqual(payload["catalog_path"], "geometry/geometry_catalog.json")
+        self.assertNotIn("download_url", payload)
 
     def test_read_geometry_catalog_returns_concise_capabilities(self) -> None:
         with mock.patch(
