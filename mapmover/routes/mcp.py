@@ -75,6 +75,71 @@ from tool_access_shared import (
 
 router = APIRouter()
 
+MCP_PACK_READ_TOOLS = {"get_tool_help", "get_catalog", "get_pack"}
+MCP_GEOMETRY_READ_TOOLS = {
+    "how_geometry_works", "resolve_point", "loc_id_info", "read_geometry_catalog",
+    "list_reference_systems", "identify_reference_system", "resolve_reference",
+    "convert_reference", "compare_geographies", "check_geometry", "get_geometry",
+    "resolve_loc_id_scope", "estimate_geometry_package", "estimate_conversion_job",
+    "get_job_status",
+}
+MCP_GEOMETRY_BULK_TOOLS = {"create_geometry_export", "create_conversion_job"}
+
+
+def _required_mcp_permission(tool_name: str) -> str:
+    if tool_name in MCP_PACK_READ_TOOLS:
+        return "packs:read"
+    if tool_name in MCP_GEOMETRY_BULK_TOOLS:
+        return "geometry:bulk"
+    if tool_name in MCP_GEOMETRY_READ_TOOLS:
+        return "geometry:read"
+    return "data:query"
+
+
+def _mcp_scope_denial(request: Request, tool_name: str, request_id: Any) -> JSONResponse | None:
+    caller = request_caller_identity(request)
+    if caller.kind != "api_key":
+        return None
+    required = _required_mcp_permission(tool_name)
+    if required in caller.scopes:
+        return None
+    return _jsonrpc_error(
+        request_id,
+        -32003,
+        "MCP credential does not grant this tool",
+        data={"error": "insufficient_scope", "required_permission": required},
+        status_code=403,
+    )
+
+
+def _commercial_denial_details(decision: str, payload: dict[str, Any]) -> dict[str, Any]:
+    """Normalize paid denial semantics for every MCP execution helper."""
+    if payload.get("payment_choice_required"):
+        code = "payment_choice_required"
+    elif payload.get("account_credit_required"):
+        code = "account_credit_required"
+    else:
+        code = "payment_required" if decision == "challenge" else "commercial_access_unavailable"
+    return {
+        "code": code,
+        "message": str(
+            payload.get("message")
+            or ("Payment is required before this tool can execute." if decision == "challenge" else "Commercial access is unavailable.")
+        ),
+        "challenge": payload.get("challenge"),
+        "payment_options": (
+            {
+                "account": {
+                    "endpoint": "/mcp/account",
+                    "credential_header": "X-API-Key",
+                    "manage_url": "https://www.daedalmap.com/account?tab=agents",
+                },
+                "x402": {"endpoint": "/mcp/x402"},
+            }
+            if payload.get("payment_choice_required") else None
+        ),
+    }
+
 
 def _guard_mcp_execution(tool_name: str):
     """Convert shared worker capacity/timeouts into stable MCP tool errors."""
@@ -477,6 +542,7 @@ async def _commercial_access_decision(
                     "include_polygon": bool(include_polygon),
                     "pricing_quote": authoritative_quote,
                     "request_fingerprint": request_fingerprint,
+                    "required_permission": _required_mcp_permission(tool_name),
                 },
                 "caller": {
                     "auth_user_id": caller_identity.auth_user_id if spend_authorized else None,
@@ -485,6 +551,7 @@ async def _commercial_access_decision(
                     "caller_kind": caller_identity.kind,
                     "caller_confidence": caller_identity.confidence if spend_authorized else "weak",
                     "can_spend_credits": bool(spend_authorized),
+                    "credential_id": str(getattr(request.state, "api_key_id", "") or "") or None,
                 },
             },
         )
@@ -495,6 +562,16 @@ async def _commercial_access_decision(
     status_name = str((payload or {}).get("status") or "").strip().lower()
     if status_name not in {"allow", "challenge"}:
         return "unavailable", payload or {}
+    if status_name == "challenge":
+        mode = str(getattr(request.state, "mcp_access_mode", "smart") or "smart")
+        payload = dict(payload or {})
+        if mode == "smart":
+            payload["payment_choice_required"] = True
+            payload["message"] = "Choose account credit or x402 for this paid MCP call."
+        elif mode == "account":
+            payload.pop("challenge", None)
+            payload["account_credit_required"] = True
+            payload["message"] = "This account cannot cover the quoted MCP call. Add credit or use /mcp/x402 explicitly."
     return status_name, payload or {}
 
 
@@ -2097,9 +2174,8 @@ async def _execute_resolve_point_tool(request: Request, arguments: dict[str, Any
                     "caller_binding": str(verifier_context.get("caller_binding") or "").strip(),
                 }
             else:
-                error_code = (
-                    "payment_required" if decision == "challenge" else "commercial_access_unavailable"
-                )
+                denial = _commercial_denial_details(decision, verifier_payload)
+                error_code = denial["code"]
                 _stamp_mcp_tool_analytics(
                     request,
                     event="mcp_tool",
@@ -2123,14 +2199,13 @@ async def _execute_resolve_point_tool(request: Request, arguments: dict[str, Any
                 context = verifier_payload.get("context")
                 if isinstance(context, dict) and context.get("pricing"):
                     quote_payload["daedalmap_pricing"] = context["pricing"]
-                if verifier_payload.get("challenge"):
-                    quote_payload["challenge"] = verifier_payload["challenge"]
+                if denial["challenge"]:
+                    quote_payload["challenge"] = denial["challenge"]
+                if denial["payment_options"]:
+                    quote_payload["payment_options"] = denial["payment_options"]
                 quote_payload["error"] = {
                     "code": error_code,
-                    "message": str(
-                        verifier_payload.get("message")
-                        or f"{len(points)} points exceeds the free preview limit of {limit}."
-                    ),
+                    "message": denial["message"],
                 }
                 _log_mcp_tool_usage_event(
                     request,
@@ -4011,21 +4086,19 @@ def _result_row_count(tool_name: str, payload: dict[str, Any], result: dict[str,
 def _commercial_tool_denial(
     *, tool_name: str, quote: dict[str, Any], decision: str, verifier_payload: dict[str, Any]
 ) -> dict[str, Any]:
-    code = "payment_required" if decision == "challenge" else "commercial_access_unavailable"
+    denial = _commercial_denial_details(decision, verifier_payload)
     return {
         "ok": False,
         "payment_required": decision == "challenge",
         "tool_name": tool_name,
         "quote": quote,
         "error": {
-            "code": code,
-            "message": str(
-                verifier_payload.get("message")
-                or ("Payment is required before this tool can execute." if decision == "challenge" else "Commercial access is unavailable.")
-            ),
+            "code": denial["code"],
+            "message": denial["message"],
         },
         "daedalmap_pricing": (verifier_payload.get("context") or {}).get("pricing") or quote,
-        "challenge": verifier_payload.get("challenge"),
+        "challenge": denial["challenge"],
+        "payment_options": denial["payment_options"],
     }
 
 
@@ -4705,7 +4778,11 @@ def _source_registry_from_request(request: Request) -> str | None:
 
 @router.get("/mcp")
 @router.get("/mcp/{pack_id}")
+@router.get("/mcp/account/{pack_id}")
+@router.get("/mcp/x402/{pack_id}")
 async def mcp_endpoint_info(pack_id: str | None = None):
+    if pack_id in {"account", "x402"}:
+        pack_id = None
     normalized_pack_id = _normalize_pack_id(pack_id)
     if pack_id and not normalized_pack_id:
         return JSONResponse({"error": "Pack MCP facade not found"}, status_code=404)
@@ -4740,7 +4817,11 @@ async def mcp_endpoint_info(pack_id: str | None = None):
 
 @router.post("/mcp")
 @router.post("/mcp/{pack_id}")
+@router.post("/mcp/account/{pack_id}")
+@router.post("/mcp/x402/{pack_id}")
 async def mcp_endpoint(request: Request, pack_id: str | None = None):
+    if pack_id in {"account", "x402"}:
+        pack_id = None
     normalized_pack_id = _normalize_pack_id(pack_id)
     source_registry = _source_registry_from_request(request)
     request.state.analytics_metadata = {
@@ -4879,6 +4960,9 @@ async def mcp_endpoint(request: Request, pack_id: str | None = None):
         return _jsonrpc_error(request_id, -32602, "Tool arguments must be an object")
     if not _tool_allowed_for_facade(tool_name, normalized_pack_id):
         return _jsonrpc_error(request_id, -32601, f"Tool '{tool_name}' is not available on this MCP facade")
+    scope_denial = _mcp_scope_denial(request, tool_name, request_id)
+    if scope_denial is not None:
+        return scope_denial
 
     helper_started_at = time.perf_counter()
 

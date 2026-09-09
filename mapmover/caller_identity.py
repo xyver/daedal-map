@@ -261,7 +261,7 @@ def resolve_caller_identity(
             confidence=CONFIDENCE_VERIFIED,
             auth_user_id=str(key_account).strip(),
             ip_hash=ip_hash,
-            plan_id=plan_id,
+            plan_id=str(getattr(request.state, "api_key_plan_id", "") or plan_id or "").strip().lower() or None,
             scopes=scopes,
         )
 

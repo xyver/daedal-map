@@ -13,6 +13,7 @@ RUNTIME_ACCOUNT_AUTH_USER_PATH = "/internal/runtime-account/auth-user"
 RUNTIME_ACCOUNT_CONTEXT_PATH = "/internal/runtime-account/context"
 RUNTIME_ACCOUNT_CORPUS_PATH = "/internal/runtime-account/corpus"
 RUNTIME_ACCOUNT_ANONYMOUS_USAGE_PATH = "/internal/runtime-account/anonymous-usage"
+RUNTIME_ACCOUNT_MCP_CREDENTIAL_PATH = "/internal/runtime-account/mcp-credential"
 
 
 def load_authenticated_user(access_token: str) -> dict[str, Any] | None:
@@ -113,3 +114,25 @@ def load_anonymous_usage_cost(caller_binding: str | None, ip_hash: str | None, s
             body,
         )
         return None
+
+
+def verify_mcp_credential(api_key: str) -> dict[str, Any] | None:
+    """Verify a purpose-issued key through the private credential authority."""
+    if not hosted_runtime_control_enabled():
+        return None
+    value = str(api_key or "").strip()
+    if not value:
+        return None
+    try:
+        status_code, body = _post_internal(
+            RUNTIME_ACCOUNT_MCP_CREDENTIAL_PATH,
+            {"api_key": value},
+        )
+    except Exception as exc:
+        logger.warning("Hosted MCP credential verification failed: %s", exc)
+        return None
+    if status_code != 200 or not isinstance(body, dict):
+        return None
+    if not body.get("credential_id") or not body.get("account_id"):
+        return None
+    return body

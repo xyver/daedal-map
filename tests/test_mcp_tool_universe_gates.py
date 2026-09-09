@@ -25,6 +25,8 @@ from mapmover.routes.mcp import (
     _shape_resolve_point_payload,
     _provenance_summary,
     _access_lane,
+    _commercial_denial_details,
+    _required_mcp_permission,
     router as mcp_router,
 )
 from mapmover.security import is_local_loopback_request
@@ -70,6 +72,23 @@ class ResolvePointPayloadShapeTests(unittest.TestCase):
         self.assertEqual(shaped["deepest_resolved_family"], "water_body")
         self.assertEqual(shaped["resolution_family"], "marine")
         self.assertEqual(shaped["overlap_families"][0]["loc_id"], "USA-EEZ-MRGID-1")
+
+
+class McpAccountScopeTests(unittest.TestCase):
+    def test_tools_share_a_small_explicit_permission_vocabulary(self):
+        self.assertEqual(_required_mcp_permission("get_catalog"), "packs:read")
+        self.assertEqual(_required_mcp_permission("resolve_point"), "geometry:read")
+        self.assertEqual(_required_mcp_permission("create_geometry_export"), "geometry:bulk")
+        self.assertEqual(_required_mcp_permission("query_dataset"), "data:query")
+
+    def test_smart_payment_choice_is_shared_by_paid_tools(self):
+        detail = _commercial_denial_details("challenge", {
+            "payment_choice_required": True,
+            "message": "Choose a rail",
+        })
+        self.assertEqual(detail["code"], "payment_choice_required")
+        self.assertEqual(detail["payment_options"]["account"]["endpoint"], "/mcp/account")
+        self.assertEqual(detail["payment_options"]["x402"]["endpoint"], "/mcp/x402")
 
 
 class LocalRuntimeAccessTests(unittest.TestCase):

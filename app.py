@@ -8,6 +8,7 @@ This file is intentionally thin:
 - startup initialization
 """
 
+import asyncio
 import io
 import os
 import sys
@@ -463,7 +464,45 @@ async def static_no_cache(request: Request, call_next):
         _apply_common_security_headers(response, request, path)
         return response
 
-    auth_user = await get_authenticated_user_async(request)
+    mcp_mode = None
+    if path == "/mcp/account" or path.startswith("/mcp/account/"):
+        mcp_mode = "account"
+    elif path == "/mcp/x402" or path.startswith("/mcp/x402/"):
+        mcp_mode = "x402"
+    elif path == "/mcp" or path.startswith("/mcp/"):
+        mcp_mode = "smart"
+    request.state.mcp_access_mode = mcp_mode
+
+    api_key_credential = None
+    supplied_mcp_key = str(request.headers.get("x-api-key") or "").strip()
+    if mcp_mode in {"account", "smart"} and supplied_mcp_key:
+        from mapmover.hosted_runtime_account import verify_mcp_credential
+        api_key_credential = await asyncio.to_thread(verify_mcp_credential, supplied_mcp_key)
+        if not api_key_credential:
+            response = JSONResponse(
+                {"error": "invalid_mcp_credential"},
+                status_code=401,
+                headers={"WWW-Authenticate": 'ApiKey realm="DaedalMap MCP"'},
+            )
+            _apply_common_security_headers(response, request, path)
+            return response
+        request.state.api_key_account_id = str(api_key_credential["account_id"])
+        request.state.api_key_id = str(api_key_credential["credential_id"])
+        request.state.api_key_scopes = tuple(api_key_credential.get("permissions") or ())
+        request.state.api_key_plan_id = str(api_key_credential.get("plan_id") or "")
+        request.state.mcp_credit_authorized = "credits:spend" in request.state.api_key_scopes
+    elif mcp_mode == "account":
+        response = JSONResponse(
+            {"error": "mcp_credential_required"},
+            status_code=401,
+            headers={"WWW-Authenticate": 'ApiKey realm="DaedalMap MCP"'},
+        )
+        _apply_common_security_headers(response, request, path)
+        return response
+
+    # A browser bearer token is never general MCP spending authority. When an
+    # MCP key is present, resolve identity exclusively from that key.
+    auth_user = None if mcp_mode else await get_authenticated_user_async(request)
     auth_user_id = str((auth_user or {}).get("id") or "").strip() or None
     request.state.auth_user_id = auth_user_id
     client_ip = get_client_ip(request)
