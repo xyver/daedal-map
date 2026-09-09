@@ -291,7 +291,11 @@ def _candidate(
             "geo_level": (levels or {}).get(value),
             "geometry_available": any(loc_id in shape_ids for loc_id in matches[value]),
         }
-        for value in matched_identifiers[:10]
+        # Identification calls are already bounded (100 values on the public
+        # surface). Return every checked sample match so browser previews can
+        # draw the exact same evidence the user reviewed instead of a second,
+        # smaller subset.
+        for value in matched_identifiers[:100]
     ]
     return {
         "system": system,
