@@ -34,9 +34,8 @@ def _resolve_bootstrap_country_code(row: pd.Series, name_to_iso3: dict[str, str]
     """
     Resolve a world-bootstrap row to the ISO3 key expected by country callers.
 
-    `geometry/global.csv` is spine-owned and broader than canonical ISO3 countries,
-    so this adapter intentionally exposes only rows that can be addressed as a
-    country in the shared runtime contract.
+    The Admin0 Display product is identity-shaped, and this adapter exposes only
+    rows that can be addressed as a country in the shared runtime contract.
     """
     loc_id = str(row.get("loc_id") or "").strip().upper()
     if re.fullmatch(r"[A-Z]{3}", loc_id):
@@ -277,7 +276,7 @@ def get_geometry_source(geographic_level, data_catalog):
     """
     # Map geographic levels to preferred geometry sources
     geometry_sources = {
-        'country': 'geometry/global.csv',
+        'country': 'geometry/admin0/display.parquet',
         'county': 'usplaces.csv',
         'state': 'usplaces.csv',  # Can filter to state level
         'city': 'Populated Places.csv',

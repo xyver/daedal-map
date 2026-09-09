@@ -8,7 +8,7 @@ fields.
 
 Two inputs, with a strict division of labour:
 
-- ``geometry/display/admin_0.parquet`` supplies **shapes only**. It is the
+- ``geometry/admin0/display.parquet`` supplies **shapes only**. It is the
   bounded 2.3 MB simplified Admin0 bootstrap the map already loads, so the
   browser never receives exact world geometry for a status view.
 - ``geometry/geometry_catalog.json`` supplies **every fact**. The route then
@@ -569,7 +569,7 @@ def build_geometry_inventory_payload() -> dict[str, Any]:
         "view": "internal",
         "features": features,
         "count": len(features),
-        "shape_source": "geometry/display/admin_0.parquet",
+        "shape_source": "geometry/admin0/display.parquet",
         "data_source": "geometry/geometry_catalog.json",
         "catalog": {
             "schema_version": catalog.get("schema_version") or catalog.get("_schema_version"),

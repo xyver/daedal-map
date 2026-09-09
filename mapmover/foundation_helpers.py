@@ -11,11 +11,13 @@ from __future__ import annotations
 
 import json
 import logging
-from io import BytesIO, StringIO
+from io import BytesIO
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
+from shapely import from_wkb
+from shapely.geometry import mapping
 
 from .duckdb_helpers import is_cloud_mode, parquet_columns, path_to_uri, run_df
 from .orchestrator_specs import list_orchestrator_specs
@@ -50,8 +52,9 @@ FOUNDATION_HELPER_REGISTRY = {
     "country_crosswalks": "geometry/countries/{ISO3}/crosswalk.json",
     "country_json_assets": "countries/{ISO3}/{filename}",
     "global_country_geometry": {
-        "display": "geometry/display/admin_0.parquet",
-        "exact_fallback": "geometry/global.csv",
+        "display": "geometry/admin0/display.parquet",
+        "full": "geometry/admin0/full.parquet",
+        "supplemental": "geometry/admin0/supplemental.parquet",
     },
     "world_factbook_static": "global/world_factbook_static/all_countries.parquet",
     "orchestrator_specs": "mapmover/orchestrator_specs.py",
@@ -223,7 +226,7 @@ def _admin0_country_universe() -> set[str]:
 
     The Geometry Catalog overlay is the true read of which countries exist and
     how they are tracked, and it takes its shapes from
-    `geometry/display/admin_0.parquet` and its facts from
+    `geometry/admin0/display.parquet` and its facts from
     `geometry/geometry_catalog.json`. The exact bank follows that universe so a
     territory added to the published Display bank is recognized here without a
     second edit to the coverage reference.
@@ -260,19 +263,17 @@ def _load_supplemental_admin0_frame(
     global bank when its reviewed polygon corrects a coastal coverage gap. Keep
     both candidates; the point matcher selects the smallest covering polygon.
     """
-    path = GEOMETRY_DIR / "supplemental" / "admin0_territories.parquet"
-    index_path = GEOMETRY_DIR / "supplemental" / "admin0_territories_index.json"
-    if not is_cloud_mode() and (not path.exists() or not index_path.exists()):
-        return pd.DataFrame(columns=existing_columns)
-
+    path = GEOMETRY_DIR / "admin0" / "supplemental.parquet"
+    manifest_path = GEOMETRY_DIR / "admin0" / "manifest.json"
     try:
-        index = (
-            read_artifact_json("geometry/supplemental/admin0_territories_index.json", lane="published")
+        manifest = (
+            read_artifact_json("geometry/admin0/manifest.json", lane="published")
             if is_cloud_mode()
-            else json.loads(index_path.read_text(encoding="utf-8"))
+            else json.loads(manifest_path.read_text(encoding="utf-8"))
         )
+        index = manifest.get("supplemental_source_contract") or {}
     except Exception as e:
-        logger.warning("Failed to load supplemental Admin0 index: %s", e)
+        logger.warning("Failed to load canonical Admin0 manifest: %s", e)
         return pd.DataFrame(columns=existing_columns)
 
     if str(index.get("license_review_status") or "").strip().lower() != "approved" or not index.get("usable_for_derivation"):
@@ -280,11 +281,11 @@ def _load_supplemental_admin0_frame(
 
     reference_codes = _admin0_country_universe()
     try:
-        supplemental = (
-            pd.read_parquet(BytesIO(read_artifact_bytes("geometry/supplemental/admin0_territories.parquet", lane="published")))
-            if is_cloud_mode()
-            else pd.read_parquet(path)
-        )
+        if is_cloud_mode():
+            raw = read_artifact_bytes("geometry/admin0/supplemental.parquet", lane="published")
+            supplemental = pd.read_parquet(BytesIO(raw))
+        else:
+            supplemental = pd.read_parquet(path)
     except Exception as e:
         logger.warning("Failed to load supplemental Admin0 geometry: %s", e)
         return pd.DataFrame(columns=existing_columns)
@@ -447,40 +448,42 @@ def load_global_countries_frame():
     if _GLOBAL_COUNTRIES_CACHE is not None:
         return _GLOBAL_COUNTRIES_CACHE
 
-    global_file = GEOMETRY_DIR / "global.csv"
-    lane = resolve_artifact_read(global_file)
+    full_file = GEOMETRY_DIR / "admin0" / "full.parquet"
 
-    def _merge_supplemental(base, origin: str):
-        existing_loc_ids = set(base["loc_id"].dropna().astype(str).str.strip().str.upper()) if "loc_id" in base.columns else set()
-        supplemental = _load_supplemental_admin0_frame(list(base.columns), existing_loc_ids)
-        frame = pd.concat([base, supplemental], ignore_index=True) if not supplemental.empty else base
-        logger.info(
-            "Loaded %d countries from %s plus %d supplemental Admin0 rows",
-            len(frame),
-            origin,
-            len(supplemental),
+    def _normalize_full(frame: pd.DataFrame) -> pd.DataFrame:
+        if "geometry" in frame.columns or "geometry_wkb" not in frame.columns:
+            return frame
+        normalized = frame.copy()
+        normalized["geometry"] = normalized["geometry_wkb"].map(
+            lambda value: json.dumps(mapping(from_wkb(value)), separators=(",", ":"))
+            if value is not None else None
         )
-        return frame
+        normalized["parent_id"] = "WORLD"
+        normalized["admin_level"] = 0
+        normalized["type"] = "admin"
+        normalized["code"] = normalized["loc_id"]
+        normalized["iso_a3"] = normalized["loc_id"]
+        normalized["has_polygon"] = normalized["geometry"].notna()
+        return normalized
 
+    lane = resolve_artifact_read(full_file)
     if lane == READ_LOCAL:
         try:
-            _GLOBAL_COUNTRIES_CACHE = _merge_supplemental(pd.read_csv(global_file), "global.csv")
+            _GLOBAL_COUNTRIES_CACHE = _normalize_full(pd.read_parquet(full_file))
+            logger.info("Loaded %d countries from geometry/admin0/full.parquet", len(_GLOBAL_COUNTRIES_CACHE))
             return _GLOBAL_COUNTRIES_CACHE
         except Exception as e:
-            logger.error(f"Error loading global.csv: {e}")
-            return None
+            logger.warning("Failed to load geometry/admin0/full.parquet: %s", e)
 
     if lane == READ_REMOTE:
         try:
-            raw = read_artifact_bytes("geometry/global.csv", lane="published").decode("utf-8-sig")
-            _GLOBAL_COUNTRIES_CACHE = _merge_supplemental(
-                pd.read_csv(StringIO(raw)), "published geometry/global.csv"
-            )
+            raw = read_artifact_bytes("geometry/admin0/full.parquet", lane="published")
+            _GLOBAL_COUNTRIES_CACHE = _normalize_full(pd.read_parquet(BytesIO(raw)))
             return _GLOBAL_COUNTRIES_CACHE
         except Exception as e:
-            logger.warning("Failed to load global.csv from object storage: %s", e)
+            logger.warning("Failed to load geometry/admin0/full.parquet from object storage: %s", e)
 
-    logger.warning(f"global.csv not available at {global_file}")
+    logger.warning("Full Admin0 geometry is unavailable")
     return None
 
 
@@ -503,29 +506,33 @@ def load_global_country_display_frame():
     if _GLOBAL_COUNTRY_DISPLAY_CACHE is not None:
         return _GLOBAL_COUNTRY_DISPLAY_CACHE
 
-    display_file = GEOMETRY_DIR / "display" / "admin_0.parquet"
-    lane = resolve_artifact_read(display_file)
-    try:
-        if lane == READ_LOCAL:
-            base = pd.read_parquet(display_file)
-        elif lane == READ_REMOTE:
-            raw = read_artifact_bytes("geometry/display/admin_0.parquet", lane="published")
-            base = pd.read_parquet(BytesIO(raw))
-        else:
-            base = None
+    candidates = ((
+        GEOMETRY_DIR / "admin0" / "display.parquet",
+        "geometry/admin0/display.parquet",
+    ),)
+    for display_file, remote_path in candidates:
+        lane = resolve_artifact_read(display_file)
+        try:
+            if lane == READ_LOCAL:
+                base = pd.read_parquet(display_file)
+            elif lane == READ_REMOTE:
+                base = pd.read_parquet(BytesIO(read_artifact_bytes(remote_path, lane="published")))
+            else:
+                base = None
 
-        if base is not None:
-            # The published Display artifact is self-contained. Runtime merging
-            # would hide an incomplete build and make its actual row universe
-            # depend on a second object-store read.
-            _GLOBAL_COUNTRY_DISPLAY_CACHE = base
-            logger.info(
-                "Loaded %d countries from self-contained Admin0 Display bootstrap",
-                len(_GLOBAL_COUNTRY_DISPLAY_CACHE),
-            )
-            return _GLOBAL_COUNTRY_DISPLAY_CACHE
-    except Exception as e:
-        logger.warning("Failed to load Admin0 Display bootstrap: %s", e)
+            if base is not None:
+                # The published Display artifact is self-contained. Runtime
+                # merging would hide an incomplete build and make its row
+                # universe depend on a second object-store read.
+                _GLOBAL_COUNTRY_DISPLAY_CACHE = base
+                logger.info(
+                    "Loaded %d countries from self-contained Admin0 Display bootstrap at %s",
+                    len(_GLOBAL_COUNTRY_DISPLAY_CACHE),
+                    remote_path,
+                )
+                return _GLOBAL_COUNTRY_DISPLAY_CACHE
+        except Exception as e:
+            logger.warning("Failed to load Admin0 Display bootstrap at %s: %s", remote_path, e)
 
     # Display callers serialize this frame to clients. Failing closed prevents
     # a missing bounded artifact from silently shipping exact query polygons.

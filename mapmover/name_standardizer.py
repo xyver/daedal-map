@@ -3,7 +3,7 @@ Name Standardizer Module
 Matches and standardizes place names against canonical geometry datasets.
 
 The geometry files are the source of truth for names:
-- global.csv - countries (admin_0)
+- geometry/admin0/full.parquet - countries (admin_0)
 - {ISO3}.parquet - per-country admin levels
 
 This module:
@@ -23,7 +23,7 @@ import unicodedata
 from rapidfuzz import fuzz, process
 
 from .duckdb_helpers import duckdb_available, select_columns_from_parquet
-from .foundation_helpers import load_reference_json
+from .foundation_helpers import load_global_countries_frame, load_reference_json
 from .paths import GEOMETRY_DIR
 
 
@@ -53,7 +53,7 @@ class NameStandardizer:
         # Alias mappings from conversions.json
         self._aliases: Dict[str, str] = {}  # alias lowercase -> canonical
         # Reverse index over every name universe we know: common names from
-        # iso_codes.json and formal names from global.csv both point at the
+        # iso_codes.json and formal names from Admin0 Full both point at the
         # ISO3. Without this, a country whose geometry name is formal ("the
         # Federal Republic of Germany") cannot be found by its common name.
         self._name_to_code: Dict[str, str] = {}  # normalized name -> ISO3
@@ -114,9 +114,8 @@ class NameStandardizer:
             self._add_common_aliases()
 
         # Load current runtime country geometry inventory.
-        countries_path = self.geom_dir / "global.csv"
-        if countries_path.exists():
-            df = pd.read_csv(countries_path)
+        df = load_global_countries_frame()
+        if df is not None:
             for _, row in df.iterrows():
                 name = row.get('name')
                 code = row.get('loc_id') or row.get('code')

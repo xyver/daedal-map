@@ -2285,9 +2285,9 @@ async def debug_geometry(req: Request):
         "geometry_dir_exists": GEOMETRY_DIR.exists(),
     }
 
-    global_csv = GEOMETRY_DIR / "global.csv"
-    result["global_csv_path"] = str(global_csv)
-    result["global_csv_exists"] = global_csv.exists()
+    admin0_full = GEOMETRY_DIR / "admin0" / "full.parquet"
+    result["admin0_full_path"] = str(admin0_full)
+    result["admin0_full_exists"] = admin0_full.exists()
 
     try:
         geom_path = get_geometry_path()
@@ -2307,16 +2307,15 @@ async def debug_geometry(req: Request):
     except Exception as e:
         result["admin0_display_error"] = str(e)
 
-    # Reading the exact bank materializes a 400 MB+ CSV for the life of the
+    # Reading the Full bank materializes its polygons for the life of the
     # process. Report whatever is already cached, and load it only when the
-    # caller explicitly asks, so opening this page cannot push Railway into
-    # an out-of-memory restart.
+    # caller explicitly asks so this diagnostic does not warm it accidentally.
     result["exact_global_loaded"] = foundation_helpers._GLOBAL_COUNTRIES_CACHE is not None
     load_exact = str(req.query_params.get("load_exact", "") or "").strip().lower() in {"1", "true", "yes"}
     if not load_exact:
         result["exact_global_note"] = (
-            "Exact global.csv not loaded by this request. Append ?load_exact=1 to force it; "
-            "it costs a 400 MB+ read that stays resident."
+            "Admin0 Full not loaded by this request. Append ?load_exact=1 to force it; "
+            "the decoded geometry stays resident."
         )
         return result
 

@@ -373,7 +373,7 @@ def _build_root_index(data_root: Path, scopes: dict):
 
     # Check for geometry files
     geometry_dir = data_root / "geometry"
-    has_global_csv = (geometry_dir / "global.csv").exists() if geometry_dir.exists() else False
+    has_admin0_full = (geometry_dir / "admin0" / "full.parquet").exists() if geometry_dir.exists() else False
     has_entities = (geometry_dir / "global_entities.parquet").exists() if geometry_dir.exists() else False
     gadm_count = len(list(geometry_dir.glob("*.parquet"))) - (1 if has_entities else 0) if geometry_dir.exists() else 0
 
@@ -389,7 +389,7 @@ def _build_root_index(data_root: Path, scopes: dict):
         root_index["_global"] = {
             "_description": "Datasets available at country level (admin_0) for all countries",
             "path": "global",
-            "geometry": "geometry/global.csv" if has_global_csv else None,
+            "geometry": "geometry/admin0/full.parquet" if has_admin0_full else None,
             "global_entities": "geometry/global_entities.parquet" if has_entities else None,
             "datasets": sorted([
                 m.get("source_id") for m, _ in scopes["global"] if m.get("source_id")
@@ -421,7 +421,7 @@ def _build_root_index(data_root: Path, scopes: dict):
     root_index["_default"] = {
         "_description": "Default for countries without dedicated folders",
         "has_folder": False,
-        "geometry_outline": "geometry/global.csv" if has_global_csv else None,
+        "geometry_outline": "geometry/admin0/full.parquet" if has_admin0_full else None,
         "geometry_fallback": "geometry/{ISO3}.parquet" if gadm_count > 0 else None,
         "admin_levels": [0],
         "datasets": []

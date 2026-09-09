@@ -49,11 +49,6 @@ class FoundationGeometryCloudTests(unittest.TestCase):
         }])
         parquet = io.BytesIO()
         supplemental.to_parquet(parquet, index=False)
-        global_csv = (
-            b"loc_id,name,geometry,bbox_min_lon,bbox_min_lat,bbox_max_lon,bbox_max_lat\n"
-            b"USA,United States,,,,,\n"
-            b"MNP,Northern Mariana Islands (shallow),,,,,\n"
-        )
         display = pd.DataFrame([
             {
                 "loc_id": "USA",
@@ -78,12 +73,8 @@ class FoundationGeometryCloudTests(unittest.TestCase):
         display.to_parquet(display_parquet, index=False)
 
         def artifact_bytes(path: str, **_kwargs):
-            if path == "geometry/display/admin_0.parquet":
+            if path == "geometry/admin0/display.parquet":
                 return display_parquet.getvalue()
-            if path == "geometry/global.csv":
-                return global_csv
-            if path == "geometry/supplemental/admin0_territories.parquet":
-                return parquet.getvalue()
             raise AssertionError(path)
 
         with tempfile.TemporaryDirectory() as temp_name, mock.patch.object(
@@ -113,13 +104,9 @@ class FoundationGeometryCloudTests(unittest.TestCase):
     def test_local_display_frame_prefers_display_bootstrap(self) -> None:
         with tempfile.TemporaryDirectory() as temp_name:
             root = Path(temp_name)
-            (root / "display").mkdir()
+            (root / "admin0").mkdir()
             pd.DataFrame([{"loc_id": "DSP", "name": "Display"}]).to_parquet(
-                root / "display" / "admin_0.parquet",
-                index=False,
-            )
-            pd.DataFrame([{"loc_id": "EXACT", "name": "Exact"}]).to_csv(
-                root / "global.csv",
+                root / "admin0" / "display.parquet",
                 index=False,
             )
             with mock.patch.object(
@@ -135,9 +122,9 @@ class FoundationGeometryCloudTests(unittest.TestCase):
     def test_missing_display_frame_does_not_fall_back_to_exact_geometry(self) -> None:
         with tempfile.TemporaryDirectory() as temp_name:
             root = Path(temp_name)
-            pd.DataFrame([{"loc_id": "EXACT", "name": "Exact"}]).to_csv(
-                root / "global.csv",
-                index=False,
+            (root / "admin0").mkdir()
+            pd.DataFrame([{"loc_id": "EXACT", "name": "Exact"}]).to_parquet(
+                root / "admin0" / "full.parquet", index=False,
             )
             with mock.patch.object(
                 foundation_helpers, "GEOMETRY_DIR", root
@@ -154,14 +141,13 @@ class FoundationGeometryCloudTests(unittest.TestCase):
     def test_exact_global_frame_does_not_use_display_bootstrap(self) -> None:
         with tempfile.TemporaryDirectory() as temp_name:
             root = Path(temp_name)
-            (root / "display").mkdir()
+            (root / "admin0").mkdir()
             pd.DataFrame([{"loc_id": "DSP", "name": "Display"}]).to_parquet(
-                root / "display" / "admin_0.parquet",
+                root / "admin0" / "display.parquet",
                 index=False,
             )
-            pd.DataFrame([{"loc_id": "EXACT", "name": "Exact"}]).to_csv(
-                root / "global.csv",
-                index=False,
+            pd.DataFrame([{"loc_id": "EXACT", "name": "Exact"}]).to_parquet(
+                root / "admin0" / "full.parquet", index=False,
             )
             with mock.patch.object(
                 foundation_helpers, "GEOMETRY_DIR", root
@@ -172,6 +158,25 @@ class FoundationGeometryCloudTests(unittest.TestCase):
                 frame = foundation_helpers.load_global_countries_frame()
 
         self.assertEqual(["EXACT"], frame["loc_id"].tolist())
+
+    def test_exact_global_frame_prefers_admin0_full_parquet(self) -> None:
+        from shapely.geometry import Point
+
+        with tempfile.TemporaryDirectory() as temp_name:
+            root = Path(temp_name)
+            (root / "admin0").mkdir()
+            pd.DataFrame([{
+                "candidate_id": "FULL~primary",
+                "loc_id": "FULL",
+                "name": "Full",
+                "source_kind": "global_full",
+                "geometry_wkb": Point(0, 0).buffer(1).wkb,
+            }]).to_parquet(root / "admin0" / "full.parquet", index=False)
+            with mock.patch.object(foundation_helpers, "GEOMETRY_DIR", root):
+                frame = foundation_helpers.load_global_countries_frame()
+
+        self.assertEqual(["FULL"], frame["loc_id"].tolist())
+        self.assertIn("geometry", frame.columns)
 
 
 if __name__ == "__main__":

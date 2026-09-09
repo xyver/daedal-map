@@ -609,7 +609,7 @@ def execute_order(order: dict) -> dict:
                 filter_regions=filter_regions,
             ),
             # This frame is serialized into response GeoJSON. Keep exact
-            # global.csv geometry confined to containment/query helpers.
+            # Admin0 Full geometry confined to containment/query helpers.
             load_global_countries_func=load_global_country_display_frame,
             load_subcounty_geometry_func=load_subcounty_geometry,
             load_geometry_rows_by_loc_ids_func=load_geometry_rows_by_loc_ids,

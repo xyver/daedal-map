@@ -1,7 +1,7 @@
-"""The app and site Admin0 read paths use the Display bank, not global.csv.
+"""The app and site Admin0 read paths use Display, not Admin0 Full.
 
-Exact Admin0 geometry is a 400 MB+ CSV that stays resident for the life of the
-process once any caller touches it. Point containment needs that precision;
+Full Admin0 geometry stays resident once a caller materializes it. Point
+containment needs that precision;
 viewport shortlists, bounding boxes, breadcrumb names, and metadata rows do not,
 and every one of them used to pull the exact bank into ordinary map and site
 requests. These tests pin the split so it does not drift back.
@@ -19,7 +19,7 @@ from mapmover import foundation_helpers, geometry_handlers, preprocessor_geo
 from mapmover.runtime import loc_id_resolution
 
 
-EXACT_MUST_NOT_LOAD = AssertionError("this path must not read exact global.csv")
+EXACT_MUST_NOT_LOAD = AssertionError("this path must not read Admin0 Full")
 
 
 def _display_frame() -> pd.DataFrame:
@@ -103,8 +103,7 @@ class Admin0DisplayReadPathTests(unittest.TestCase):
                 logger=_SilentLogger(),
             )
 
-        # Hong Kong is one of the territories the exact bank merges at runtime
-        # with a null bbox, which dropped it from every viewport.
+        # Hong Kong must remain independently addressable in the Display product.
         self.assertEqual(["HKG"], visible)
 
     def test_country_name_resolution_reads_display_bank(self) -> None:
@@ -142,10 +141,9 @@ class Admin0DisplayReadPathTests(unittest.TestCase):
 class Admin0CountryUniverseTests(unittest.TestCase):
     """The exact bank recognizes the universe the Geometry Catalog overlay shows.
 
-    The overlay takes shapes from geometry/display/admin_0.parquet and facts
+    The overlay takes shapes from geometry/admin0/display.parquet and facts
     from geometry/geometry_catalog.json. A territory published into that
-    Display bank should be admitted by the exact bank's supplemental merge
-    without a second edit to the coverage reference.
+    Display bank should be admitted without a second edit to the coverage reference.
     """
 
     def test_display_universe_extends_the_reference_codes(self) -> None:

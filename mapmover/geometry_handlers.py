@@ -3,8 +3,8 @@ Geometry endpoint handlers.
 Handles loading geometry files and country hierarchy for drill-down navigation.
 
 Data sources (resolved via paths.py DATA_ROOT):
-  geometry/display/admin_0.parquet - bounded Admin0 map/display geometry
-  geometry/global.csv              - exact Admin0 query/compatibility fallback
+  geometry/admin0/display.parquet  - bounded Admin0 map/display geometry
+  geometry/admin0/full.parquet     - full-detail Admin0 product
   geometry/{ISO3}.parquet          - global-fallback Admin0-2 country shards
 
 Schema (13 columns):
@@ -1395,7 +1395,7 @@ def _find_containing_row(df, lon: float, lat: float):
 def _find_containing_country_with_fallback(country_df, lon: float, lat: float):
     """Resolve a containing country, falling back to the country bank's admin_0 row.
 
-    `global.csv` is the fast shared country layer, but it may occasionally miss
+    The shared Admin0 predicate layout is the fast country layer, but it may occasionally miss
     a coastal/island point if its simplified ADM0 outline drifted slightly from
     the per-country geometry bank. In that case, use the global bbox shortlist
     and check the country parquet's admin_0 geometry before declaring failure.
@@ -2297,7 +2297,7 @@ def get_countries_geometry(debug: bool = False):
     """
     Get bounded country geometries for initial map display.
 
-    This endpoint is a visual payload. Exact `geometry/global.csv` polygons are
+    This endpoint is a visual payload. Full `geometry/admin0/full.parquet` polygons are
     reserved for containment and compatibility query paths and must not leak
     into the browser bootstrap.
     Returns a GeoJSON FeatureCollection with polygon countries only.
