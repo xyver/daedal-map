@@ -8,19 +8,26 @@ from unittest import mock
 
 from tool_access_shared import (
     paid_bulk_tool_ids,
+    resize_charge_quote,
     tool_account_item_limit,
+    tool_charge_quote,
+    tool_charge_units,
     tool_effective_item_limit,
     tool_meter,
     tool_payment_required_payload,
     tool_pricing_version,
     tool_quote,
 )
+from access_policy_shared import clear_access_policy_cache
 
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
 class ToolAccessContractTests(unittest.TestCase):
+    def tearDown(self) -> None:
+        clear_access_policy_cache()
+
     def test_registry_source_has_no_duplicate_literal_keys(self) -> None:
         tree = ast.parse((ROOT / "tool_access_shared.py").read_text(encoding="utf-8"))
         duplicates: list[str] = []
@@ -63,6 +70,33 @@ class ToolAccessContractTests(unittest.TestCase):
         self.assertEqual(payload["quote"]["capability_id"], "point_lookup")
         self.assertEqual(payload["quote"]["amount_usdc_base_units"], 10_200)
         self.assertEqual(payload["limits"], {"free_batch_limit": 100, "paid_batch_limit": 10_000})
+
+    def test_conversion_job_uses_one_authored_meter_and_quote(self) -> None:
+        units = tool_charge_units("create_conversion_job", 3144, minimum=True)
+        quote = tool_charge_quote("create_conversion_job", units)
+        self.assertEqual(units, 32)
+        self.assertEqual(quote["amount_usdc_base_units"], 1_610_000)
+        self.assertEqual(quote["pricing_source"], "registry")
+
+    def test_dashboard_price_override_is_the_quote_authority(self) -> None:
+        policy = (
+            '{"schema_version":"1.0.0","policy_revision":"price-test-1",'
+            '"mode":"enforce","pricing":{"tools":{"create_conversion_job":'
+            '{"base_micro_usd":20000,"per_unit_micro_usd":60000}}}}'
+        )
+        with mock.patch.dict(os.environ, {"DAEDALMAP_ACCESS_POLICY_JSON": policy}, clear=False):
+            clear_access_policy_cache()
+            quote = tool_charge_quote("create_conversion_job", 32)
+        self.assertEqual(quote["amount_usdc_base_units"], 1_940_000)
+        self.assertEqual(quote["pricing_source"], "operator_policy")
+        self.assertEqual(quote["pricing_version"], "operator-policy:price-test-1")
+
+    def test_actual_charge_resizes_the_estimate_without_repricing_it(self) -> None:
+        estimate = tool_charge_quote("create_conversion_job", 32)
+        actual = resize_charge_quote(estimate, 30)
+        self.assertEqual(actual["pricing_version"], estimate["pricing_version"])
+        self.assertEqual(actual["per_unit_micro_usd"], 50_000)
+        self.assertEqual(actual["amount_usdc_base_units"], 1_510_000)
 
 
 class AccountLaneTests(unittest.TestCase):

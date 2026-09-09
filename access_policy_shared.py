@@ -56,6 +56,7 @@ DEFAULT_POLICY: dict[str, Any] = {
     "audience": AUDIENCE_PUBLIC,
     "packs": {},
     "tools": {},
+    "pricing": {"tools": {}},
     "rate_limits": {"surfaces": {}, "tools": {}},
 }
 
@@ -110,6 +111,22 @@ def _validate_policy(raw: Any) -> dict[str, Any]:
                 raise AccessPolicyError(
                     f"access policy {collection}.{resource_id}.audience must be one of {sorted(VALID_AUDIENCES)}"
                 )
+    pricing = policy.get("pricing") or {}
+    if not isinstance(pricing, dict):
+        raise AccessPolicyError("access policy pricing must be an object")
+    price_tools = pricing.get("tools") or {}
+    if not isinstance(price_tools, dict):
+        raise AccessPolicyError("access policy pricing.tools must be an object")
+    for tool_name, entry in price_tools.items():
+        if not str(tool_name or "").strip() or not isinstance(entry, dict):
+            raise AccessPolicyError("access policy pricing.tools entries require a tool name and object value")
+        for field in ("base_micro_usd", "per_unit_micro_usd"):
+            value = entry.get(field)
+            if value is not None and (isinstance(value, bool) or not isinstance(value, int) or value < 0):
+                raise AccessPolicyError(f"access policy pricing.tools.{tool_name}.{field} must be a non-negative integer")
+        version = entry.get("pricing_version")
+        if version is not None and (not isinstance(version, str) or not version.strip() or len(version) > 128):
+            raise AccessPolicyError(f"access policy pricing.tools.{tool_name}.pricing_version must be 1-128 characters")
     return policy
 
 

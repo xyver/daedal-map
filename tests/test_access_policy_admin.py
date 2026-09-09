@@ -27,6 +27,10 @@ class AccessPolicyAdminTests(unittest.TestCase):
             "audience": "public",
             "packs": {},
             "tools": {"resolve_point:gbr": {"billing": "free"}},
+            "pricing": {"tools": {"create_conversion_job": {
+                "base_micro_usd": 10000,
+                "per_unit_micro_usd": 50000,
+            }}},
             "rate_limits": {"surfaces": {}, "tools": {}},
             "payment": {
                 "account_credit_enabled": True,
@@ -55,6 +59,10 @@ class AccessPolicyAdminTests(unittest.TestCase):
                 )
                 self.assertEqual(response.status_code, 200, response.text)
                 self.assertEqual(load_access_policy()["policy_revision"], "dashboard-test-1")
+                self.assertEqual(
+                    load_access_policy()["pricing"]["tools"]["create_conversion_job"]["per_unit_micro_usd"],
+                    50000,
+                )
                 status = client.get(
                     "/api/admin/access-policy",
                     headers={"x-internal-api-key": "control-test-token"},

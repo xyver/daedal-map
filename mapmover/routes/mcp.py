@@ -4173,7 +4173,7 @@ async def _execute_geometry_job_runtime_tool(request: Request, arguments: dict[s
                     )
                     result = denial or await run_mcp_blocking(
                         tool_name, geometry_tool_jobs.create_geometry_export,
-                        payload, inline_limit=inline_limit,
+                        payload, inline_limit=inline_limit, pricing_quote=estimate.get("quote"),
                     )
             else:
                 result = await run_mcp_blocking(
@@ -4208,7 +4208,7 @@ async def _execute_geometry_job_runtime_tool(request: Request, arguments: dict[s
                     )
                     result = denial or await run_mcp_blocking(
                         tool_name, geometry_tool_jobs.create_conversion_job,
-                        payload, inline_limit=inline_limit,
+                        payload, inline_limit=inline_limit, pricing_quote=estimate.get("quote"),
                     )
             else:
                 result = await run_mcp_blocking(

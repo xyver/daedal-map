@@ -21,6 +21,8 @@ import zipfile
 from copy import deepcopy
 from typing import Any
 
+from tool_access_shared import resize_charge_quote, tool_charge_quote, tool_charge_units
+
 from ..geometry_handlers import GEOMETRY_INDEX_COLUMNS, get_geometry_index, load_country_parquet
 from .admin_hierarchy import infer_admin_level_from_loc_id
 from .admin_spine_query import query_descendant_scope
@@ -466,7 +468,7 @@ def estimate_geometry_package(
     within_limit = execution_limit is None or len(loc_ids) <= execution_limit
     delivery_mode = "inline" if within_limit else "not_available_in_v0"
     charge_units = _geometry_charge_units(available_count if include_polygon else len(loc_ids), include_polygon=include_polygon, minimum=True)
-    quote = _charge_quote("create_geometry_export", charge_units)
+    quote = tool_charge_quote("create_geometry_export", charge_units)
     create_arguments = {
         "loc_ids": loc_ids,
         "format": output_format,
@@ -508,29 +510,13 @@ def estimate_geometry_package(
     )
 
 
-def _charge_quote(tool_name: str, charge_units: int) -> dict[str, Any]:
-    """Attach a price to the charge-unit meter this module already computes.
-
-    The meter predates the price: charge_units has been reported since
-    geometry-tools-v0 with no rate behind it, so the heaviest tools were served
-    free. Rates live in tool_access_shared.TOOL_ACCESS_REGISTRY and are
-    environment-overridable, so this stays a lever.
-    """
-    from tool_access_shared import tool_quote
-
-    quote = tool_quote(tool_name, int(charge_units), free_limit=0)
-    return {**quote, "charge_units": int(charge_units)}
-
-
 def _geometry_charge_units(item_count: int, *, include_polygon: bool, minimum: bool = False) -> int:
-    divisor = 10 if include_polygon else 100
-    units = math.ceil(max(0, int(item_count)) / divisor)
-    return max(1, units) if minimum and item_count else units
+    field = "polygon_items_per_charge_unit" if include_polygon else "metadata_items_per_charge_unit"
+    return tool_charge_units("create_geometry_export", item_count, divisor_field=field, minimum=minimum)
 
 
 def _conversion_charge_units(item_count: int, *, minimum: bool = False) -> int:
-    units = math.ceil(max(0, int(item_count)) / 100)
-    return max(1, units) if minimum and item_count else units
+    return tool_charge_units("create_conversion_job", item_count, minimum=minimum)
 
 
 def _quote_id(prefix: str, payload: dict[str, Any], quote: dict[str, Any]) -> str:
@@ -597,7 +583,12 @@ def _new_job(
     return _clean_json(job)
 
 
-def create_geometry_export(payload: dict[str, Any], *, inline_limit: int | None = GEOMETRY_EXPORT_INLINE_LIMIT) -> dict[str, Any]:
+def create_geometry_export(
+    payload: dict[str, Any],
+    *,
+    inline_limit: int | None = GEOMETRY_EXPORT_INLINE_LIMIT,
+    pricing_quote: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     inline_limit = max(1, int(inline_limit)) if inline_limit is not None else None
     output_format = str(payload.get("format") or "geojson_gzip").strip().lower()
     if output_format not in GEOMETRY_EXPORT_FORMATS:
@@ -622,7 +613,11 @@ def create_geometry_export(payload: dict[str, Any], *, inline_limit: int | None 
         "successful_items": successful_items,
         "unresolved_items": max(0, len(loc_ids) - successful_items),
         "charge_units": charge_units,
-        "quote": _charge_quote("create_geometry_export", charge_units),
+        "quote": (
+            resize_charge_quote(pricing_quote, charge_units)
+            if pricing_quote
+            else tool_charge_quote("create_geometry_export", charge_units)
+        ),
     }
     return _new_job(
         "geometry_export",
@@ -861,7 +856,7 @@ def estimate_conversion_job(
     execution_limit = max(1, int(execution_limit)) if execution_limit is not None else None
     within_limit = bool(items) and (execution_limit is None or row_count <= execution_limit)
     charge_units = _conversion_charge_units(row_count, minimum=True)
-    quote = _charge_quote("create_conversion_job", charge_units)
+    quote = tool_charge_quote("create_conversion_job", charge_units)
     quote_id = _quote_id("convquote", payload, quote)
     return _clean_json(
         {
@@ -901,7 +896,12 @@ def estimate_conversion_job(
     )
 
 
-def create_conversion_job(payload: dict[str, Any], *, inline_limit: int | None = CONVERSION_INLINE_LIMIT) -> dict[str, Any]:
+def create_conversion_job(
+    payload: dict[str, Any],
+    *,
+    inline_limit: int | None = CONVERSION_INLINE_LIMIT,
+    pricing_quote: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     inline_limit = max(1, int(inline_limit)) if inline_limit is not None else None
     contract_error = _conversion_contract_error(payload, allow_row_count=False)
     if contract_error:
@@ -966,7 +966,11 @@ def create_conversion_job(payload: dict[str, Any], *, inline_limit: int | None =
         "successful_distinct_items": successful_distinct,
         "duplicate_items_collapsed": max(0, len(items) - len(resolution_cache)),
         "charge_units": charge_units,
-        "quote": _charge_quote("create_conversion_job", charge_units),
+        "quote": (
+            resize_charge_quote(pricing_quote, charge_units)
+            if pricing_quote
+            else tool_charge_quote("create_conversion_job", charge_units)
+        ),
     }
     return _new_job(
         "conversion_job",

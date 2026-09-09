@@ -24,6 +24,8 @@ Lanes are ``free``, ``account``, and ``paid``, matching
 
 To change a limit: edit ``free_item_limit`` / ``account_item_limit`` /
 ``paid_item_limit`` here.
+To change a price: edit the authored ``price`` here, set the canonical micro-USD
+environment override, or activate a revisioned dashboard pricing override.
 To swap a tool between free and paid: change ``pricing`` here, and nothing else.
 
 Env vars still override at runtime for incident response and load testing:
@@ -80,12 +82,12 @@ TOOL_ACCESS_REGISTRY: dict[str, dict] = {
         # Commodity lane: coordinate to admin chain has real free substitutes
         # (Geocodio at $1/1k, a no-API-key Census MCP for the US), so it is
         # priced at the bottom of the geocoding band and earns on volume.
-        "price": {"base_usd": 0.01, "per_item_usd": 0.0002},
+        "price": {"base_usd": 0.01, "per_unit_usd": 0.0002},
         "pricing_version": "geography-tools-2026-08-16.1",
         "meter": {"unit": "resolved_point", "items_per_charge_unit": 1},
         "legacy_price_env": {
             "base_usd": ("POINT_LOOKUP_PAID_BASE_USD",),
-            "per_item_usd": ("POINT_LOOKUP_PAID_PER_POINT_USD",),
+            "per_unit_usd": ("POINT_LOOKUP_PAID_PER_POINT_USD",),
         },
     },
     "check_geometry": {
@@ -136,7 +138,7 @@ TOOL_ACCESS_REGISTRY: dict[str, dict] = {
         "legacy_limit_env": ("REFERENCE_RESOLVE_BATCH_LIMIT",),
         # Enrichment lane: external code to canonical loc_id. Weak substitutes,
         # so priced above the commodity point lane.
-        "price": {"base_usd": 0.01, "per_item_usd": 0.001},
+        "price": {"base_usd": 0.01, "per_unit_usd": 0.001},
         "pricing_version": "geography-tools-2026-08-16.1",
         "meter": {"unit": "resolved_reference", "items_per_charge_unit": 1},
     },
@@ -155,7 +157,7 @@ TOOL_ACCESS_REGISTRY: dict[str, dict] = {
         # Highest-value lane: family and vintage translation through loc_id has
         # no global substitute in the competitive set, so it carries the top
         # per-item price rather than riding the commodity rate.
-        "price": {"base_usd": 0.01, "per_item_usd": 0.002},
+        "price": {"base_usd": 0.01, "per_unit_usd": 0.002},
         "pricing_version": "geography-tools-2026-08-16.1",
         "meter": {"unit": "converted_reference", "items_per_charge_unit": 1},
         "pricing": PRICING_PAID_BULK,
@@ -195,7 +197,7 @@ TOOL_ACCESS_REGISTRY: dict[str, dict] = {
     # (one unit per 10 polygons, or per 100 metadata rows). These rates attach a
     # price to that existing meter. Estimates stay free; only creation bills.
     "create_geometry_export": {
-        "price": {"base_usd": 0.01, "per_item_usd": 0.004},
+        "price": {"base_usd": 0.01, "per_unit_usd": 0.004},
         "charge_unit": "charge_units",
         "pricing_version": "geography-tools-2026-08-16.1",
         "meter": {
@@ -216,9 +218,12 @@ TOOL_ACCESS_REGISTRY: dict[str, dict] = {
         "notes": "Quotes must stay free.",
     },
     "create_conversion_job": {
-        "price": {"base_usd": 0.01, "per_item_usd": 0.002},
+        # Five cents per 100 successfully resolved distinct references. This is
+        # the website's default identifier -> loc_id conversion lane: below the
+        # $1/1k geocoder anchor, but no longer a near-free unit mismatch.
+        "price": {"base_usd": 0.01, "per_unit_usd": 0.05},
         "charge_unit": "charge_units",
-        "pricing_version": "geography-tools-2026-08-16.1",
+        "pricing_version": "geography-tools-2026-09-09.1",
         "meter": {"unit": "conversion_charge_unit", "items_per_charge_unit": 100},
         "family": FAMILY_GEOGRAPHY,
         "capability_id": "conversion_job",
@@ -357,7 +362,11 @@ def _price_env_names(tool_name: str, field: str) -> tuple[str, ...]:
     generic = f"MCP_TOOL_PRICE_{field.upper()}_{suffix}"
     legacy = tool_profile(tool_name).get("legacy_price_env") or {}
     legacy_names = legacy.get(field) if isinstance(legacy, dict) else ()
-    return (generic, *(str(name) for name in legacy_names or ()))
+    compatibility = (
+        (f"MCP_TOOL_PRICE_PER_ITEM_USD_{suffix}",)
+        if field == "per_unit_usd" else ()
+    )
+    return (generic, *compatibility, *(str(name) for name in legacy_names or ()))
 
 
 def tool_price(tool_name: str) -> dict:
@@ -370,8 +379,9 @@ def tool_price(tool_name: str) -> dict:
     authored = tool_profile(tool_name).get("price")
     authored = authored if isinstance(authored, dict) else {}
     out: dict[str, float] = {}
-    for field in ("base_usd", "per_item_usd"):
-        value = float(authored.get(field) or 0.0)
+    for field in ("base_usd", "per_unit_usd"):
+        legacy_field = "per_item_usd" if field == "per_unit_usd" else field
+        value = float(authored.get(field, authored.get(legacy_field)) or 0.0)
         for env_name in _price_env_names(tool_name, field):
             raw = str(os.getenv(env_name, "") or "").strip()
             if raw:
@@ -381,7 +391,25 @@ def tool_price(tool_name: str) -> dict:
                     continue
                 break
         out[field] = value
+    # Compatibility alias for older discovery consumers. New code and copy
+    # should say unit because a unit may represent 1, 10, or 100 items.
+    out["per_item_usd"] = out["per_unit_usd"]
     return out
+
+
+def _operator_price_override(tool_name: str) -> tuple[dict, str]:
+    """Return the active dashboard override and its revision, if present."""
+    try:
+        from access_policy_shared import load_access_policy
+
+        policy = load_access_policy()
+    except Exception:
+        return {}, ""
+    pricing = policy.get("pricing") if isinstance(policy, dict) else {}
+    tools = pricing.get("tools") if isinstance(pricing, dict) else {}
+    entry = tools.get(str(tool_name or "").strip().lower()) if isinstance(tools, dict) else None
+    revision = str(policy.get("policy_revision") or "").strip() if isinstance(policy, dict) else ""
+    return (dict(entry), revision) if isinstance(entry, dict) else ({}, revision)
 
 
 def _usd_to_micro_usd(value) -> int:
@@ -414,21 +442,82 @@ def tool_price_micro_usd(tool_name: str) -> dict:
     authored = tool_price(tool_name)
     base = _env_int_optional(f"MCP_TOOL_PRICE_BASE_MICRO_USD_{suffix}")
     per_unit = _env_int_optional(f"MCP_TOOL_PRICE_PER_UNIT_MICRO_USD_{suffix}")
-    return {
+    resolved = {
         "base_micro_usd": _usd_to_micro_usd(authored.get("base_usd")) if base is None else base,
-        "per_unit_micro_usd": _usd_to_micro_usd(authored.get("per_item_usd")) if per_unit is None else per_unit,
+        "per_unit_micro_usd": _usd_to_micro_usd(authored.get("per_unit_usd")) if per_unit is None else per_unit,
     }
+    override, _revision = _operator_price_override(tool_name)
+    for field in ("base_micro_usd", "per_unit_micro_usd"):
+        value = override.get(field)
+        if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+            resolved[field] = value
+    resolved["source"] = "operator_policy" if override else ("environment" if base is not None or per_unit is not None else "registry")
+    return resolved
 
 
 def tool_pricing_version(tool_name: str) -> str:
     suffix = "".join(ch if ch.isalnum() else "_" for ch in str(tool_name or "").upper()).strip("_")
     override = str(os.getenv(f"MCP_TOOL_PRICING_VERSION_{suffix}", "") or "").strip()
-    return override or str(tool_profile(tool_name).get("pricing_version") or "unpriced-v0")
+    if override:
+        return override
+    price_override, revision = _operator_price_override(tool_name)
+    if price_override:
+        authored = str(price_override.get("pricing_version") or "").strip()
+        return authored or f"operator-policy:{revision or 'unknown'}"
+    return str(tool_profile(tool_name).get("pricing_version") or "unpriced-v0")
 
 
 def tool_meter(tool_name: str) -> dict:
     value = tool_profile(tool_name).get("meter")
     return dict(value) if isinstance(value, dict) else {"unit": "item", "items_per_charge_unit": 1}
+
+
+def tool_charge_units(
+    tool_name: str,
+    item_count: int,
+    *,
+    divisor_field: str = "items_per_charge_unit",
+    minimum: bool = False,
+) -> int:
+    """Convert physical items into the tool's authored billable units."""
+    meter = tool_meter(tool_name)
+    divisor = max(1, int(meter.get(divisor_field) or 1))
+    count = max(0, int(item_count or 0))
+    units = (count + divisor - 1) // divisor
+    return max(1, units) if minimum and count else units
+
+
+def tool_charge_quote(tool_name: str, charge_units: int) -> dict:
+    """Quote an already-metered job through the same tool pricing authority."""
+    units = max(0, int(charge_units or 0))
+    return {**tool_quote(tool_name, units, free_limit=0), "charge_units": units}
+
+
+def resize_charge_quote(quote: dict, charge_units: int) -> dict:
+    """Apply actual units to an immutable estimate-rate snapshot.
+
+    Execution may finish with fewer successful units than were reserved. Using
+    the estimate's rates and version prevents an operator price change during a
+    request from repricing or invalidating that in-flight job.
+    """
+    units = max(0, int(charge_units or 0))
+    fallback = tool_price_micro_usd(str(quote.get("tool_name") or ""))
+    base = max(0, int(quote.get("base_micro_usd", fallback["base_micro_usd"]) or 0))
+    per_unit = max(0, int(quote.get("per_unit_micro_usd", fallback["per_unit_micro_usd"]) or 0))
+    amount = base + units * per_unit if units else 0
+    resized = dict(quote)
+    resized.update({
+        "quantity": units,
+        "free_quantity": 0,
+        "billable_quantity": units,
+        "charge_units": units,
+        "base_micro_usd": base,
+        "per_unit_micro_usd": per_unit,
+        "amount_usdc_base_units": amount,
+        "estimated_price_usd": amount / 1_000_000,
+        "price_display": f"${amount / 1_000_000:.6f}".rstrip("0").rstrip("."),
+    })
+    return resized
 
 
 def tool_effective_item_limit(tool_name: str, *, lane: str = "free", default: int | None = None) -> int | None:
@@ -471,21 +560,29 @@ def tool_quote(tool_name: str, item_count: int, free_limit: int | None = None) -
     free = tool_free_item_limit(tool_name) if free_limit is None else free_limit
     free = int(free or 0)
     price = tool_price_micro_usd(tool_name)
+    meter = tool_meter(tool_name)
     billable = max(0, int(item_count) - free)
     amount_micro_usd = price["base_micro_usd"] + billable * price["per_unit_micro_usd"] if billable else 0
+    items_per_unit = meter.get("items_per_charge_unit")
+    per_item_usd = (
+        price["per_unit_micro_usd"] / max(1, int(items_per_unit)) / 1_000_000
+        if isinstance(items_per_unit, int) and not isinstance(items_per_unit, bool)
+        else None
+    )
     return {
         "capability_id": tool_capability_id(tool_name),
         "tool_name": str(tool_name or "").strip(),
         "pricing_version": tool_pricing_version(tool_name),
-        "meter": tool_meter(tool_name),
+        "meter": meter,
         "quantity": int(item_count),
         "free_quantity": free,
         "billable_quantity": billable,
         "base_micro_usd": price["base_micro_usd"],
         "per_unit_micro_usd": price["per_unit_micro_usd"],
+        "pricing_source": price["source"],
         "amount_usdc_base_units": amount_micro_usd,
         "base_usd": price["base_micro_usd"] / 1_000_000,
-        "per_item_usd": price["per_unit_micro_usd"] / 1_000_000,
+        "per_item_usd": per_item_usd,
         "per_unit_usd": price["per_unit_micro_usd"] / 1_000_000,
         "estimated_price_usd": amount_micro_usd / 1_000_000,
         "price_display": f"${amount_micro_usd / 1_000_000:.6f}".rstrip("0").rstrip("."),
