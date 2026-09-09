@@ -10,10 +10,13 @@ county-map-private/docs/future/API/tool_universe_contract.md:
 
 from __future__ import annotations
 
+import asyncio
+import json
 import unittest
 from unittest import mock
 
 from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
 
 from mapmover.routes.mcp import (
@@ -26,6 +29,8 @@ from mapmover.routes.mcp import (
     _provenance_summary,
     _access_lane,
     _commercial_denial_details,
+    _apply_mcp_payment_mode,
+    _execute_paid_tool,
     _required_mcp_permission,
     router as mcp_router,
 )
@@ -89,6 +94,38 @@ class McpAccountScopeTests(unittest.TestCase):
         self.assertEqual(detail["code"], "payment_choice_required")
         self.assertEqual(detail["payment_options"]["account"]["endpoint"], "/mcp/account")
         self.assertEqual(detail["payment_options"]["x402"]["endpoint"], "/mcp/x402")
+
+    def test_dataset_402_uses_the_same_route_choice(self):
+        request = self._request_for_mode("smart")
+        routed = _apply_mcp_payment_mode(request, {"challenge": {"amount": "quoted"}})
+        detail = _commercial_denial_details("challenge", routed)
+        self.assertEqual(detail["code"], "payment_choice_required")
+        self.assertEqual(detail["challenge"], {"amount": "quoted"})
+
+    def test_named_dataset_402_returns_payment_choices(self):
+        request = self._request_for_mode("smart")
+        challenge = {
+            "daedalmap_pricing": {"price_display": "$0.01"},
+            "challenge": {"amount": "10000"},
+        }
+        with mock.patch(
+            "mapmover.routes.mcp.execute_query_dataset_payload",
+            new=mock.AsyncMock(return_value=JSONResponse(challenge, status_code=402)),
+        ):
+            response = asyncio.run(
+                _execute_paid_tool(request, "get_earthquake_events", {}, "paid-1")
+            )
+        result = json.loads(response.body)["result"]
+        self.assertTrue(result["isError"])
+        self.assertEqual(result["structuredContent"]["error"]["code"], "payment_choice_required")
+        self.assertEqual(result["structuredContent"]["payment_options"]["account"]["endpoint"], "/mcp/account")
+        self.assertEqual(result["structuredContent"]["payment_options"]["x402"]["endpoint"], "/mcp/x402")
+
+    @staticmethod
+    def _request_for_mode(mode: str) -> Request:
+        request = Request({"type": "http", "method": "POST", "path": "/mcp", "headers": []})
+        request.state.mcp_access_mode = mode
+        return request
 
 
 class LocalRuntimeAccessTests(unittest.TestCase):

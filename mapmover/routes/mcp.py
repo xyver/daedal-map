@@ -141,6 +141,20 @@ def _commercial_denial_details(decision: str, payload: dict[str, Any]) -> dict[s
     }
 
 
+def _apply_mcp_payment_mode(request: Request, payload: dict[str, Any]) -> dict[str, Any]:
+    """Apply smart/account intent to any paid MCP path, including datasets."""
+    mode = str(getattr(request.state, "mcp_access_mode", "smart") or "smart")
+    routed = dict(payload or {})
+    if mode == "smart":
+        routed["payment_choice_required"] = True
+        routed["message"] = "Choose account credit or x402 for this paid MCP call."
+    elif mode == "account":
+        routed.pop("challenge", None)
+        routed["account_credit_required"] = True
+        routed["message"] = "This account cannot cover the quoted MCP call. Add credit or use /mcp/x402 explicitly."
+    return routed
+
+
 def _guard_mcp_execution(tool_name: str):
     """Convert shared worker capacity/timeouts into stable MCP tool errors."""
 
@@ -563,15 +577,7 @@ async def _commercial_access_decision(
     if status_name not in {"allow", "challenge"}:
         return "unavailable", payload or {}
     if status_name == "challenge":
-        mode = str(getattr(request.state, "mcp_access_mode", "smart") or "smart")
-        payload = dict(payload or {})
-        if mode == "smart":
-            payload["payment_choice_required"] = True
-            payload["message"] = "Choose account credit or x402 for this paid MCP call."
-        elif mode == "account":
-            payload.pop("challenge", None)
-            payload["account_credit_required"] = True
-            payload["message"] = "This account cannot cover the quoted MCP call. Add credit or use /mcp/x402 explicitly."
+        payload = _apply_mcp_payment_mode(request, payload or {})
     return status_name, payload or {}
 
 
@@ -1767,8 +1773,9 @@ def _read_resource(uri: str, pack_id: str | None = None) -> dict[str, Any] | Non
                 "get_fx_rates - daily FX rates from 1940 to present\n"
                 'Minimal call: {"filters": {"region_ids": ["JPN"], "time": {"start": "2024-01-01", "end": "2024-12-31", "granularity": "monthly"}}}\n\n'
                 "## Step 3: Understand the paid tools\n\n"
-                "get_earthquake_events and get_tsunami_events require x402 payment on Base mainnet USDC.\n"
-                "Call them without payment first - the server returns HTTP 402 with the exact price before any charge.\n"
+                "get_earthquake_events and get_tsunami_events are paid tools.\n"
+                "Use /mcp/account with an X-API-Key to spend account credit, or /mcp/x402 for direct x402 payment on Base.\n"
+                "If you call the smart /mcp endpoint without either credential, the tool returns the exact quote and both choices before any charge.\n"
                 "Small queries stay cheap; very broad scans cost more or need narrower filters.\n"
                 "Requests too broad for live API access return narrowing suggestions instead of a payment challenge.\n\n"
                 "## Canonical first, live second\n\n"
@@ -1780,7 +1787,7 @@ def _read_resource(uri: str, pack_id: str | None = None) -> dict[str, Any] | Non
                 "Call prompts/list to get complete example tool calls for every supported query shape.\n\n"
                 "## Reference\n\n"
                 f"Free packs: {', '.join(sorted(_free_pack_ids()))}\n"
-                f"Paid packs: {', '.join(sorted(_paid_pack_ids()))} (x402 Base mainnet USDC)\n"
+                f"Paid packs: {', '.join(sorted(_paid_pack_ids()))} (account credit or x402)\n"
                 f"Full docs: {site_url}/docs/for-agents\n"
                 f"Catalog endpoint: {app_url}/api/v1/catalog\n"
             ),
@@ -1796,10 +1803,10 @@ def _read_resource(uri: str, pack_id: str | None = None) -> dict[str, Any] | Non
                 "## Free: monthly USD/JPY rate for 2024\n\n"
                 "Tool: get_fx_rates\n"
                 '{"filters": {"region_ids": ["JPN"], "time": {"start": "2024-01-01", "end": "2024-12-31", "granularity": "monthly"}}, "metrics": ["local_per_usd"]}\n\n'
-                "## Paid: largest earthquake in Turkey in 2023 (x402 Base USDC)\n\n"
+                "## Paid: largest earthquake in Turkey in 2023 (account credit or x402)\n\n"
                 "Tool: get_earthquake_events\n"
                 '{"metrics": ["magnitude", "timestamp", "place", "depth_km"], "filters": {"time": {"start": "2023-01-01", "end": "2023-12-31"}, "region_ids": ["TUR"]}, "sort": [{"field": "magnitude", "direction": "desc"}], "limit": 1}\n\n'
-                "## Paid: count tsunamis above 5m wave height since 1950 (x402 Base USDC)\n\n"
+                "## Paid: count tsunamis above 5m wave height since 1950 (account credit or x402)\n\n"
                 "Tool: get_tsunami_events\n"
                 '{"metrics": ["event_count"], "filters": {"time": {"start": 2000, "end": 2024}, "region_ids": ["JPN", "IDN", "IHO1953-240001002"], "compare": [{"field": "max_water_height_m", "op": ">=", "value": 5}]}}\n\n'
                 "## Filter reference\n\n"
@@ -1832,7 +1839,7 @@ def _read_resource(uri: str, pack_id: str | None = None) -> dict[str, Any] | Non
                 "# Access Model\n\n"
                 "Live hosted pack access split:\n"
                 + "".join(
-                    f"- {pid}: {'free' if p['pricing'] == 'free' else 'paid via x402 on Base mainnet USDC'}\n"
+                    f"- {pid}: {'free' if p['pricing'] == 'free' else 'paid via account credit or x402'}\n"
                     for pid, p in profiles.items()
                 )
                 + "\nDiscovery endpoints are always free:\n"
@@ -1896,6 +1903,15 @@ async def _execute_paid_tool(request: Request, tool_name: str, arguments: dict[s
         # present the price to the user and handle the payment flow. Returning
         # the raw HTTP 402 causes MCP clients to see an opaque connection error
         # rather than actionable pricing information.
+        if isinstance(parsed_body, dict):
+            parsed_body = _apply_mcp_payment_mode(request, parsed_body)
+            denial = _commercial_denial_details("challenge", parsed_body)
+            if denial["code"] in {"payment_choice_required", "account_credit_required"}:
+                parsed_body["error"] = {"code": denial["code"], "message": denial["message"]}
+                if denial["payment_options"]:
+                    parsed_body["payment_options"] = denial["payment_options"]
+                if denial["challenge"]:
+                    parsed_body["challenge"] = denial["challenge"]
         return _jsonrpc_response(_tool_result(parsed_body, is_error=True), rpc_request_id)
 
     if response.status_code == 200:
