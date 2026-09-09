@@ -4061,6 +4061,16 @@ async def _authorize_geometry_job_execution(
             "expected_quote_id": expected_quote_id,
         }
 
+    from mapmover.credit_action_authorization import verified_credit_action
+
+    caller_identity = request_caller_identity(request, ip_hash=hash_ip_for_analytics(get_client_ip(request)))
+    credit_authorized = verified_credit_action(
+        request,
+        capability_id=tool_capability_id(tool_name),
+        quote_id=expected_quote_id,
+        request_id=str(payload.get("request_id") or ""),
+        user_id=caller_identity.auth_user_id,
+    )
     decision, verifier_payload = await _commercial_access_decision(
         request,
         tool_name=tool_name,
@@ -4069,6 +4079,7 @@ async def _authorize_geometry_job_execution(
         include_polygon=bool(payload.get("include_polygon")),
         pricing_quote=quote,
         request_id=str(payload.get("request_id") or ""),
+        credit_authorized=credit_authorized,
     )
     if decision != "allow":
         return None, _commercial_tool_denial(

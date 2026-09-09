@@ -383,7 +383,10 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=get_allowed_origins(),
     allow_methods=["GET", "POST", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type", "Accept", "Origin", "Referer", "X-Requested-With"],
+    allow_headers=[
+        "Authorization", "Content-Type", "Accept", "Origin", "Referer", "X-Requested-With",
+        "X-DaedalMap-Credit-Authorization",
+    ],
 )
 app.add_middleware(GZipMiddleware, minimum_size=1024)
 
