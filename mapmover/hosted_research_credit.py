@@ -18,7 +18,7 @@ RESEARCH_CREDIT_TIMEOUT_SECONDS = 10.0
 SUPPORTED_CALLER_KINDS = {"authenticated", "qa_suite", "qa_http_suite"}
 RESEARCH_NEGATIVE_FLOOR_MICRO_USD = -1_000_000
 RESEARCH_TOP_UP_CTA = "top_up"
-RESEARCH_TOP_UP_URL = "/settings/account"
+RESEARCH_TOP_UP_URL = "/account?tab=payments"
 
 
 def hosted_research_credit_enabled() -> bool:

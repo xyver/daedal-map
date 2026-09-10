@@ -43,6 +43,19 @@ import os
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
 
+MICRO_USD_PER_DISPLAY_CREDIT = 10_000
+CREDIT_PRICE_QUANTUM_MICRO_USD = 1_000
+
+
+def quantize_credit_price(amount_micro_usd: int) -> int:
+    """Round a positive price to 0.1 displayed credit using integer math."""
+    amount = max(0, int(amount_micro_usd or 0))
+    if amount == 0:
+        return 0
+    quantum = CREDIT_PRICE_QUANTUM_MICRO_USD
+    return max(quantum, ((amount + quantum // 2) // quantum) * quantum)
+
+
 # Only pricing values starting with "paid" are enforced as paid, matching the
 # pack registry convention. Default is free.
 PRICING_FREE = "free"
@@ -504,7 +517,7 @@ def resize_charge_quote(quote: dict, charge_units: int) -> dict:
     fallback = tool_price_micro_usd(str(quote.get("tool_name") or ""))
     base = max(0, int(quote.get("base_micro_usd", fallback["base_micro_usd"]) or 0))
     per_unit = max(0, int(quote.get("per_unit_micro_usd", fallback["per_unit_micro_usd"]) or 0))
-    amount = base + units * per_unit if units else 0
+    amount = quantize_credit_price(base + units * per_unit if units else 0)
     resized = dict(quote)
     resized.update({
         "quantity": units,
@@ -515,6 +528,7 @@ def resize_charge_quote(quote: dict, charge_units: int) -> dict:
         "per_unit_micro_usd": per_unit,
         "amount_usdc_base_units": amount,
         "estimated_price_usd": amount / 1_000_000,
+        "price_credits": amount / MICRO_USD_PER_DISPLAY_CREDIT,
         "price_display": f"${amount / 1_000_000:.6f}".rstrip("0").rstrip("."),
     })
     return resized
@@ -562,7 +576,9 @@ def tool_quote(tool_name: str, item_count: int, free_limit: int | None = None) -
     price = tool_price_micro_usd(tool_name)
     meter = tool_meter(tool_name)
     billable = max(0, int(item_count) - free)
-    amount_micro_usd = price["base_micro_usd"] + billable * price["per_unit_micro_usd"] if billable else 0
+    amount_micro_usd = quantize_credit_price(
+        price["base_micro_usd"] + billable * price["per_unit_micro_usd"] if billable else 0
+    )
     items_per_unit = meter.get("items_per_charge_unit")
     per_item_usd = (
         price["per_unit_micro_usd"] / max(1, int(items_per_unit)) / 1_000_000
@@ -572,7 +588,7 @@ def tool_quote(tool_name: str, item_count: int, free_limit: int | None = None) -
     return {
         "capability_id": tool_capability_id(tool_name),
         "tool_name": str(tool_name or "").strip(),
-        "pricing_version": tool_pricing_version(tool_name),
+        "pricing_version": f"{tool_pricing_version(tool_name)}+credit-q1000",
         "meter": meter,
         "quantity": int(item_count),
         "free_quantity": free,
@@ -585,6 +601,7 @@ def tool_quote(tool_name: str, item_count: int, free_limit: int | None = None) -
         "per_item_usd": per_item_usd,
         "per_unit_usd": price["per_unit_micro_usd"] / 1_000_000,
         "estimated_price_usd": amount_micro_usd / 1_000_000,
+        "price_credits": amount_micro_usd / MICRO_USD_PER_DISPLAY_CREDIT,
         "price_display": f"${amount_micro_usd / 1_000_000:.6f}".rstrip("0").rstrip("."),
         "item_limit": tool_paid_item_limit(tool_name),
     }

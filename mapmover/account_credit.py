@@ -15,7 +15,7 @@ from mapmover.hosted_research_credit import (
 MICRO_USD_PER_DOLLAR = 1_000_000
 RESEARCH_NEGATIVE_FLOOR_MICRO_USD = -1_000_000
 RESEARCH_TOP_UP_CTA = "top_up"
-RESEARCH_TOP_UP_URL = "/settings/account"
+RESEARCH_TOP_UP_URL = "/account?tab=payments"
 
 
 @dataclass

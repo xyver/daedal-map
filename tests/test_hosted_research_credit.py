@@ -47,7 +47,7 @@ class HostedResearchCreditTests(unittest.TestCase):
                     "error_code": "research_top_up_required",
                     "message": "Top up your account to continue using hosted Research.",
                     "cta": "top_up",
-                    "cta_url": "/settings/account",
+                    "cta_url": "/account?tab=payments",
                 },
             ),
         ):

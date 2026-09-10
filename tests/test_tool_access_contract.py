@@ -60,7 +60,8 @@ class ToolAccessContractTests(unittest.TestCase):
         }
         with mock.patch.dict(os.environ, env, clear=False):
             quote = tool_quote("create_conversion_job", 2, free_limit=0)
-            self.assertEqual(quote["amount_usdc_base_units"], 12987)
+            self.assertEqual(quote["amount_usdc_base_units"], 13000)
+            self.assertEqual(quote["price_credits"], 1.3)
             self.assertEqual(tool_effective_item_limit("create_conversion_job"), 4321)
 
     def test_shared_challenge_preserves_the_canonical_quote(self) -> None:
@@ -68,7 +69,7 @@ class ToolAccessContractTests(unittest.TestCase):
             "resolve_point", 101, free_limit=100, paid_limit=10_000, request_id="req-1"
         )
         self.assertEqual(payload["quote"]["capability_id"], "point_lookup")
-        self.assertEqual(payload["quote"]["amount_usdc_base_units"], 10_200)
+        self.assertEqual(payload["quote"]["amount_usdc_base_units"], 10_000)
         self.assertEqual(payload["limits"], {"free_batch_limit": 100, "paid_batch_limit": 10_000})
 
     def test_conversion_job_uses_one_authored_meter_and_quote(self) -> None:
@@ -89,7 +90,7 @@ class ToolAccessContractTests(unittest.TestCase):
             quote = tool_charge_quote("create_conversion_job", 32)
         self.assertEqual(quote["amount_usdc_base_units"], 1_940_000)
         self.assertEqual(quote["pricing_source"], "operator_policy")
-        self.assertEqual(quote["pricing_version"], "operator-policy:price-test-1")
+        self.assertEqual(quote["pricing_version"], "operator-policy:price-test-1+credit-q1000")
 
     def test_actual_charge_resizes_the_estimate_without_repricing_it(self) -> None:
         estimate = tool_charge_quote("create_conversion_job", 32)
