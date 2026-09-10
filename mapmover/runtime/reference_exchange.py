@@ -1680,15 +1680,17 @@ def resolve_references_batch(requests: list[dict[str, Any]]) -> list[dict[str, A
         groups.setdefault(key, []).append((index, request))
 
     if census_candidates:
-        from .reference_graph import identities
+        from .admin_spine_query import load_rows_by_loc_ids
 
         candidate_ids = list(dict.fromkeys(
             loc_id for _, _, _, loc_id, _ in census_candidates if loc_id
         ))
         matched_ids = {
-            str(row.get("loc_id") or "")
-            for row in identities(candidate_ids)
-            if isinstance(row, dict) and row.get("loc_id")
+            str(value)
+            for value in load_rows_by_loc_ids(
+                "USA", candidate_ids, columns=["admin_level"]
+            ).get("loc_id", [])
+            if value
         }
         for index, request, value, loc_id, level in census_candidates:
             if loc_id and loc_id in matched_ids:

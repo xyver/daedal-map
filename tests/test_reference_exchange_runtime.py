@@ -5,6 +5,7 @@ from unittest import mock
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+import pandas as pd
 
 from mapmover.routes.geometry import router as geometry_router
 from mapmover.runtime import reference_exchange
@@ -35,10 +36,17 @@ class ReferenceExchangeRuntimeTests(unittest.TestCase):
             {"loc_id": "USA-NC-199", "admin_level": 2},
         ]
 
-        with mock.patch("mapmover.runtime.reference_graph.identities", return_value=identities) as identity_mock:
+        with mock.patch(
+            "mapmover.runtime.admin_spine_query.load_rows_by_loc_ids",
+            return_value=pd.DataFrame(identities),
+        ) as identity_mock:
             results = resolve_references_batch(requests)
 
-        identity_mock.assert_called_once_with(["USA-NC-185", "USA-CT-110", "USA-NC-199"])
+        identity_mock.assert_called_once_with(
+            "USA",
+            ["USA-NC-185", "USA-CT-110", "USA-NC-199"],
+            columns=["admin_level"],
+        )
         self.assertEqual(results[0]["resolved_loc_id"], "USA-NC-185")
         self.assertEqual(results[2]["resolved_loc_id"], "USA-NC-199")
         self.assertFalse(results[1]["ok"])
