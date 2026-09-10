@@ -17,12 +17,54 @@ from mapmover.runtime.reference_exchange import (
     list_reference_systems,
     loc_id_references,
     resolve_reference,
+    resolve_references_batch,
 )
 from mapmover.runtime.reference_identification import identify_reference_system
 from mapmover.runtime.reference_graph import clear_reference_graph_cache
 
 
 class ReferenceExchangeRuntimeTests(unittest.TestCase):
+    def test_census_batch_matches_admin_spine_once_and_preserves_mismatches(self) -> None:
+        requests = [
+            {"from_system": "census_geoid", "value": "37185", "iso3": "USA", "target_admin_level": "admin_2"},
+            {"from_system": "census_geoid", "value": "09110", "iso3": "USA", "target_admin_level": "admin_2"},
+            {"from_system": "census_geoid", "value": "37199", "iso3": "USA", "target_admin_level": "admin_2"},
+        ]
+        identities = [
+            {"loc_id": "USA-NC-185", "admin_level": 2},
+            {"loc_id": "USA-NC-199", "admin_level": 2},
+        ]
+
+        with mock.patch("mapmover.runtime.reference_graph.identities", return_value=identities) as identity_mock:
+            results = resolve_references_batch(requests)
+
+        identity_mock.assert_called_once_with(["USA-NC-185", "USA-CT-110", "USA-NC-199"])
+        self.assertEqual(results[0]["resolved_loc_id"], "USA-NC-185")
+        self.assertEqual(results[2]["resolved_loc_id"], "USA-NC-199")
+        self.assertFalse(results[1]["ok"])
+        self.assertEqual(results[1]["error"]["code"], "admin_spine_match_not_found")
+
+    def test_native_admin_batch_uses_country_alias_and_identity_indexes_once(self) -> None:
+        requests = [
+            {"from_system": "admin.native_id", "value": "10", "iso3": "CAN", "target_admin_level": "admin_1"},
+            {"from_system": "admin.native_id", "value": "99", "iso3": "CAN", "target_admin_level": "admin_1"},
+        ]
+        aliases = [{"reference_system": "admin.native_id", "external_id": "10", "loc_id": "CAN-NL"}]
+        nodes = [{"loc_id": "CAN-NL", "family": "admin_boundary", "admin_level": 1}]
+
+        with (
+            mock.patch("mapmover.runtime.reference_graph.identify_aliases", return_value=aliases) as alias_mock,
+            mock.patch("mapmover.runtime.reference_graph.identities", return_value=nodes) as identity_mock,
+        ):
+            results = resolve_references_batch(requests)
+
+        alias_mock.assert_called_once_with(["10", "99"], iso3="CAN", limit=500)
+        identity_mock.assert_called_once_with(["CAN-NL"])
+        self.assertEqual(results[0]["resolved_loc_id"], "CAN-NL")
+        self.assertEqual(results[0]["admin_level"], "admin_1")
+        self.assertFalse(results[1]["ok"])
+        self.assertEqual(results[1]["error"]["code"], "admin_spine_match_not_found")
+
     def test_supersession_notice_keeps_requested_geometry_primary(self) -> None:
         notice = geometry_supersession_notice(
             "USA-CT-OLD",
@@ -133,7 +175,7 @@ class ReferenceExchangeRuntimeTests(unittest.TestCase):
         self.assertEqual(payload["results"][0]["family"], "admin_local")
         graph_identity.assert_not_called()
 
-    def test_identify_census_tract_geoids_returns_verified_geometry_binding(self) -> None:
+    def test_identify_census_tract_geoids_returns_identity_binding(self) -> None:
         payload = identify_reference_system(
             ["06073000100", "06073000201", "06073000100"],
             expected={"system": "census 2020 geoid", "geo_level": "tract", "vintage": "2020"},
@@ -148,22 +190,13 @@ class ReferenceExchangeRuntimeTests(unittest.TestCase):
         self.assertEqual(payload["recommended_binding"]["geo_level"], "admin_3")
         candidate = payload["candidates"][0]
         self.assertEqual(candidate["match_rate"], 1.0)
-        self.assertEqual(candidate["geometry_available_count"], 2)
-        self.assertEqual(
-            candidate["geometry_availability_basis"],
-            "exact_identity_plus_catalog_bank",
-        )
-        self.assertIn("usa_admin3_census_2020", candidate["geometry_bank_ids"])
+        self.assertNotIn("geometry_available_count", candidate)
+        self.assertNotIn("geometry_bank_ids", candidate)
 
-    def test_identify_census_geoids_does_not_scan_geometry_rows(self) -> None:
-        with (
-            mock.patch(
-                "mapmover.runtime.reference_identification._geometry_rows"
-            ) as geometry_rows,
-            mock.patch(
+    def test_identify_census_geoids_does_not_scan_graph_or_geometry(self) -> None:
+        with mock.patch(
                 "mapmover.runtime.reference_identification._reference_graph_candidates"
-            ) as graph_candidates,
-        ):
+            ) as graph_candidates:
             payload = identify_reference_system(
                 ["06073000100", "06073000201"],
                 expected={"system": "census_geoid", "geo_level": "tract", "vintage": "2020"},
@@ -171,8 +204,7 @@ class ReferenceExchangeRuntimeTests(unittest.TestCase):
             )
 
         self.assertEqual(payload["status"], "matched")
-        self.assertEqual(payload["candidates"][0]["geometry_available_count"], 2)
-        geometry_rows.assert_not_called()
+        self.assertNotIn("geometry_available_count", payload["candidates"][0])
         graph_candidates.assert_not_called()
 
     def test_connecticut_release_relabel_uses_admitted_reference_alias(self) -> None:
@@ -190,42 +222,16 @@ class ReferenceExchangeRuntimeTests(unittest.TestCase):
         clear_reference_graph_cache()
 
         candidate = payload["candidates"][0]
-        self.assertEqual(candidate["geometry_available_count"], 2)
+        self.assertEqual(candidate["match_count"], 2)
         self.assertEqual(payload["recommended_binding"]["system"], "us_census_geoid")
         self.assertEqual(payload["recommended_binding"]["geo_level"], "admin_3")
         warning_codes = {item["code"] for item in payload["warnings"]}
         self.assertNotIn("identifier_geometry_coverage_incomplete", warning_codes)
         self.assertNotIn("known_supporting_crosswalk_not_admitted", warning_codes)
 
-    def test_expected_census_system_checks_graph_when_syntax_match_lacks_geometry(self) -> None:
-        graph_candidate = {
-            "system": "us_census_geoid",
-            "method": "reference_graph_exact_alias",
-            "match_count": 1,
-            "unmatched_count": 0,
-            "match_rate": 1.0,
-            "ambiguous_identifier_count": 0,
-            "geo_levels": [],
-            "loc_id_resolvable": True,
-            "geometry_available": True,
-            "geometry_available_count": 1,
-            "geometry_bank_ids": [],
-            "geometry_vintages": [],
-            "expected_vintage_supported": None,
-            "catalog_bank": None,
-            "sample_matches": [{
-                "identifier": "09110528100",
-                "loc_ids": ["USA-CT-013-528100"],
-                "geo_level": None,
-                "geometry_available": True,
-            }],
-            "_matches": {"09110528100": ["USA-CT-013-528100"]},
-            "_levels": {},
-            "_shape_ids": ["USA-CT-013-528100"],
-        }
+    def test_expected_census_system_does_not_load_graph_after_format_match(self) -> None:
         with mock.patch(
             "mapmover.runtime.reference_identification._reference_graph_candidates",
-            return_value=[graph_candidate],
         ) as graph_candidates:
             payload = identify_reference_system(
                 ["09110528100"],
@@ -233,8 +239,8 @@ class ReferenceExchangeRuntimeTests(unittest.TestCase):
                 country_scope="USA",
             )
 
-        graph_candidates.assert_called_once()
-        self.assertEqual(payload["candidates"][0]["geometry_available_count"], 1)
+        graph_candidates.assert_not_called()
+        self.assertEqual(payload["status"], "matched")
 
     def test_partial_expected_system_still_checks_reference_graph(self) -> None:
         with mock.patch(
@@ -271,10 +277,7 @@ class ReferenceExchangeRuntimeTests(unittest.TestCase):
         self.assertEqual(set(question["answer_schema"]["enum"]), systems)
         self.assertEqual(payload["clarification"]["retry"]["answer_mapping"]["reference_system"], "expected.system")
 
-    @mock.patch("mapmover.runtime.reference_identification._catalog_bank", return_value=None)
-    def test_identify_ambiguity_survives_temporarily_unavailable_geometry_catalog(
-        self, _catalog_bank: mock.Mock
-    ) -> None:
+    def test_identify_ambiguity_is_independent_of_geometry_catalog(self) -> None:
         payload = identify_reference_system(["06037"], country_scope="USA")
 
         self.assertEqual(payload["status"], "ambiguous")

@@ -1939,7 +1939,7 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
             "source_vintage": "census_2020",
         }
         with (
-            mock.patch("mapmover.runtime.geometry_tool_jobs._run_conversion_row", return_value=fake),
+            mock.patch("mapmover.runtime.geometry_tool_jobs.resolve_references_batch", return_value=[fake]),
             mock.patch("mapmover.routes.mcp.log_api_query_event"),
         ):
             created = _tool_call(
@@ -1956,7 +1956,7 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         artifact = created["artifact"]
         self.assertEqual(artifact["filename"], "cleaned-census.csv")
         self.assertIn("population", artifact["content"])
-        self.assertIn("daedalmap_loc_id", artifact["content"])
+        self.assertIn("loc_id", artifact["content"])
         self.assertIn("USA-CA-073-000100", artifact["content"])
         self.assertIsNone(created["result"]["output_rows"])
 
@@ -1970,7 +1970,7 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
             "source_vintage": "census_2020",
         }
         with (
-            mock.patch("mapmover.runtime.geometry_tool_jobs._run_conversion_row", return_value=fake),
+            mock.patch("mapmover.runtime.geometry_tool_jobs.resolve_references_batch", return_value=[fake]),
             mock.patch("mapmover.routes.mcp.log_api_query_event"),
         ):
             created = _tool_call(
@@ -1985,11 +1985,9 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
 
         row = created["result"]["output_rows"][0]
         self.assertEqual(row["population"], 1234)
-        self.assertEqual(row["daedalmap_loc_id"], "USA-CA-073-000100")
-        self.assertEqual(row["daedalmap_family"], "admin_boundary")
-        self.assertEqual(row["daedalmap_admin_level"], "admin_3")
-        self.assertEqual(row["daedalmap_join_cardinality"], "one_to_one")
-        self.assertEqual(row["daedalmap_source_vintage"], "census_2020")
+        self.assertEqual(row["loc_id"], "USA-CA-073-000100")
+        self.assertEqual(row["admin_level"], "admin_3")
+        self.assertEqual(set(row), {"population", "row_index", "loc_id", "admin_level"})
         self.assertIsNone(created["artifact"])
 
     def test_large_conversion_coalesces_distinct_crosswalk_requests(self) -> None:
@@ -2018,7 +2016,7 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
 
         fake = {"ok": True, "resolved_loc_id": "USA-CA-073-000100"}
         with (
-            mock.patch("mapmover.runtime.geometry_tool_jobs._run_conversion_row", return_value=fake),
+            mock.patch("mapmover.runtime.geometry_tool_jobs.resolve_references_batch", return_value=[fake]),
             mock.patch("mapmover.routes.mcp.log_api_query_event"),
         ):
             created = _tool_call(
@@ -2035,7 +2033,7 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         table = pq.read_table(io.BytesIO(base64.b64decode(artifact["content_base64"])))
         row = table.to_pylist()[0]
         self.assertEqual(row["population"], 1234)
-        self.assertEqual(row["daedalmap_loc_id"], "USA-CA-073-000100")
+        self.assertEqual(row["loc_id"], "USA-CA-073-000100")
 
     def test_identify_reference_system_and_bound_conversion_deduplicate_geoids(self) -> None:
         with mock.patch("mapmover.routes.mcp.log_api_query_event") as analytics_mock:
@@ -2062,7 +2060,7 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
             )
 
         self.assertEqual(identified["status"], "matched")
-        self.assertEqual(identified["candidates"][0]["geometry_available_count"], 2)
+        self.assertNotIn("geometry_available_count", identified["candidates"][0])
         self.assertEqual(analytics_mock.call_args_list[0].kwargs["capability_id"], "reference_system_identification")
         self.assertEqual(created["result"]["distinct_geography_count"], 2)
         self.assertEqual(created["result"]["converted_count"], 3)
@@ -2073,7 +2071,7 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
     def test_bound_conversion_executes_once_per_distinct_geography(self) -> None:
         fake = {"ok": True, "resolved_loc_id": "USA-CA-073-000100"}
         with (
-            mock.patch("mapmover.runtime.geometry_tool_jobs._run_conversion_row", return_value=fake) as resolver_mock,
+            mock.patch("mapmover.runtime.geometry_tool_jobs.resolve_references_batch", return_value=[fake, fake]) as resolver_mock,
             mock.patch("mapmover.routes.mcp.log_api_query_event"),
         ):
             created = _tool_call(
@@ -2085,8 +2083,55 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
                 },
             )
 
-        self.assertEqual(resolver_mock.call_count, 2)
+        resolver_mock.assert_called_once()
+        self.assertEqual(len(resolver_mock.call_args.args[0]), 2)
         self.assertEqual(created["result"]["distinct_geography_count"], 2)
+
+    def test_bound_conversion_delivers_partial_success_and_meters_only_matches(self) -> None:
+        matched = {
+            "ok": True,
+            "resolved_loc_id": "USA-NC-185",
+            "admin_level": "admin_2",
+            "match_type": "admin_spine_exact",
+        }
+        unmatched = {
+            "ok": False,
+            "error": {
+                "code": "admin_spine_match_not_found",
+                "message": "identifier did not match the selected country admin spine",
+            },
+        }
+        with (
+            mock.patch("mapmover.runtime.geometry_tool_jobs.resolve_references_batch", return_value=[matched, unmatched]) as resolver_mock,
+            mock.patch("mapmover.routes.mcp.log_api_query_event"),
+        ):
+            created = _tool_call(
+                self.client,
+                "create_conversion_job",
+                {
+                    "geography_binding": {
+                        "mode": "reference",
+                        "system": "census_geoid",
+                        "geo_level": "county",
+                        "vintage": "2020",
+                        "country_scope": "USA",
+                    },
+                    "items": [
+                        {"row_index": 1, "value": "37185", "data": {"name": "Warren"}},
+                        {"row_index": 2, "value": "09110", "data": {"name": "Connecticut exception"}},
+                    ],
+                    "output_format": "json_rows",
+                },
+            )
+
+        resolver_mock.assert_called_once()
+        self.assertTrue(created["ok"])
+        self.assertEqual(created["result"]["converted_count"], 1)
+        self.assertEqual(created["result"]["error_count"], 1)
+        self.assertEqual(created["result"]["meter_receipt"]["successful_distinct_items"], 1)
+        self.assertEqual(created["result"]["output_rows"][0]["loc_id"], "USA-NC-185")
+        self.assertIsNone(created["result"]["output_rows"][1]["loc_id"])
+        self.assertIn("did not match", created["result"]["output_rows"][1]["error"])
 
     def test_identify_reference_system_enforces_public_identifier_cap(self) -> None:
         with mock.patch("mapmover.routes.mcp.log_api_query_event"):
@@ -2111,8 +2156,7 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
             )
 
         self.assertFalse(payload["ok"])
-        self.assertEqual(payload["error"]["code"], "geography_binding_mismatch")
-        self.assertEqual(payload["identifier_check"]["status"], "partial_match")
+        self.assertEqual(payload["error"]["code"], "unsupported_geography_binding")
 
     def test_natural_language_tool_arguments_return_translation_guidance(self) -> None:
         with mock.patch("mapmover.routes.mcp.log_api_query_event"):

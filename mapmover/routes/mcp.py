@@ -495,6 +495,7 @@ async def _commercial_access_decision(
     request_id: str,
     resource_path: str = "/mcp",
     credit_authorized: bool | None = None,
+    credit_user_id: str | None = None,
 ) -> tuple[str, dict[str, Any]]:
     """Ask the shared commercial verifier whether this bulk call may execute.
 
@@ -516,14 +517,17 @@ async def _commercial_access_decision(
 
     ip_hash = hash_ip_for_analytics(get_client_ip(request))
     caller_identity = request_caller_identity(request, ip_hash=ip_hash)
-    auth_user_id = caller_identity.auth_user_id
-    caller_binding = caller_identity.binding
+    authorized_credit_user_id = str(credit_user_id or "").strip() or None
+    auth_user_id = authorized_credit_user_id or caller_identity.auth_user_id
+    caller_binding = f"account:{auth_user_id}" if authorized_credit_user_id else caller_identity.binding
     # MCP requires its purpose-issued authority bit. First-party REST may pass
     # its already-verified spend authority explicitly; neither path trusts JSON.
     if credit_authorized is None:
         spend_authorized = bool(getattr(request.state, "mcp_credit_authorized", False)) and caller_identity.can_spend_credits
     else:
-        spend_authorized = bool(credit_authorized) and caller_identity.can_spend_credits
+        spend_authorized = bool(credit_authorized) and (
+            bool(authorized_credit_user_id) or caller_identity.can_spend_credits
+        )
     authoritative_quote = pricing_quote or tool_quote(tool_name, units)
     fingerprint_source = json.dumps(
         {
@@ -559,11 +563,11 @@ async def _commercial_access_decision(
                     "required_permission": _required_mcp_permission(tool_name),
                 },
                 "caller": {
-                    "auth_user_id": caller_identity.auth_user_id if spend_authorized else None,
+                    "auth_user_id": auth_user_id if spend_authorized else None,
                     "ip_hash": ip_hash,
                     "caller_binding": caller_binding,
-                    "caller_kind": caller_identity.kind,
-                    "caller_confidence": caller_identity.confidence if spend_authorized else "weak",
+                    "caller_kind": "account" if authorized_credit_user_id else caller_identity.kind,
+                    "caller_confidence": "verified" if authorized_credit_user_id else caller_identity.confidence if spend_authorized else "weak",
                     "can_spend_credits": bool(spend_authorized),
                     "credential_id": str(getattr(request.state, "api_key_id", "") or "") or None,
                 },
@@ -4150,16 +4154,18 @@ async def _authorize_geometry_job_execution(
             "expected_quote_id": expected_quote_id,
         }
 
-    from mapmover.credit_action_authorization import verified_credit_action
+    from mapmover.credit_action_authorization import verified_credit_action_user_id
 
     caller_identity = request_caller_identity(request, ip_hash=hash_ip_for_analytics(get_client_ip(request)))
-    credit_authorized = verified_credit_action(
+    credit_user_id = verified_credit_action_user_id(
         request,
         capability_id=tool_capability_id(tool_name),
         quote_id=expected_quote_id,
         request_id=str(payload.get("request_id") or ""),
         user_id=caller_identity.auth_user_id,
     )
+    if credit_user_id:
+        request.state.auth_user_id = credit_user_id
     decision, verifier_payload = await _commercial_access_decision(
         request,
         tool_name=tool_name,
@@ -4168,7 +4174,8 @@ async def _authorize_geometry_job_execution(
         include_polygon=bool(payload.get("include_polygon")),
         pricing_quote=quote,
         request_id=str(payload.get("request_id") or ""),
-        credit_authorized=credit_authorized,
+        credit_authorized=bool(credit_user_id),
+        credit_user_id=credit_user_id,
     )
     if decision != "allow":
         return None, _commercial_tool_denial(

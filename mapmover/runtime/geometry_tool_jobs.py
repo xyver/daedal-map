@@ -36,7 +36,7 @@ from .reference_exchange import (
     resolve_reference,
     resolve_references_batch,
 )
-from .reference_identification import identify_reference_system
+from .reference_identification import normalize_identifier_system
 
 
 _JOB_REGISTRY: dict[str, dict[str, Any]] = {}
@@ -60,7 +60,6 @@ _RESERVED_OUTPUT_PREFIX = "daedalmap_"
 # be tuned by the route's authored/env operational limit.
 GEOMETRY_EXPORT_INLINE_LIMIT = 250
 CONVERSION_INLINE_LIMIT = 7_500
-CONVERSION_BATCH_SCAN_THRESHOLD = 25
 
 
 def _clean_json(value: Any) -> Any:
@@ -233,6 +232,28 @@ def _unsupported_deep_scope_error(parent_loc_id: str, admin_level: int, bbox: tu
             },
             "supported_deep_admin_levels": [f"admin_{level}" for level in supported_levels],
         }
+    return None
+
+
+def _conversion_binding_error(payload: dict[str, Any]) -> dict[str, Any] | None:
+    """Validate binding metadata without re-identifying any dataset values."""
+    binding = payload.get("geography_binding")
+    if not isinstance(binding, dict):
+        return None
+    system = normalize_identifier_system(binding.get("system"))
+    if not system:
+        return {"ok": False, "error": {"code": "invalid_geography_binding", "message": "geography_binding.system is required"}}
+    if system == "us_census_geoid":
+        country = str(binding.get("country_scope") or "USA").strip().upper()
+        vintage = str(binding.get("vintage") or "2020").strip().lower()
+        if country != "USA" or vintage not in {"2020", "census_2020"}:
+            return {
+                "ok": False,
+                "error": {
+                    "code": "unsupported_geography_binding",
+                    "message": "US Census GEOID conversion supports the USA 2020 identifier binding",
+                },
+            }
     return None
 
 
@@ -693,71 +714,20 @@ def _conversion_reference_request(row: dict[str, Any], *, default_limit: int) ->
     return request
 
 
-def _verify_conversion_binding(payload: dict[str, Any], items: list[Any], *, limit: int = 100) -> dict[str, Any] | None:
-    binding = payload.get("geography_binding") if isinstance(payload.get("geography_binding"), dict) else None
-    if not binding:
-        return None
-    distinct_values = list(dict.fromkeys(
-        str(item.get("value")).strip()
-        for item in items
-        if isinstance(item, dict) and item.get("value") not in (None, "")
-    ))
-    checked_values = distinct_values[:limit]
-    if not checked_values:
-        return {"ok": False, "status": "invalid_request", "error": {"code": "identifiers_required", "message": "bound conversion rows require non-empty value identifiers"}}
-    return identify_reference_system(
-        checked_values,
-        expected={
-            "system": binding.get("system"),
-            "geo_level": binding.get("geo_level"),
-            "vintage": binding.get("vintage"),
-            "country_scope": binding.get("country_scope"),
-        },
-        country_scope=binding.get("country_scope"),
-        validation_scope="all_distinct_identifiers" if len(checked_values) == len(distinct_values) else "sample",
-    )
-
-
 def _conversion_output_row(item: dict[str, Any], result: dict[str, Any], *, fallback_index: int) -> dict[str, Any]:
     row = dict(item.get("data") or {})
-    row["daedalmap_row_index"] = item.get("row_index", fallback_index)
+    row["row_index"] = item.get("row_index", fallback_index)
     if item.get("id") is not None:
-        row["daedalmap_row_id"] = item.get("id")
-    row["daedalmap_input_identifier"] = item.get("value")
-    row["daedalmap_conversion_ok"] = bool(result.get("ok"))
-    row["daedalmap_loc_id"] = result.get("resolved_loc_id") or result.get("loc_id")
-    row["daedalmap_family"] = result.get("resolved_family") or result.get("family")
-    row["daedalmap_admin_level"] = result.get("admin_level") or (result.get("crosswalk") or {}).get("target_admin_level")
-    row["daedalmap_match_type"] = result.get("match_type")
-    row["daedalmap_source_vintage"] = result.get("source_vintage")
-    row["daedalmap_relationship_vintage"] = (result.get("crosswalk") or {}).get("relationship_vintage")
-    matches = result.get("matches")
-    match_count = result.get("match_count")
-    if match_count is None and isinstance(matches, list):
-        match_count = len(matches)
-    if match_count is None:
-        match_count = 1 if row["daedalmap_conversion_ok"] and row["daedalmap_loc_id"] else 0
-    row["daedalmap_match_count"] = int(match_count or 0)
-    if result.get("match_type") == "crosswalk_overlap" and row["daedalmap_match_count"] > 1:
-        row["daedalmap_join_cardinality"] = "weighted_one_to_many"
-    elif row["daedalmap_match_count"] > 1:
-        row["daedalmap_join_cardinality"] = "one_to_many"
-    elif row["daedalmap_match_count"] == 1:
-        row["daedalmap_join_cardinality"] = "one_to_one"
-    else:
-        row["daedalmap_join_cardinality"] = "unresolved"
-    row["daedalmap_geometry_available"] = result.get("geometry_available")
+        row["row_id"] = item.get("id")
+    row["loc_id"] = result.get("resolved_loc_id") or result.get("loc_id")
+    admin_level = result.get("admin_level") or (result.get("crosswalk") or {}).get("target_admin_level")
+    if admin_level:
+        row["admin_level"] = admin_level
     error = result.get("error")
     if isinstance(error, dict):
-        row["daedalmap_error_code"] = error.get("code")
-        row["daedalmap_error_message"] = error.get("message")
+        row["error"] = error.get("message") or error.get("code")
     elif error:
-        row["daedalmap_error_message"] = str(error)
-    else:
-        row["daedalmap_error_code"] = None
-        row["daedalmap_error_message"] = None
-    if matches is not None:
-        row["daedalmap_matches_json"] = json.dumps(matches, ensure_ascii=False, separators=(",", ":"))
+        row["error"] = str(error)
     return _clean_json(row)
 
 
@@ -817,59 +787,36 @@ def estimate_conversion_job(
     contract_error = _conversion_contract_error(payload, allow_row_count=True)
     if contract_error:
         return contract_error
+    binding_error = _conversion_binding_error(payload)
+    if binding_error:
+        return binding_error
     items = payload.get("items") if isinstance(payload.get("items"), list) else []
     row_count = len(items) if items else max(0, int(payload.get("row_count") or 0))
     output_format = str(payload.get("output_format") or "json_rows").strip().lower()
-    sample = items[:sample_limit]
-    resolved = 0
-    errors = 0
-    resolution_cache: dict[str, dict[str, Any]] = {}
-    for item in sample:
-        if not isinstance(item, dict):
-            errors += 1
-            continue
-        row = _conversion_row(payload, item)
-        cache_key = _conversion_cache_key(row)
-        if cache_key not in resolution_cache:
-            resolution_cache[cache_key] = _run_conversion_row(row, default_limit=1)
-        result = resolution_cache[cache_key]
-        if result.get("ok"):
-            resolved += 1
-        else:
-            errors += 1
     binding = payload.get("geography_binding") if isinstance(payload.get("geography_binding"), dict) else None
-    values = [item.get("value") for item in sample if isinstance(item, dict) and item.get("value") not in (None, "")]
-    identifier_check = None
-    if binding and values:
-        identifier_check = identify_reference_system(
-            values,
-            expected={
-                "system": binding.get("system"),
-                "geo_level": binding.get("geo_level"),
-                "vintage": binding.get("vintage"),
-                "country_scope": binding.get("country_scope"),
-            },
-            country_scope=binding.get("country_scope"),
-            validation_scope="sample",
-        )
-    estimated_resolvable = row_count if not sample else int(row_count * (resolved / max(1, len(sample))))
     execution_limit = max(1, int(execution_limit)) if execution_limit is not None else None
-    within_limit = bool(items) and (execution_limit is None or row_count <= execution_limit)
+    within_limit = row_count > 0 and (execution_limit is None or row_count <= execution_limit)
     charge_units = _conversion_charge_units(row_count, minimum=True)
     quote = tool_charge_quote("create_conversion_job", charge_units)
-    quote_id = _quote_id("convquote", payload, quote)
+    quote_id = _quote_id("convquote", {
+        "geography_binding": binding,
+        "from_system": payload.get("from_system"),
+        "to_system": payload.get("to_system"),
+        "target_admin_level": payload.get("target_admin_level"),
+        "iso3": payload.get("iso3"),
+        "relationship_vintage": payload.get("relationship_vintage"),
+        "row_count": row_count,
+        "output_format": output_format,
+    }, quote)
     return _clean_json(
         {
             "ok": True,
             "quote_id": quote_id,
             "request_kind": "conversion_job",
             "row_count": row_count,
-            "sampled_rows": len(sample),
-            "sampled_distinct_geographies": len(resolution_cache),
-            "sample_resolved": resolved,
-            "sample_errors": errors,
-            "estimated_resolvable_rows": estimated_resolvable,
-            "estimated_error_rows": max(0, row_count - estimated_resolvable),
+            "sampled_rows": 0,
+            "estimated_resolvable_rows": row_count if binding else None,
+            "estimated_error_rows": None,
             "estimated_output_bytes": max(1000, row_count * (500 if output_format == "parquet" else 900)),
             "output_format": output_format,
             "preserves_input_columns": True,
@@ -885,8 +832,8 @@ def estimate_conversion_job(
                 "deduplicate_by_identifier": True,
                 "spatial_lookup_required": False,
             },
-            "identifier_check": identifier_check,
-            "create_call": {"tool": "create_conversion_job", "arguments": {**payload, "quote_id": quote_id}} if within_limit else None,
+            "identifier_check": None,
+            "create_call": {"tool": "create_conversion_job", "arguments": {**payload, "quote_id": quote_id}} if within_limit and items else None,
             "guidance": None if within_limit else _bounded_inline_error(
                 request_kind="conversion",
                 requested=row_count,
@@ -906,22 +853,19 @@ def create_conversion_job(
     contract_error = _conversion_contract_error(payload, allow_row_count=False)
     if contract_error:
         return contract_error
+    binding_error = _conversion_binding_error(payload)
+    if binding_error:
+        return binding_error
     items = payload.get("items") if isinstance(payload.get("items"), list) else []
     output_format = str(payload.get("output_format") or "json_rows").strip().lower()
     if not items:
         return {"ok": False, "error": {"code": "invalid_request", "message": "items are required for conversion execution"}}
     if inline_limit is not None and len(items) > inline_limit:
         return _bounded_inline_error(request_kind="conversion", requested=len(items), limit=inline_limit)
-    identifier_check = _verify_conversion_binding(payload, items)
-    if identifier_check is not None and identifier_check.get("status") != "matched":
-        return {
-            "ok": False,
-            "error": {
-                "code": "geography_binding_mismatch",
-                "message": "supplied geography_binding was not confirmed for the provided identifiers",
-            },
-            "identifier_check": identifier_check,
-        }
+    # Identification is a separate MCP step. A confirmed binding is consumed
+    # directly here; execution validates individual values while performing the
+    # bulk transform/join and never re-runs identification or geometry checks.
+    identifier_check = None
     results = []
     output_rows = []
     resolution_cache: dict[str, dict[str, Any]] = {}
@@ -931,7 +875,7 @@ def create_conversion_job(
             continue
         row = _conversion_row(payload, item)
         unique_rows.setdefault(_conversion_cache_key(row), row)
-    if len(unique_rows) >= CONVERSION_BATCH_SCAN_THRESHOLD:
+    if unique_rows:
         keys = list(unique_rows)
         batch_results = resolve_references_batch([
             _conversion_reference_request(unique_rows[key], default_limit=10)

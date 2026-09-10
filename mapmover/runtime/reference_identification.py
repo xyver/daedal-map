@@ -1,16 +1,15 @@
-"""Identify unknown geography identifiers against maintained reference banks.
+"""Identify unknown geography identifiers against maintained identity indexes.
 
 This is the discovery step immediately before ``resolve_reference``.  It works
-only from exact identifier evidence: format signatures, reference-graph alias
-rows, and geometry-bank availability.  It does not inspect polygons or infer a
-vintage that the evidence cannot support.
+only from identifier formats and maintained reference/equivalence indexes.
+Geometry availability belongs to the shape tools and is deliberately not read
+here.
 """
 
 from __future__ import annotations
 
 import re
 from collections import defaultdict
-from pathlib import Path
 from typing import Any
 
 from .external_reference_adapters import (
@@ -21,7 +20,6 @@ from .external_reference_adapters import (
     identifier_matches,
 )
 from .family_admin_crosswalk import admin_level_name
-from ..paths import DATA_ROOT
 
 
 US_CENSUS_GEOID_SYSTEM = "us_census_geoid"
@@ -100,19 +98,6 @@ def _expected_level(value: Any) -> str | None:
         return str(value).strip().lower().replace(" ", "_")
 
 
-def _geometry_rows(loc_ids: list[str]) -> dict[str, dict[str, Any]]:
-    if not loc_ids:
-        return {}
-    from .reference_exchange import get_geometry_references
-
-    payload = get_geometry_references(loc_ids, include_polygon=False, include_info=False)
-    return {
-        str(row.get("loc_id") or ""): row
-        for row in payload.get("results") or []
-        if isinstance(row, dict) and row.get("loc_id")
-    }
-
-
 #: Evidence strength per detection method, strongest first. Used only to pick
 #: between candidates that already agree about the referent.
 _METHOD_RANK = {
@@ -159,93 +144,6 @@ def _verified_loc_ids(values: list[str]) -> set[str]:
     return verify_loc_ids(values)
 
 
-def _country_supporting_identifier_evidence(
-    identifiers: list[str], *, country_scope: str,
-) -> list[dict[str, Any]]:
-    """Find exact values in known, non-admitted country support crosswalks."""
-    if not country_scope or not identifiers:
-        return []
-    from .geometry_catalog import load_country_geometry_catalog
-
-    catalog = load_country_geometry_catalog(country_scope)
-    wanted = set(identifiers)
-    evidence: list[dict[str, Any]] = []
-    for asset in catalog.get("supporting_crosswalk_assets") or []:
-        if not isinstance(asset, dict) or int(asset.get("row_count") or 0) > 1_000_000:
-            continue
-        path = DATA_ROOT / str(asset.get("path") or "")
-        if not path.is_file() or path.suffix.lower() not in {".csv", ".parquet"}:
-            continue
-        candidate_columns = [
-            str(column) for column in asset.get("columns") or []
-            if re.search(r"(?:fips|geoid|loc_?id|code)", str(column), re.IGNORECASE)
-        ]
-        if not candidate_columns:
-            continue
-        try:
-            import pandas as pd
-
-            if path.suffix.lower() == ".csv":
-                frame = pd.read_csv(path, usecols=candidate_columns, dtype=str, keep_default_na=False)
-            else:
-                frame = pd.read_parquet(path, columns=candidate_columns).fillna("").astype(str)
-        except Exception:
-            continue
-        matching_columns = []
-        matched_values: set[str] = set()
-        for column in candidate_columns:
-            values = set(frame[column].astype(str).str.strip())
-            matches = sorted(wanted & values)
-            if matches:
-                matched_values.update(matches)
-                matching_columns.append({
-                    "column": column,
-                    "match_count": len(matches),
-                    "sample_matches": matches[:10],
-                })
-        if matching_columns:
-            evidence.append({
-                "path": str(asset.get("path") or ""),
-                "discovery_status": asset.get("discovery_status"),
-                "callable": False,
-                "match_count": len(matched_values),
-                "unmatched_count": len(wanted - matched_values),
-                "matching_columns": matching_columns,
-                "usage_note": asset.get("usage_note"),
-            })
-    return evidence
-
-
-def _catalog_bank(*, country_scope: str, admin_level: str, expected_vintage: str | None) -> dict[str, Any] | None:
-    from .geometry_catalog import load_country_geometry_catalog, load_geometry_catalog
-
-    country = str(country_scope or "").strip().upper()
-    vintage = str(expected_vintage or "").strip().lower()
-    country_catalog = load_country_geometry_catalog(country) if country else {}
-    catalog = country_catalog if country_catalog.get("geometry_banks") else load_geometry_catalog()
-    matches = []
-    for bank in catalog.get("geometry_banks") or []:
-        if not isinstance(bank, dict):
-            continue
-        if country and str(bank.get("scope") or "").strip().upper() != country:
-            continue
-        try:
-            bank_level = admin_level_name(bank.get("admin_level"))
-        except Exception:
-            bank_level = str(bank.get("admin_level") or "").strip().lower()
-        if bank_level != admin_level:
-            continue
-        bank_vintage = str(bank.get("source_vintage") or bank.get("release_id") or "").strip().lower()
-        if vintage and vintage not in bank_vintage:
-            continue
-        matches.append(bank)
-    matches.sort(key=lambda item: (
-        str(item.get("spine_readiness") or "") != "ready",
-        str(item.get("bank_id") or ""),
-    ))
-    return matches[0] if matches else None
-
-
 def _candidate(
     *,
     system: str,
@@ -255,41 +153,15 @@ def _candidate(
     method: str,
     expected_vintage: str | None = None,
     country_scope: str = "",
-    use_catalog_bank_coverage: bool = False,
 ) -> dict[str, Any]:
     matched_identifiers = [value for value in identifiers if matches.get(value)]
     loc_ids = list(dict.fromkeys(loc_id for value in matched_identifiers for loc_id in matches[value]))
     level_values = sorted({level for level in (levels or {}).values() if level})
-    catalog_bank = None
-    if len(level_values) == 1:
-        catalog_bank = _catalog_bank(
-            country_scope=country_scope,
-            admin_level=level_values[0],
-            expected_vintage=expected_vintage,
-        )
-    # A level-wide bank proves that a maintained geometry system exists, not
-    # that every syntactically valid identifier exists in it. Verify exact
-    # identities before reporting geometry availability. This remains cheaper
-    # than hydrating polygons and prevents release-specific codes from being
-    # fabricated into the canonical spine.
-    if use_catalog_bank_coverage and catalog_bank:
-        geometry: dict[str, dict[str, Any]] = {}
-        shape_ids = _verified_loc_ids(loc_ids)
-        geometry_availability_basis = "exact_identity_plus_catalog_bank"
-    else:
-        geometry = _geometry_rows(loc_ids)
-        shape_ids = {loc_id for loc_id, row in geometry.items() if row.get("has_shape")}
-        geometry_availability_basis = "exact_geometry_row"
-    bank_ids = sorted({str(geometry[loc_id].get("bank_id")) for loc_id in shape_ids if geometry.get(loc_id, {}).get("bank_id")})
-    geometry_vintages = sorted({str(geometry[loc_id].get("geometry_vintage")) for loc_id in shape_ids if geometry.get(loc_id, {}).get("geometry_vintage")})
-    if catalog_bank and catalog_bank.get("bank_id") and str(catalog_bank["bank_id"]) not in bank_ids:
-        bank_ids.append(str(catalog_bank["bank_id"]))
     sample_matches = [
         {
             "identifier": value,
             "loc_ids": matches[value][:5],
             "geo_level": (levels or {}).get(value),
-            "geometry_available": any(loc_id in shape_ids for loc_id in matches[value]),
         }
         # Identification calls are already bounded (100 values on the public
         # surface). Return every checked sample match so browser previews can
@@ -306,28 +178,16 @@ def _candidate(
         "ambiguous_identifier_count": sum(1 for value in matched_identifiers if len(matches[value]) > 1),
         "geo_levels": level_values,
         "loc_id_resolvable": bool(loc_ids),
-        "geometry_available": bool(shape_ids),
-        "geometry_availability_basis": geometry_availability_basis,
-        "geometry_available_count": sum(
-            1 for value in matched_identifiers if any(loc_id in shape_ids for loc_id in matches[value])
+        "expected_vintage_supported": (
+            expected_vintage in {"2020", "census_2020"}
+            if system == US_CENSUS_GEOID_SYSTEM and expected_vintage
+            else None
         ),
-        "geometry_bank_ids": sorted(bank_ids),
-        "geometry_vintages": geometry_vintages,
-        "expected_vintage_supported": (catalog_bank is not None) if expected_vintage else None,
-        "catalog_bank": {
-            "bank_id": catalog_bank.get("bank_id"),
-            "source_vintage": catalog_bank.get("source_vintage"),
-            "release_id": catalog_bank.get("release_id"),
-            "geometry_path": catalog_bank.get("geometry_path"),
-            "feature_count": catalog_bank.get("feature_count"),
-            "spine_readiness": catalog_bank.get("spine_readiness"),
-        } if catalog_bank else None,
         "sample_matches": sample_matches,
         # Retained only while candidates from the same reference system are
         # reconciled. These are removed from the public response below.
         "_matches": {key: list(value) for key, value in matches.items()},
         "_levels": dict(levels or {}),
-        "_shape_ids": sorted(shape_ids),
     }
 
 
@@ -406,8 +266,8 @@ def _dataset_interpretations(
     """Combine cheap dataset clues with exact identifier verification.
 
     These scores are discovery guidance, not identity assertions. Exact match
-    and geometry counts remain separate so a friendly confidence label can
-    never hide incomplete maintained coverage.
+    counts remain separate so a friendly confidence label cannot hide partial
+    identifier coverage.
     """
     if not dataset_context:
         return []
@@ -450,23 +310,20 @@ def _dataset_interpretations(
     hint_says_county = "county" in row_geography
     hint_says_zip = "zip" in row_geography or "zcta" in row_geography
 
-    def verified_evidence(system: str) -> tuple[float, float, list[str]]:
+    def verified_evidence(system: str) -> tuple[float, list[str]]:
         candidate = by_system.get(system) or {}
         match_rate = float(candidate.get("match_rate") or 0.0)
         match_count = int(candidate.get("match_count") or 0)
-        geometry_count = int(candidate.get("geometry_available_count") or 0)
-        geometry_rate = geometry_count / match_count if match_count else 0.0
         evidence: list[str] = []
         if match_count:
             evidence.append(f"{match_count}/{len(identifiers)} sampled identifiers matched exactly")
-            evidence.append(f"{geometry_count}/{match_count} exact matches have maintained geometry")
         else:
             evidence.append("format alternative; exact maintained matches were not checked in this call")
-        return match_rate, geometry_rate, evidence
+        return match_rate, evidence
 
     interpretations: list[dict[str, Any]] = []
     if all_five_digits:
-        match_rate, geometry_rate, evidence = verified_evidence(US_CENSUS_GEOID_SYSTEM)
+        match_rate, evidence = verified_evidence(US_CENSUS_GEOID_SYSTEM)
         score = 0.0
         if census_county_shape:
             score += 0.25
@@ -483,7 +340,7 @@ def _dataset_interpretations(
         if hint_says_county:
             score += 0.15
             evidence.append("the caller described the row geography as county")
-        score += 0.10 * match_rate + 0.05 * geometry_rate
+        score += 0.15 * match_rate
         if expected_level and expected_level != "admin_2":
             score *= 0.35
         interpretations.append({
@@ -494,11 +351,10 @@ def _dataset_interpretations(
             "confidence": "high" if score >= 0.8 else "medium" if score >= 0.5 else "low",
             "verified": bool(match_rate),
             "match_rate": match_rate if match_rate else None,
-            "geometry_availability_rate": round(geometry_rate, 6) if match_rate else None,
             "evidence": evidence,
         })
 
-        match_rate, geometry_rate, evidence = verified_evidence("overlay_zcta")
+        match_rate, evidence = verified_evidence("overlay_zcta")
         score = 0.20
         evidence.append("five-digit values can also resemble ZIP/ZCTA identifiers")
         if header_says_zip:
@@ -510,7 +366,7 @@ def _dataset_interpretations(
         if has_state_component and has_county_component:
             score -= 0.15
             evidence.append("separate state and county fields make the ZIP/ZCTA reading less likely")
-        score += 0.20 * match_rate + 0.05 * geometry_rate
+        score += 0.25 * match_rate
         score = max(0.0, min(1.0, score))
         interpretations.append({
             "system": "overlay_zcta",
@@ -520,7 +376,6 @@ def _dataset_interpretations(
             "confidence": "high" if score >= 0.8 else "medium" if score >= 0.5 else "low",
             "verified": bool(match_rate),
             "match_rate": match_rate if match_rate else None,
-            "geometry_availability_rate": round(geometry_rate, 6) if match_rate else None,
             "evidence": evidence,
         })
 
@@ -532,9 +387,9 @@ def _dataset_interpretations(
             continue
         if not system or any(item["system"] == system for item in interpretations):
             continue
-        match_rate, geometry_rate, evidence = verified_evidence(system)
+        match_rate, evidence = verified_evidence(system)
         geo_level = (candidate.get("geo_levels") or [None])[0]
-        score = min(1.0, 0.55 * match_rate + 0.15 * geometry_rate)
+        score = min(1.0, 0.70 * match_rate)
         if local_format_match_rate is not None:
             score = min(1.0, score + 0.05 * local_format_match_rate)
             evidence.append(f"{local_format_match_rate:.0%} of populated values fit the locally detected format")
@@ -552,7 +407,6 @@ def _dataset_interpretations(
             "confidence": "high" if score >= 0.8 else "medium" if score >= 0.5 else "low",
             "verified": bool(match_rate),
             "match_rate": match_rate,
-            "geometry_availability_rate": round(geometry_rate, 6),
             "evidence": evidence,
         })
 
@@ -652,7 +506,6 @@ def identify_reference_system(
                 method="exact_identifier_crosswalk",
                 expected_vintage=expected_vintage or "2020",
                 country_scope=country or "USA",
-                use_catalog_bank_coverage=True,
             ))
 
     if not expected_system or expected_system == "daedalmap.loc_id":
@@ -730,11 +583,6 @@ def identify_reference_system(
     expected_system_fully_matched = bool(expected_system) and any(
         candidate.get("system") == expected_system
         and candidate.get("match_count") == len(values)
-        and (
-            candidate.get("method") != "exact_identifier_crosswalk"
-            or not candidate.get("catalog_bank")
-            or candidate.get("geometry_available_count") == candidate.get("match_count")
-        )
         and candidate.get("method") in {
             "exact_identifier_crosswalk",
             "typed_external_equivalence",
@@ -759,8 +607,6 @@ def identify_reference_system(
             continue
         prior_matches = prior.get("_matches") or {}
         incoming_matches = candidate.get("_matches") or {}
-        prior_shapes = set(prior.get("_shape_ids") or [])
-        incoming_shapes = set(candidate.get("_shape_ids") or [])
         combined: dict[str, list[str]] = {}
         for value in values:
             old = list(prior_matches.get(value) or [])
@@ -768,14 +614,6 @@ def identify_reference_system(
             if not old:
                 combined[value] = new
             elif not new:
-                combined[value] = old
-            elif any(loc_id in incoming_shapes for loc_id in new) and not any(
-                loc_id in prior_shapes for loc_id in old
-            ):
-                combined[value] = new
-            elif any(loc_id in prior_shapes for loc_id in old) and not any(
-                loc_id in incoming_shapes for loc_id in new
-            ):
                 combined[value] = old
             elif _METHOD_RANK.get(str(candidate.get("method") or ""), 99) < _METHOD_RANK.get(
                 str(prior.get("method") or ""), 99
@@ -796,21 +634,18 @@ def identify_reference_system(
             ),
             expected_vintage=expected_vintage,
             country_scope=country,
-            use_catalog_bank_coverage=(candidate["system"] == US_CENSUS_GEOID_SYSTEM),
         )
     candidates = list(by_system.values())
     candidates.sort(key=lambda item: (
         -float(item.get("match_rate") or 0),
-        -int(item.get("geometry_available_count") or 0),
         int(item.get("ambiguous_identifier_count") or 0),
         str(item.get("system") or ""),
     ))
 
     # Only a vintage explicitly declared by the caller may disqualify an
-    # otherwise exact identifier-system match. Census adapters use their
-    # maintained vintage while looking up a geometry bank, but a temporarily
-    # unavailable catalog entry must not make a five-digit county/ZCTA value
-    # appear unambiguous and silently select the other system.
+    # otherwise exact identifier-system match. A five-digit county/ZCTA value
+    # must not appear unambiguous and silently select the other system merely
+    # because one maintained release is temporarily unavailable.
     vintage_is_constrained = expected_vintage is not None
     full_matches = [
         candidate for candidate in candidates
@@ -857,24 +692,8 @@ def identify_reference_system(
         expected_level=expected_level,
     )
     selected = full_matches[0] if full_matches and status == "matched" else None
-    country_catalog_evidence = _country_supporting_identifier_evidence(
-        values, country_scope=country,
-    )
-    exact_geometry_check_required = bool(
-        selected
-        and selected.get("method") == "exact_identifier_crosswalk"
-        and selected.get("catalog_bank")
-    )
-    exact_geometry_complete = bool(
-        not exact_geometry_check_required
-        or (
-            selected
-            and int(selected.get("geometry_available_count") or 0)
-            == int(selected.get("match_count") or 0)
-        )
-    )
     recommended_binding = None
-    if selected and exact_geometry_complete:
+    if selected:
         levels = selected.get("geo_levels") or []
         recommended_binding = {
             "mode": "reference",
@@ -897,32 +716,6 @@ def identify_reference_system(
     warnings: list[dict[str, Any]] = []
     guidance = None
     clarification = None
-    if selected and exact_geometry_check_required and not exact_geometry_complete:
-        missing_count = int(selected.get("match_count") or 0) - int(
-            selected.get("geometry_available_count") or 0
-        )
-        warnings.append({
-            "code": "identifier_geometry_coverage_incomplete",
-            "message": (
-                f"The identifier system matched, but {missing_count} distinct identifier(s) "
-                "lack exact identity/geometry in the selected bank. No bulk binding was issued."
-            ),
-        })
-        if country_catalog_evidence:
-            warnings.append({
-                "code": "known_supporting_crosswalk_not_admitted",
-                "message": (
-                    "The country catalog contains exact matching values in local supporting "
-                    "crosswalk evidence, but that asset is not yet an admitted callable geometry crosswalk."
-                ),
-            })
-        guidance = {
-            "action": "inspect_country_catalog_then_admit_or_select_vintage",
-            "message": (
-                "Inspect the country catalog evidence and declared source vintage before conversion."
-            ),
-            "recommended_tool": "read_geometry_catalog",
-        }
     if str(validation_scope or "sample") == "sample" and status in {"matched", "ambiguous", "partial_match"}:
         warnings.append({
             "code": "sample_validation_only",
@@ -935,7 +728,6 @@ def identify_reference_system(
                 "label": str(candidate.get("system") or "").replace("_", " "),
                 "geo_levels": candidate.get("geo_levels") or [],
                 "match_rate": candidate.get("match_rate"),
-                "geometry_available": candidate.get("geometry_available"),
             }
             for candidate in full_matches
         ]
@@ -961,7 +753,7 @@ def identify_reference_system(
         vintage_conflict = any(candidate.get("expected_vintage_supported") is False for candidate in candidates)
         code = "expected_vintage_unavailable" if vintage_conflict else "partial_identifier_match"
         message = (
-            "The identifiers match the declared system and level, but the requested vintage has no maintained matching geometry bank."
+            "The identifiers match the declared system and level, but the requested vintage is not supported by this identifier adapter."
             if vintage_conflict else
             "Only part of the supplied identifier set matched the declared or detected system."
         )
@@ -1020,7 +812,6 @@ def identify_reference_system(
         "dataset_interpretations": dataset_interpretations,
         "concurring_systems": concurring_systems,
         "recommended_binding": recommended_binding,
-        "country_catalog_evidence": country_catalog_evidence,
         "next_call": {
             "tool": "estimate_conversion_job",
             "arguments": {"geography_binding": recommended_binding},

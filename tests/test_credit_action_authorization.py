@@ -8,7 +8,11 @@ from unittest import mock
 
 from starlette.requests import Request
 
-from mapmover.credit_action_authorization import CREDIT_ACTION_HEADER, verified_credit_action
+from mapmover.credit_action_authorization import (
+    CREDIT_ACTION_HEADER,
+    verified_credit_action,
+    verified_credit_action_user_id,
+)
 
 
 def _request(token: str) -> Request:
@@ -50,6 +54,20 @@ def _verify(token: str, **overrides) -> bool:
 
 def test_matching_credit_action_is_accepted():
     assert _verify(_token("shared-secret"))
+
+
+def test_signed_credit_action_can_carry_first_party_account_identity():
+    with mock.patch(
+        "mapmover.credit_action_authorization.commercial_access_internal_token",
+        return_value="shared-secret",
+    ):
+        assert verified_credit_action_user_id(
+            _request(_token("shared-secret")),
+            capability_id="conversion_job",
+            quote_id="quote-1",
+            request_id="request-1",
+            now=1050,
+        ) == "user-1"
 
 
 def test_token_is_bound_to_account_capability_quote_and_request():

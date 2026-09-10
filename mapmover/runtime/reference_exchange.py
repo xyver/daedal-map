@@ -1627,19 +1627,34 @@ def resolve_reference(
 
 
 def resolve_references_batch(requests: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Resolve reference requests while scanning each shared crosswalk only once.
+    """Resolve reference requests with one lookup per shared identity source.
 
-    Direct IDs, names, aliases, historical references, and family-to-family
-    conversions retain their existing single-request paths. Only homogeneous
-    family-to-admin crosswalk work is coalesced.
+    Census GEOIDs are matched together against the admin identity spine.
+    Homogeneous family-to-admin crosswalk work is also coalesced. Other direct,
+    alias, historical, and family-to-family requests retain their established
+    single-request paths.
     """
     results: list[dict[str, Any] | None] = [None] * len(requests)
     groups: dict[tuple[Any, ...], list[tuple[int, dict[str, Any]]]] = {}
+    census_candidates: list[tuple[int, dict[str, Any], str, str | None, str | None]] = []
+    native_admin_groups: dict[str, list[tuple[int, dict[str, Any], str]]] = {}
     for index, request in enumerate(requests):
         if request.get("to_system"):
             results[index] = convert_reference(**request)
             continue
         system = _normalize_system(request.get("from_system"))
+        if system == "us_census_geoid":
+            from .reference_identification import census_geoid_level, census_geoid_to_loc_id
+
+            value = str(request.get("value") or "").strip()
+            loc_id = census_geoid_to_loc_id(value)
+            census_candidates.append((index, request, value, loc_id, census_geoid_level(value)))
+            continue
+        if system == "admin.native_id":
+            country = str(request.get("iso3") or "").strip().upper()
+            value = str(request.get("value") or "").strip()
+            native_admin_groups.setdefault(country, []).append((index, request, value))
+            continue
         if get_external_adapter(system):
             results[index] = resolve_reference(**request)
             continue
@@ -1663,6 +1678,94 @@ def resolve_references_batch(requests: list[dict[str, Any]]) -> list[dict[str, A
             int(request.get("limit") or 10),
         )
         groups.setdefault(key, []).append((index, request))
+
+    if census_candidates:
+        from .reference_graph import identities
+
+        candidate_ids = list(dict.fromkeys(
+            loc_id for _, _, _, loc_id, _ in census_candidates if loc_id
+        ))
+        matched_ids = {
+            str(row.get("loc_id") or "")
+            for row in identities(candidate_ids)
+            if isinstance(row, dict) and row.get("loc_id")
+        }
+        for index, request, value, loc_id, level in census_candidates:
+            if loc_id and loc_id in matched_ids:
+                results[index] = {
+                    "ok": True,
+                    "from_system": "us_census_geoid",
+                    "input": request.get("value"),
+                    "normalized_input": value,
+                    "resolved_loc_id": loc_id,
+                    "resolved_family": "admin_boundary",
+                    "admin_level": level,
+                    "match_type": "admin_spine_exact",
+                    "source_vintage": "census_2020",
+                }
+            else:
+                results[index] = {
+                    "ok": False,
+                    "from_system": "us_census_geoid",
+                    "input": request.get("value"),
+                    "normalized_input": value,
+                    "error": {
+                        "code": "admin_spine_match_not_found" if loc_id else "invalid_census_geoid",
+                        "message": "identifier did not match the selected country admin spine" if loc_id else "expected a 2, 5, 11, 12, or 15 digit US Census GEOID",
+                    },
+                }
+
+    if native_admin_groups:
+        from .reference_graph import identify_aliases, identities
+
+        for country, members in native_admin_groups.items():
+            values = list(dict.fromkeys(value for _, _, value in members if value))
+            aliases = identify_aliases(values, iso3=country or None, limit=max(500, len(values) * 10))
+            by_value: dict[str, list[dict[str, Any]]] = {}
+            for alias in aliases:
+                if str(alias.get("reference_system") or "").lower() != "admin.native_id":
+                    continue
+                by_value.setdefault(str(alias.get("external_id") or ""), []).append(alias)
+            candidate_ids = list(dict.fromkeys(
+                str(alias.get("loc_id") or "")
+                for matches in by_value.values()
+                for alias in matches
+                if alias.get("loc_id")
+            ))
+            identity_by_id = {
+                str(row.get("loc_id") or ""): row
+                for row in identities(candidate_ids)
+                if isinstance(row, dict) and row.get("loc_id")
+            }
+            for index, request, value in members:
+                matches = [
+                    alias for alias in by_value.get(value, [])
+                    if str(alias.get("loc_id") or "") in identity_by_id
+                ]
+                if len(matches) == 1:
+                    loc_id = str(matches[0].get("loc_id") or "")
+                    node = identity_by_id[loc_id]
+                    results[index] = {
+                        "ok": True,
+                        "from_system": "admin.native_id",
+                        "input": request.get("value"),
+                        "normalized_input": value,
+                        "resolved_loc_id": loc_id,
+                        "resolved_family": node.get("family") or "admin_boundary",
+                        "admin_level": admin_level_name(node.get("admin_level")),
+                        "match_type": "admin_spine_exact",
+                    }
+                else:
+                    results[index] = {
+                        "ok": False,
+                        "from_system": "admin.native_id",
+                        "input": request.get("value"),
+                        "normalized_input": value,
+                        "error": {
+                            "code": "admin_spine_match_ambiguous" if len(matches) > 1 else "admin_spine_match_not_found",
+                            "message": "identifier matched more than one admin-spine identity" if len(matches) > 1 else "identifier did not match the selected country admin spine",
+                        },
+                    }
 
     for (system, level, iso3, artifact_path, min_share, limit), members in groups.items():
         normalized = [
