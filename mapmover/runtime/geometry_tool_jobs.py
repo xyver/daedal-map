@@ -902,10 +902,13 @@ def create_conversion_job(
         output_name=str(payload.get("output_name") or "daedalmap-conversion"),
     )
     successful_distinct = sum(1 for item in resolution_cache.values() if item.get("ok"))
-    charge_units = _conversion_charge_units(successful_distinct)
+    successful_rows = sum(1 for item in results if item.get("ok"))
+    charge_units = _conversion_charge_units(successful_rows)
     meter_receipt = {
         "tool_name": "create_conversion_job",
         "requested_items": len(items),
+        "successful_items": successful_rows,
+        "unresolved_items": max(0, len(items) - successful_rows),
         "distinct_items_resolved": len(resolution_cache),
         "successful_distinct_items": successful_distinct,
         "duplicate_items_collapsed": max(0, len(items) - len(resolution_cache)),

@@ -708,6 +708,17 @@ def _tool_effective_access(tool_name: str, *, country_scope: str | None = None) 
             authored_pricing=tool_profile(tool_name).get("pricing") or "free",
             license_permissions={"paid"},
         )
+    if tool_name == "create_conversion_job":
+        # This tool meters identity-processing work and does not return source
+        # geometry. Geometry-bank redistribution permissions therefore do not
+        # determine whether the conversion service can settle its own quote.
+        return resolve_effective_access(
+            resource_kind="tool",
+            resource_id=tool_name,
+            authored_pricing=tool_profile(tool_name).get("pricing") or "free",
+            license_permissions={"paid"},
+            publication_cleared=True,
+        )
     try:
         from mapmover.runtime.geometry_catalog import geometry_bank_access_facts
 

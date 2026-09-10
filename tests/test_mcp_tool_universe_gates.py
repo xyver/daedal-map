@@ -615,6 +615,26 @@ class PaidBulkLicensingTests(unittest.TestCase):
         ):
             self.assertTrue(mcp_module._tool_paid_bulk_enforced("resolve_point"))
 
+    def test_conversion_billing_does_not_inherit_geometry_redistribution_terms(self) -> None:
+        """Identity-only conversion may meter work without returning source geometry."""
+        import mapmover.routes.mcp as mcp_module
+
+        with (
+            mock.patch(
+                "mapmover.runtime.geometry_catalog.geometry_bank_access_facts",
+                side_effect=AssertionError("conversion must not inspect geometry-bank licensing"),
+            ),
+            mock.patch.object(
+                mcp_module,
+                "resolve_effective_access",
+                return_value={"settlement_required": True},
+            ) as resolve_mock,
+        ):
+            self.assertTrue(mcp_module._tool_paid_bulk_enforced("create_conversion_job"))
+
+        self.assertEqual(resolve_mock.call_args.kwargs["license_permissions"], {"paid"})
+        self.assertTrue(resolve_mock.call_args.kwargs["publication_cleared"])
+
     def test_free_tools_never_enforce_paid_bulk(self) -> None:
         import mapmover.routes.mcp as mcp_module
 

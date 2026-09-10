@@ -2128,10 +2128,34 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         self.assertTrue(created["ok"])
         self.assertEqual(created["result"]["converted_count"], 1)
         self.assertEqual(created["result"]["error_count"], 1)
+        self.assertEqual(created["result"]["meter_receipt"]["successful_items"], 1)
+        self.assertEqual(created["result"]["meter_receipt"]["unresolved_items"], 1)
         self.assertEqual(created["result"]["meter_receipt"]["successful_distinct_items"], 1)
         self.assertEqual(created["result"]["output_rows"][0]["loc_id"], "USA-NC-185")
         self.assertIsNone(created["result"]["output_rows"][1]["loc_id"])
         self.assertIn("did not match", created["result"]["output_rows"][1]["error"])
+
+    def test_conversion_meter_charges_successful_rows_after_deduplication(self) -> None:
+        matched = {"ok": True, "resolved_loc_id": "USA-NC-185", "admin_level": "admin_2"}
+        with (
+            mock.patch("mapmover.runtime.geometry_tool_jobs.resolve_references_batch", return_value=[matched]),
+            mock.patch("mapmover.routes.mcp.log_api_query_event"),
+        ):
+            created = _tool_call(
+                self.client,
+                "create_conversion_job",
+                {
+                    "from_system": "census_geoid",
+                    "items": [{"value": "37185"} for _ in range(250)],
+                    "output_format": "json_rows",
+                },
+            )
+
+        meter = created["result"]["meter_receipt"]
+        self.assertEqual(meter["successful_items"], 250)
+        self.assertEqual(meter["successful_distinct_items"], 1)
+        self.assertEqual(meter["duplicate_items_collapsed"], 249)
+        self.assertEqual(meter["charge_units"], 3)
 
     def test_identify_reference_system_enforces_public_identifier_cap(self) -> None:
         with mock.patch("mapmover.routes.mcp.log_api_query_event"):
