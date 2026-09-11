@@ -63,7 +63,7 @@ from mapmover.runtime.geography_reference import classify_loc_id_family
 from mapmover.runtime.source_response_semantics import (
     collect_metric_response_contract,
 )
-from mapmover.data_loading import load_source_metadata
+from mapmover.data_loading import load_catalog, load_source_metadata
 from mapmover.security import get_client_ip, rate_limiter
 from mapmover.storage_mode import get_runtime_mode
 
@@ -74,35 +74,25 @@ EXACT_ID_ALIAS_FIELDS = {"event_id", "storm_id", "fire_id", "id"}
 
 
 def _source_access_facts(metadata: dict[str, Any]) -> tuple[set[str], bool]:
-    """Read legal eligibility and public-release clearance from one source.
+    """Read the same generated material-policy contract used by geometry."""
+    from material_policy_shared import material_access_facts
 
-    Data and geometry use the same factual fields.  Legacy data sources without
-    an explicit review envelope remain governed by their published catalog
-    permission; an explicit pending/rejected condition always fails closed.
+    facts = material_access_facts(metadata)
+    permission = str(facts.get("permission") or "").strip().lower()
+    return ({permission} if permission else set()), bool(facts.get("publication_cleared"))
+
+
+def _source_material_record(source_id: str) -> dict[str, Any]:
+    """Read the generated catalog contract or fail closed.
+
+    Source ``metadata.json`` owns query shape. The generated catalog owns the
+    resolved material policy, so hosted access must not independently rebuild a
+    legal decision from the source file during each request.
     """
-    permissions: set[str] = set()
-    envelopes = [metadata]
-    for key in ("license_policy", "source_license"):
-        value = metadata.get(key)
-        if isinstance(value, dict):
-            envelopes.append(value)
-    for envelope in envelopes:
-        value = str(envelope.get("permission") or "").strip().lower()
-        if value:
-            permissions.add(value)
-
-    cleared = True
-    for envelope in envelopes:
-        review = str(envelope.get("license_review_status") or "").strip().lower()
-        if review in {"needs_review", "rejected", "unreviewed", "pending"}:
-            cleared = False
-        secondary = envelope.get("secondary_use")
-        if isinstance(secondary, dict):
-            status = str(secondary.get("status") or "").strip().lower()
-            disposition = str(secondary.get("disposition") or "").strip().lower()
-            if status in {"needs_review", "requires_application"} or disposition in {"", "pending", "needs_review"}:
-                cleared = False
-    return permissions, cleared
+    for source in (load_catalog() or {}).get("sources", []):
+        if isinstance(source, dict) and str(source.get("source_id") or "").strip() == source_id:
+            return source
+    return {}
 
 
 def _get_request_ip(request: Request) -> str | None:
@@ -391,8 +381,9 @@ async def execute_query_dataset_payload(req: Request, payload: dict[str, Any]) -
     if resolved_from_pack:
         req.state.analytics_pack_id = pack_id or spec.pack_id
     local_installed_access = get_runtime_mode() == "local"
-    source_access_metadata = load_source_metadata(spec.metadata_source_id or spec.source_id) or {}
-    source_permissions, publication_cleared = _source_access_facts(source_access_metadata)
+    metadata_source_id = spec.metadata_source_id or spec.source_id
+    source_material_record = _source_material_record(metadata_source_id)
+    source_permissions, publication_cleared = _source_access_facts(source_material_record)
     effective_access = pack_effective_access(
         spec.pack_id,
         license_permissions=source_permissions or None,

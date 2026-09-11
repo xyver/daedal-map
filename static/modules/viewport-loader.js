@@ -416,7 +416,7 @@ export const ViewportLoader = {
       for (let offset = 0; offset < missingLocIds.length; offset += batchSize) {
         const batch = missingLocIds.slice(offset, offset + batchSize);
         const batchData = await postMsgpack(
-          '/geometry/selection',
+          '/geometry/display-features',
           { loc_ids: batch },
           { signal: requestController.signal }
         );

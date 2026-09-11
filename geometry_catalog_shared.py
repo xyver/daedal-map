@@ -202,6 +202,17 @@ def _without_fields(record: dict[str, Any], fields: set[str]) -> dict[str, Any]:
     return {key: value for key, value in record.items() if key not in fields}
 
 
+def _compact_material_policy(value: Any) -> dict[str, Any] | None:
+    """Keep public legal/citation facts while dropping repeated source receipts."""
+    if not isinstance(value, dict):
+        return None
+    return {
+        key: item
+        for key, item in value.items()
+        if key not in {"provenance", "object_license_policy"}
+    }
+
+
 def _compact_family_rows(rows: Any) -> list[dict[str, Any]]:
     return [
         _without_fields(row, _PUBLIC_FAMILY_DETAIL_FIELDS)
@@ -226,6 +237,9 @@ def _compact_public_record(key: str, record: dict[str, Any]) -> dict[str, Any]:
             result["country_catalog_path"] = (
                 f"geometry/countries/{country}/{country}_catalog.json"
             )
+    compact_policy = _compact_material_policy(result.get("material_policy"))
+    if compact_policy is not None:
+        result["material_policy"] = compact_policy
     return result
 
 

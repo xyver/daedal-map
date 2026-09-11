@@ -43,7 +43,9 @@ function inferLoadingLabel(url, options = {}) {
     if (level === 3) return 'Loading local areas...';
     return 'Loading map index...';
   }
-  if (url.includes('/geometry/selection')) return 'Loading map shapes...';
+  if (url.includes('/geometry/selection') || url.includes('/geometry/display-features')) {
+    return 'Loading map shapes...';
+  }
   if (url.includes('/geometry/countries')) return 'Loading countries...';
   if (url.includes('/geometry/viewport')) return 'Loading map view...';
   if (url.includes('/api/earthquakes/')) return 'Loading earthquakes...';

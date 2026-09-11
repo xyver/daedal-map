@@ -24,6 +24,7 @@ from geometry_catalog_shared import (
     published_geometry_catalog_records,
     public_geometry_catalog_records,
 )
+from material_policy_shared import combine_material_access
 
 
 CATALOG_PATH = GEOMETRY_DIR / "geometry_catalog.json"
@@ -291,10 +292,9 @@ def geometry_bank_access_facts(
 ) -> tuple[set[str], bool]:
     """Return commercial-use permissions and hosted publication clearance.
 
-    Both singular and plural source envelopes are accepted during migration.
-    An explicit pending review or secondary-use disposition fails closed.  The
-    runtime catalog contains promoted banks, so a legacy envelope with no
-    review field retains its prior admitted behavior.
+    Every matched bank must carry the generated material-policy contract.
+    Missing policy fails closed instead of reconstructing a decision from
+    source envelopes at request time.
     """
     catalog = load_geometry_catalog() or {}
     banks = catalog.get("geometry_banks") or {}
@@ -305,9 +305,7 @@ def geometry_bank_access_facts(
 
     normalized_scopes = {str(value).strip().upper() for value in (scopes or set()) if str(value).strip()}
     normalized_families = {str(value).strip().lower() for value in (families or set()) if str(value).strip()}
-    permissions: set[str] = set()
-    publication_cleared = True
-    matched_bank = False
+    matched_banks: list[dict[str, Any]] = []
     for bank in banks:
         if not isinstance(bank, dict):
             continue
@@ -317,34 +315,9 @@ def geometry_bank_access_facts(
             continue
         if normalized_families and bank_family not in normalized_families:
             continue
-        matched_bank = True
-        source_licenses = [
-            item for item in (bank.get("source_licenses") or []) if isinstance(item, dict)
-        ]
-        if not source_licenses and isinstance(bank.get("source_license"), dict):
-            source_licenses = [bank["source_license"]]
-        if not source_licenses:
-            source_licenses = [bank]
-        for source_license in source_licenses:
-            value = source_license.get("permission") or bank.get("permission")
-            text = str(value or "").strip().lower()
-            if text:
-                permissions.add(text)
-            review = str(source_license.get("license_review_status") or "").strip().lower()
-            if review in {"needs_review", "rejected", "unreviewed", "pending"}:
-                publication_cleared = False
-            secondary = source_license.get("secondary_use")
-            if isinstance(secondary, dict):
-                status = str(secondary.get("status") or "").strip().lower()
-                disposition = str(secondary.get("disposition") or "").strip().lower()
-                if status in {"needs_review", "requires_application"} or disposition in {"", "pending", "needs_review"}:
-                    publication_cleared = False
-    return permissions, bool(matched_bank and publication_cleared)
-
-
-def geometry_bank_permissions() -> set[str]:
-    """Compatibility projection of :func:`geometry_bank_access_facts`."""
-    return geometry_bank_access_facts()[0]
+        matched_banks.append(bank)
+    combined = combine_material_access(matched_banks)
+    return set(combined.get("permissions") or set()), bool(combined.get("publication_cleared"))
 
 
 def is_deprecated_geometry_loc_id(value: str | None) -> bool:
