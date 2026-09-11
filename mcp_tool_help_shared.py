@@ -94,6 +94,14 @@ TOOL_GUIDANCE: dict[str, dict[str, Any]] = {
         ["estimate_conversion_job", "resolve_reference", "check_geometry"],
         ["reference system", "source vintage", "geometry bank ids", "validation scope"],
     ),
+    "identify_dataset_geography": _g(
+        ["You have bounded samples from several table columns and need DaedalMap to select and identify the geography."],
+        ["Uploading the complete source file", "Pre-classifying systems in browser code", "Returning polygons", "Converting every row"],
+        {"columns": [{"name": "municipality_code", "values": ["1200013", "1200054"]}], "dataset_context": {"file_name": "population.csv", "row_count": 200}},
+        ["status", "candidates", "recommended_candidate_id", "recommended_binding"],
+        ["identify_reference_system", "estimate_conversion_job", "resolve_point"],
+        ["selected input column", "reference system", "country scope", "admin level", "sample match rate"],
+    ),
     "resolve_reference": _g(
         ["You have a name or external geography code and need ranked DaedalMap loc_id matches."],
         ["Converting coordinates", "Pretending overlap is strict parentage"],
@@ -403,7 +411,7 @@ def tool_help_payload(
     pricing = tool_pricing(name)
     access = {
         "pricing": pricing,
-        "free_discovery": name in {"get_tool_help", "how_geometry_works", "get_catalog", "get_pack", "read_geometry_catalog", "list_reference_systems", "identify_reference_system"},
+        "free_discovery": name in {"get_tool_help", "how_geometry_works", "get_catalog", "get_pack", "read_geometry_catalog", "list_reference_systems", "identify_dataset_geography", "identify_reference_system"},
         "limits": limits,
         "above_free_limit": "payment_required" if pricing.startswith("paid") else (
             "bounded_inline_limit_error" if name in {"create_geometry_export", "create_conversion_job"} else "typed_cap_error"

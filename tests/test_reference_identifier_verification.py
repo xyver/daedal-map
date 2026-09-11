@@ -20,9 +20,10 @@ from mapmover.runtime.reference_exchange import (
     list_reference_systems,
     resolve_gers_division,
     resolve_reference,
+    resolve_references_batch,
     verify_loc_ids,
 )
-from mapmover.runtime.reference_identification import identify_reference_system
+from mapmover.runtime.reference_identification import identify_dataset_geography, identify_reference_system
 
 
 # A real Overture GERS division id and the loc_id the crosswalk assigns it.
@@ -296,6 +297,50 @@ class GersResolutionTests(unittest.TestCase):
             if item["system"] == GERS_SYSTEM
         )
         self.assertGreater(len(entry["internal_releases"]), 1)
+
+    def test_dataset_identification_selects_published_brazil_admin_ids(self) -> None:
+        payload = identify_dataset_geography([
+            {"name": "municipality_code", "values": ["1200013", "1200054"], "nonempty_count": 2},
+            {"name": "population", "values": ["4567", "8910"], "nonempty_count": 2},
+        ])
+
+        selected = payload["candidates"][0]
+        self.assertEqual(selected["header"], "municipality_code")
+        self.assertEqual(selected["catalog"]["recommended_binding"]["country_scope"], "BRA")
+        self.assertEqual(selected["catalog"]["recommended_binding"]["geo_level"], "admin_2")
+
+    def test_dataset_identification_owns_coordinate_column_selection(self) -> None:
+        payload = identify_dataset_geography([
+            {"name": "ActiveFireCandidate", "values": ["true", "false"]},
+            {"name": "trailhead_lat", "values": ["49.957284", "49.3"]},
+            {"name": "trailhead_lon", "values": ["-123.120488", "-123.1"]},
+        ])
+
+        selected = payload["candidates"][0]
+        self.assertEqual(selected["kind"], "coordinates")
+        self.assertEqual(selected["columns"], ["trailhead_lat", "trailhead_lon"])
+
+    def test_dataset_identification_keeps_global_admin_binding_with_mismatches(self) -> None:
+        payload = identify_dataset_geography([
+            {"name": "LocationCode", "values": ["AFG", "ALB", "DZA", "CAN", "SEAR"]},
+            {"name": "NumericValue", "values": ["1", "2", "3", "4", "5"]},
+        ])
+
+        selected = payload["candidates"][0]
+        self.assertEqual(selected["header"], "LocationCode")
+        self.assertEqual(selected["catalog"]["status"], "partial_match")
+        self.assertEqual(selected["catalog"]["recommended_binding"]["system"], "geoboundaries.code")
+        self.assertEqual(selected["catalog"]["recommended_binding"]["geo_level"], "admin_0")
+        self.assertIsNone(selected["catalog"]["recommended_binding"]["country_scope"])
+
+    def test_global_admin_codes_resolve_without_an_invented_country_scope(self) -> None:
+        payload = resolve_references_batch([
+            {"from_system": "geoboundaries.code", "value": "AFG", "target_admin_level": "admin_0"},
+            {"from_system": "geoboundaries.code", "value": "ALB", "target_admin_level": "admin_0"},
+        ])
+
+        self.assertEqual([item["resolved_loc_id"] for item in payload], ["AFG", "ALB"])
+        self.assertEqual([item["admin_level"] for item in payload], ["admin_0", "admin_0"])
 
 
 if __name__ == "__main__":

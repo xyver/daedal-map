@@ -58,6 +58,7 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
 
         self.assertIn("how_geometry_works", tool_names)
         self.assertIn("list_reference_systems", tool_names)
+        self.assertIn("identify_dataset_geography", tool_names)
         self.assertIn("identify_reference_system", tool_names)
         self.assertIn("read_geometry_catalog", tool_names)
         self.assertIn("resolve_reference", tool_names)
@@ -90,6 +91,24 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         self.assertIn("crosswalk_artifacts", catalog_views)
         self.assertNotIn("bridges", catalog_views)
 
+    def test_dataset_geography_tool_selects_country_admin_binding(self) -> None:
+        payload = _tool_call(
+            self.client,
+            "identify_dataset_geography",
+            {
+                "columns": [
+                    {"name": "municipality_code", "values": ["1200013", "1200054"], "nonempty_count": 2},
+                    {"name": "population", "values": ["4567", "8910"], "nonempty_count": 2},
+                ],
+                "dataset_context": {"file_name": "brazil.csv", "row_count": 2},
+            },
+        )
+
+        selected = payload["candidates"][0]
+        self.assertEqual(selected["header"], "municipality_code")
+        self.assertEqual(selected["catalog"]["recommended_binding"]["country_scope"], "BRA")
+        self.assertEqual(selected["catalog"]["recommended_binding"]["geo_level"], "admin_2")
+
     def test_geography_facade_has_coordinated_registry_identity(self) -> None:
         envelope = _mcp_call(
             self.client,
@@ -98,7 +117,7 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         )
 
         self.assertEqual(envelope["result"]["serverInfo"]["name"], "com.daedalmap/geography")
-        self.assertEqual(envelope["result"]["serverInfo"]["version"], "1.0.4")
+        self.assertEqual(envelope["result"]["serverInfo"]["version"], "1.1.0")
 
     def test_large_structured_tool_result_summarizes_text_copy(self) -> None:
         payload = {

@@ -549,6 +549,8 @@ def _normalize_source_loc_id(source_family: str, value: str, iso3: str) -> str:
         return f"{country}-NWSZ-{text.upper()}"
     if family == "overlay_nws_fire_weather_zone" and len(text) == 6 and text[:2].isalpha() and text[2].upper() == "Z":
         return f"{country}-NWSFZ-{text.upper()}"
+    if family in {"usa.census.2025.aiannhce", "usa.census.aiannhce"} and text.isdigit() and len(text) <= 4:
+        return text.zfill(4)
     return text
 
 
@@ -1410,7 +1412,7 @@ def resolve_reference(
     *,
     from_system: str,
     value: str,
-    iso3: str = "USA",
+    iso3: str | None = None,
     target_admin_level: int | str | None = "admin_2",
     relationship_vintage: str | None = None,
     min_share: float | None = None,
@@ -1436,9 +1438,7 @@ def resolve_reference(
         payload = resolve_external_reference(
             system,
             text,
-            # `iso3` defaults to USA for family/admin crosswalks, so using
-            # it here would silently filter a Canadian external id. Only the
-            # explicit country hint may constrain an external adapter.
+            # Only an explicit country hint may constrain an external adapter.
             country_scope=country_hint or None,
             source_release=source_release,
             internal_release=internal_release,
@@ -1569,7 +1569,8 @@ def resolve_reference(
         try:
             from .reference_graph import identity as graph_identity, resolve_alias
 
-            graph_matches = resolve_alias(system, text, limit=limit or 10, iso3=iso3)
+            normalized_alias = _normalize_source_loc_id(system, text, iso3 or "")
+            graph_matches = resolve_alias(system, normalized_alias, limit=limit or 10, iso3=iso3)
         except Exception:
             graph_matches = []
         if graph_matches:
@@ -1579,6 +1580,7 @@ def resolve_reference(
                 "ok": True,
                 "from_system": system,
                 "input": value,
+                "normalized_input": normalized_alias,
                 "resolved_loc_id": primary.get("loc_id"),
                 "resolved_family": graph_node.get("family") or classify_loc_id_family(primary.get("loc_id")),
                 "match_type": "reference_graph_alias",
@@ -1638,6 +1640,7 @@ def resolve_references_batch(requests: list[dict[str, Any]]) -> list[dict[str, A
     groups: dict[tuple[Any, ...], list[tuple[int, dict[str, Any]]]] = {}
     census_candidates: list[tuple[int, dict[str, Any], str, str | None, str | None]] = []
     native_admin_groups: dict[str, list[tuple[int, dict[str, Any], str]]] = {}
+    unscoped_alias_groups: dict[str, list[tuple[int, dict[str, Any], str]]] = {}
     for index, request in enumerate(requests):
         if request.get("to_system"):
             results[index] = convert_reference(**request)
@@ -1658,8 +1661,17 @@ def resolve_references_batch(requests: list[dict[str, Any]]) -> list[dict[str, A
         if get_external_adapter(system):
             results[index] = resolve_reference(**request)
             continue
+        requested_country = str(request.get("iso3") or "").strip().upper()
+        if not requested_country:
+            # Dataset identification may deliberately return no single country
+            # for a global column (for example, ISO/geoBoundaries Admin0
+            # codes). Resolve those exact graph aliases in one batched scan;
+            # never invent a USA scope in the transport layer.
+            value = str(request.get("value") or "").strip()
+            unscoped_alias_groups.setdefault(system, []).append((index, request, value))
+            continue
         level = admin_level_name(request.get("target_admin_level") or "admin_2")
-        iso3 = str(request.get("iso3") or "USA").strip().upper()
+        iso3 = requested_country
         artifact = _first_crosswalk_artifact(
             source_family=system,
             target_admin_level=level,
@@ -1769,6 +1781,63 @@ def resolve_references_batch(requests: list[dict[str, Any]]) -> list[dict[str, A
                         },
                     }
 
+    if unscoped_alias_groups:
+        from .reference_graph import identify_aliases, identities
+
+        for system, members in unscoped_alias_groups.items():
+            values = list(dict.fromkeys(value for _, _, value in members if value))
+            aliases = identify_aliases(
+                values,
+                iso3=None,
+                reference_system=system,
+                limit=max(500, len(values) * 10),
+            )
+            by_value: dict[str, list[dict[str, Any]]] = {}
+            for alias in aliases:
+                if str(alias.get("reference_system") or "").lower() != system:
+                    continue
+                by_value.setdefault(str(alias.get("external_id") or ""), []).append(alias)
+            candidate_ids = list(dict.fromkeys(
+                str(alias.get("loc_id") or "")
+                for matches in by_value.values()
+                for alias in matches
+                if alias.get("loc_id")
+            ))
+            identity_by_id = {
+                str(row.get("loc_id") or ""): row
+                for row in identities(candidate_ids)
+                if isinstance(row, dict) and row.get("loc_id")
+            }
+            for index, request, value in members:
+                matches = [
+                    alias for alias in by_value.get(value, [])
+                    if str(alias.get("loc_id") or "") in identity_by_id
+                ]
+                loc_ids = list(dict.fromkeys(str(alias.get("loc_id") or "") for alias in matches))
+                if len(loc_ids) == 1:
+                    loc_id = loc_ids[0]
+                    node = identity_by_id[loc_id]
+                    results[index] = {
+                        "ok": True,
+                        "from_system": system,
+                        "input": request.get("value"),
+                        "normalized_input": value,
+                        "resolved_loc_id": loc_id,
+                        "resolved_family": node.get("family") or classify_loc_id_family(loc_id),
+                        "admin_level": admin_level_name(node.get("admin_level")),
+                        "match_type": "reference_graph_alias",
+                    }
+                else:
+                    results[index] = {
+                        "ok": False,
+                        "from_system": system,
+                        "input": request.get("value"),
+                        "normalized_input": value,
+                        "error": {
+                            "code": "reference_alias_ambiguous" if len(loc_ids) > 1 else "reference_alias_not_found",
+                            "message": "identifier matched more than one maintained identity" if len(loc_ids) > 1 else "identifier did not match the maintained identity graph",
+                        },
+                    }
     for (system, level, iso3, artifact_path, min_share, limit), members in groups.items():
         normalized = [
             _normalize_source_loc_id(system, str(request.get("value") or "").strip(), iso3)

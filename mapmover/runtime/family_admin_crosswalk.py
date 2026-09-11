@@ -18,7 +18,7 @@ from ..paths import DATA_ROOT
 
 
 def admin_level_name(admin_level: int | str) -> str:
-    text = str(admin_level or "").strip().lower()
+    text = str(admin_level if admin_level is not None else "").strip().lower()
     aliases = {
         "country": "admin_0",
         "nation": "admin_0",

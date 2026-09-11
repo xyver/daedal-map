@@ -62,7 +62,7 @@ class PublicDiscoveryCatalogTests(unittest.TestCase):
             "geography": {
                 "get_tool_help", "how_geometry_works", "get_catalog", "get_pack",
                 "resolve_point", "loc_id_info", "read_geometry_catalog",
-                "list_reference_systems", "identify_reference_system",
+                "list_reference_systems", "identify_dataset_geography", "identify_reference_system",
                 "resolve_reference", "convert_reference", "check_geometry",
                 "compare_geographies", "get_geometry", "resolve_loc_id_scope",
                 "estimate_geometry_package", "create_geometry_export",

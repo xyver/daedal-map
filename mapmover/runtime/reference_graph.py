@@ -880,6 +880,7 @@ def public_alias_reference_systems(*, iso3: str | None = None) -> list[dict[str,
 
 def identify_aliases(
     external_ids: list[str], *, limit: int = 500, iso3: str | None = None,
+    reference_system: str | None = None,
 ) -> list[dict[str, Any]]:
     """Return exact alias rows, narrowed to one country graph when supplied."""
     requested = list(dict.fromkeys(str(item).strip() for item in external_ids if str(item).strip()))
@@ -893,17 +894,24 @@ def identify_aliases(
             *([global_reference_graph_root()] if global_reference_graph_root() else []),
         ]
     )
-    source = _table_source_for_roots("aliases", roots)
+    source = _table_source_for_roots(
+        "aliases", roots, reference_system=str(reference_system) if reference_system else None,
+    )
     if not source:
         return []
     placeholders = ", ".join("?" for _ in requested)
     connection = _connection()
     try:
+        system_filter = " AND lower(reference_system) = lower(?)" if reference_system else ""
+        parameters = [*requested]
+        if reference_system:
+            parameters.append(str(reference_system))
+        parameters.append(max(1, int(limit)))
         cursor = connection.execute(
             f"""SELECT * FROM read_parquet({source}, union_by_name=True)
-                WHERE external_id IN ({placeholders})
+                WHERE external_id IN ({placeholders}){system_filter}
                 ORDER BY reference_system, external_id, loc_id LIMIT ?""",
-            [*requested, max(1, int(limit))],
+            parameters,
         )
         columns = [item[0] for item in cursor.description]
         return [dict(zip(columns, row)) for row in cursor.fetchall()]

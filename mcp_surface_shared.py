@@ -263,6 +263,46 @@ def build_tool_definitions() -> list[dict]:
             "annotations": {"readOnlyHint": True},
         },
         {
+            "name": "identify_dataset_geography",
+            "title": "Identify Dataset Geography",
+            "description": "Free dataset-orchestration utility. Accepts bounded samples from plausible scalar columns and determines which column contains geography, then identifies its maintained reference system, country, and administrative level. The caller performs only structural parsing and sampling; it must not assign geographic meaning in advance. Returns ranked bindings for identifier columns or coordinate pairs. No geometry is loaded and no full dataset is retained. No payment required.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "columns": {
+                        "type": "array",
+                        "minItems": 1,
+                        "maxItems": 64,
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "name": {"type": "string"},
+                                "values": {"type": "array", "maxItems": 32, "items": {"type": "string"}},
+                                "nonempty_count": {"type": "integer", "minimum": 0},
+                            },
+                            "required": ["name", "values"],
+                            "additionalProperties": False,
+                        },
+                        "description": "Structurally filtered columns with deterministic representative scalar values. Do not pre-label their geographic system.",
+                    },
+                    "dataset_context": {
+                        "type": "object",
+                        "properties": {
+                            "file_name": {"type": "string"},
+                            "sheet_name": {"type": "string"},
+                            "row_count": {"type": "integer", "minimum": 0},
+                        },
+                        "additionalProperties": False,
+                    },
+                    "country_scope": {"type": "string", "description": "Optional caller-declared ISO3 hint. Omit when unknown."},
+                    "request_id": {"type": "string"},
+                },
+                "required": ["columns"],
+                "additionalProperties": False,
+            },
+            "annotations": {"readOnlyHint": True},
+        },
+        {
             "name": "identify_reference_system",
             "title": "Identify Geographic Reference System",
             "description": "Free geography utility. Checks a bounded sample of identifiers plus optional dataset/column context against maintained reference indexes and geometry banks. LLM clients must extract identifier values from the user's natural-language request and pass them as strings; do not put the prose question in the arguments, and preserve leading zeros. Use it when a caller is unsure which system or level their keys belong to. It returns one to three interpretations with confidence and preserves ambiguity until the user confirms one by retrying with expected.system. A caller who already knows the system can provide expected on the first call and receive a verified geography_binding directly. It does not convert the full dataset or return polygons. No payment required.",
@@ -344,7 +384,7 @@ def build_tool_definitions() -> list[dict]:
                         },
                         "description": "Reference values to resolve in one call. Default public cap is deployment-configurable.",
                     },
-                    "iso3": {"type": "string", "description": "Country hint for system-specific crosswalks. Default USA."},
+                    "iso3": {"type": "string", "description": "Optional country hint for system-specific crosswalks. Omit for a globally scoped identifier system."},
                     "target_admin_level": {"anyOf": [{"type": "string"}, {"type": "integer"}], "description": "Admin target level for crosswalk-backed resolution. Default admin_2. Accepts admin_0..admin_5, 0..5, or names such as country, state, county, tract, block_group, or block."},
                     "relationship_vintage": {"type": "string", "description": "Optional relationship vintage to require, such as usa_geometry_current or census_2020_relationship_files."},
                     "min_share": {"type": "number", "minimum": 0, "maximum": 1, "description": "Optional minimum area-share threshold for overlap matches."},

@@ -164,6 +164,14 @@ TOOL_ACCESS_REGISTRY: dict[str, dict] = {
         "paid_item_limit": 2500,
         "legacy_limit_env": ("REFERENCE_IDENTIFY_BATCH_LIMIT",),
     },
+    "identify_dataset_geography": {
+        "family": FAMILY_GEOGRAPHY,
+        "capability_id": "dataset_geography_identification",
+        "pricing": PRICING_FREE,
+        "item_field": "columns",
+        "free_item_limit": 64,
+        "paid_item_limit": 64,
+    },
     "convert_reference": {
         "family": FAMILY_GEOGRAPHY,
         "capability_id": "reference_conversion",

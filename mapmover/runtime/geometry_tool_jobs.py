@@ -677,12 +677,13 @@ def _conversion_cache_key(row: dict[str, Any]) -> str:
 
 
 def _run_conversion_row(row: dict[str, Any], *, default_limit: int) -> dict[str, Any]:
+    country_scope = str(row.get("iso3") or "").strip().upper() or None
     if row.get("to_system"):
         return convert_reference(
             from_system=str(row.get("from_system") or ""),
             value=str(row.get("value") or ""),
             to_system=str(row.get("to_system") or ""),
-            iso3=str(row.get("iso3") or "USA"),
+            iso3=country_scope,
             target_admin_level=row.get("target_admin_level") or "admin_2",
             relationship_vintage=row.get("relationship_vintage"),
             min_share=row.get("min_share"),
@@ -691,7 +692,7 @@ def _run_conversion_row(row: dict[str, Any], *, default_limit: int) -> dict[str,
     return resolve_reference(
         from_system=str(row.get("from_system") or ""),
         value=str(row.get("value") or ""),
-        iso3=str(row.get("iso3") or "USA"),
+        iso3=country_scope,
         target_admin_level=row.get("target_admin_level") or "admin_2",
         relationship_vintage=row.get("relationship_vintage"),
         min_share=row.get("min_share"),
@@ -703,7 +704,7 @@ def _conversion_reference_request(row: dict[str, Any], *, default_limit: int) ->
     request = {
         "from_system": str(row.get("from_system") or ""),
         "value": str(row.get("value") or ""),
-        "iso3": str(row.get("iso3") or "USA"),
+        "iso3": str(row.get("iso3") or "").strip().upper() or None,
         "target_admin_level": row.get("target_admin_level") or "admin_2",
         "relationship_vintage": row.get("relationship_vintage"),
         "min_share": row.get("min_share"),

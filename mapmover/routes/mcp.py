@@ -78,7 +78,7 @@ router = APIRouter()
 MCP_PACK_READ_TOOLS = {"get_tool_help", "get_catalog", "get_pack"}
 MCP_GEOMETRY_READ_TOOLS = {
     "how_geometry_works", "resolve_point", "loc_id_info", "read_geometry_catalog",
-    "list_reference_systems", "identify_reference_system", "resolve_reference",
+    "list_reference_systems", "identify_dataset_geography", "identify_reference_system", "resolve_reference",
     "convert_reference", "compare_geographies", "check_geometry", "get_geometry",
     "resolve_loc_id_scope", "estimate_geometry_package", "estimate_conversion_job",
     "get_job_status",
@@ -1239,7 +1239,7 @@ def get_server_description(pack_id: str | None = None) -> str:
             "Start with free discovery: call read_geometry_catalog with view='capabilities' for the current global baseline and catalog-admitted country enrichment; use its focused inventory views for admin depths, shape-backed families, crosswalks, named geometries, and package availability. Then call list_reference_systems to see supported exchange systems, relationship vintages, counts, and license/source context. "
             "For coordinates, call resolve_point with lat/lon or points; it returns only the compact complete latest-available chain and defaults to the deepest served tier. Do not request geometry or relationship detail in that call. "
             "When the caller asks for details about that chain, pass its stack loc_ids to loc_id_info; use get_geometry only for shapes and compare_geographies only for overlap, topology, validity, or successor questions. Mixed-vintage point context is not strict parentage. "
-            "For a user dataset with unknown or informally declared geography keys, call identify_reference_system on representative or all distinct identifiers, then pass an unambiguous geography_binding to the conversion-job tools. For one known outside geography code or name, call resolve_reference. For bulk geometry, call resolve_loc_id_scope only for one strict hierarchy, then estimate_geometry_package before create_geometry_export. "
+            "For a user dataset with unknown or informally declared geography keys, pass bounded scalar column samples to identify_dataset_geography; the caller may filter transport noise but must not choose the geography itself. Then pass its unambiguous geography_binding to the conversion-job tools. Use identify_reference_system only when one identifier column is already selected. For one known outside geography code or name, call resolve_reference. For bulk geometry, call resolve_loc_id_scope only for one strict hierarchy, then estimate_geometry_package before create_geometry_export. "
             "Geometry export and conversion creates are synchronous operations with operational safety limits (currently 250 selected geometries and 7,500 conversion rows by default) sized around a 10-20 second response budget. Local and hosted tools use the same item ceilings for now; local access does not require hosted settlement. Call the estimate tool or get_tool_help for the effective access lane. This facade does not promise a durable queue that is not deployed."
         )
     if not normalized:
@@ -3174,6 +3174,64 @@ async def _execute_identify_reference_system_tool(request: Request, arguments: d
     return _jsonrpc_response(_tool_result(result_payload, is_error=not allowed), rpc_request_id)
 
 
+@_guard_mcp_execution("identify_dataset_geography")
+async def _execute_identify_dataset_geography_tool(request: Request, arguments: dict[str, Any], rpc_request_id: Any) -> Response:
+    started_at = time.perf_counter()
+    payload = _ensure_request_id(arguments, "identify_dataset_geography")
+    request_id = str(payload.get("request_id") or "")
+    columns = payload.get("columns") if isinstance(payload.get("columns"), list) else []
+    limit = _tool_batch_item_limit("identify_dataset_geography")
+    if len(columns) > limit:
+        error_payload = _batch_error_payload(
+            request_id=request_id,
+            batch_id=None,
+            code="too_many_items",
+            message=f"identify_dataset_geography accepts at most {limit} columns per call",
+            limit=limit,
+            loc_id_count=len(columns),
+        )
+        return _jsonrpc_response(_tool_result(error_payload, is_error=True), rpc_request_id)
+    try:
+        from mapmover.runtime.reference_identification import identify_dataset_geography
+
+        runtime_started = time.perf_counter()
+        result = await run_mcp_blocking(
+            "identify_dataset_geography",
+            identify_dataset_geography,
+            columns,
+            dataset_context=payload.get("dataset_context"),
+            country_scope=payload.get("country_scope"),
+        )
+        stages = {"dataset_identification_ms": _elapsed_ms(runtime_started)}
+    except Exception as exc:
+        result = {"ok": False, "status": "failed", "error": {"code": "dataset_geography_identification_failed", "message": str(exc)}}
+        stages = {}
+    result_payload = {"request_id": request_id, "limit": limit, **result}
+    allowed = bool(result.get("ok"))
+    candidate_count = len(result.get("candidates") or []) if isinstance(result, dict) else 0
+    _log_mcp_tool_usage_event(
+        request,
+        request_id=request_id,
+        tool_name="identify_dataset_geography",
+        capability_id="dataset_geography_identification",
+        decision="allow" if allowed else "deny",
+        started_at=started_at,
+        row_count=len(columns),
+        query_granularity=f"bulk_{len(columns)}",
+        response_payload=result_payload,
+        error_code=None if allowed else str(((result.get("error") or {}).get("code") if isinstance(result.get("error"), dict) else None) or "dataset_geography_identification_failed"),
+        metadata={
+            "event": "dataset_geography_identification",
+            "tool_mode": "discovery",
+            "quantity": len(columns),
+            "candidate_count": candidate_count,
+            "status": result.get("status"),
+            **_compute_metadata(response_payload=result_payload, stages=stages, input_count=len(columns), output_count=candidate_count, batch_limit=limit),
+        },
+    )
+    return _jsonrpc_response(_tool_result(result_payload, is_error=not allowed), rpc_request_id)
+
+
 @_guard_mcp_execution("read_geometry_catalog")
 async def _execute_read_geometry_catalog_tool(request: Request, arguments: dict[str, Any], rpc_request_id: Any) -> Response:
     started_at = time.perf_counter()
@@ -3452,7 +3510,7 @@ def _resolve_reference_item(payload: dict[str, Any]) -> dict[str, Any]:
         return resolve_reference(
             from_system=from_system,
             value=value,
-            iso3=str(payload.get("iso3") or "USA"),
+            iso3=str(payload.get("iso3") or "").strip().upper() or None,
             target_admin_level=payload.get("target_admin_level", "admin_2"),
             relationship_vintage=payload.get("relationship_vintage"),
             min_share=_normalize_crosswalk_share(payload.get("min_share")),
@@ -3696,7 +3754,7 @@ def _resolve_reference_items(items: list[Any], base_payload: dict[str, Any]) -> 
         requests.append({
             "from_system": from_system,
             "value": value,
-            "iso3": str(merged.get("iso3") or "USA"),
+            "iso3": str(merged.get("iso3") or "").strip().upper() or None,
             "target_admin_level": merged.get("target_admin_level", "admin_2"),
             "relationship_vintage": merged.get("relationship_vintage"),
             "min_share": _normalize_crosswalk_share(merged.get("min_share")),
@@ -5166,6 +5224,12 @@ async def mcp_endpoint(request: Request, pack_id: str | None = None):
         if rate_limit_response:
             return rate_limit_response
         return await _execute_identify_reference_system_tool(request, arguments, request_id)
+
+    if tool_name == "identify_dataset_geography":
+        rate_limit_response = _live_tool_rate_limit_response(request, tool_name, request_id)
+        if rate_limit_response:
+            return rate_limit_response
+        return await _execute_identify_dataset_geography_tool(request, arguments, request_id)
 
     if tool_name == "resolve_reference":
         rate_limit_response = _live_tool_rate_limit_response(request, tool_name, request_id)
