@@ -584,6 +584,31 @@ def identify_reference_system(
                 country_scope=country or "USA",
             ))
 
+    geoboundaries_code_checked = False
+    if not expected_system or expected_system == "geoboundaries.code":
+        shaped = [value for value in values if re.fullmatch(r"[A-Za-z]{3}", value)]
+        try:
+            from .global_admin0_query import load_global_admin0_identities
+
+            identity_rows = load_global_admin0_identities(shaped) or {}
+        except Exception:
+            identity_rows = {}
+        matches = {
+            value: [value.upper()]
+            for value in shaped
+            if value.upper() in identity_rows
+        }
+        if matches:
+            candidates.append(_candidate(
+                system="geoboundaries.code",
+                identifiers=values,
+                matches=matches,
+                levels={value: "admin_0" for value in matches},
+                method="exact_identifier_lookup",
+                country_scope="",
+            ))
+        geoboundaries_code_checked = expected_system == "geoboundaries.code"
+
     if not expected_system or expected_system == "daedalmap.loc_id":
         # The regex is a prefilter, not the evidence. It only decides which
         # values are worth a lookup; matching it never means the identifier
@@ -665,7 +690,7 @@ def identify_reference_system(
         }
         for candidate in candidates
     )
-    if not expected_system_fully_matched:
+    if not expected_system_fully_matched and not geoboundaries_code_checked:
         for candidate in _reference_graph_candidates(
             values, country_scope=country, reference_system=expected_system or None,
         ):
@@ -1241,9 +1266,15 @@ def identify_dataset_geography(
             "catalog": result,
         })
         if (
-            result.get("status") == "matched"
-            and binding.get("geo_level")
-            and (confidence_score >= 0.7 or expected_hint is not None)
+            binding
+            and (
+                expected_hint is not None
+                or (
+                    result.get("status") == "matched"
+                    and binding.get("geo_level")
+                    and confidence_score >= 0.7
+                )
+            )
         ):
             break
 

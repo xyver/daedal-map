@@ -321,10 +321,11 @@ class GersResolutionTests(unittest.TestCase):
         self.assertEqual(selected["columns"], ["trailhead_lat", "trailhead_lon"])
 
     def test_dataset_identification_keeps_global_admin_binding_with_mismatches(self) -> None:
-        payload = identify_dataset_geography([
-            {"name": "LocationCode", "values": ["AFG", "ALB", "DZA", "CAN", "SEAR"]},
-            {"name": "NumericValue", "values": ["1", "2", "3", "4", "5"]},
-        ])
+        with mock.patch("mapmover.runtime.reference_identification._reference_graph_candidates") as graph_scan:
+            payload = identify_dataset_geography([
+                {"name": "LocationCode", "values": ["AFG", "ALB", "DZA", "CAN", "SEAR"]},
+                {"name": "NumericValue", "values": ["1", "2", "3", "4", "5"]},
+            ])
 
         selected = payload["candidates"][0]
         self.assertEqual(selected["header"], "LocationCode")
@@ -332,6 +333,7 @@ class GersResolutionTests(unittest.TestCase):
         self.assertEqual(selected["catalog"]["recommended_binding"]["system"], "geoboundaries.code")
         self.assertEqual(selected["catalog"]["recommended_binding"]["geo_level"], "admin_0")
         self.assertIsNone(selected["catalog"]["recommended_binding"]["country_scope"])
+        graph_scan.assert_not_called()
 
     def test_global_admin_codes_resolve_without_an_invented_country_scope(self) -> None:
         payload = resolve_references_batch([
