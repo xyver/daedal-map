@@ -1664,6 +1664,7 @@ def resolve_points_to_locations(
     target_admin_level: int | None = None,
     max_admin_level: int | None = None,
     country_scope: str | None = None,
+    include_marine_context: bool = True,
 ):
     """Resolve multiple points through one shared geometry-loading pass.
 
@@ -2114,7 +2115,7 @@ def resolve_points_to_locations(
         and not results[item["index"]].get("error")
         and results[item["index"]].get("country")
     ]
-    if admin_candidates and not scope_iso3:
+    if admin_candidates and not scope_iso3 and include_marine_context:
         from .runtime.loc_id_resolution import _resolve_points_to_marine_stacks
 
         stage_started = time.perf_counter()
@@ -2127,27 +2128,31 @@ def resolve_points_to_locations(
             result = results[item["index"]]
             marine_matched = marine_result.get("matched") or {}
             context: list[dict] = []
-            if marine_matched.get("loc_id"):
-                marine_family = marine_matched.get("family")
+            marine_family = marine_matched.get("family")
+            if marine_matched.get("loc_id") and marine_family in {
+                "marine_eez", "marine_jurisdiction",
+            }:
                 context.append({
                     "loc_id": marine_matched.get("loc_id"),
                     "name": marine_matched.get("name"),
                     "family": marine_family,
                     "admin_level": None,
-                    "relationship": (
-                        "marine_jurisdiction"
-                        if marine_family in {"marine_eez", "marine_jurisdiction"}
-                        else "physical_water_body"
-                    ),
+                    "relationship": "marine_jurisdiction",
                 })
-            context.extend(marine_result.get("overlap_families") or [])
+            context.extend(
+                entry for entry in marine_result.get("overlap_families") or []
+                if entry.get("family") in {"marine_eez", "marine_jurisdiction"}
+                or entry.get("relationship") == "marine_jurisdiction"
+            )
+            if not context:
+                continue
             seen: set[str] = set()
             result["overlap_families"] = [
                 entry for entry in [*(result.get("overlap_families") or []), *context]
                 if entry.get("loc_id") and not (entry["loc_id"] in seen or seen.add(entry["loc_id"]))
             ]
             result["marine_context"] = {
-                "matched": marine_matched or None,
+                "matched": context[0],
                 "resolution_family": "marine",
             }
         _add_timing_ms(timing_ms, "marine_context_ms", stage_started)

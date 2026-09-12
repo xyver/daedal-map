@@ -29,6 +29,86 @@ class GeometryPointResolutionRuntimeTests(unittest.TestCase):
         self._query_layout_patch.stop()
         clear_cache()
 
+    def test_admin_preview_can_skip_optional_marine_context(self):
+        country = {"loc_id": "CAN", "name": "Canada", "admin_level": 0}
+        query_match = {"stack": [country], "matched": country}
+        point = {"lon": -123.12, "lat": 49.96}
+        with (
+            patch("mapmover.geometry_handlers.resolve_global_admin0_query_points", return_value=[country]),
+            patch("mapmover.geometry_handlers.resolve_admin_spine_query_points", return_value=[query_match]),
+            patch("mapmover.runtime.loc_id_resolution._resolve_points_to_marine_stacks", return_value=[None]) as marine,
+        ):
+            result = resolve_points_to_locations([point], include_marine_context=False)[0]
+            self.assertEqual(result["matched"]["loc_id"], "CAN")
+            marine.assert_not_called()
+            resolve_points_to_locations([point])
+            marine.assert_called_once()
+
+    def test_admin_result_does_not_report_named_ocean_polygons_as_local_overlaps(self):
+        country = {"loc_id": "USA", "name": "United States", "admin_level": 0}
+        locality = {"loc_id": "USA-VA-059", "name": "Fairfax", "admin_level": 2}
+        marine_result = {
+            "matched": {
+                "loc_id": "IHO1953-23",
+                "name": "Atlantic Ocean",
+                "family": "water_body",
+            },
+            "overlap_families": [{
+                "loc_id": "IHO1953-24",
+                "name": "North Atlantic Ocean",
+                "family": "water_body",
+                "relationship": "broader_water_body",
+            }],
+        }
+        with (
+            patch("mapmover.geometry_handlers.resolve_global_admin0_query_points", return_value=[country]),
+            patch(
+                "mapmover.geometry_handlers.resolve_admin_spine_query_points",
+                return_value=[{"stack": [country, locality], "matched": locality}],
+            ),
+            patch(
+                "mapmover.runtime.loc_id_resolution._resolve_points_to_marine_stacks",
+                return_value=[marine_result],
+            ),
+        ):
+            result = resolve_points_to_locations([{"lon": -77.3, "lat": 38.85}])[0]
+
+        self.assertNotIn("overlap_families", result)
+        self.assertNotIn("marine_context", result)
+
+    def test_admin_result_keeps_independent_marine_jurisdiction_overlap(self):
+        country = {"loc_id": "USA", "name": "United States", "admin_level": 0}
+        locality = {"loc_id": "USA-VA-001", "name": "Coastal place", "admin_level": 2}
+        marine_result = {
+            "matched": {
+                "loc_id": "IHO1953-23", "name": "Atlantic Ocean", "family": "water_body",
+            },
+            "overlap_families": [{
+                "loc_id": "USA-EEZ-MRGID-1",
+                "name": "United States Exclusive Economic Zone",
+                "family": "marine_eez",
+                "relationship": "marine_jurisdiction",
+            }],
+        }
+        with (
+            patch("mapmover.geometry_handlers.resolve_global_admin0_query_points", return_value=[country]),
+            patch(
+                "mapmover.geometry_handlers.resolve_admin_spine_query_points",
+                return_value=[{"stack": [country, locality], "matched": locality}],
+            ),
+            patch(
+                "mapmover.runtime.loc_id_resolution._resolve_points_to_marine_stacks",
+                return_value=[marine_result],
+            ),
+        ):
+            result = resolve_points_to_locations([{"lon": -75.0, "lat": 37.0}])[0]
+
+        self.assertEqual(
+            [item["loc_id"] for item in result["overlap_families"]],
+            ["USA-EEZ-MRGID-1"],
+        )
+        self.assertEqual(result["marine_context"]["matched"]["family"], "marine_eez")
+
     def test_batch_point_resolver_falls_back_to_marine_for_offshore_point(self):
         import pandas as pd
 
