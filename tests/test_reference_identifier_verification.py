@@ -333,6 +333,8 @@ class GersResolutionTests(unittest.TestCase):
         self.assertEqual(selected["catalog"]["recommended_binding"]["system"], "geoboundaries.code")
         self.assertEqual(selected["catalog"]["recommended_binding"]["geo_level"], "admin_0")
         self.assertIsNone(selected["catalog"]["recommended_binding"]["country_scope"])
+        self.assertEqual(selected["confidenceScore"], 0.8)
+        self.assertEqual(payload["recommended_candidate_id"], selected["id"])
         graph_scan.assert_not_called()
 
     def test_global_admin_codes_resolve_without_an_invented_country_scope(self) -> None:

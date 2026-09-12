@@ -81,22 +81,24 @@ class ReferenceExchangeRuntimeTests(unittest.TestCase):
         self.assertFalse(results[1]["ok"])
         self.assertEqual(results[1]["error"]["code"], "admin_spine_match_not_found")
 
-    def test_native_admin_batch_uses_country_alias_and_identity_indexes_once(self) -> None:
+    def test_native_admin_batch_uses_narrow_alias_and_route_indexes_once(self) -> None:
         requests = [
             {"from_system": "admin.native_id", "value": "10", "iso3": "CAN", "target_admin_level": "admin_1"},
             {"from_system": "admin.native_id", "value": "99", "iso3": "CAN", "target_admin_level": "admin_1"},
         ]
         aliases = [{"reference_system": "admin.native_id", "external_id": "10", "loc_id": "CAN-NL"}]
-        nodes = [{"loc_id": "CAN-NL", "family": "admin_boundary", "admin_level": 1}]
+        nodes = pd.DataFrame([{"loc_id": "CAN-NL", "admin_level": 1, "admin_1_loc_id": "CAN-NL"}])
 
         with (
             mock.patch("mapmover.runtime.reference_graph.identify_aliases", return_value=aliases) as alias_mock,
-            mock.patch("mapmover.runtime.reference_graph.identities", return_value=nodes) as identity_mock,
+            mock.patch("mapmover.runtime.admin_spine_query.load_route_rows_by_loc_ids", return_value=nodes) as identity_mock,
         ):
             results = resolve_references_batch(requests)
 
-        alias_mock.assert_called_once_with(["10", "99"], iso3="CAN", limit=500)
-        identity_mock.assert_called_once_with(["CAN-NL"])
+        alias_mock.assert_called_once_with(
+            ["10", "99"], iso3="CAN", reference_system="admin.native_id", limit=500,
+        )
+        identity_mock.assert_called_once_with("CAN", ["CAN-NL"])
         self.assertEqual(results[0]["resolved_loc_id"], "CAN-NL")
         self.assertEqual(results[0]["admin_level"], "admin_1")
         self.assertFalse(results[1]["ok"])

@@ -23,6 +23,7 @@ from mapmover.runtime.reference_graph import (
     identity,
     identity_at,
     identities,
+    identify_aliases,
     public_alias_reference_systems,
     relationships_for_loc_id,
     resolve_public_loc_id,
@@ -144,6 +145,50 @@ class ReferenceGraphRuntimeTests(unittest.TestCase):
         self.assertEqual(identity("TST-A-001")["family"], "test_sidechain")
         self.assertTrue(any(row["external_id"] == "001" for row in aliases_for_loc_id("TST-A-001")))
         self.assertEqual(relationships_for_loc_id("TST-A-001")[0]["target_loc_id"], "TST-B-002")
+
+    def test_alias_identification_opens_physical_files_sequentially(self) -> None:
+        second = self.root / "aliases_second.parquet"
+        pd.DataFrame([{
+            "reference_system": "test.other", "external_id": "002",
+            "loc_id": "TST-B-002", "alias_type": "official_code",
+        }]).to_parquet(second, index=False)
+        partitions = pd.read_parquet(self.root / "alias_partitions.parquet")
+        extra = partitions.iloc[[0]].copy()
+        extra["partition_id"] = "test_other"
+        extra["path"] = str(second)
+        pd.concat([partitions, extra], ignore_index=True).to_parquet(
+            self.root / "alias_partitions.parquet", index=False,
+        )
+        opened: list[str] = []
+        real_connection = reference_graph._connection
+
+        class RecordingConnection:
+            def __init__(self):
+                self.connection = real_connection()
+
+            def execute(self, statement, parameters=None):
+                if parameters:
+                    opened.append(str(parameters[0]))
+                return self.connection.execute(statement, parameters or [])
+
+            def close(self):
+                self.connection.close()
+
+        with (
+            mock.patch.object(reference_graph, "_global_discovery_index_current", return_value=False),
+            mock.patch.object(reference_graph, "_connection", side_effect=RecordingConnection),
+        ):
+            rows = identify_aliases(["001", "002"], iso3="TST")
+
+        self.assertEqual({row["external_id"] for row in rows}, {"001", "002"})
+        self.assertEqual(opened, [str(self.root / "aliases.parquet"), str(second)])
+
+    def test_alias_identification_honors_cancellation_between_files(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "cancelled"):
+            identify_aliases(
+                ["001"], iso3="TST",
+                cancelled=lambda: (_ for _ in ()).throw(RuntimeError("cancelled")),
+            )
 
     def test_undated_single_and_batch_identity_queries_select_newest_version(self) -> None:
         current = pd.read_parquet(self.root / "identities.parquet")

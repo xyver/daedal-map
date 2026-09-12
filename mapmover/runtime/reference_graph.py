@@ -15,7 +15,7 @@ from functools import lru_cache
 
 import pyarrow.parquet as pq
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from ..duckdb_helpers import is_cloud_mode, lease_query_connection, parquet_columns, path_to_uri, select_rows
 from ..paths import DATA_ROOT
@@ -46,6 +46,8 @@ FULL_GRAPH_FILES = (
 )
 IDENTITY_ROUTE_INDEX = "identity_routes.parquet"
 ALIAS_SYSTEM_ROUTE_INDEX = "alias_system_routes.parquet"
+GLOBAL_DISCOVERY_RELATIVE = Path("geometry/global/reference_discovery/identifier_index.parquet")
+GLOBAL_DISCOVERY_MANIFEST = Path("geometry/global/reference_discovery/manifest.json")
 
 #: Identity columns read from partitions. Partitions span countries and
 #: families with differing schemas, and some carry a GEOMETRY column DuckDB
@@ -204,6 +206,37 @@ def clear_reference_graph_cache() -> None:
     _load_graph_json.cache_clear()
     _missing_graph_files.cache_clear()
     _discover_roots.cache_clear()
+    _global_discovery_index_current.cache_clear()
+
+
+@lru_cache(maxsize=2)
+def _global_discovery_index_current(cloud_mode: bool) -> bool:
+    """Return whether the compact discovery index matches active graph roots."""
+    index_path = DATA_ROOT / GLOBAL_DISCOVERY_RELATIVE
+    manifest_path = DATA_ROOT / GLOBAL_DISCOVERY_MANIFEST
+    manifest = _graph_json(manifest_path) or {}
+    if str(manifest.get("status") or "").upper() != "PASS":
+        return False
+    try:
+        available = bool(parquet_columns(index_path)) if cloud_mode else index_path.is_file()
+    except Exception:
+        return False
+    if not available:
+        return False
+    expected = manifest.get("source_graphs") or {}
+    current: dict[str, str] = {}
+    for country, root in reference_graph_roots().items():
+        current[country] = str((_graph_json(root / "manifest.json") or {}).get("release_id") or "")
+    global_root = global_reference_graph_root()
+    if global_root is not None:
+        current["__global__"] = str(
+            (_graph_json(global_root / "manifest.json") or {}).get("release_id") or ""
+        )
+    declared = {
+        str(key): str((value or {}).get("release_id") or "")
+        for key, value in expected.items() if isinstance(value, dict)
+    }
+    return bool(current) and declared == current
 
 
 def global_reference_graph_root() -> Path | None:
@@ -881,8 +914,9 @@ def public_alias_reference_systems(*, iso3: str | None = None) -> list[dict[str,
 def identify_aliases(
     external_ids: list[str], *, limit: int = 500, iso3: str | None = None,
     reference_system: str | None = None,
+    cancelled: Callable[[], bool] | None = None,
 ) -> list[dict[str, Any]]:
-    """Return exact alias rows, narrowed to one country graph when supplied."""
+    """Return exact aliases while opening only one physical file at a time."""
     requested = list(dict.fromkeys(str(item).strip() for item in external_ids if str(item).strip()))
     if not requested or not reference_graph_available():
         return []
@@ -894,27 +928,53 @@ def identify_aliases(
             *([global_reference_graph_root()] if global_reference_graph_root() else []),
         ]
     )
-    source = _table_source_for_roots(
-        "aliases", roots, reference_system=str(reference_system) if reference_system else None,
-    )
-    if not source:
-        return []
     placeholders = ", ".join("?" for _ in requested)
     connection = _connection()
     try:
         system_filter = " AND lower(reference_system) = lower(?)" if reference_system else ""
-        parameters = [*requested]
-        if reference_system:
-            parameters.append(str(reference_system))
-        parameters.append(max(1, int(limit)))
-        cursor = connection.execute(
-            f"""SELECT * FROM read_parquet({source}, union_by_name=True)
-                WHERE external_id IN ({placeholders}){system_filter}
-                ORDER BY reference_system, external_id, loc_id LIMIT ?""",
-            parameters,
-        )
-        columns = [item[0] for item in cursor.description]
-        return [dict(zip(columns, row)) for row in cursor.fetchall()]
+        maximum = max(1, int(limit))
+        rows: list[dict[str, Any]] = []
+        # Unknown-country discovery normally touches one compact, release-pinned
+        # file. A missing/stale derivative falls back safely to graph partitions
+        # but still reads them sequentially instead of constructing one huge
+        # read_parquet list.
+        discovery = DATA_ROOT / GLOBAL_DISCOVERY_RELATIVE
+        if not country and _global_discovery_index_current(is_cloud_mode()):
+            paths = [discovery]
+        else:
+            paths = []
+            for root in roots:
+                routed = (
+                    _route_paths(
+                        root, ALIAS_SYSTEM_ROUTE_INDEX, "reference_system", [str(reference_system)],
+                    )
+                    if reference_system else []
+                )
+                paths.extend(routed or _partition_paths(root, "aliases"))
+            paths = list(dict.fromkeys(paths))
+        for path in paths:
+            if cancelled:
+                cancelled()
+            if not is_cloud_mode() and not path.is_file():
+                continue
+            parameters = [path_to_uri(path), *requested]
+            if reference_system:
+                parameters.append(str(reference_system))
+            parameters.append(maximum)
+            cursor = connection.execute(
+                f"""SELECT * FROM read_parquet(?)
+                    WHERE external_id IN ({placeholders}){system_filter}
+                    ORDER BY reference_system, external_id, loc_id LIMIT ?""",
+                parameters,
+            )
+            columns = [item[0] for item in cursor.description]
+            rows.extend(dict(zip(columns, row)) for row in cursor.fetchall())
+        rows.sort(key=lambda row: (
+            str(row.get("reference_system") or ""),
+            str(row.get("external_id") or ""),
+            str(row.get("loc_id") or ""),
+        ))
+        return rows[:maximum]
     finally:
         connection.close()
 

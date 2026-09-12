@@ -269,6 +269,42 @@ def test_modern_layout_fails_closed_when_route_index_is_unreadable() -> None:
     assert result.empty
 
 
+def test_route_identity_lookup_opens_only_route_index() -> None:
+    opened_paths = []
+
+    class Result:
+        def fetchdf(self):
+            return pd.DataFrame([{
+                "loc_id": "AUS-1-001-002-003-004",
+                "admin_level": 5,
+                "admin_1_loc_id": "AUS-1",
+            }])
+
+    class Connection:
+        def execute(self, _sql, parameters):
+            opened_paths.append(parameters[0])
+            return Result()
+
+        def close(self):
+            pass
+
+    with (
+        patch.object(admin_spine_query, "layout_available", return_value=True),
+        patch.object(admin_spine_query, "layout_root", return_value=Path("layout")),
+        patch.object(admin_spine_query, "_layout_manifest", return_value={
+            "route_index": {"path": "loc_id_routes.parquet"},
+        }),
+        patch.object(admin_spine_query, "path_to_uri", side_effect=lambda path: path.as_posix()),
+        patch.object(admin_spine_query, "_connection", return_value=Connection()),
+    ):
+        result = admin_spine_query.load_route_rows_by_loc_ids(
+            "AUS", ["AUS-1-001-002-003-004"],
+        )
+
+    assert result.iloc[0]["admin_level"] == 5
+    assert opened_paths == ["layout/loc_id_routes.parquet"]
+
+
 def test_point_resolve_reads_each_layout_file_once_with_exact_shape_check() -> None:
     """The point resolver must not reopen a remote shard for WKB by loc_id."""
     names = [part.strip() for part in admin_spine_query.META_COLUMNS.replace("\n", " ").split(",")]

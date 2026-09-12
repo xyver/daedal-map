@@ -574,6 +574,45 @@ def load_rows_by_loc_ids(iso3: str, loc_ids: list[str], columns: list[str] | Non
         connection.close()
 
 
+def load_route_rows_by_loc_ids(iso3: str, loc_ids: list[str]) -> pd.DataFrame:
+    """Resolve admin identities from the compact country route index only.
+
+    Identification and joins need existence, level, and deep-shard ownership;
+    they do not need to reopen polygon banks.  The route index is part of the
+    admitted query-layout closure and is authoritative for modern layouts.
+    """
+    country = str(iso3 or "").strip().upper()
+    requested = list(dict.fromkeys(
+        str(value).strip() for value in loc_ids if str(value).strip()
+    ))
+    if not requested or not layout_available(country):
+        return pd.DataFrame(columns=["loc_id", "admin_level", "admin_1_loc_id"])
+    route_path = layout_root(country) / ROUTE_INDEX_NAME
+    manifest = _layout_manifest(country)
+    route_required = bool((manifest.get("route_index") or {}).get("path") == ROUTE_INDEX_NAME)
+    if not route_required and not route_path.is_file() and not is_cloud_mode():
+        return pd.DataFrame(columns=["loc_id", "admin_level", "admin_1_loc_id"])
+    connection = _connection()
+    try:
+        placeholders = ",".join("?" for _ in requested)
+        frame = connection.execute(
+            f"SELECT loc_id, admin_level, admin_1_loc_id FROM read_parquet(?) "
+            f"WHERE loc_id IN ({placeholders})",
+            [path_to_uri(route_path), *requested],
+        ).fetchdf()
+        if frame.empty:
+            return frame
+        order = {loc_id: index for index, loc_id in enumerate(requested)}
+        frame["_requested_order"] = frame["loc_id"].map(order)
+        return frame.sort_values("_requested_order").drop(
+            columns=["_requested_order"]
+        ).reset_index(drop=True)
+    except Exception:
+        return pd.DataFrame(columns=["loc_id", "admin_level", "admin_1_loc_id"])
+    finally:
+        connection.close()
+
+
 def query_descendant_scope(
     iso3: str,
     parent_loc_id: str,

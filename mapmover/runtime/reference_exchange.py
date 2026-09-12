@@ -104,6 +104,27 @@ def _normalize_system(system: str | None) -> str:
     return SYSTEM_ALIASES.get(value, value)
 
 
+def _unique_catalog_country_for_reference_system(system: str) -> str | None:
+    """Infer scope only when the published catalog declares one country.
+
+    This keeps generic batch conversion fast for country-owned systems such as
+    ZCTA without encoding their country in the tool. A system published by
+    multiple countries remains ambiguous until the caller supplies a scope.
+    """
+    normalized = _normalize_system(system)
+    countries = {
+        str(entry.get("country_code") or "").strip().upper()
+        for entry in (load_geometry_catalog().get("reference_systems") or [])
+        if isinstance(entry, dict)
+        and _normalize_system(entry.get("system")) == normalized
+        and bool(entry.get("callable"))
+        and str(entry.get("publication_status") or "").strip().lower()
+        in {"published", "approved_for_publication"}
+        and len(str(entry.get("country_code") or "").strip()) == 3
+    }
+    return next(iter(countries)) if len(countries) == 1 else None
+
+
 def verify_loc_ids(values: Any) -> set[str]:
     """Return the canonical subset of ``values`` that name a maintained identity.
 
@@ -1710,6 +1731,8 @@ def resolve_references_batch(requests: list[dict[str, Any]]) -> list[dict[str, A
             continue
         requested_country = str(request.get("iso3") or "").strip().upper()
         if not requested_country:
+            requested_country = _unique_catalog_country_for_reference_system(system) or ""
+        if not requested_country:
             # Dataset identification may deliberately return no single country
             # for a global column (for example, ISO/geoBoundaries Admin0
             # codes). Resolve those exact graph aliases in one batched scan;
@@ -1811,11 +1834,17 @@ def resolve_references_batch(requests: list[dict[str, Any]]) -> list[dict[str, A
                 )
 
     if native_admin_groups:
-        from .reference_graph import identify_aliases, identities
+        from .admin_spine_query import load_route_rows_by_loc_ids
+        from .reference_graph import identify_aliases
 
         for country, members in native_admin_groups.items():
             values = list(dict.fromkeys(value for _, _, value in members if value))
-            aliases = identify_aliases(values, iso3=country or None, limit=max(500, len(values) * 10))
+            aliases = identify_aliases(
+                values,
+                iso3=country or None,
+                reference_system="admin.native_id",
+                limit=max(500, len(values) * 10),
+            )
             by_value: dict[str, list[dict[str, Any]]] = {}
             for alias in aliases:
                 if str(alias.get("reference_system") or "").lower() != "admin.native_id":
@@ -1827,15 +1856,20 @@ def resolve_references_batch(requests: list[dict[str, Any]]) -> list[dict[str, A
                 for alias in matches
                 if alias.get("loc_id")
             ))
+            route_frame = load_route_rows_by_loc_ids(country, candidate_ids)
             identity_by_id = {
                 str(row.get("loc_id") or ""): row
-                for row in identities(candidate_ids)
-                if isinstance(row, dict) and row.get("loc_id")
+                for row in route_frame.to_dict("records")
+                if row.get("loc_id")
             }
             for index, request, value in members:
+                expected_level = int(str(admin_level_name(
+                    request.get("target_admin_level") or "admin_2"
+                )).removeprefix("admin_"))
                 matches = [
                     alias for alias in by_value.get(value, [])
                     if str(alias.get("loc_id") or "") in identity_by_id
+                    and int(identity_by_id[str(alias.get("loc_id") or "")]["admin_level"]) == expected_level
                 ]
                 if len(matches) == 1:
                     loc_id = str(matches[0].get("loc_id") or "")
@@ -1846,7 +1880,7 @@ def resolve_references_batch(requests: list[dict[str, Any]]) -> list[dict[str, A
                         "input": request.get("value"),
                         "normalized_input": value,
                         "resolved_loc_id": loc_id,
-                        "resolved_family": node.get("family") or "admin_boundary",
+                        "resolved_family": "admin_boundary",
                         "admin_level": admin_level_name(node.get("admin_level")),
                         "match_type": "admin_spine_exact",
                     }

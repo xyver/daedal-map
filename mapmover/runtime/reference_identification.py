@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import re
 from collections import defaultdict
-from typing import Any
+from typing import Any, Callable
 
 from .external_reference_adapters import (
     GERS_SYSTEM,
@@ -23,6 +23,15 @@ from .family_admin_crosswalk import admin_level_name
 
 
 US_CENSUS_GEOID_SYSTEM = "us_census_geoid"
+
+
+class IdentificationCancelled(RuntimeError):
+    """Raised cooperatively when the caller no longer needs identification."""
+
+
+def _cancel_point(cancelled: Callable[[], bool] | None) -> None:
+    if cancelled and cancelled():
+        raise IdentificationCancelled("reference identification cancelled")
 
 US_STATE_FIPS_TO_ABBR = {
     "01": "AL", "02": "AK", "04": "AZ", "05": "AR", "06": "CA",
@@ -109,6 +118,27 @@ _METHOD_RANK = {
 }
 
 
+def _admin_route_metadata_for_loc_ids(loc_ids: list[str]) -> dict[str, dict[str, Any]]:
+    """Read admin level and deep-shard ownership from country route indexes."""
+    grouped: dict[str, list[str]] = defaultdict(list)
+    for loc_id in dict.fromkeys(loc_ids):
+        if loc_id:
+            grouped[loc_id.split("-", 1)[0]].append(loc_id)
+    found: dict[str, dict[str, Any]] = {}
+    try:
+        from .admin_spine_query import load_route_rows_by_loc_ids
+
+        for country, values in grouped.items():
+            route_rows = load_route_rows_by_loc_ids(country, values)
+            for row in route_rows.to_dict("records"):
+                loc_id = str(row.get("loc_id") or "")
+                if loc_id:
+                    found[loc_id] = row
+    except Exception:
+        pass
+    return found
+
+
 def _identity_metadata_for_loc_ids(loc_ids: list[str]) -> dict[str, dict[str, Any]]:
     """Read bounded identity metadata without letting one country poison peers."""
     try:
@@ -119,10 +149,16 @@ def _identity_metadata_for_loc_ids(loc_ids: list[str]) -> dict[str, dict[str, An
     for loc_id in dict.fromkeys(loc_ids):
         if loc_id:
             grouped[loc_id.split("-", 1)[0]].append(loc_id)
-    found: dict[str, dict[str, Any]] = {}
+    # Admin identity metadata is already encoded in each country's compact
+    # route index. Sidechain identities absent from the spine retain the graph
+    # fallback because full reference-system identification may need them.
+    found = _admin_route_metadata_for_loc_ids(loc_ids)
     for values in grouped.values():
+        missing_values = [loc_id for loc_id in values if loc_id not in found]
+        if not missing_values:
+            continue
         try:
-            found.update({str(row.get("loc_id") or ""): row for row in identities(values)})
+            found.update({str(row.get("loc_id") or ""): row for row in identities(missing_values)})
         except Exception:
             continue
     missing = [loc_id for loc_id in dict.fromkeys(loc_ids) if loc_id and loc_id not in found]
@@ -223,6 +259,7 @@ def _candidate(
 
 def _reference_graph_candidates(
     identifiers: list[str], *, country_scope: str = "", reference_system: str | None = None,
+    cancelled: Callable[[], bool] | None = None,
 ) -> list[dict[str, Any]]:
     lookup_to_original: dict[str, list[str]] = defaultdict(list)
     try:
@@ -241,7 +278,10 @@ def _reference_graph_candidates(
             limit=max(100, len(identifiers) * 25),
             iso3=country_scope or None,
             reference_system=reference_system,
+            cancelled=lambda: _cancel_point(cancelled),
         )
+    except IdentificationCancelled:
+        raise
     except Exception:
         alias_rows = []
     grouped: dict[str, dict[str, list[str]]] = defaultdict(lambda: defaultdict(list))
@@ -497,8 +537,10 @@ def identify_reference_system(
     country_scope: str | None = None,
     validation_scope: str = "sample",
     dataset_context: dict[str, Any] | None = None,
+    cancelled: Callable[[], bool] | None = None,
 ) -> dict[str, Any]:
     """Rank maintained reference systems for a bounded identifier set."""
+    _cancel_point(cancelled)
     if not isinstance(identifiers, list):
         return _invalid_identification_contract(
             code="invalid_identifiers_type",
@@ -649,6 +691,7 @@ def identify_reference_system(
             ))
 
     for adapter in admitted_external_adapters():
+        _cancel_point(cancelled)
         if expected_system and expected_system != adapter.system:
             continue
         # Identifier shape only bounds the lookup. A maintained
@@ -691,9 +734,13 @@ def identify_reference_system(
         for candidate in candidates
     )
     if not expected_system_fully_matched and not geoboundaries_code_checked:
-        for candidate in _reference_graph_candidates(
-            values, country_scope=country, reference_system=expected_system or None,
-        ):
+        graph_kwargs: dict[str, Any] = {
+            "country_scope": country,
+            "reference_system": expected_system or None,
+        }
+        if cancelled is not None:
+            graph_kwargs["cancelled"] = cancelled
+        for candidate in _reference_graph_candidates(values, **graph_kwargs):
             if not expected_system or candidate["system"] == expected_system:
                 candidates.append(candidate)
 
@@ -984,6 +1031,13 @@ _DATASET_GEO_HEADER_TOKENS = {
     "department", "nuts", "latitude", "longitude", "lat", "lon", "lng", "x", "y",
 }
 
+# Dataset discovery separates reviewable clues from an automatic choice. These
+# are deliberately centralized so traffic-based tuning does not spread magic
+# numbers across the MCP and browser.
+DATASET_REVIEW_CONFIDENCE = 0.60
+DATASET_AUTO_CONFIDENCE = 0.80
+DATASET_CANDIDATE_LIMIT = 3
+
 
 def _dataset_header_tokens(value: Any) -> set[str]:
     text = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", str(value or ""))
@@ -1094,7 +1148,10 @@ def _dataset_expected_hint(
     return None, None
 
 
-def _dataset_graph_evidence(columns: list[dict[str, Any]]) -> dict[str, tuple[int, int]]:
+def _dataset_graph_evidence(
+    columns: list[dict[str, Any]], *, country_scope: str | None = None,
+    cancelled: Callable[[], bool] | None = None,
+) -> dict[str, tuple[int, int, str, str]]:
     """Score columns from one catalog-backed alias scan, independent of headers."""
     try:
         from .reference_graph import identify_aliases
@@ -1102,11 +1159,22 @@ def _dataset_graph_evidence(columns: list[dict[str, Any]]) -> dict[str, tuple[in
         all_values = list(dict.fromkeys(
             value for column in columns for value in column.get("values") or [] if value
         ))
-        aliases = identify_aliases(all_values, limit=max(500, len(all_values) * 10))
+        aliases = identify_aliases(
+            all_values,
+            limit=max(500, len(all_values) * 10),
+            iso3=country_scope,
+            cancelled=lambda: _cancel_point(cancelled),
+        )
         loc_ids = list(dict.fromkeys(
             str(alias.get("loc_id") or "") for alias in aliases if alias.get("loc_id")
         ))
-        identities = _identity_metadata_for_loc_ids(loc_ids)
+        # Ranking a dataset column only needs to know whether an exact alias is
+        # on the admin spine and how deep it is. Do not hydrate sidechain
+        # identity graphs here; the selected column gets full verification in
+        # identify_reference_system immediately afterward.
+        identities = _admin_route_metadata_for_loc_ids(loc_ids)
+    except IdentificationCancelled:
+        raise
     except Exception:
         return {}
     levels_by_value: dict[str, list[int]] = defaultdict(list)
@@ -1119,16 +1187,55 @@ def _dataset_graph_evidence(columns: list[dict[str, Any]]) -> dict[str, tuple[in
         except (TypeError, ValueError):
             level = -1
         levels_by_value[value].append(level)
-    return {
-        column["name"]: (
-            sum(1 for value in column.get("values") or [] if value in levels_by_value),
-            max(
-                (level for value in column.get("values") or [] for level in levels_by_value.get(value, [])),
-                default=-1,
-            ),
+    evidence: dict[str, tuple[int, int, str, str]] = {}
+    countries_by_value: dict[str, list[str]] = defaultdict(list)
+    systems_by_value: dict[str, list[str]] = defaultdict(list)
+    for alias in aliases:
+        external_id = str(alias.get("external_id") or "")
+        loc_id = str(alias.get("loc_id") or "")
+        country = str(alias.get("country_scope") or loc_id.split("-", 1)[0]).upper()
+        system = normalize_identifier_system(alias.get("reference_system"))
+        if external_id and len(country) == 3:
+            countries_by_value[external_id].append(country)
+        if external_id and system:
+            systems_by_value[external_id].append(system)
+    for column in columns:
+        values = column.get("values") or []
+        matched = sum(1 for value in values if value in levels_by_value)
+        deepest = max(
+            (level for value in values for level in levels_by_value.get(value, [])),
+            default=-1,
         )
-        for column in columns
-    }
+        country_counts: dict[str, int] = defaultdict(int)
+        system_counts: dict[str, int] = defaultdict(int)
+        for value in values:
+            for country in set(countries_by_value.get(value, [])):
+                country_counts[country] += 1
+            for system in set(systems_by_value.get(value, [])):
+                system_counts[system] += 1
+        ranked = sorted(country_counts.items(), key=lambda item: (-item[1], item[0]))
+        ranked_systems = sorted(system_counts.items(), key=lambda item: (-item[1], item[0]))
+        inferred_country = (
+            ranked[0][0]
+            if ranked and ranked[0][1] >= max(1, round(len(values) * 0.8))
+            and (len(ranked) == 1 or ranked[0][1] > ranked[1][1])
+            else ""
+        )
+        threshold = max(1, round(len(values) * 0.8))
+        # Native admin IDs often also carry public aliases for the same loc_id.
+        # When the route index proves they are admin-spine identities, prefer
+        # the native system instead of treating those concurring names as an
+        # unresolved tie.
+        inferred_system = (
+            "admin.native_id"
+            if system_counts.get("admin.native_id", 0) >= threshold and matched >= threshold
+            else ranked_systems[0][0]
+            if ranked_systems and ranked_systems[0][1] >= threshold
+            and (len(ranked_systems) == 1 or ranked_systems[0][1] > ranked_systems[1][1])
+            else ""
+        )
+        evidence[column["name"]] = (matched, deepest, inferred_country, inferred_system)
+    return evidence
 
 
 def identify_dataset_geography(
@@ -1136,6 +1243,7 @@ def identify_dataset_geography(
     *,
     dataset_context: dict[str, Any] | None = None,
     country_scope: str | None = None,
+    cancelled: Callable[[], bool] | None = None,
 ) -> dict[str, Any]:
     """Identify geography columns from a bounded, browser-produced table profile.
 
@@ -1143,6 +1251,7 @@ def identify_dataset_geography(
     semantics—column choice, system, country, and level—are decided here from
     maintained reference indexes.
     """
+    _cancel_point(cancelled)
     if not isinstance(columns, list) or not columns:
         return {
             "ok": False,
@@ -1152,6 +1261,7 @@ def identify_dataset_geography(
     clean_columns: list[dict[str, Any]] = []
     total_values = 0
     for raw in columns[:64]:
+        _cancel_point(cancelled)
         if not isinstance(raw, dict):
             continue
         name = str(raw.get("name") or "").strip()
@@ -1196,7 +1306,9 @@ def identify_dataset_geography(
             "recommended_candidate_id": coordinate["id"],
             "warnings": [],
         }
-    graph_evidence = {} if has_authored_hint else _dataset_graph_evidence(clean_columns)
+    graph_evidence = {} if has_authored_hint else _dataset_graph_evidence(
+        clean_columns, country_scope=country_scope, cancelled=cancelled,
+    )
     ranked_columns = sorted(
         clean_columns,
         key=lambda column: (
@@ -1211,18 +1323,31 @@ def identify_dataset_geography(
             column["name"].lower(),
         ),
     )
-    for index, column in enumerate(ranked_columns[:12]):
+    # The graph evidence pass has already ranked every supplied column. Probe
+    # only the strongest bounded set instead of reopening reference partitions
+    # for a long tail of low-signal scalar fields.
+    for index, column in enumerate(ranked_columns[:DATASET_CANDIDATE_LIMIT]):
+        _cancel_point(cancelled)
         expected_hint, expected_country = authored_hints[column["name"]]
+        detected = graph_evidence.get(column["name"]) or (0, -1, "", "")
+        if expected_hint is None and not detected[0]:
+            continue
+        inferred_country = detected[2]
+        if expected_hint is None and detected[3]:
+            expected_hint = {"system": detected[3]}
+            if detected[1] >= 0:
+                expected_hint["geo_level"] = f"admin_{detected[1]}"
         result = identify_reference_system(
             column["values"],
             expected=expected_hint,
-            country_scope=country_scope or expected_country,
+            country_scope=country_scope or expected_country or inferred_country,
             validation_scope="sample",
             dataset_context={
                 **(dataset_context or {}),
                 "column_name": column["name"],
                 "column_names": [item["name"] for item in clean_columns],
             },
+            cancelled=cancelled,
         )
         interpretations = result.get("dataset_interpretations") or []
         if result.get("status") == "ambiguous" and interpretations:
@@ -1230,9 +1355,12 @@ def identify_dataset_geography(
             runner_up = interpretations[1] if len(interpretations) > 1 else {}
             top_score = float(top.get("confidence_score") or 0)
             margin = top_score - float(runner_up.get("confidence_score") or 0)
-            if top.get("verified") and top_score >= 0.7 and margin >= 0.2:
+            if top.get("verified") and top_score >= DATASET_AUTO_CONFIDENCE and margin >= 0.2:
                 inferred_system = str(top.get("system") or "")
-                inferred_scope = "USA" if inferred_system == US_CENSUS_GEOID_SYSTEM else country_scope
+                inferred_scope = (
+                    "USA" if inferred_system == US_CENSUS_GEOID_SYSTEM
+                    else country_scope or expected_country or inferred_country
+                )
                 result = identify_reference_system(
                     column["values"],
                     expected={
@@ -1246,6 +1374,7 @@ def identify_dataset_geography(
                         "column_name": column["name"],
                         "column_names": [item["name"] for item in clean_columns],
                     },
+                    cancelled=cancelled,
                 )
         matched = max((int(item.get("match_count") or 0) for item in result.get("candidates") or []), default=0)
         if not result.get("ok") or not matched:
@@ -1257,6 +1386,17 @@ def identify_dataset_geography(
             (float(item.get("confidence_score") or 0) for item in result.get("dataset_interpretations") or []),
             default=float(((result.get("candidates") or [{}])[0].get("match_rate") or 0) * 0.7),
         )
+        # A maintained header adapter plus exact identifier coverage is stronger
+        # than the generic interpretation score alone (for example 4/5 ISO3
+        # codes). Unhinted columns keep the conservative contextual score so
+        # incidental numeric/name collisions do not become automatic choices.
+        if expected_hint is not None:
+            confidence_score = max(
+                confidence_score,
+                max((float(item.get("match_rate") or 0) for item in result.get("candidates") or []), default=0.0),
+            )
+        if confidence_score < DATASET_REVIEW_CONFIDENCE:
+            continue
         candidates.append({
             "id": f"dataset-column-{index + 1}",
             "kind": kind,
@@ -1280,7 +1420,7 @@ def identify_dataset_geography(
                 or (
                     result.get("status") == "matched"
                     and binding.get("geo_level")
-                    and confidence_score >= 0.7
+                    and confidence_score >= DATASET_AUTO_CONFIDENCE
                 )
             )
         ):
@@ -1294,13 +1434,18 @@ def identify_dataset_geography(
         -float(item.get("confidenceScore") or 0),
         str(item.get("header") or ""),
     ))
+    candidates = candidates[:DATASET_CANDIDATE_LIMIT]
     status = "matched" if candidates else "unmatched"
+    recommended = next((item for item in candidates if (
+        item.get("kind") == "coordinates"
+        or float(item.get("confidenceScore") or 0) >= DATASET_AUTO_CONFIDENCE
+    )), None)
     return {
         "ok": True,
         "status": status,
         "column_count": len(clean_columns),
         "sample_value_count": total_values,
-        "candidates": candidates[:6],
-        "recommended_candidate_id": candidates[0]["id"] if candidates else None,
+        "candidates": candidates,
+        "recommended_candidate_id": recommended["id"] if recommended else None,
         "warnings": [] if candidates else [{"code": "no_dataset_geography_match", "message": "No maintained geography system matched the sampled columns."}],
     }
