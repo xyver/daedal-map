@@ -232,6 +232,16 @@ def _compact_public_record(key: str, record: dict[str, Any]) -> dict[str, Any]:
         result = _without_fields(result, _PUBLIC_CROSSWALK_ARTIFACT_DETAIL_FIELDS)
     elif key in {"country_profiles", "domain_profiles"}:
         result["family_coverage"] = _compact_family_rows(result.get("family_coverage"))
+        if key == "country_profiles" and isinstance(result.get("active_release"), dict):
+            result["active_release"] = _without_fields(
+                result["active_release"],
+                {
+                    "source_pointer_path",
+                    "source_pointer_sha256",
+                    "version_manifest_path",
+                    "version_manifest_sha256",
+                },
+            )
         country = _country_code(result.get("country_code"))
         if country:
             result["country_catalog_path"] = (

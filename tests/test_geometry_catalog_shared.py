@@ -197,3 +197,29 @@ def test_downloadable_projection_refers_to_the_crosswalk_catalog() -> None:
     assert "crosswalks" not in published
     assert "reference_systems" not in published
     assert published["crosswalk_catalog_path"] == "geometry/crosswalk_catalog.json"
+
+
+def test_downloadable_projection_does_not_advertise_internal_release_receipts() -> None:
+    published = build_published_geometry_catalog({
+        "country_profiles": [{
+            "country_code": "USA",
+            "release_status": "published",
+            "active_release": {
+                "release_id": "usa_geometry_1_0_0",
+                "source_pointer_path": "geometry/countries/USA/releases/geometry/current.json",
+                "source_pointer_sha256": "pointer-hash",
+                "version_manifest_path": "geometry/countries/USA/releases/geometry/usa_geometry_1_0_0/version.json",
+                "version_manifest_sha256": "version-hash",
+                "runtime_artifacts": {
+                    "query_layout_manifest": "geometry/countries/USA/runtime/admin_spine/manifest.json",
+                },
+            },
+        }],
+    })
+
+    assert published["country_profiles"][0]["active_release"] == {
+        "release_id": "usa_geometry_1_0_0",
+        "runtime_artifacts": {
+            "query_layout_manifest": "geometry/countries/USA/runtime/admin_spine/manifest.json",
+        },
+    }
