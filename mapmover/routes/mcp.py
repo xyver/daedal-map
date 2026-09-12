@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import hashlib
 import math
 import numbers
 import re
 import time
+import threading
 import uuid
 from functools import lru_cache, wraps
 from typing import Any
@@ -3275,17 +3277,46 @@ async def _execute_identify_dataset_geography_tool(request: Request, arguments: 
         )
         return _jsonrpc_response(_tool_result(error_payload, is_error=True), rpc_request_id)
     try:
-        from mapmover.runtime.reference_identification import identify_dataset_geography
+        from mapmover.runtime.reference_identification import (
+            IdentificationCancelled,
+            identify_dataset_geography,
+        )
 
         runtime_started = time.perf_counter()
-        result = await run_mcp_blocking(
-            "identify_dataset_geography",
-            identify_dataset_geography,
-            columns,
-            dataset_context=payload.get("dataset_context"),
-            country_scope=payload.get("country_scope"),
-        )
+        cancellation_event = threading.Event()
+
+        async def cancel_when_disconnected() -> None:
+            while not cancellation_event.is_set():
+                if await request.is_disconnected():
+                    cancellation_event.set()
+                    return
+                await asyncio.sleep(0.1)
+
+        disconnect_task = asyncio.create_task(cancel_when_disconnected())
+        try:
+            result = await run_mcp_blocking(
+                "identify_dataset_geography",
+                identify_dataset_geography,
+                columns,
+                dataset_context=payload.get("dataset_context"),
+                country_scope=payload.get("country_scope"),
+                cancelled=cancellation_event.is_set,
+                cancellation_event=cancellation_event,
+            )
+        finally:
+            cancellation_event.set()
+            disconnect_task.cancel()
         stages = {"dataset_identification_ms": _elapsed_ms(runtime_started)}
+    except IdentificationCancelled:
+        result = {
+            "ok": False,
+            "status": "cancelled",
+            "error": {
+                "code": "dataset_geography_identification_cancelled",
+                "message": "The caller disconnected before identification completed.",
+            },
+        }
+        stages = {}
     except Exception as exc:
         result = {"ok": False, "status": "failed", "error": {"code": "dataset_geography_identification_failed", "message": str(exc)}}
         stages = {}

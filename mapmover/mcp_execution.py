@@ -59,6 +59,7 @@ async def run_mcp_blocking(
     /,
     *args: Any,
     timeout_seconds: float | None = None,
+    cancellation_event: threading.Event | None = None,
     **kwargs: Any,
 ) -> T:
     """Run synchronous tool work off-loop with fail-fast bounded capacity.
@@ -85,6 +86,8 @@ async def run_mcp_blocking(
     try:
         return await asyncio.wait_for(asyncio.shield(wrapped), timeout=budget)
     except asyncio.TimeoutError as exc:
+        if cancellation_event is not None:
+            cancellation_event.set()
         raise MCPExecutionTimeoutError(
             f"{tool_name} exceeded the hosted execution budget of {budget:g} seconds"
         ) from exc

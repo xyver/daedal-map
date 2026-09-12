@@ -43,6 +43,21 @@ class MCPExecutionTests(unittest.IsolatedAsyncioTestCase):
             self.assertIsNone(await mcp_execution.run_mcp_blocking("third_tool", lambda: None))
         test_executor.shutdown(wait=True)
 
+    async def test_timeout_signals_cooperative_cancellation(self):
+        cancellation = threading.Event()
+
+        def worker():
+            cancellation.wait(timeout=2)
+
+        with self.assertRaises(mcp_execution.MCPExecutionTimeoutError):
+            await mcp_execution.run_mcp_blocking(
+                "cancellable_tool",
+                worker,
+                timeout_seconds=0.01,
+                cancellation_event=cancellation,
+            )
+        self.assertTrue(cancellation.wait(timeout=1))
+
 
 if __name__ == "__main__":
     unittest.main()
