@@ -265,7 +265,7 @@ def build_tool_definitions() -> list[dict]:
         {
             "name": "identify_dataset_geography",
             "title": "Identify Dataset Geography",
-            "description": "Free dataset-orchestration utility. Accepts bounded samples from plausible scalar columns and determines which column contains geography, then identifies its maintained reference system, country, and administrative level. The caller performs only structural parsing and sampling; it must not assign geographic meaning in advance. Returns ranked bindings for identifier columns or coordinate pairs. No geometry is loaded and no full dataset is retained. No payment required.",
+            "description": "Free dataset-orchestration utility. Accepts bounded samples from plausible scalar columns and determines which column contains geography, then identifies its maintained reference system, country, and administrative level. The caller performs only structural parsing and sampling; it must not assign geographic meaning in advance. Returns up to three reviewable bindings at 60% confidence or better, plus a coordinate fallback when present; only an unambiguous result at 80% or better is recommended automatically. No geometry is loaded and no full dataset is retained. No payment required.",
             "inputSchema": {
                 "type": "object",
                 "properties": {

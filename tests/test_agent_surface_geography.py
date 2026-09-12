@@ -14,7 +14,8 @@ def test_llm_surfaces_cover_every_current_geography_tool() -> None:
     ]
     surfaces = (render_app_llms_txt(), render_site_llms_txt(), render_site_llms_full())
 
-    assert len(tool_names) == 17
+    assert len(tool_names) == 18
+    assert "identify_dataset_geography" in tool_names
     for surface in surfaces:
         for tool_name in tool_names:
             assert f"`{tool_name}`" in surface
