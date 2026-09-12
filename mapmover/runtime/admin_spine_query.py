@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 from functools import lru_cache
+import threading
 
 from shapely import from_wkb
 from shapely.geometry import Point
@@ -25,6 +26,8 @@ bbox_min_lon, bbox_min_lat, bbox_max_lon, bbox_max_lat
 """
 META_COLUMN_NAMES = [part.strip() for part in META_COLUMNS.replace("\n", " ").split(",")]
 ROUTE_INDEX_NAME = "loc_id_routes.parquet"
+_SHALLOW_IDENTITY_CACHE: dict[tuple[str, int], pd.DataFrame] = {}
+_SHALLOW_IDENTITY_CACHE_LOCK = threading.Lock()
 
 
 def layout_root(iso3: str) -> Path:
@@ -63,6 +66,64 @@ def layout_available(iso3: str) -> bool:
 def clear_admin_spine_query_cache() -> None:
     _published_layout_manifest_available.cache_clear()
     _layout_manifest_at_root.cache_clear()
+    with _SHALLOW_IDENTITY_CACHE_LOCK:
+        _SHALLOW_IDENTITY_CACHE.clear()
+
+
+def prewarm_shallow_identity_index(iso3: str, maximum_level: int = 2) -> int:
+    """Cache a country's bounded Admin0..N identity rows without geometry.
+
+    This is intentionally separate from Display geometry prewarm. Dataset
+    conversion needs only stable loc_ids and levels, so retaining polygon WKB
+    here would waste both Railway memory and object-store bandwidth.
+    """
+    country = str(iso3 or "").strip().upper()
+    level = max(0, min(3, int(maximum_level)))
+    if not layout_available(country):
+        return 0
+    connection = _connection()
+    try:
+        frame = connection.execute(
+            f"SELECT {META_COLUMNS} FROM read_parquet(?) "
+            "WHERE admin_level <= ? ORDER BY admin_level, loc_id",
+            [path_to_uri(layout_root(country) / "admin_0_3.parquet"), level],
+        ).fetchdf()
+    finally:
+        connection.close()
+    if frame.empty:
+        return 0
+    with _SHALLOW_IDENTITY_CACHE_LOCK:
+        _SHALLOW_IDENTITY_CACHE[(country, level)] = frame
+    return len(frame)
+
+
+def cached_shallow_identity_rows(
+    iso3: str,
+    loc_ids: list[str],
+    *,
+    maximum_level: int,
+    columns: list[str] | None = None,
+) -> pd.DataFrame | None:
+    """Return rows from a complete warm identity slice, or ``None`` if cold."""
+    country = str(iso3 or "").strip().upper()
+    requested = list(dict.fromkeys(str(value).strip() for value in loc_ids if str(value).strip()))
+    with _SHALLOW_IDENTITY_CACHE_LOCK:
+        eligible = [
+            (level, frame) for (cached_country, level), frame in _SHALLOW_IDENTITY_CACHE.items()
+            if cached_country == country and level >= int(maximum_level)
+        ]
+        if not eligible:
+            return None
+        frame = min(eligible, key=lambda item: item[0])[1]
+        selected = frame[frame["loc_id"].isin(requested)].copy()
+    projection = list(dict.fromkeys(["loc_id", *(columns or [])]))
+    if columns is not None:
+        selected = selected[[name for name in projection if name in selected.columns]]
+    order = {loc_id: index for index, loc_id in enumerate(requested)}
+    if selected.empty:
+        return selected.reset_index(drop=True)
+    selected["_requested_order"] = selected["loc_id"].map(order)
+    return selected.sort_values("_requested_order").drop(columns=["_requested_order"]).reset_index(drop=True)
 
 
 def _layout_manifest(iso3: str) -> dict[str, Any]:

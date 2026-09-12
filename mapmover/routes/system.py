@@ -189,7 +189,7 @@ def _start_runtime_prewarm_threads() -> list[str]:
     try:
         from mapmover.duckdb_helpers import is_cloud_mode
         if is_cloud_mode():
-            task_names.extend(["geometry_display", "ops_snapshots"])
+            task_names.extend(["geometry_display", "reference_identities", "ops_snapshots"])
             if os.environ.get("PREWARM_DISASTERS", "0").strip().lower() in {"1", "true", "yes", "on"}:
                 task_names.append("disasters")
     except Exception:
@@ -213,6 +213,7 @@ def _start_runtime_prewarm_threads() -> list[str]:
         from mapmover.geometry_handlers import prewarm_geometry
         from mapmover.ops_orchestrator_runtime import prewarm_ops_snapshots
         from mapmover.paths import GLOBAL_DIR
+        from mapmover.runtime.reference_prewarm import prewarm_reference_identities
 
         if is_cloud_mode():
             threading.Thread(
@@ -222,6 +223,14 @@ def _start_runtime_prewarm_threads() -> list[str]:
                 name="prewarm-geometry-display-refresh",
             ).start()
             started.append("geometry_display")
+
+            threading.Thread(
+                target=run_prewarm_task,
+                args=("reference_identities", prewarm_reference_identities),
+                daemon=True,
+                name="prewarm-reference-identities-refresh",
+            ).start()
+            started.append("reference_identities")
 
             threading.Thread(
                 target=run_prewarm_task,

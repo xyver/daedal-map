@@ -1408,6 +1408,37 @@ def _admin_text_result(value: str, *, country_hint: str | None, admin_level_hint
     }
 
 
+def _global_admin0_identity_result(
+    value: str,
+    identity: Any | None,
+) -> dict[str, Any]:
+    """Return the tiny exact-code result used by single and batch resolution."""
+    normalized = str(value or "").strip().upper()
+    if identity is None:
+        return {
+            "ok": False,
+            "from_system": "geoboundaries.code",
+            "input": value,
+            "normalized_input": normalized,
+            "error": {
+                "code": "admin_spine_match_not_found",
+                "message": "identifier did not match the maintained global Admin0 identity index",
+            },
+        }
+    return {
+        "ok": True,
+        "from_system": "geoboundaries.code",
+        "input": value,
+        "normalized_input": normalized,
+        "resolved_loc_id": normalized,
+        "resolved_family": "admin_boundary",
+        "admin_level": "admin_0",
+        "match_type": "admin_spine_exact",
+        "name": identity.get("name") if hasattr(identity, "get") else None,
+        "source_system": identity.get("source_system") if hasattr(identity, "get") else None,
+    }
+
+
 def resolve_reference(
     *,
     from_system: str,
@@ -1482,6 +1513,17 @@ def resolve_reference(
             "geometry": item,
             "source_vintage": "census_2020",
         })
+    if system == "geoboundaries.code":
+        # geoBoundaries Admin0 codes are already canonical ISO3 loc_ids.  A
+        # compact identity-index membership test is the entire conversion;
+        # opening the all-country reference graph here turns a tiny join into
+        # a multi-second scan and adds no evidence.
+        from .global_admin0_query import load_global_admin0_identities
+
+        normalized = text.upper()
+        identities = load_global_admin0_identities([normalized])
+        if identities is not None:
+            return _clean_json(_global_admin0_identity_result(text, identities.get(normalized)))
     if system == ADMIN_SYSTEM:
         return _clean_json(_admin_text_result(text, country_hint=country_hint or iso3, admin_level_hint=admin_level_hint, request_system=system))
     if system == "historical_country":
@@ -1639,6 +1681,7 @@ def resolve_references_batch(requests: list[dict[str, Any]]) -> list[dict[str, A
     results: list[dict[str, Any] | None] = [None] * len(requests)
     groups: dict[tuple[Any, ...], list[tuple[int, dict[str, Any]]]] = {}
     census_candidates: list[tuple[int, dict[str, Any], str, str | None, str | None]] = []
+    global_admin0_candidates: list[tuple[int, dict[str, Any], str]] = []
     native_admin_groups: dict[str, list[tuple[int, dict[str, Any], str]]] = {}
     unscoped_alias_groups: dict[str, list[tuple[int, dict[str, Any], str]]] = {}
     for index, request in enumerate(requests):
@@ -1652,6 +1695,10 @@ def resolve_references_batch(requests: list[dict[str, Any]]) -> list[dict[str, A
             value = str(request.get("value") or "").strip()
             loc_id = census_geoid_to_loc_id(value)
             census_candidates.append((index, request, value, loc_id, census_geoid_level(value)))
+            continue
+        if system == "geoboundaries.code":
+            value = str(request.get("value") or "").strip()
+            global_admin0_candidates.append((index, request, value))
             continue
         if system == "admin.native_id":
             country = str(request.get("iso3") or "").strip().upper()
@@ -1692,16 +1739,28 @@ def resolve_references_batch(requests: list[dict[str, Any]]) -> list[dict[str, A
         groups.setdefault(key, []).append((index, request))
 
     if census_candidates:
-        from .admin_spine_query import load_rows_by_loc_ids
+        from .admin_spine_query import cached_shallow_identity_rows, load_rows_by_loc_ids
 
         candidate_ids = list(dict.fromkeys(
             loc_id for _, _, _, loc_id, _ in census_candidates if loc_id
         ))
+        maximum_level = max(
+            (int(str(level).replace("admin_", "")) for _, _, _, loc_id, level in census_candidates if loc_id and level),
+            default=0,
+        )
+        cached = (
+            cached_shallow_identity_rows(
+                "USA", candidate_ids, maximum_level=maximum_level, columns=["admin_level"]
+            )
+            if maximum_level <= 2
+            else None
+        )
+        identity_rows = cached if cached is not None else load_rows_by_loc_ids(
+            "USA", candidate_ids, columns=["admin_level"]
+        )
         matched_ids = {
             str(value)
-            for value in load_rows_by_loc_ids(
-                "USA", candidate_ids, columns=["admin_level"]
-            ).get("loc_id", [])
+            for value in identity_rows.get("loc_id", [])
             if value
         }
         for index, request, value, loc_id, level in census_candidates:
@@ -1728,6 +1787,28 @@ def resolve_references_batch(requests: list[dict[str, Any]]) -> list[dict[str, A
                         "message": "identifier did not match the selected country admin spine" if loc_id else "expected a 2, 5, 11, 12, or 15 digit US Census GEOID",
                     },
                 }
+
+    if global_admin0_candidates:
+        from .global_admin0_query import load_global_admin0_identities
+
+        values = list(dict.fromkeys(
+            value.upper() for _, _, value in global_admin0_candidates if value
+        ))
+        identities = load_global_admin0_identities(values)
+        if identities is None:
+            # A legacy/local layout without the compact identity index retains
+            # the established graph fallback. Production published layouts are
+            # required to expose the index and never enter this branch.
+            for index, request, value in global_admin0_candidates:
+                unscoped_alias_groups.setdefault("geoboundaries.code", []).append(
+                    (index, request, value)
+                )
+        else:
+            for index, request, value in global_admin0_candidates:
+                normalized = value.upper()
+                results[index] = _clean_json(
+                    _global_admin0_identity_result(value, identities.get(normalized))
+                )
 
     if native_admin_groups:
         from .reference_graph import identify_aliases, identities

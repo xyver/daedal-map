@@ -25,6 +25,35 @@ from mapmover.runtime.reference_graph import clear_reference_graph_cache
 
 
 class ReferenceExchangeRuntimeTests(unittest.TestCase):
+    def test_global_admin0_batch_uses_compact_identity_index_once(self) -> None:
+        requests = [
+            {"from_system": "geoboundaries.code", "value": "afg", "target_admin_level": "admin_0"},
+            {"from_system": "geoboundaries.code", "value": "SEAR", "target_admin_level": "admin_0"},
+            {"from_system": "geoboundaries.code", "value": "ALB", "target_admin_level": "admin_0"},
+        ]
+        identities = {
+            "AFG": pd.Series({"loc_id": "AFG", "name": "Afghanistan"}),
+            "ALB": pd.Series({"loc_id": "ALB", "name": "Albania"}),
+        }
+        with (
+            mock.patch(
+                "mapmover.runtime.global_admin0_query.load_global_admin0_identities",
+                return_value=identities,
+            ) as identity_mock,
+            mock.patch(
+                "mapmover.runtime.reference_graph.identify_aliases",
+                side_effect=AssertionError("global Admin0 codes must not open the reference graph"),
+            ),
+        ):
+            results = resolve_references_batch(requests)
+
+        identity_mock.assert_called_once_with(["AFG", "SEAR", "ALB"])
+        self.assertEqual(results[0]["resolved_loc_id"], "AFG")
+        self.assertEqual(results[2]["resolved_loc_id"], "ALB")
+        self.assertEqual(results[0]["admin_level"], "admin_0")
+        self.assertFalse(results[1]["ok"])
+        self.assertEqual(results[1]["error"]["code"], "admin_spine_match_not_found")
+
     def test_census_batch_matches_admin_spine_once_and_preserves_mismatches(self) -> None:
         requests = [
             {"from_system": "census_geoid", "value": "37185", "iso3": "USA", "target_admin_level": "admin_2"},

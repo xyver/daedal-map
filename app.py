@@ -292,12 +292,13 @@ async def lifespan(app: FastAPI):
         from mapmover.geometry_handlers import prewarm_geometry
         from mapmover.ops_orchestrator_runtime import prewarm_ops_snapshots
         from mapmover.paths import GLOBAL_DIR
+        from mapmover.runtime.reference_prewarm import prewarm_reference_identities
         tasks = ["control_catalogs", "public_pack_catalog", "api_catalog"]
         if is_cloud_mode():
             # Readiness covers bounded, shared visitor dependencies only.
             # Executing every pack's authored default can hydrate large data
             # products and is neither a readiness requirement nor bounded.
-            tasks.extend(["geometry_display", "ops_snapshots"])
+            tasks.extend(["geometry_display", "reference_identities", "ops_snapshots"])
             # Disaster overlays are broad, multi-source reads. Keep them out
             # of startup readiness; a scheduled warmer can opt in after the
             # process is healthy.
@@ -337,6 +338,12 @@ async def lifespan(app: FastAPI):
                 name="prewarm-geometry-display",
             )
             t_geom.start()
+            threading.Thread(
+                target=run_prewarm_task,
+                args=("reference_identities", prewarm_reference_identities),
+                daemon=True,
+                name="prewarm-reference-identities",
+            ).start()
 
             def maintain_ops_snapshots() -> None:
                 try:
@@ -364,7 +371,7 @@ async def lifespan(app: FastAPI):
                     name="prewarm-disasters",
                 ).start()
 
-            logger.info("Pre-warmers started: control-catalogs + public-pack-catalog + api-catalog + geometry-display + ops-snapshots")
+            logger.info("Pre-warmers started: control-catalogs + public-pack-catalog + api-catalog + geometry-display + reference-identities + ops-snapshots")
         else:
             logger.info("Pre-warmers started: control-catalogs + public-pack-catalog + api-catalog")
     except Exception as exc:
