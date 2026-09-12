@@ -294,6 +294,7 @@ class ReferenceExchangeRuntimeTests(unittest.TestCase):
         graph_candidates.assert_called_once_with(
             ["06073000100", "not-a-census-geoid"],
             country_scope="USA",
+            reference_system="us_census_geoid",
         )
 
     def test_identify_five_digit_codes_reports_census_zcta_ambiguity(self) -> None:

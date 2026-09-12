@@ -827,11 +827,19 @@ def identify_reference_system(
         expected_level=expected_level,
     )
     selected = full_matches[0] if full_matches and status == "matched" else None
-    if selected is None and expected_system and candidates and candidates[0].get("match_count"):
+    if (
+        selected is None
+        and expected_system
+        and candidates
+        and candidates[0].get("match_count")
+        and candidates[0].get("expected_vintage_supported") is not False
+    ):
         # An explicit system confirmation can bind the rows that do match while
         # preserving partial_match and per-row failures for the rest. This is
         # the normal bulk-join contract: useful rows are not discarded because
-        # a few identifiers need later review.
+        # a few identifiers need later review. An explicitly unavailable
+        # vintage remains unbound because retrying with supported source
+        # context is required before conversion.
         selected = candidates[0]
     recommended_binding = None
     if selected:
