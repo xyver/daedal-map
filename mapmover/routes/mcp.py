@@ -4,6 +4,7 @@ import json
 import hashlib
 import math
 import numbers
+import re
 import time
 import uuid
 from functools import lru_cache, wraps
@@ -84,6 +85,81 @@ MCP_GEOMETRY_READ_TOOLS = {
     "get_job_status",
 }
 MCP_GEOMETRY_BULK_TOOLS = {"create_geometry_export", "create_conversion_job"}
+MCP_ANALYTICS_NAMESPACE = "com.daedalmap/analytics"
+
+
+def _mcp_client_analytics_context(params: dict[str, Any]) -> dict[str, str]:
+    """Return bounded, attribution-only context from MCP request metadata.
+
+    Browser visitor fields are intentionally forgeable. They may join product
+    analytics, but must never influence identity, access, limits, or billing.
+    """
+    meta = params.get("_meta") if isinstance(params.get("_meta"), dict) else {}
+    raw = meta.get(MCP_ANALYTICS_NAMESPACE) if isinstance(meta.get(MCP_ANALYTICS_NAMESPACE), dict) else {}
+    limits = {
+        "visitor_id": 80,
+        "first_touch_source": 60,
+        "first_touch_medium": 40,
+        "first_touch_campaign": 60,
+        "first_touch_landing": 120,
+        "first_touch_date": 10,
+    }
+    patterns = {
+        "visitor_id": re.compile(r"^v1\.[0-9a-f]{8,64}$"),
+        "first_touch_source": re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,59}$"),
+        "first_touch_medium": re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,39}$"),
+        "first_touch_campaign": re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,59}$"),
+        "first_touch_landing": re.compile(r"^/[A-Za-z0-9._/-]{0,119}$"),
+        "first_touch_date": re.compile(r"^\d{4}-\d{2}-\d{2}$"),
+    }
+    context = {}
+    for key, limit in limits.items():
+        value = str(raw.get(key) or "").strip()[:limit]
+        if value and patterns[key].fullmatch(value):
+            context[key] = value
+    if str(raw.get("surface") or "").strip() == "try_dataset":
+        context["surface"] = "try_dataset"
+    return context
+
+
+def _reference_analytics_metadata(payload: dict[str, Any], result: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Summarize a reference match without retaining identifiers or row data."""
+    result = result if isinstance(result, dict) else {}
+    nested = result.get("result") if isinstance(result.get("result"), dict) else {}
+    plan = nested.get("resolution_plan") if isinstance(nested.get("resolution_plan"), dict) else {}
+    binding = payload.get("geography_binding") if isinstance(payload.get("geography_binding"), dict) else {}
+    if not binding and isinstance(plan.get("geography_binding"), dict):
+        binding = plan["geography_binding"]
+    receipt = nested.get("meter_receipt") if isinstance(nested.get("meter_receipt"), dict) else {}
+
+    def _text(*values: Any, limit: int = 100) -> str | None:
+        for value in values:
+            cleaned = str(value or "").strip()
+            if cleaned:
+                return cleaned[:limit]
+        return None
+
+    def _integer(value: Any) -> int | None:
+        try:
+            return int(value) if value is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    return {
+        "reference_system": _text(binding.get("system"), payload.get("from_system")),
+        "country_scope": _text(binding.get("country_scope"), payload.get("iso3"), limit=3),
+        "admin_level": _text(binding.get("geo_level"), payload.get("target_admin_level"), limit=30),
+        "reference_vintage": _text(binding.get("vintage"), payload.get("relationship_vintage"), limit=40),
+        "source_release": _text(binding.get("source_release"), limit=80),
+        "internal_release": _text(binding.get("internal_release"), limit=80),
+        "converted_count": _integer(nested.get("converted_count")),
+        "unmatched_count": _integer(nested.get("error_count")),
+        "distinct_geography_count": _integer(nested.get("distinct_geography_count")),
+        "successful_distinct_count": _integer(receipt.get("successful_distinct_items")),
+        "duplicates_collapsed": _integer(receipt.get("duplicate_items_collapsed")),
+        "charge_units": _integer(receipt.get("charge_units")),
+        "output_format": _text(nested.get("output_format"), payload.get("output_format"), limit=30),
+    }
 
 
 def _required_mcp_permission(tool_name: str) -> str:
@@ -657,6 +733,7 @@ async def _authorize_paid_batch_tool(
     settlement = verifier_payload.get("settlement") if isinstance(verifier_payload.get("settlement"), dict) else {}
     return {
         "settlement_id": str(settlement.get("settlement_id") or "").strip(),
+        "payment_rail": str(verifier_payload.get("rail") or "").strip() or "paid",
         "request_fingerprint": str(context.get("request_fingerprint") or "").strip(),
         "caller_binding": str(context.get("caller_binding") or "").strip(),
         "free_limit": free_limit,
@@ -1083,19 +1160,23 @@ def _log_mcp_tool_usage_event(
     error_code: str | None = None,
     payment_rail: str | None = None,
     artifact_token_id: str | None = None,
+    settlement_id: str | None = None,
+    amount_charged_usdc_base_units: int | None = None,
     metadata: dict[str, Any] | None = None,
     analytics_pack_id: str = ANALYTICS_PACK_GEOGRAPHY,
 ) -> None:
     artifact_token_id = artifact_token_id or getattr(request.state, "trusted_artifact_token_id", None)
     if payment_rail is None:
         payment_rail = _access_lane(artifact_token_id)
+    inherited_metadata = getattr(request.state, "analytics_metadata", {})
+    inherited_metadata = inherited_metadata if isinstance(inherited_metadata, dict) else {}
     merged_metadata = {
-        **getattr(request.state, "analytics_metadata", {}),
-        "surface": "agent_api_mcp",
+        **inherited_metadata,
+        "surface": inherited_metadata.get("surface") or "agent_api_mcp",
         "mcp_tool_name": tool_name,
         **(metadata or {}),
     }
-    merged_metadata.setdefault("access_lane", _access_lane(artifact_token_id))
+    merged_metadata["access_lane"] = payment_rail
     request.state.analytics_pack_id = analytics_pack_id
     request.state.analytics_source_id = tool_name
     request.state.analytics_metadata = {key: value for key, value in merged_metadata.items() if value is not None}
@@ -1117,6 +1198,8 @@ def _log_mcp_tool_usage_event(
             status_code=200,
             error_code=error_code,
             query_granularity=query_granularity,
+            settlement_id=settlement_id,
+            amount_charged_usdc_base_units=amount_charged_usdc_base_units,
             metadata=request.state.analytics_metadata,
         )
     except Exception as exc:
@@ -3432,6 +3515,7 @@ async def _execute_resolve_reference_tool(request: Request, arguments: dict[str,
                 "batch_id": batch_id,
                 "resolved_count": result_payload["resolved_count"],
                 "unresolved_count": result_payload["unresolved_count"],
+                **_reference_analytics_metadata(base_payload, result_payload),
                 **_compute_metadata(
                     response_payload=result_payload,
                     stages=stages,
@@ -3440,7 +3524,9 @@ async def _execute_resolve_reference_tool(request: Request, arguments: dict[str,
                     batch_limit=limit,
                 ),
             },
-            payment_rail=_request_access_lane(request, trusted_token, paid=commercial_context is not None),
+            payment_rail=(commercial_context or {}).get("payment_rail") or _request_access_lane(
+                request, trusted_token, paid=commercial_context is not None
+            ),
             artifact_token_id=trusted_token_id,
         )
         response = _jsonrpc_response(_tool_result(result_payload), rpc_request_id)
@@ -4257,6 +4343,7 @@ async def _authorize_geometry_job_execution(
     settlement = verifier_payload.get("settlement") if isinstance(verifier_payload.get("settlement"), dict) else {}
     return {
         "settlement_id": str(settlement.get("settlement_id") or "").strip(),
+        "payment_rail": str(verifier_payload.get("rail") or "").strip() or "paid",
         "request_fingerprint": str(context.get("request_fingerprint") or "").strip(),
         "caller_binding": str(context.get("caller_binding") or "").strip(),
         "reserved_quote": quote,
@@ -4428,6 +4515,13 @@ async def _execute_geometry_job_runtime_tool(request: Request, arguments: dict[s
         query_granularity=f"bulk_{row_count}" if row_count > 1 else "single",
         response_payload=result,
         error_code=str((result.get("error") or {}).get("code") or "") or None,
+        settlement_id=str((commercial_context or {}).get("settlement_id") or "") or None,
+        amount_charged_usdc_base_units=(
+            int((((nested_result.get("meter_receipt") or {}).get("quote") or {}).get("amount_usdc_base_units")))
+            if ok and commercial_context is not None
+            and str((((nested_result.get("meter_receipt") or {}).get("quote") or {}).get("amount_usdc_base_units")) or "").isdigit()
+            else None
+        ),
         metadata={
             "event": capability_id,
             "settlement_id": (commercial_context or {}).get("settlement_id"),
@@ -4436,6 +4530,7 @@ async def _execute_geometry_job_runtime_tool(request: Request, arguments: dict[s
             "job_id": job_id,
             "job_status": status,
             "quote_id": result.get("quote_id") or payload.get("quote_id"),
+            **(_reference_analytics_metadata(payload, result) if tool_name in {"estimate_conversion_job", "create_conversion_job"} else {}),
             **_compute_metadata(
                 response_payload=result,
                 stages=stages,
@@ -4448,7 +4543,9 @@ async def _execute_geometry_job_runtime_tool(request: Request, arguments: dict[s
                 batch_limit=payload.get("limit"),
             ),
         },
-        payment_rail=_request_access_lane(request, trusted_token, paid=commercial_context is not None),
+        payment_rail=(commercial_context or {}).get("payment_rail") or _request_access_lane(
+            request, trusted_token, paid=commercial_context is not None
+        ),
         artifact_token_id=trusted_token_id,
     )
     response = _jsonrpc_response(_tool_result(result, is_error=not ok), rpc_request_id)
@@ -4943,6 +5040,10 @@ async def mcp_endpoint(request: Request, pack_id: str | None = None):
     }
     if params and not isinstance(params, dict):
         return _jsonrpc_error(request_id, -32602, "Invalid params")
+    request.state.analytics_metadata = {
+        **getattr(request.state, "analytics_metadata", {}),
+        **_mcp_client_analytics_context(params),
+    }
 
     protocol_header = str(request.headers.get("MCP-Protocol-Version") or "").strip()
     if method != "initialize" and protocol_header and protocol_header not in SUPPORTED_PROTOCOL_VERSIONS:

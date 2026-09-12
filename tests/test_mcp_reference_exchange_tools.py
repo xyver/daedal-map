@@ -119,6 +119,32 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         self.assertEqual(envelope["result"]["serverInfo"]["name"], "com.daedalmap/geography")
         self.assertEqual(envelope["result"]["serverInfo"]["version"], "1.1.0")
 
+    def test_browser_mcp_metadata_is_bounded_and_reaches_usage_analytics(self) -> None:
+        with mock.patch("mapmover.routes.mcp.log_api_query_event") as analytics_mock:
+            envelope = _mcp_call(
+                self.client,
+                "tools/call",
+                {
+                    "name": "how_geometry_works",
+                    "arguments": {},
+                    "_meta": {
+                        "com.daedalmap/analytics": {
+                            "surface": "try_dataset",
+                            "visitor_id": "v1.0123456789abcdef",
+                            "first_touch_source": "newsletter",
+                            "ignored_authority": "never-trusted",
+                        }
+                    },
+                },
+            )
+
+        self.assertIn("result", envelope)
+        metadata = analytics_mock.call_args.kwargs["metadata"]
+        self.assertEqual(metadata["surface"], "try_dataset")
+        self.assertEqual(metadata["visitor_id"], "v1.0123456789abcdef")
+        self.assertEqual(metadata["first_touch_source"], "newsletter")
+        self.assertNotIn("ignored_authority", metadata)
+
     def test_large_structured_tool_result_summarizes_text_copy(self) -> None:
         payload = {
             "request_id": "large-shape-test",
@@ -2086,6 +2112,15 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         self.assertTrue(created["result"]["resolution_plan"]["deduplicate_by_identifier"])
         self.assertEqual(created["result"]["results"][0]["resolved_loc_id"], "USA-CA-073-000100")
         self.assertEqual(created["result"]["results"][1]["row_index"], 2)
+        conversion_analytics = analytics_mock.call_args_list[1].kwargs
+        conversion_metadata = conversion_analytics["metadata"]
+        self.assertEqual(conversion_metadata["reference_system"], "us_census_geoid")
+        self.assertEqual(conversion_metadata["country_scope"], "USA")
+        self.assertEqual(conversion_metadata["admin_level"], "admin_3")
+        self.assertEqual(conversion_metadata["reference_vintage"], "2020")
+        self.assertEqual(conversion_metadata["converted_count"], 3)
+        self.assertEqual(conversion_metadata["distinct_geography_count"], 2)
+        self.assertEqual(conversion_metadata["duplicates_collapsed"], 1)
 
     def test_bound_conversion_executes_once_per_distinct_geography(self) -> None:
         fake = {"ok": True, "resolved_loc_id": "USA-CA-073-000100"}
