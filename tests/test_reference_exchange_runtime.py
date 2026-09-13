@@ -63,6 +63,95 @@ class ReferenceExchangeRuntimeTests(unittest.TestCase):
         self.assertEqual([row["resolved_loc_id"] for row in results], ["CAN-AB", "CAN-BC"])
         self.assertEqual(results[0]["overture_release"], "gers-v1")
 
+    def test_external_target_conversion_queries_reverse_bridge_once(self) -> None:
+        edges = {
+            "CAN-AB": [ExternalReferenceEdge(
+                external_id="11111111-1111-1111-1111-111111111111",
+                loc_id="CAN-AB", relationship_type="equivalent_identity",
+                is_primary=True, source_release="gers-v1", internal_release="can-v1",
+                country="CAN", source_level=1, external_subtype="region",
+                identity_confidence="high", geometry_confidence=1.0,
+                external_name="Alberta", loc_name="Alberta",
+            )],
+            "CAN-BC": [ExternalReferenceEdge(
+                external_id="22222222-2222-2222-2222-222222222222",
+                loc_id="CAN-BC", relationship_type="equivalent_identity",
+                is_primary=True, source_release="gers-v1", internal_release="can-v1",
+                country="CAN", source_level=1, external_subtype="region",
+                identity_confidence="high", geometry_confidence=1.0,
+                external_name="British Columbia", loc_name="British Columbia",
+            )],
+        }
+        requests = [
+            {"from_system": "admin.native_id", "value": "48", "to_system": "gers", "iso3": "CAN"},
+            {"from_system": "admin.native_id", "value": "59", "to_system": "gers", "iso3": "CAN"},
+        ]
+        resolved = [
+            {"ok": True, "resolved_loc_id": "CAN-AB"},
+            {"ok": True, "resolved_loc_id": "CAN-BC"},
+        ]
+        with (
+            mock.patch.object(reference_exchange, "_catalog_crosswalks", return_value=[]),
+            mock.patch.object(reference_exchange, "resolve_references_batch", return_value=resolved) as resolve_batch,
+            mock.patch.object(reference_exchange, "get_external_adapter", return_value=object()),
+            mock.patch.object(reference_exchange, "lookup_loc_id_edges_batch", return_value=edges) as reverse_query,
+        ):
+            results = reference_exchange.convert_references_batch(requests)
+
+        resolve_batch.assert_called_once()
+        reverse_query.assert_called_once_with(
+            "overture_gers", ["CAN-AB", "CAN-BC"],
+            country_scope="CAN", source_release=None, internal_release=None, limit=10,
+        )
+        self.assertEqual(
+            [row["results"][0]["value"] for row in results],
+            [
+                "11111111-1111-1111-1111-111111111111",
+                "22222222-2222-2222-2222-222222222222",
+            ],
+        )
+
+    def test_direct_conversion_batch_scans_relationship_artifact_once(self) -> None:
+        record = {
+            "crosswalk_id": "zip-to-county",
+            "source_system": "overlay_zcta",
+            "target_system": "admin_2",
+            "source_family_id": "zcta",
+            "execution_strategy": "direct_relationship_artifact",
+            "artifact_path": "test/zip-to-county.parquet",
+            "relationship_vintage": "2020",
+            "cardinality": "many_to_many",
+        }
+        frame = pd.DataFrame([
+            {
+                "source_loc_id": "USA-Z-00601", "source_id": "00601", "source_name": "00601",
+                "target_loc_id": "USA-PR-001", "target_id": "72001", "target_name": "Adjuntas",
+                "rank_by_source_area": 1, "is_primary": True,
+            },
+            {
+                "source_loc_id": "USA-Z-00602", "source_id": "00602", "source_name": "00602",
+                "target_loc_id": "USA-PR-003", "target_id": "72003", "target_name": "Aguada",
+                "rank_by_source_area": 1, "is_primary": True,
+            },
+        ])
+        requests = [
+            {"from_system": "zip", "value": "00601", "to_system": "admin_2", "iso3": "USA"},
+            {"from_system": "zip", "value": "00602", "to_system": "admin_2", "iso3": "USA"},
+        ]
+        with (
+            mock.patch.object(reference_exchange, "_catalog_crosswalks", return_value=[record]),
+            mock.patch.object(reference_exchange, "is_cloud_mode", return_value=True),
+            mock.patch.object(reference_exchange, "_select_direct_crosswalk_rows", return_value=frame) as scan,
+            mock.patch.object(reference_exchange, "resolve_references_batch") as fallback,
+        ):
+            results = reference_exchange.convert_references_batch(requests)
+
+        scan.assert_called_once()
+        self.assertEqual(scan.call_args.kwargs["input_column"], "source_loc_id")
+        self.assertEqual(scan.call_args.kwargs["values"], ["USA-Z-00601", "USA-Z-00602"])
+        fallback.assert_not_called()
+        self.assertEqual([row["loc_id"] for row in results], ["USA-Z-00601", "USA-Z-00602"])
+
     def test_global_admin0_batch_uses_compact_identity_index_once(self) -> None:
         requests = [
             {"from_system": "geoboundaries.code", "value": "afg", "target_admin_level": "admin_0"},

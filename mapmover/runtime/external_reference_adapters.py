@@ -442,6 +442,41 @@ def lookup_loc_id_edges(
     return edges if limit is None else edges[:max(0, int(limit))]
 
 
+def lookup_loc_id_edges_batch(
+    system: str,
+    loc_ids: list[str],
+    *,
+    source_release: str | None = None,
+    internal_release: str | None = None,
+    country_scope: str | None = None,
+    limit: int | None = 100,
+) -> dict[str, list[ExternalReferenceEdge]] | None:
+    """Resolve many loc_ids through one reverse bridge-partition query."""
+    adapter = get_external_adapter(system)
+    bridge = admitted_bridge(adapter) if adapter else None
+    if not _bridge_available(bridge):
+        return None
+    assert bridge is not None
+    requested = list(dict.fromkeys(
+        str(value).strip() for value in loc_ids if str(value).strip()
+    ))
+    partitions = _selected_partitions(
+        bridge,
+        source_release=source_release,
+        internal_release=internal_release,
+        country_scope=country_scope,
+    )
+    grouped: dict[str, list[ExternalReferenceEdge]] = {value: [] for value in requested}
+    for edge in _query_edges(bridge, partitions, reverse=True, values=requested):
+        grouped.setdefault(edge.loc_id, []).append(edge)
+    maximum = None if limit is None else max(0, int(limit))
+    for loc_id, edges in grouped.items():
+        edges.sort(key=lambda edge: (not edge.is_equivalence, -(edge.geometry_confidence or 0.0), edge.external_id))
+        if maximum is not None:
+            grouped[loc_id] = edges[:maximum]
+    return grouped
+
+
 def external_equivalence_matches(
     system: str, values: list[str], *, country_scope: str | None = None,
     source_release: str | None = None, internal_release: str | None = None,

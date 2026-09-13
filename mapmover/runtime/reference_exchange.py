@@ -12,7 +12,7 @@ import math
 from pathlib import Path
 from typing import Any
 
-from ..duckdb_helpers import is_cloud_mode, select_rows
+from ..duckdb_helpers import is_cloud_mode, path_to_uri, quote_ident, run_df, select_rows
 from ..geometry_handlers import get_location_info, get_selection_geometries, get_selection_geometry_metadata
 from ..paths import DATA_ROOT
 from .admin_hierarchy import infer_admin_level_from_loc_id
@@ -43,6 +43,7 @@ from .external_reference_adapters import (
     lookup_external_edges,
     lookup_external_edges_batch,
     lookup_loc_id_edges,
+    lookup_loc_id_edges_batch,
 )
 from .geography_relationships import resolve_historical_country_reference
 from .loc_id_resolution import resolve_admin_text_to_loc_id
@@ -759,26 +760,117 @@ def _direct_crosswalk_matches(
             )
         if frame.empty:
             continue
-        rows = []
-        for raw in frame.to_dict(orient="records"):
-            rows.append({
-                "system": record.get(f"{'target' if forward else 'source'}_system"),
-                "value": raw.get(f"{output_prefix}_loc_id") or raw.get(f"{output_prefix}_id"),
-                "reference_id": raw.get(f"{output_prefix}_id"),
-                "name": raw.get(f"{output_prefix}_name"),
-                "source_area_share": raw.get("source_area_share"),
-                "target_area_share": raw.get("target_area_share"),
-                "is_primary": raw.get("is_primary"),
-                "relationship_vintage": raw.get("relationship_vintage") or record.get("relationship_vintage"),
-                "crosswalk_id": record.get("crosswalk_id"),
-                "direction": "forward" if forward else "reverse",
-                "input_loc_id": raw.get(f"{input_prefix}_loc_id"),
-                "input_reference_id": raw.get(f"{input_prefix}_id"),
-                "input_name": raw.get(f"{input_prefix}_name"),
-                "input_family_id": record.get(f"{'source' if forward else 'target'}_family_id"),
-            })
-        return record, rows
+        return record, _shape_direct_crosswalk_rows(record, frame.to_dict(orient="records"), forward=forward)
     return None, []
+
+
+def _shape_direct_crosswalk_rows(
+    record: dict[str, Any], raw_rows: list[dict[str, Any]], *, forward: bool,
+) -> list[dict[str, Any]]:
+    input_prefix = "source" if forward else "target"
+    output_prefix = "target" if forward else "source"
+    return [{
+        "system": record.get(f"{'target' if forward else 'source'}_system"),
+        "value": raw.get(f"{output_prefix}_loc_id") or raw.get(f"{output_prefix}_id"),
+        "reference_id": raw.get(f"{output_prefix}_id"),
+        "name": raw.get(f"{output_prefix}_name"),
+        "source_area_share": raw.get("source_area_share"),
+        "target_area_share": raw.get("target_area_share"),
+        "is_primary": raw.get("is_primary"),
+        "relationship_vintage": raw.get("relationship_vintage") or record.get("relationship_vintage"),
+        "crosswalk_id": record.get("crosswalk_id"),
+        "direction": "forward" if forward else "reverse",
+        "input_loc_id": raw.get(f"{input_prefix}_loc_id"),
+        "input_reference_id": raw.get(f"{input_prefix}_id"),
+        "input_name": raw.get(f"{input_prefix}_name"),
+        "input_family_id": record.get(f"{'source' if forward else 'target'}_family_id"),
+    } for raw in raw_rows]
+
+
+def _select_direct_crosswalk_rows(
+    path: Path, *, input_column: str, values: list[str], rank_column: str, limit: int,
+):
+    """Read only the top ranked rows for each requested relationship ID."""
+    requested = list(dict.fromkeys(value for value in values if value))
+    if not requested:
+        return None
+    placeholders = ", ".join("?" for _ in requested)
+    sql = (
+        f"SELECT * FROM read_parquet(?) WHERE {quote_ident(input_column)} IN ({placeholders}) "
+        f"QUALIFY ROW_NUMBER() OVER (PARTITION BY {quote_ident(input_column)} "
+        f"ORDER BY {quote_ident(rank_column)} ASC NULLS LAST) <= ?"
+    )
+    return run_df(sql, [path_to_uri(path), *requested, limit])
+
+
+def _direct_crosswalk_matches_batch(
+    *, from_system: str, values: list[str], to_system: str, iso3: str, limit: int,
+) -> dict[str, tuple[dict[str, Any], list[dict[str, Any]]]]:
+    """Match a homogeneous conversion group with one scan per candidate artifact."""
+    source_system = _normalize_system(from_system)
+    target_system = _normalize_system(to_system)
+    requested = list(dict.fromkeys(str(value or "").strip() for value in values if str(value or "").strip()))
+    unresolved = set(requested)
+    matches: dict[str, tuple[dict[str, Any], list[dict[str, Any]]]] = {}
+    maximum = max(1, min(int(limit or 10), 100))
+    catalog_records = sorted(
+        _catalog_crosswalks(country_scope=iso3),
+        key=lambda item: str(item.get("source_system") or "") != source_system,
+    )
+    for record in catalog_records:
+        if not unresolved or record.get("execution_strategy") not in {"direct_relationship_artifact", "measured_relationship_artifact"}:
+            continue
+        forward = (
+            str(record.get("source_system") or "") == source_system
+            and str(record.get("target_system") or "") == target_system
+        )
+        reverse = (
+            str(record.get("target_system") or "") == source_system
+            and str(record.get("source_system") or "") == target_system
+        )
+        if not forward and not reverse:
+            continue
+        path = _direct_crosswalk_path(record)
+        if path is None or (not is_cloud_mode() and not path.is_file()):
+            continue
+        input_prefix = "source" if forward else "target"
+        rank_column = f"rank_by_{input_prefix}_area"
+        pending = [value for value in requested if value in unresolved]
+        normalized = {value: _normalize_source_loc_id(source_system, value, iso3) for value in pending}
+        frame = _select_direct_crosswalk_rows(
+            path,
+            input_column=f"{input_prefix}_loc_id",
+            values=list(normalized.values()),
+            rank_column=rank_column,
+            limit=maximum,
+        )
+        raw_rows = [] if frame is None or frame.empty else frame.to_dict(orient="records")
+        by_normalized: dict[str, list[dict[str, Any]]] = {}
+        for raw in raw_rows:
+            by_normalized.setdefault(str(raw.get(f"{input_prefix}_loc_id") or ""), []).append(raw)
+        missing = [value for value in pending if not by_normalized.get(normalized[value])]
+        by_reference: dict[str, list[dict[str, Any]]] = {}
+        if missing:
+            frame = _select_direct_crosswalk_rows(
+                path,
+                input_column=f"{input_prefix}_id",
+                values=missing,
+                rank_column=rank_column,
+                limit=maximum,
+            )
+            for raw in ([] if frame is None or frame.empty else frame.to_dict(orient="records")):
+                by_reference.setdefault(str(raw.get(f"{input_prefix}_id") or ""), []).append(raw)
+        for value in pending:
+            selected = by_normalized.get(normalized[value]) or by_reference.get(value) or []
+            if not selected:
+                continue
+            selected.sort(key=lambda raw: (raw.get(rank_column) is None, raw.get(rank_column) or 0))
+            matches[value] = (
+                record,
+                _shape_direct_crosswalk_rows(record, selected[:maximum], forward=forward),
+            )
+            unresolved.discard(value)
+    return matches
 
 
 def list_reference_systems(
@@ -2046,6 +2138,28 @@ def resolve_references_batch(requests: list[dict[str, Any]]) -> list[dict[str, A
     return [result or {"ok": False, "error": "batch resolution produced no result"} for result in results]
 
 
+def _external_edge_reference(system: str, edge: Any) -> dict[str, Any]:
+    return {
+        "system": system,
+        "value": edge.external_id,
+        "name": edge.external_name,
+        "role": edge.relationship_type,
+        "is_identity_equivalence": edge.is_equivalence,
+        "is_primary": edge.is_primary,
+        "source_release": edge.source_release,
+        "internal_release": edge.internal_release,
+        "country": edge.country,
+        "source_level": edge.source_level,
+        "external_subtype": edge.external_subtype,
+        "edge_id": edge.edge_id,
+        "partition_id": edge.partition_id,
+        "bridge_generation_id": edge.bridge_generation_id,
+        "edge_content_hash": edge.edge_content_hash,
+        "identity_confidence": edge.identity_confidence,
+        "geometry_confidence": edge.geometry_confidence,
+    }
+
+
 def loc_id_references(
     loc_id: str,
     *,
@@ -2100,25 +2214,7 @@ def loc_id_references(
             internal_release=internal_release,
             limit=limit_per_system,
         ):
-            references.append({
-                "system": adapter.system,
-                "value": edge.external_id,
-                "name": edge.external_name,
-                "role": edge.relationship_type,
-                "is_identity_equivalence": edge.is_equivalence,
-                "is_primary": edge.is_primary,
-                "source_release": edge.source_release,
-                "internal_release": edge.internal_release,
-                "country": edge.country,
-                "source_level": edge.source_level,
-                "external_subtype": edge.external_subtype,
-                "edge_id": edge.edge_id,
-                "partition_id": edge.partition_id,
-                "bridge_generation_id": edge.bridge_generation_id,
-                "edge_content_hash": edge.edge_content_hash,
-                "identity_confidence": edge.identity_confidence,
-                "geometry_confidence": edge.geometry_confidence,
-            })
+            references.append(_external_edge_reference(adapter.system, edge))
     if family in {"admin_0", "admin_local", "admin_geometry"} or inferred_level is not None:
         for artifact in _crosswalk_artifacts(target_admin_level=level, iso3=country or None):
             source = str(artifact.get("source_family") or "").strip()
@@ -2291,6 +2387,7 @@ def convert_references_batch(requests: list[dict[str, Any]]) -> list[dict[str, A
     results: list[dict[str, Any] | None] = [None] * len(requests)
     source_requests: list[dict[str, Any]] = []
     source_indexes: list[int] = []
+    direct_groups: dict[tuple[str, str, str, int], list[tuple[int, dict[str, Any]]]] = {}
 
     catalog_by_country: dict[str, list[dict[str, Any]]] = {}
     for index, request in enumerate(requests):
@@ -2314,14 +2411,46 @@ def convert_references_batch(requests: list[dict[str, Any]]) -> list[dict[str, A
             )
             for record in records
         )
-        if has_direct_pair or get_external_adapter(target):
-            results[index] = convert_reference(**request)
+        if has_direct_pair:
+            key = (from_system, target, iso3, int(request.get("limit") or 10))
+            direct_groups.setdefault(key, []).append((index, request))
             continue
         source_indexes.append(index)
         source_requests.append({key: value for key, value in request.items() if key != "to_system"})
 
-    resolved_sources = resolve_references_batch(source_requests)
+    for (from_system, target, iso3, limit), members in direct_groups.items():
+        direct = _direct_crosswalk_matches_batch(
+            from_system=from_system,
+            values=[str(request.get("value") or "") for _index, request in members],
+            to_system=target,
+            iso3=iso3,
+            limit=limit,
+        )
+        for index, request in members:
+            value = str(request.get("value") or "").strip()
+            match = direct.get(value)
+            if match:
+                record, direct_results = match
+                results[index] = _clean_json({
+                    "ok": True,
+                    "from_system": from_system,
+                    "input": request.get("value"),
+                    "to_system": target,
+                    "loc_id": direct_results[0].get("input_loc_id"),
+                    "results": direct_results,
+                    "crosswalk": {
+                        "crosswalk_id": record.get("crosswalk_id"),
+                        "relationship_vintage": record.get("relationship_vintage"),
+                        "cardinality": record.get("cardinality"),
+                    },
+                })
+                continue
+            source_indexes.append(index)
+            source_requests.append({key: value for key, value in request.items() if key != "to_system"})
+
+    resolved_sources = resolve_references_batch(source_requests) if source_requests else []
     reverse_groups: dict[tuple[Any, ...], list[tuple[int, dict[str, Any], dict[str, Any], str]]] = {}
+    external_reverse_groups: dict[tuple[Any, ...], list[tuple[int, dict[str, Any], dict[str, Any], str]]] = {}
     for index, request, resolved in zip(source_indexes, (requests[i] for i in source_indexes), resolved_sources):
         target = _normalize_system(request.get("to_system"))
         loc_id = str(resolved.get("resolved_loc_id") or "").strip()
@@ -2340,6 +2469,17 @@ def convert_references_batch(requests: list[dict[str, Any]]) -> list[dict[str, A
                 "to_system": target,
                 "results": [{"system": target, "value": loc_id}],
             })
+            continue
+        if get_external_adapter(target):
+            country = loc_id.split("-", 1)[0] if "-" in loc_id else str(request.get("iso3") or "").strip().upper()
+            key = (
+                target,
+                country,
+                str(request.get("source_release") or "").strip(),
+                str(request.get("internal_release") or "").strip(),
+                int(request.get("limit") or 10),
+            )
+            external_reverse_groups.setdefault(key, []).append((index, request, resolved, loc_id))
             continue
         level = admin_level_name(request.get("target_admin_level") or "admin_2")
         iso3 = str(request.get("iso3") or "USA").strip().upper()
@@ -2372,6 +2512,26 @@ def convert_references_batch(requests: list[dict[str, Any]]) -> list[dict[str, A
             int(request.get("limit") or 10),
         )
         reverse_groups.setdefault(key, []).append((index, request, resolved, loc_id))
+
+    for (target, country, source_release, internal_release, limit), members in external_reverse_groups.items():
+        by_loc_id = lookup_loc_id_edges_batch(
+            target,
+            [loc_id for _index, _request, _resolved, loc_id in members],
+            country_scope=country or None,
+            source_release=source_release or None,
+            internal_release=internal_release or None,
+            limit=limit,
+        )
+        if by_loc_id is None:
+            for index, request, _resolved, _loc_id in members:
+                results[index] = convert_reference(**request)
+            continue
+        for index, _request, resolved, loc_id in members:
+            references = [
+                _external_edge_reference(target, edge)
+                for edge in by_loc_id.get(loc_id, [])
+            ]
+            results[index] = _conversion_result_from_references(resolved, target, loc_id, references)
 
     for (target, level, iso3, artifact_path, min_share, limit), members in reverse_groups.items():
         loc_ids = [loc_id for _index, _request, _resolved, loc_id in members]

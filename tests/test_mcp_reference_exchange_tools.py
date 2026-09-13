@@ -2130,6 +2130,40 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         batch_mock.assert_called_once()
         single_mock.assert_not_called()
 
+    def test_conversion_job_uses_batch_converter_for_target_system(self) -> None:
+        items = [{"value": f"postal-{index:03d}"} for index in range(25)]
+        batched = [
+            {
+                "ok": True,
+                "loc_id": f"USA-CA-{index:03d}",
+                "to_system": "admin.native_id",
+                "results": [{"system": "admin.native_id", "value": f"county-{index:03d}"}],
+            }
+            for index in range(25)
+        ]
+        with (
+            mock.patch("mapmover.runtime.geometry_tool_jobs.convert_references_batch", return_value=batched) as batch_mock,
+            mock.patch("mapmover.runtime.geometry_tool_jobs.resolve_references_batch") as resolve_mock,
+            mock.patch("mapmover.runtime.geometry_tool_jobs._run_conversion_row") as single_mock,
+            mock.patch("mapmover.routes.mcp.log_api_query_event"),
+        ):
+            created = _tool_call(
+                self.client,
+                "create_conversion_job",
+                {
+                    "from_system": "postal_area",
+                    "to_system": "admin.native_id",
+                    "items": items,
+                    "output_format": "json_rows",
+                },
+            )
+
+        self.assertEqual(created["result"]["converted_count"], 25)
+        batch_mock.assert_called_once()
+        self.assertEqual(len(batch_mock.call_args.args[0]), 25)
+        resolve_mock.assert_not_called()
+        single_mock.assert_not_called()
+
     def test_conversion_parquet_is_readable(self) -> None:
         import pyarrow.parquet as pq
 

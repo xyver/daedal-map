@@ -30,6 +30,7 @@ from .country_geography import get_country_supported_deep_admin_levels
 from .geography_reference import translate_geometry_id_to_local_id
 from .reference_exchange import (
     convert_reference,
+    convert_references_batch,
     get_geometry_availability,
     get_geometry_references,
     resolve_loc_id_input,
@@ -878,10 +879,21 @@ def create_conversion_job(
         unique_rows.setdefault(_conversion_cache_key(row), row)
     if unique_rows:
         keys = list(unique_rows)
-        batch_results = resolve_references_batch([
+        requests = [
             _conversion_reference_request(unique_rows[key], default_limit=10)
             for key in keys
-        ])
+        ]
+        batch_results: list[dict[str, Any] | None] = [None] * len(requests)
+        resolution_indexes = [index for index, request in enumerate(requests) if not request.get("to_system")]
+        conversion_indexes = [index for index, request in enumerate(requests) if request.get("to_system")]
+        if resolution_indexes:
+            resolved = resolve_references_batch([requests[index] for index in resolution_indexes])
+            for index, result in zip(resolution_indexes, resolved):
+                batch_results[index] = result
+        if conversion_indexes:
+            converted = convert_references_batch([requests[index] for index in conversion_indexes])
+            for index, result in zip(conversion_indexes, converted):
+                batch_results[index] = result
         resolution_cache.update(zip(keys, batch_results))
     for index, item in enumerate(items):
         if not isinstance(item, dict):
