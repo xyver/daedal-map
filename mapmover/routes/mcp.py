@@ -2932,7 +2932,7 @@ async def _execute_loc_id_info_tool(request: Request, arguments: dict[str, Any],
 
 def _loc_id_info_items(loc_ids: list[str], payload: dict[str, Any]) -> list[dict[str, Any]]:
     from mapmover.geometry_handlers import get_location_infos
-    from mapmover.runtime.reference_exchange import resolve_loc_id_input
+    from mapmover.runtime.reference_exchange import resolve_loc_id_inputs
 
     requested = [str(loc_id or "").strip().upper() for loc_id in loc_ids]
     unique_requested = list(dict.fromkeys(requested))
@@ -2946,26 +2946,20 @@ def _loc_id_info_items(loc_ids: list[str], payload: dict[str, Any]) -> list[dict
         for loc_id, info in zip(unique_requested, direct_infos)
         if isinstance(info, dict) and not info.get("error")
     }
+    unresolved_ids = [loc_id for loc_id in unique_requested if loc_id not in direct_info_by_loc_id]
+    resolved_fallbacks = iter(resolve_loc_id_inputs(unresolved_ids))
     resolutions: dict[str, dict[str, Any]] = {}
     for loc_id in unique_requested:
-        if loc_id in direct_info_by_loc_id:
-            resolutions[loc_id] = {
+        resolutions[loc_id] = (
+            {
                 "ok": True,
                 "status": "unchanged",
                 "requested_loc_id": loc_id,
                 "loc_id": loc_id,
                 "resolved_from_public_alias": False,
             }
-            continue
-        try:
-            resolutions[loc_id] = resolve_loc_id_input(loc_id)
-        except Exception:
-            resolutions[loc_id] = {
-                "ok": True,
-                "requested_loc_id": loc_id,
-                "loc_id": loc_id,
-                "resolved_from_public_alias": False,
-            }
+            if loc_id in direct_info_by_loc_id else next(resolved_fallbacks)
+        )
     canonical_ids = list(dict.fromkeys(
         str(resolution.get("loc_id") or requested_id)
         for requested_id, resolution in resolutions.items()
