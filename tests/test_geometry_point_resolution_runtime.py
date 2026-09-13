@@ -597,6 +597,63 @@ class GeometryPointResolutionRuntimeTests(unittest.TestCase):
         self.assertEqual([row["loc_id"] for row in result["stack"]], ["NZL", "NZL-AUK", "NZL-AUK-001"])
         legacy_load.assert_not_called()
 
+    def test_standard_ceiling_returns_deepest_available_without_deep_files(self):
+        import pandas as pd
+
+        country = pd.Series({"loc_id": "NZL", "name": "New Zealand", "admin_level": 0})
+        shallow_match = {
+            "stack": [
+                {"loc_id": "NZL", "name": "New Zealand", "admin_level": 0},
+                {"loc_id": "NZL-AUK", "name": "Auckland", "admin_level": 1},
+                {"loc_id": "NZL-AUK-001", "name": "Central", "admin_level": 2},
+            ],
+            "matched": {"loc_id": "NZL-AUK-001", "name": "Central", "admin_level": 2},
+        }
+        with (
+            patch("mapmover.geometry_handlers.load_global_admin0_identities", return_value={"NZL": country}),
+            patch(
+                "mapmover.geometry_handlers.resolve_admin_spine_query_points",
+                return_value=[shallow_match],
+            ) as query,
+            patch("mapmover.geometry_handlers.load_country_parquet_viewport") as legacy_load,
+        ):
+            result = resolve_points_to_locations(
+                [{"lon": 174.76, "lat": -36.85}],
+                country_scope="NZL",
+                max_admin_level=3,
+                shallow_banks_only=True,
+            )[0]
+
+        query.assert_called_once()
+        self.assertEqual(query.call_args.kwargs["target_admin_level"], 3)
+        legacy_load.assert_not_called()
+        self.assertNotIn("error", result)
+        self.assertEqual(result["matched"]["admin_level"], 2)
+        self.assertEqual(result["target_admin_level"], "up_to_admin_3")
+
+    def test_standard_mode_does_not_open_legacy_country_files(self):
+        import pandas as pd
+
+        country = pd.Series({"loc_id": "NZL", "name": "New Zealand", "admin_level": 0})
+        with (
+            patch("mapmover.geometry_handlers.load_global_admin0_identities", return_value={"NZL": country}),
+            patch("mapmover.geometry_handlers.resolve_admin_spine_query_points", return_value=None),
+            patch("mapmover.geometry_handlers.load_country_parquet_viewport") as legacy_viewport,
+            patch("mapmover.geometry_handlers.load_country_parquet") as legacy_full,
+        ):
+            result = resolve_points_to_locations(
+                [{"lon": 174.76, "lat": -36.85}],
+                country_scope="NZL",
+                max_admin_level=3,
+                shallow_banks_only=True,
+            )[0]
+
+        legacy_viewport.assert_not_called()
+        legacy_full.assert_not_called()
+        self.assertNotIn("error", result)
+        self.assertEqual(result["matched"]["loc_id"], "NZL")
+        self.assertEqual(result["query_layout"], "global_admin0_only")
+
     def test_resolve_points_to_locations_batches_country_admin_reads(self):
         import pandas as pd
 

@@ -104,7 +104,7 @@ def geography_tools_section(app_origin: str) -> str:
 def geography_workflow_section() -> str:
     """Return question-first instructions for the current geography MCP roster."""
     return (
-        "1. Point to loc_id: call `resolve_point`. For a bounded batch use `points`, one `country_scope`, and one `target_admin_level`.\n"
+        "1. Point to loc_id: call `resolve_point`. Standard mode accepts cross-country `points` and stops at Admin 3. For Admin 4-6, group the standard results by Admin 1 and use `lookup_mode=deep` with one `country_scope` and one `admin_1_scope` per call.\n"
         "2. What a loc_id is connected to: call `loc_id_info` with `include_references=true`; add `include_hierarchy=true` for its strict stored ancestry.\n"
         "3. Dataset to loc_id: pass bounded, structurally filtered column samples to `identify_dataset_geography`; it selects the column, country, level, and system. For one already-selected identifier column, use `identify_reference_system`. Resolve a known outside code or name with `resolve_reference`, and use `convert_reference` only when another reference system is the desired output.\n"
         "4. Shape lookup: call `check_geometry` for availability, then `get_geometry`. Metadata, bbox, and centroid are the default; set `include_polygon=true` only when shape coordinates are needed. If the requested record is historical, return it first; present any `supersession` prompt as a second question and do not fetch the successor until the caller chooses it.\n"

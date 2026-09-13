@@ -201,33 +201,45 @@ def _metadata_with_geometry_bbox(
     maximum_level: int | None = None,
     admin3: str = "",
 ) -> pd.DataFrame:
-    """Read each polygon in a batch envelope once, then match in one STRtree.
+    """Read polygons whose bboxes contain an actual input point, once per bank.
 
     A point-by-point DuckDB query is catastrophic for large MCP batches even
-    when every individual read is selective.  The batch envelope may admit
-    more polygons, but each Parquet bank is scanned once and every WKB value is
-    decoded once instead of once per input point.
+    when every individual read is selective.  A single envelope around a
+    geographically distributed batch is also catastrophic: 100 points spread
+    across a country can turn that envelope into an almost-full geometry read.
+    Keep one Parquet scan, but predicate it against the actual point set so WKB
+    is projected only for polygons that can contain at least one input point.
     """
     if not points:
         return pd.DataFrame(columns=[*META_COLUMN_NAMES, "geometry"])
-    min_lon = min(float(point["lon"]) for point in points)
-    max_lon = max(float(point["lon"]) for point in points)
-    min_lat = min(float(point["lat"]) for point in points)
-    max_lat = max(float(point["lat"]) for point in points)
-    clauses = [
-        "bbox_max_lon >= ?", "bbox_min_lon <= ?",
-        "bbox_max_lat >= ?", "bbox_min_lat <= ?",
+    unique_points = list(dict.fromkeys(
+        (float(point["lon"]), float(point["lat"])) for point in points
+    ))
+    point_values = ", ".join("(?, ?)" for _ in unique_points)
+    parameters: list[Any] = [
+        coordinate
+        for point in unique_points
+        for coordinate in point
     ]
-    parameters: list[Any] = [path_to_uri(path), min_lon, max_lon, min_lat, max_lat]
+    parameters.append(path_to_uri(path))
+    clauses = []
     if maximum_level is not None:
         clauses.append("admin_level <= ?")
         parameters.append(int(maximum_level))
     if admin3:
         clauses.append("admin_3_loc_id = ?")
         parameters.append(admin3)
+    clauses.append(
+        "EXISTS (SELECT 1 FROM input_points AS point "
+        "WHERE regions.bbox_max_lon >= point.lon "
+        "AND regions.bbox_min_lon <= point.lon "
+        "AND regions.bbox_max_lat >= point.lat "
+        "AND regions.bbox_min_lat <= point.lat)"
+    )
     cursor = connection.execute(
+        f"WITH input_points(lon, lat) AS (VALUES {point_values}) "
         f"SELECT {META_COLUMNS}, ST_AsWKB(geometry) AS geometry "
-        f"FROM read_parquet(?) WHERE {' AND '.join(clauses)} "
+        f"FROM read_parquet(?) AS regions WHERE {' AND '.join(clauses)} "
         "ORDER BY admin_level, loc_id",
         parameters,
     )
@@ -369,6 +381,7 @@ def resolve_points(
     points: list[dict[str, Any]],
     *,
     target_admin_level: int | None = None,
+    admin_1_scope: str | None = None,
 ) -> list[dict[str, Any]] | None:
     """Resolve a point batch with one read/index pass per physical bank.
 
@@ -407,11 +420,36 @@ def resolve_points(
         needs_deep = target is None or target > 3
         if needs_deep:
             by_owner: dict[str, list[tuple[int, dict[str, Any]]]] = {}
+            missing_owner = False
             for position, point in enumerate(point_items):
                 anchor = matches[position].get(3) or matches[position].get(2) or matches[position].get(1)
                 owner = str((anchor or {}).get("admin_1_loc_id") or "")
                 if owner:
                     by_owner.setdefault(owner, []).append((position, point))
+                else:
+                    missing_owner = True
+            expected_owner = str(admin_1_scope or "").strip()
+            observed_owners = sorted(by_owner)
+            if expected_owner and (missing_owner or observed_owners != [expected_owner]):
+                error = {
+                    "code": "deep_admin_1_scope_mismatch",
+                    "message": (
+                        "Every point in an Admin 4+ request must resolve inside the "
+                        "single declared admin_1_scope. Split the input by Admin 1."
+                    ),
+                    "admin_1_scope": expected_owner,
+                    "observed_admin_1_scopes": observed_owners,
+                }
+                return [
+                    {
+                        "country": country,
+                        "stack": [levels[level] for level in sorted(levels)],
+                        "matched": levels[max(levels)] if levels else None,
+                        "query_layout": True,
+                        "error": error,
+                    }
+                    for levels in matches
+                ]
             for owner, owned in by_owner.items():
                 deep_path = root / "deep" / f"{owner}.parquet"
                 if not is_cloud_mode() and not deep_path.is_file():

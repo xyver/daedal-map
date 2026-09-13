@@ -590,7 +590,7 @@ def tool_family_pack_detail(pack_id: str | None) -> dict:
         important_rules = [
             "These are direct utility tools, not a query_dataset pack; the first 100 resolve_point items per call are free and larger hosted batches use paid throughput.",
             "Coordinates must be WGS84 decimal degrees.",
-            "resolve_point defaults to the complete latest-available chain through the country's deepest served tier; target_admin_level only stops earlier.",
+            "resolve_point defaults to standard mode: deepest available through Admin 3 without deep-partition reads. For Admin 4-6, group the standard results by Admin 1 and use deep mode with one country_scope and one admin_1_scope per call.",
             "A mixed-vintage point chain is context. loc_id_info hierarchy and resolve_loc_id_scope follow strict stored parentage within a coherent release.",
             "get_geometry returns bbox and centroid by default; request include_polygon only when you need the full geometry payload.",
             "Use convert_reference for ZIP/ZCTA, tribal-area, NWS public forecast-zone, or NWS fire weather-zone conversions in either direction.",

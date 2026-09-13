@@ -1664,7 +1664,9 @@ def resolve_points_to_locations(
     target_admin_level: int | None = None,
     max_admin_level: int | None = None,
     country_scope: str | None = None,
+    admin_1_scope: str | None = None,
     include_marine_context: bool = True,
+    shallow_banks_only: bool = False,
 ):
     """Resolve multiple points through one shared geometry-loading pass.
 
@@ -1673,10 +1675,17 @@ def resolve_points_to_locations(
     cloud mode. This helper keeps the result shape compatible while grouping
     geometry reads by country/state and admin level.
     """
-    if target_admin_level is None and max_admin_level is not None:
-        target_admin_level = max_admin_level
+    # ``target_admin_level`` is exact: callers asking for Admin 3 receive an
+    # error when that tier is unavailable. ``max_admin_level`` is an I/O
+    # ceiling: return the deepest available match at or below it. Keeping the
+    # concepts separate lets global shallow bulk stop before every deep shard
+    # without falsely rejecting countries whose maintained spine ends at 0-2.
+    requested_target_admin_level = target_admin_level
+    io_admin_level = (
+        target_admin_level if target_admin_level is not None else max_admin_level
+    )
     scope_iso3 = str(country_scope or "").strip().upper()
-    if scope_iso3 == "CAN":
+    if scope_iso3 == "CAN" and not shallow_banks_only:
         from .runtime.canada_exact_geometry import (
             canada_query_exact_enabled,
             resolve_canada_query_exact_points,
@@ -1688,7 +1697,7 @@ def resolve_points_to_locations(
                     "resolve_point exact mode returns loc_ids only; fetch or export the selected geometry separately"
                 )
             return resolve_canada_query_exact_points(
-                points, target_admin_level=target_admin_level,
+                points, target_admin_level=io_admin_level,
             )
     normalized_points: list[dict] = []
     for index, point in enumerate(points or []):
@@ -1822,7 +1831,8 @@ def resolve_points_to_locations(
         unresolved_items: list[dict] = []
         stage_started = time.perf_counter()
         query_matches = resolve_admin_spine_query_points(
-            iso3, country_items, target_admin_level=target_admin_level,
+            iso3, country_items, target_admin_level=io_admin_level,
+            admin_1_scope=admin_1_scope,
         )
         if query_matches is None:
             query_matches = [None] * len(country_items)
@@ -1830,17 +1840,32 @@ def resolve_points_to_locations(
             if query_match is None:
                 unresolved_items.append(item)
                 continue
+            if query_match.get("error"):
+                country_match = item["country_match"]
+                results[item["index"]] = {
+                    "point": {"lon": float(item["lon"]), "lat": float(item["lat"])},
+                    "country": {
+                        "loc_id": iso3,
+                        "name": country_match.get("name") or iso3,
+                    },
+                    "admin_1_scope": admin_1_scope,
+                    "error": query_match["error"],
+                }
+                continue
             full_stack = list(query_match.get("stack") or [])
             available_levels = sorted({int(row.get("admin_level", 0)) for row in full_stack})
             selected_stack = full_stack
-            if target_admin_level is not None:
+            if io_admin_level is not None:
                 selected_stack = [
                     row for row in full_stack
-                    if int(row.get("admin_level", 0)) <= target_admin_level
+                    if int(row.get("admin_level", 0)) <= io_admin_level
                 ]
             exact_target = (
-                target_admin_level is None
-                or any(int(row.get("admin_level", 0)) == target_admin_level for row in selected_stack)
+                requested_target_admin_level is None
+                or any(
+                    int(row.get("admin_level", 0)) == requested_target_admin_level
+                    for row in selected_stack
+                )
             )
             selected = selected_stack[-1] if selected_stack else None
             country_match = item["country_match"]
@@ -1849,19 +1874,22 @@ def resolve_points_to_locations(
                 max_level = max(available_levels or [0])
                 error_code = (
                     "target_admin_level_unavailable"
-                    if target_admin_level is not None and target_admin_level > max_level
+                    if requested_target_admin_level is not None and requested_target_admin_level > max_level
                     else "no_match_at_target_admin_level"
                 )
                 results[item["index"]] = {
                     "point": {"lon": float(item["lon"]), "lat": float(item["lat"])},
                     "country": {"loc_id": iso3, "name": country_name},
-                    "target_admin_level": f"admin_{target_admin_level}",
+                    "target_admin_level": f"admin_{requested_target_admin_level}",
                     "max_available_admin_level": f"admin_{max_level}",
                     "available_admin_levels": [f"admin_{level}" for level in available_levels],
-                    "query_layout": "admin_0_3_plus_admin_1_deep",
+                    "query_layout": (
+                        "admin_0_3" if shallow_banks_only
+                        else "admin_0_3_plus_admin_1_deep"
+                    ),
                     "error": {
                         "code": error_code,
-                        "message": f"Point did not match admin_{target_admin_level} in {iso3}",
+                        "message": f"Point did not match admin_{requested_target_admin_level} in {iso3}",
                     },
                 }
                 continue
@@ -1877,16 +1905,61 @@ def resolve_points_to_locations(
                 "stack": [_compact_point_stack_entry(row) for row in selected_stack],
                 "resolution_mode": "latest_available_per_depth",
                 "target_admin_level": (
-                    f"admin_{target_admin_level}" if target_admin_level is not None else "deepest"
+                    f"admin_{requested_target_admin_level}"
+                    if requested_target_admin_level is not None
+                    else (f"up_to_admin_{io_admin_level}" if io_admin_level is not None else "deepest")
                 ),
                 "deeper_available": bool(deeper_levels),
                 "available_deeper_admin_levels": [f"admin_{level}" for level in deeper_levels],
-                "query_layout": "admin_0_3_plus_admin_1_deep",
+                "query_layout": (
+                    "admin_0_3" if shallow_banks_only
+                    else "admin_0_3_plus_admin_1_deep"
+                ),
             }
             if include_geometry:
                 results[item["index"]]["geojson"] = get_selection_geometries([selected.get("loc_id")])
         _add_timing_ms(timing_ms, f"{iso3}_query_layout_ms", stage_started)
         country_items = unresolved_items
+        if shallow_banks_only and country_items:
+            for item in country_items:
+                country_match = item["country_match"]
+                country_name = country_match.get("name") or iso3
+                country_row = {
+                    "loc_id": iso3,
+                    "name": country_name,
+                    "admin_level": 0,
+                }
+                result = {
+                    "point": {"lon": float(item["lon"]), "lat": float(item["lat"])},
+                    "country": {"loc_id": iso3, "name": country_name},
+                    "matched": {
+                        "loc_id": iso3,
+                        "name": country_name,
+                        "admin_level": 0,
+                        "country_name": country_name,
+                        "iso3": iso3,
+                    },
+                    "stack": [_compact_point_stack_entry(country_row)],
+                    "resolution_mode": "latest_available_per_depth",
+                    "target_admin_level": (
+                        f"admin_{requested_target_admin_level}"
+                        if requested_target_admin_level is not None
+                        else f"up_to_admin_{io_admin_level}"
+                    ),
+                    "deeper_available": False,
+                    "available_deeper_admin_levels": [],
+                    "query_layout": "global_admin0_only",
+                }
+                if requested_target_admin_level not in {None, 0}:
+                    result["error"] = {
+                        "code": "target_admin_level_unavailable",
+                        "message": (
+                            f"{iso3} has no admitted Admin 0-3 query bank for an exact "
+                            f"Admin {requested_target_admin_level} lookup."
+                        ),
+                    }
+                results[item["index"]] = result
+            continue
         if not country_items:
             continue
 
@@ -1898,7 +1971,7 @@ def resolve_points_to_locations(
 
         admin1_df = pd.DataFrame()
         admin2_df = pd.DataFrame()
-        if target_admin_level is None or target_admin_level >= 1:
+        if io_admin_level is None or io_admin_level >= 1:
             stage_started = time.perf_counter()
             admin1_df = _cached_country_admin_frame(iso3, 1)
             if admin1_df is None:
@@ -1907,7 +1980,7 @@ def resolve_points_to_locations(
                 admin1_df = load_country_parquet(iso3, admin_level=1)
             _add_timing_ms(timing_ms, f"{iso3}_admin1_load_ms", stage_started)
 
-        if target_admin_level is None or target_admin_level >= 2:
+        if io_admin_level is None or io_admin_level >= 2:
             stage_started = time.perf_counter()
             admin2_df = _cached_country_admin_frame(iso3, 2)
             if admin2_df is None:
@@ -1931,9 +2004,9 @@ def resolve_points_to_locations(
                 **({1: admin1_match} if admin1_match is not None else {}),
                 **({2: admin2_match} if admin2_match is not None else {}),
             }
-            if target_admin_level is not None and target_admin_level <= 0:
+            if io_admin_level is not None and io_admin_level <= 0:
                 item["deepest_row"] = item["country_match"]
-            elif target_admin_level == 1:
+            elif io_admin_level == 1:
                 item["deepest_row"] = admin1_match if admin1_match is not None else item["country_match"]
             elif admin2_match is not None:
                 item["deepest_row"] = admin2_match
@@ -1961,9 +2034,9 @@ def resolve_points_to_locations(
             item["max_available_admin_level"] = max_available_admin_level
             item["available_admin_levels"] = list(range(0, max_available_admin_level + 1))
         deep_levels = supported_deep_levels
-        if target_admin_level is not None:
-            deep_levels = [level for level in deep_levels if level <= target_admin_level]
-        if target_admin_level is not None and target_admin_level < 3:
+        if io_admin_level is not None:
+            deep_levels = [level for level in deep_levels if level <= io_admin_level]
+        if io_admin_level is not None and io_admin_level < 3:
             deep_levels = []
         _add_timing_ms(timing_ms, f"{iso3}_deep_config_ms", stage_started)
         for admin_level in deep_levels:
@@ -2019,12 +2092,12 @@ def resolve_points_to_locations(
             available_deeper_levels = [
                 f"admin_{level}"
                 for level in supported_deep_levels
-                if target_admin_level is not None and level > target_admin_level
+                if requested_target_admin_level is not None and level > requested_target_admin_level
             ]
-            if target_admin_level is not None and deepest_level != target_admin_level:
+            if requested_target_admin_level is not None and deepest_level != requested_target_admin_level:
                 error_code = (
                     "target_admin_level_unavailable"
-                    if target_admin_level > max_available_admin_level
+                    if requested_target_admin_level > max_available_admin_level
                     else "no_match_at_target_admin_level"
                 )
                 results[item["index"]] = {
@@ -2037,7 +2110,7 @@ def resolve_points_to_locations(
                         "country_name": country_name,
                         "iso3": iso3,
                     },
-                    "target_admin_level": f"admin_{target_admin_level}",
+                    "target_admin_level": f"admin_{requested_target_admin_level}",
                     "max_available_admin_level": f"admin_{max_available_admin_level}",
                     "available_admin_levels": [f"admin_{level}" for level in available_admin_levels],
                     "deeper_available": bool(available_deeper_levels),
@@ -2045,9 +2118,9 @@ def resolve_points_to_locations(
                     "error": {
                         "code": error_code,
                         "message": (
-                            f"{iso3} currently serves through admin_{max_available_admin_level}, not admin_{target_admin_level}"
+                            f"{iso3} currently serves through admin_{max_available_admin_level}, not admin_{requested_target_admin_level}"
                             if error_code == "target_admin_level_unavailable"
-                            else f"Point did not match a {f'admin_{target_admin_level}'} geometry in {iso3}"
+                            else f"Point did not match an admin_{requested_target_admin_level} geometry in {iso3}"
                         ),
                     },
                 }
@@ -2069,7 +2142,11 @@ def resolve_points_to_locations(
                 },
                 "stack": stack,
                 "resolution_mode": "latest_available_per_depth",
-                "target_admin_level": f"admin_{target_admin_level}" if target_admin_level is not None else "deepest",
+                "target_admin_level": (
+                    f"admin_{requested_target_admin_level}"
+                    if requested_target_admin_level is not None
+                    else (f"up_to_admin_{io_admin_level}" if io_admin_level is not None else "deepest")
+                ),
                 "deeper_available": bool(available_deeper_levels),
                 "available_deeper_admin_levels": available_deeper_levels,
             }

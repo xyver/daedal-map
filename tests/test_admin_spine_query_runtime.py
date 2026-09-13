@@ -66,6 +66,37 @@ def test_cloud_point_candidates_use_object_store_uri() -> None:
     assert connection.parameters[0] == "s3://bucket/published/layout.parquet"
 
 
+def test_batch_point_candidates_filter_against_points_not_shared_envelope() -> None:
+    class Connection:
+        def execute(self, sql, parameters):
+            self.sql = sql
+            self.parameters = parameters
+            return self
+
+        def fetchdf(self):
+            return pd.DataFrame()
+
+    connection = Connection()
+    with patch.object(admin_spine_query, "path_to_uri", return_value="layout.parquet"):
+        admin_spine_query._metadata_with_geometry_bbox(
+            connection,
+            Path("layout.parquet"),
+            [
+                {"lon": -118.25, "lat": 34.05},
+                {"lon": -74.00, "lat": 40.71},
+                {"lon": -118.25, "lat": 34.05},
+            ],
+            maximum_level=2,
+        )
+
+    assert "WITH input_points(lon, lat) AS (VALUES (?, ?), (?, ?))" in connection.sql
+    assert "EXISTS (SELECT 1 FROM input_points" in connection.sql
+    assert "regions.bbox_max_lon >= point.lon" in connection.sql
+    assert connection.parameters == [
+        -118.25, 34.05, -74.00, 40.71, "layout.parquet", 2,
+    ]
+
+
 def test_exact_id_load_opens_only_shallow_and_requested_admin1_shards() -> None:
     opened_paths = []
 
@@ -428,6 +459,100 @@ def test_batch_point_resolve_opens_shallow_bank_once_for_every_point() -> None:
     bank_read.assert_called_once()
     assert len(result or []) == 100
     assert all(item["matched"]["loc_id"] == "USA-CA-001" for item in result or [])
+
+
+def test_deep_batch_opens_only_the_discovered_owner_bank_once() -> None:
+    square_wkb = Polygon([(0, 0), (0, 10), (10, 10), (10, 0), (0, 0)]).wkb
+
+    def frame(rows: list[tuple[int, str]]) -> pd.DataFrame:
+        output = []
+        for level, loc_id in rows:
+            row = {name: "" for name in admin_spine_query.META_COLUMN_NAMES}
+            row.update({
+                "loc_id": loc_id,
+                "admin_level": level,
+                "name": loc_id,
+                "admin_0_loc_id": "USA",
+                "admin_1_loc_id": "USA-CA",
+                "admin_2_loc_id": "USA-CA-001" if level >= 2 else "",
+                "admin_3_loc_id": "USA-CA-001-007" if level >= 3 else "",
+                "bbox_min_lon": 0.0,
+                "bbox_min_lat": 0.0,
+                "bbox_max_lon": 10.0,
+                "bbox_max_lat": 10.0,
+                "geometry": square_wkb,
+            })
+            output.append(row)
+        return pd.DataFrame(output)
+
+    shallow = frame([(0, "USA"), (1, "USA-CA"), (2, "USA-CA-001"), (3, "USA-CA-001-007")])
+    deep = frame([(4, "USA-CA-001-007-1"), (5, "USA-CA-001-007-1-001")])
+    opened = []
+
+    def bank_read(_connection, path, _points, **_kwargs):
+        opened.append(path.as_posix())
+        return deep if "/deep/" in path.as_posix() else shallow
+
+    class Connection:
+        def close(self):
+            pass
+
+    with (
+        patch.object(admin_spine_query, "layout_available", return_value=True),
+        patch.object(admin_spine_query, "layout_root", return_value=Path("layout")),
+        patch.object(admin_spine_query, "is_cloud_mode", return_value=True),
+        patch.object(admin_spine_query, "_connection", return_value=Connection()),
+        patch.object(admin_spine_query, "_metadata_with_geometry_bbox", side_effect=bank_read),
+    ):
+        result = admin_spine_query.resolve_points(
+            "USA",
+            [{"lon": 5.0, "lat": 5.0} for _ in range(100)],
+            target_admin_level=5,
+            admin_1_scope="USA-CA",
+        )
+
+    assert opened == ["layout/admin_0_3.parquet", "layout/deep/USA-CA.parquet"]
+    assert len(result or []) == 100
+    assert all(item["matched"]["admin_level"] == 5 for item in result or [])
+
+
+def test_deep_batch_rejects_wrong_owner_before_opening_deep_bank() -> None:
+    square_wkb = Polygon([(0, 0), (0, 10), (10, 10), (10, 0), (0, 0)]).wkb
+    rows = []
+    for level, loc_id in [(0, "USA"), (1, "USA-CA"), (2, "USA-CA-001"), (3, "USA-CA-001-007")]:
+        row = {name: "" for name in admin_spine_query.META_COLUMN_NAMES}
+        row.update({
+            "loc_id": loc_id, "admin_level": level, "name": loc_id,
+            "admin_0_loc_id": "USA", "admin_1_loc_id": "USA-CA",
+            "bbox_min_lon": 0.0, "bbox_min_lat": 0.0,
+            "bbox_max_lon": 10.0, "bbox_max_lat": 10.0,
+            "geometry": square_wkb,
+        })
+        rows.append(row)
+    shallow = pd.DataFrame(rows)
+    opened = []
+
+    def bank_read(_connection, path, _points, **_kwargs):
+        opened.append(path.as_posix())
+        return shallow
+
+    class Connection:
+        def close(self):
+            pass
+
+    with (
+        patch.object(admin_spine_query, "layout_available", return_value=True),
+        patch.object(admin_spine_query, "layout_root", return_value=Path("layout")),
+        patch.object(admin_spine_query, "_connection", return_value=Connection()),
+        patch.object(admin_spine_query, "_metadata_with_geometry_bbox", side_effect=bank_read),
+    ):
+        result = admin_spine_query.resolve_points(
+            "USA", [{"lon": 5.0, "lat": 5.0}],
+            target_admin_level=5, admin_1_scope="USA-TX",
+        )
+
+    assert opened == ["layout/admin_0_3.parquet"]
+    assert result[0]["error"]["code"] == "deep_admin_1_scope_mismatch"
 
 
 def test_point_resolve_exactly_recovers_null_ancestry_rows_from_layout_banks() -> None:

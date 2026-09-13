@@ -58,9 +58,9 @@ TOOL_GUIDANCE: dict[str, dict[str, Any]] = {
         ["query_dataset", "get_tool_help"], ["source metadata", "release/freshness fields"]
     ),
     "resolve_point": _g(
-        ["You have WGS84 latitude/longitude and need the latest available administrative loc_id chain."],
-        ["Resolving names or outside codes", "Returning polygons", "Sending multiple countries above admin_1 in one bulk call", "Omitting both a bounded country/level plan and bulk_preset above 25 points"],
-        {"points": [{"id": "row-1", "lat": 49.2827, "lon": -123.1207}], "country_scope": "CAN", "target_admin_level": "admin_2"},
+        ["You have WGS84 latitude/longitude and need an administrative loc_id chain."],
+        ["Resolving names or outside codes", "Returning polygons", "Using deep mode without exactly one country_scope and one admin_1_scope"],
+        {"points": [{"id": "row-1", "lat": 49.2827, "lon": -123.1207}], "lookup_mode": "standard"},
         ["deepest_resolved_loc_id", "stack", "resolution_mode", "available_deeper_admin_levels"],
         ["loc_id_info", "check_geometry", "get_geometry", "compare_geographies"]
     ),
@@ -292,15 +292,15 @@ def geometry_family_help_payload(
         "request_rules": [
             {
                 "request": "one exploratory point",
-                "rule": "Call resolve_point once. It may infer the country, Admin1 owner, and deepest available result.",
+                "rule": "Call resolve_point in standard mode. It infers the country and returns the deepest available result through Admin 3 without opening deep partitions.",
             },
             {
                 "request": "multiple administrative points",
-                "rule": "Read the country catalog entry, then use one country_scope and one target_admin_level. Split multi-country input into separate calls.",
+                "rule": "Use standard mode for a cross-country batch; it performs global Admin 0 discovery and then opens only each discovered country's Admin 0-3 bank.",
             },
             {
                 "request": "points at a partitioned deep level",
-                "rule": "Follow the selected country's query_guidance. When it declares Admin1-owned deep partitions, first resolve to Admin1, group by returned Admin1 loc_id, and make one deeper call per group.",
+                "rule": "Use lookup_mode='deep' with exactly one country_scope and one admin_1_scope. First run standard mode, then split points by the returned Admin 1 loc_id.",
             },
             {
                 "request": "geometry for known loc_ids",
@@ -439,8 +439,9 @@ def tool_help_payload(
         }
         access["bulk_shape"] = {
             "threshold": limits.get("free_item_limit"),
-            "required_above_threshold": ["country_scope", "target_admin_level"],
-            "multi_country_rule": "split_into_one_call_per_country",
+            "standard_mode": "cross-country; global Admin0 discovery then Admin0-3 country banks only",
+            "deep_mode": "exactly one country_scope and one admin_1_scope; target_admin_level also required above threshold",
+            "deep_required_above_threshold": ["country_scope", "target_admin_level"],
             "cross_country_presets": ["global_admin_0", "global_admin_1"],
             "preset_field": "bulk_preset",
         }

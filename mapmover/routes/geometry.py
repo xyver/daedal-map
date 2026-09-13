@@ -88,12 +88,13 @@ def _caller_included_point_limit(caller_identity, *, free_limit: int, paid_limit
     return max(free_limit, min(int(resolved or free_limit), paid_limit))
 
 
-def _point_bulk_shape_error(*, point_count: int, country_scope: str | None, target_admin_level: int | None, bulk_preset: str | None = None, threshold: int) -> dict | None:
+def _point_bulk_shape_error(*, point_count: int, country_scope: str | None, target_admin_level: int | None, bulk_preset: str | None = None, lookup_mode: str = "standard", threshold: int) -> dict | None:
     from mapmover.point_bulk_policy import point_bulk_shape_error
 
     return point_bulk_shape_error(
         point_count=point_count, country_scope=country_scope,
         target_admin_level=target_admin_level, bulk_preset=bulk_preset,
+        lookup_mode=lookup_mode,
         threshold=threshold,
     )
 
@@ -409,7 +410,7 @@ async def get_display_geometry_features_endpoint(req: Request):
 
 @router.post("/geometry/resolve-point")
 async def resolve_point_endpoint(req: Request):
-    """Resolve a lon/lat point to the deepest available containing loc_id."""
+    """Resolve a point in standard Admin0-3 mode, or scoped deep mode."""
     started_at = time.perf_counter()
     try:
         body = await decode_request_body(req)
@@ -420,7 +421,22 @@ async def resolve_point_endpoint(req: Request):
 
         target_admin_level = _point_lookup_target_admin_level(body.get("target_admin_level", body.get("max_admin_level")))
         country_scope = str(body.get("country_scope") or body.get("country_hint") or "").strip().upper() or None
-        results = resolve_points_to_locations([{"lon": lon, "lat": lat}], include_geometry=False, target_admin_level=target_admin_level, country_scope=country_scope)
+        admin_1_scope = str(body.get("admin_1_scope") or "").strip() or None
+        from mapmover.point_bulk_policy import apply_point_lookup_mode
+        lookup_mode, target_admin_level, max_admin_level, mode_error = apply_point_lookup_mode(
+            body.get("lookup_mode"), country_scope=country_scope,
+            target_admin_level=target_admin_level,
+            admin_1_scope=admin_1_scope,
+        )
+        if mode_error is not None:
+            return msgpack_error(mode_error["message"], 400)
+        results = resolve_points_to_locations(
+            [{"lon": lon, "lat": lat}], include_geometry=False,
+            target_admin_level=target_admin_level, max_admin_level=max_admin_level,
+            country_scope=country_scope,
+            admin_1_scope=admin_1_scope,
+            shallow_banks_only=lookup_mode == "standard",
+        )
         result = results[0] if results else {"error": "point did not resolve"}
         interaction_source = str(body.get("interaction_source") or "point_lookup").strip().lower()
         if interaction_source not in {"address_autocomplete", "point_lookup"}:
@@ -433,7 +449,10 @@ async def resolve_point_endpoint(req: Request):
             "event": "address_lookup_selected" if interaction_source == "address_autocomplete" else "point_lookup",
             "interaction_source": interaction_source,
             "resolved": not bool(result.get("error")),
-            "target_admin_level": f"admin_{target_admin_level}" if target_admin_level is not None else "deepest",
+            "target_admin_level": (
+                f"admin_{target_admin_level}" if target_admin_level is not None
+                else (f"up_to_admin_{max_admin_level}" if max_admin_level is not None else "deepest")
+            ),
             "country_scope": country_scope,
         }
         req.state.analytics_metadata = metadata
@@ -466,7 +485,7 @@ async def resolve_point_endpoint(req: Request):
 
 @router.post("/api/v1/resolve/point")
 async def resolve_point_json_endpoint(req: Request):
-    """Resolve a lon/lat point to the deepest available containing loc_id as JSON."""
+    """Resolve a point in standard Admin0-3 mode, or scoped deep mode, as JSON."""
     try:
         body = await req.json()
     except Exception:
@@ -480,8 +499,23 @@ async def resolve_point_json_endpoint(req: Request):
     include_geometry = False
     target_admin_level = _point_lookup_target_admin_level(body.get("target_admin_level", body.get("max_admin_level")))
     country_scope = str(body.get("country_scope") or body.get("country_hint") or "").strip().upper() or None
+    admin_1_scope = str(body.get("admin_1_scope") or "").strip() or None
+    from mapmover.point_bulk_policy import apply_point_lookup_mode
+    lookup_mode, target_admin_level, max_admin_level, mode_error = apply_point_lookup_mode(
+        body.get("lookup_mode"), country_scope=country_scope,
+        target_admin_level=target_admin_level,
+        admin_1_scope=admin_1_scope,
+    )
+    if mode_error is not None:
+        return JSONResponse({"error": mode_error}, status_code=400)
     try:
-        results = resolve_points_to_locations([{"lon": lon, "lat": lat}], include_geometry=include_geometry, target_admin_level=target_admin_level, country_scope=country_scope)
+        results = resolve_points_to_locations(
+            [{"lon": lon, "lat": lat}], include_geometry=include_geometry,
+            target_admin_level=target_admin_level, max_admin_level=max_admin_level,
+            country_scope=country_scope,
+            admin_1_scope=admin_1_scope,
+            shallow_banks_only=lookup_mode == "standard",
+        )
         result = results[0] if results else {"error": "point did not resolve"}
         if result.get("error"):
             return JSONResponse(result, status_code=404)
@@ -511,7 +545,8 @@ async def resolve_points_json_endpoint(req: Request):
     included_limit = _caller_included_point_limit(caller_identity, free_limit=limit, paid_limit=paid_limit)
     target_admin_level = _point_lookup_target_admin_level(body.get("target_admin_level", body.get("max_admin_level")))
     country_scope = str(body.get("country_scope") or body.get("country_hint") or "").strip().upper() or None
-    from mapmover.point_bulk_policy import apply_global_bulk_preset
+    admin_1_scope = str(body.get("admin_1_scope") or "").strip() or None
+    from mapmover.point_bulk_policy import apply_global_bulk_preset, apply_point_lookup_mode
 
     bulk_preset, country_scope, target_admin_level, preset_error = apply_global_bulk_preset(
         body.get("bulk_preset"), country_scope=country_scope,
@@ -519,9 +554,17 @@ async def resolve_points_json_endpoint(req: Request):
     )
     if preset_error is not None:
         return JSONResponse({"error": preset_error}, status_code=400)
+    lookup_mode, target_admin_level, max_admin_level, mode_error = apply_point_lookup_mode(
+        body.get("lookup_mode"), country_scope=country_scope,
+        target_admin_level=target_admin_level, admin_1_scope=admin_1_scope,
+        bulk_preset=bulk_preset,
+    )
+    if mode_error is not None:
+        return JSONResponse({"error": mode_error}, status_code=400)
     shape_error = _point_bulk_shape_error(
         point_count=len(points), country_scope=country_scope,
-        target_admin_level=target_admin_level, bulk_preset=bulk_preset, threshold=limit,
+        target_admin_level=target_admin_level, bulk_preset=bulk_preset,
+        lookup_mode=lookup_mode, threshold=limit,
     )
     if shape_error is not None:
         return JSONResponse(
@@ -669,7 +712,13 @@ async def resolve_points_json_endpoint(req: Request):
 
     resolver_stage_ms = {}
     try:
-        raw_results = resolve_points_to_locations(valid_points, include_geometry=include_geometry, timing_ms=resolver_stage_ms, target_admin_level=target_admin_level, country_scope=country_scope)
+        raw_results = resolve_points_to_locations(
+            valid_points, include_geometry=include_geometry, timing_ms=resolver_stage_ms,
+            target_admin_level=target_admin_level, max_admin_level=max_admin_level,
+            country_scope=country_scope,
+            admin_1_scope=admin_1_scope,
+            shallow_banks_only=lookup_mode == "standard",
+        )
     except Exception as exc:
         raw_results = [{"error": str(exc), "point": {"lon": point.get("lon"), "lat": point.get("lat")}} for point in valid_points]
 
@@ -696,9 +745,13 @@ async def resolve_points_json_endpoint(req: Request):
         "point_count": len(points),
         "resolved_count": resolved_count,
         "unresolved_count": unresolved_count,
-        "target_admin_level": f"admin_{target_admin_level}" if target_admin_level is not None else "deepest",
+        "target_admin_level": (
+            f"admin_{target_admin_level}" if target_admin_level is not None
+            else (f"up_to_admin_{max_admin_level}" if max_admin_level is not None else "deepest")
+        ),
         "country_scope": country_scope,
         "bulk_preset": bulk_preset,
+        "lookup_mode": lookup_mode,
         "results": results,
     }
 
@@ -765,7 +818,10 @@ async def resolve_points_json_endpoint(req: Request):
         "access_tier": caller_identity.access_tier,
         "access_lane": "commercial_access" if commercial_context is not None else _access_lane(trusted_token),
         "artifact_token_id": trusted_token_id,
-        "target_admin_level": f"admin_{target_admin_level}" if target_admin_level is not None else "deepest",
+        "target_admin_level": (
+            f"admin_{target_admin_level}" if target_admin_level is not None
+            else (f"up_to_admin_{max_admin_level}" if max_admin_level is not None else "deepest")
+        ),
         "country_scope": country_scope,
         "resolver_stage_ms": resolver_stage_ms,
         **_onboarding_context(body),
