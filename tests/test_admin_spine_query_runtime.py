@@ -1,6 +1,7 @@
 from pathlib import Path
 from unittest.mock import patch
 
+import duckdb
 import pandas as pd
 from shapely.geometry import Polygon
 
@@ -76,25 +77,206 @@ def test_batch_point_candidates_filter_against_points_not_shared_envelope() -> N
         def fetchdf(self):
             return pd.DataFrame()
 
+    points = [
+        {"lon": -118.25, "lat": 34.05},
+        {"lon": -74.00, "lat": 40.71},
+        {"lon": -118.25, "lat": 34.05},
+        *({"lon": -100.0 + index, "lat": 35.0} for index in range(31)),
+    ]
     connection = Connection()
     with patch.object(admin_spine_query, "path_to_uri", return_value="layout.parquet"):
         admin_spine_query._metadata_with_geometry_bbox(
             connection,
             Path("layout.parquet"),
-            [
-                {"lon": -118.25, "lat": 34.05},
-                {"lon": -74.00, "lat": 40.71},
-                {"lon": -118.25, "lat": 34.05},
-            ],
+            points,
             maximum_level=2,
         )
 
-    assert "WITH input_points(lon, lat) AS (VALUES (?, ?), (?, ?))" in connection.sql
+    assert "WITH input_points(lon, lat) AS (VALUES " in connection.sql
+    assert connection.sql.count("(?, ?)") == 33
     assert "EXISTS (SELECT 1 FROM input_points" in connection.sql
     assert "regions.bbox_max_lon >= point.lon" in connection.sql
+    assert "regions.bbox_min_lon <= ?" in connection.sql
+    assert connection.parameters[-4:] == [-70.00, -118.25, 40.71, 34.05]
+
+
+def test_single_point_candidates_push_bbox_filter_into_parquet_scan() -> None:
+    class Connection:
+        def execute(self, sql, parameters):
+            self.sql = sql
+            self.parameters = parameters
+            return self
+
+        def fetchdf(self):
+            return pd.DataFrame()
+
+    connection = Connection()
+    with patch.object(admin_spine_query, "path_to_uri", return_value="layout.parquet"):
+        admin_spine_query._metadata_with_geometry_bbox(
+            connection, Path("layout.parquet"), [{"lon": -118.25, "lat": 34.05}],
+        )
+    assert "WITH input_points" not in connection.sql
+    assert "EXISTS" not in connection.sql
+    assert "regions.bbox_min_lon <= ?" in connection.sql
+    assert "ST_AsWKB(geometry) AS geometry" in connection.sql
+    assert connection.parameters == ["layout.parquet", -118.25, -118.25, 34.05, 34.05]
+
+
+def test_single_point_candidates_return_wkb_in_one_read() -> None:
+    class Connection:
+        def __init__(self):
+            self.calls = 0
+
+        def execute(self, sql, parameters):
+            self.calls += 1
+            return self
+
+        def fetchdf(self):
+            return pd.DataFrame([{"loc_id": "USA-CA", "geometry": b"state"}])
+
+    connection = Connection()
+    timings = {}
+    with patch.object(admin_spine_query, "path_to_uri", return_value="layout.parquet"):
+        result = admin_spine_query._metadata_with_geometry_bbox(
+            connection, Path("layout.parquet"), [{"lon": -118.25, "lat": 34.05}],
+            stage_timing_ms=timings,
+        )
+    assert connection.calls == 1
+    assert result["geometry"].tolist() == [b"state"]
+    assert timings["bbox_candidate_count"] == 1
+    assert "direct_point_bank_ms" in timings
+
+
+def test_small_distributed_batch_uses_per_point_pushdown() -> None:
+    class Connection:
+        def execute(self, sql, parameters):
+            self.sql = sql
+            self.parameters = parameters
+            return self
+
+        def fetchdf(self):
+            return pd.DataFrame([
+                {"loc_id": "USA-CA", "admin_level": 1, "geometry": b"state"},
+                {"loc_id": "USA-CA", "admin_level": 1, "geometry": b"state"},
+                {"loc_id": "USA-CA-037", "admin_level": 2, "geometry": b"county"},
+            ])
+
+    connection = Connection()
+    with patch.object(admin_spine_query, "path_to_uri", return_value="layout.parquet"):
+        result = admin_spine_query._metadata_with_geometry_bbox(
+            connection, Path("layout.parquet"),
+            [{"lon": -118.25, "lat": 34.05}, {"lon": -122.42, "lat": 37.77}],
+            maximum_level=2,
+        )
+    assert connection.sql.count("FROM read_parquet(?)") == 2
+    assert "UNION ALL" in connection.sql
+    assert "EXISTS" not in connection.sql
     assert connection.parameters == [
-        -118.25, 34.05, -74.00, 40.71, "layout.parquet", 2,
+        "layout.parquet", -118.25, -118.25, 34.05, 34.05, 2,
+        "layout.parquet", -122.42, -122.42, 37.77, 37.77, 2,
     ]
+    assert result["loc_id"].tolist() == ["USA-CA", "USA-CA-037"]
+
+
+def test_batch_point_candidates_fetch_wkb_only_for_bbox_ids() -> None:
+    metadata = pd.DataFrame([
+        {"loc_id": "USA-CA", "admin_level": 1},
+        {"loc_id": "USA-CA-037", "admin_level": 2},
+    ])
+    shapes = pd.DataFrame([
+        {"loc_id": "USA-CA", "geometry": b"state"},
+        {"loc_id": "USA-CA-037", "geometry": b"county"},
+    ])
+
+    class Result:
+        def __init__(self, frame):
+            self.frame = frame
+
+        def fetchdf(self):
+            return self.frame
+
+    class Connection:
+        def __init__(self):
+            self.calls = []
+
+        def execute(self, sql, parameters):
+            self.calls.append((sql, parameters))
+            return Result(metadata if len(self.calls) == 1 else shapes)
+
+    connection = Connection()
+    timings = {}
+    with patch.object(admin_spine_query, "path_to_uri", return_value="layout.parquet"):
+        result = admin_spine_query._metadata_with_geometry_bbox(
+            connection,
+            Path("layout.parquet"),
+            [{"lon": -118.25 + index, "lat": 34.05} for index in range(33)],
+            stage_timing_ms=timings,
+        )
+
+    assert len(connection.calls) == 2
+    assert "ST_AsWKB" not in connection.calls[0][0]
+    assert "ST_AsWKB" in connection.calls[1][0]
+    assert connection.calls[1][1] == ["layout.parquet", "USA-CA", "USA-CA-037"]
+    assert result["geometry"].tolist() == [b"state", b"county"]
+    assert timings["bbox_candidate_count"] == 2
+    assert "bbox_metadata_ms" in timings and "candidate_wkb_ms" in timings
+
+
+def test_spatial_join_matches_points_exactly_with_one_file_reference(tmp_path: Path) -> None:
+    path = tmp_path / "bank.parquet"
+    raw_path = tmp_path / "raw.parquet"
+    rows = []
+    for loc_id, level, offset in [("A", 1, 0), ("B", 2, 20), ("C", 3, 40)]:
+        row = {name: "" for name in admin_spine_query.META_COLUMN_NAMES}
+        row.update({
+            "loc_id": loc_id, "admin_level": level,
+            "bbox_min_lon": offset, "bbox_min_lat": offset,
+            "bbox_max_lon": offset + 10, "bbox_max_lat": offset + 10,
+            "geometry": Polygon([
+                (offset, offset), (offset, offset + 10),
+                (offset + 10, offset + 10), (offset + 10, offset),
+            ]).wkb,
+        })
+        rows.append(row)
+    pd.DataFrame(rows).to_parquet(raw_path, index=False)
+    connection = duckdb.connect()
+    timings = {}
+    try:
+        connection.execute("LOAD spatial")
+        raw_sql = str(raw_path).replace("'", "''")
+        path_sql = str(path).replace("'", "''")
+        connection.execute(
+            "COPY (SELECT * EXCLUDE (geometry), ST_GeomFromWKB(geometry) AS geometry "
+            f"FROM read_parquet('{raw_sql}')) TO '{path_sql}' (FORMAT PARQUET)",
+        )
+        result = admin_spine_query._spatial_join_point_matches(
+            connection, path,
+            [{"lon": 5, "lat": 5}, {"lon": 25, "lat": 25}, {"lon": 11, "lat": 11}],
+            maximum_level=2, stage_timing_ms=timings,
+        )
+    finally:
+        connection.close()
+    assert result[0][1]["loc_id"] == "A"
+    assert result[1][2]["loc_id"] == "B"
+    assert result[2] == {}
+    assert timings["spatial_join_match_count"] == 2
+
+
+def test_spatial_join_requires_broad_batch_and_bounded_manifest_size() -> None:
+    path = Path("layout/deep/USA-CA.parquet")
+    points = [{"lon": -124 + index * 0.1, "lat": 32 + index * 0.1} for index in range(64)]
+    manifest = {"outputs": [{"path": "deep/USA-CA.parquet", "bytes": 165_000_000}]}
+    with (
+        patch.object(admin_spine_query, "layout_root", return_value=Path("layout")),
+        patch.object(admin_spine_query, "_layout_manifest", return_value=manifest),
+    ):
+        assert admin_spine_query._spatial_join_bank_eligible("USA", path, points)
+        assert not admin_spine_query._spatial_join_bank_eligible("USA", path, points[:32])
+        assert not admin_spine_query._spatial_join_bank_eligible(
+            "USA", path, [{"lon": -120 + index * 0.001, "lat": 34} for index in range(64)],
+        )
+        manifest["outputs"][0]["bytes"] = 478_000_000
+        assert not admin_spine_query._spatial_join_bank_eligible("USA", path, points)
 
 
 def test_exact_id_load_opens_only_shallow_and_requested_admin1_shards() -> None:
@@ -462,11 +644,15 @@ def test_batch_point_resolve_opens_shallow_bank_once_for_every_point() -> None:
 
 
 def test_deep_batch_opens_only_the_discovered_owner_bank_once() -> None:
-    square_wkb = Polygon([(0, 0), (0, 10), (10, 10), (10, 0), (0, 0)]).wkb
-
     def frame(rows: list[tuple[int, str]]) -> pd.DataFrame:
         output = []
         for level, loc_id in rows:
+            margin = min(level * 0.8, 4.5)
+            square_wkb = Polygon([
+                (margin, margin), (margin, 10 - margin),
+                (10 - margin, 10 - margin), (10 - margin, margin),
+                (margin, margin),
+            ]).wkb
             row = {name: "" for name in admin_spine_query.META_COLUMN_NAMES}
             row.update({
                 "loc_id": loc_id,

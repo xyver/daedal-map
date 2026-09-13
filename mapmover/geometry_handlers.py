@@ -1833,6 +1833,7 @@ def resolve_points_to_locations(
         query_matches = resolve_admin_spine_query_points(
             iso3, country_items, target_admin_level=io_admin_level,
             admin_1_scope=admin_1_scope,
+            stage_timing_ms=timing_ms,
         )
         if query_matches is None:
             query_matches = [None] * len(country_items)

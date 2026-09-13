@@ -5,7 +5,9 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 from functools import lru_cache
+import os
 import threading
+import time
 
 from shapely import from_wkb
 from shapely.geometry import Point
@@ -26,6 +28,14 @@ bbox_min_lon, bbox_min_lat, bbox_max_lon, bbox_max_lat
 """
 META_COLUMN_NAMES = [part.strip() for part in META_COLUMNS.replace("\n", " ").split(",")]
 ROUTE_INDEX_NAME = "loc_id_routes.parquet"
+MAX_DIRECT_POINT_BRANCHES = 32
+SPATIAL_JOIN_MIN_POINTS = max(
+    1, int(os.environ.get("POINT_SPATIAL_JOIN_MIN_POINTS", "64")),
+)
+SPATIAL_JOIN_MAX_BANK_BYTES = max(
+    0,
+    int(float(os.environ.get("POINT_SPATIAL_JOIN_MAX_BANK_MB", "200")) * 1024 * 1024),
+)
 _SHALLOW_IDENTITY_CACHE: dict[tuple[str, int], pd.DataFrame] = {}
 _SHALLOW_IDENTITY_CACHE_LOCK = threading.Lock()
 
@@ -200,28 +210,69 @@ def _metadata_with_geometry_bbox(
     *,
     maximum_level: int | None = None,
     admin3: str = "",
+    stage_timing_ms: dict[str, int] | None = None,
 ) -> pd.DataFrame:
-    """Read polygons whose bboxes contain an actual input point, once per bank.
+    """Read exact point candidates without scanning the large WKB column first.
 
     A point-by-point DuckDB query is catastrophic for large MCP batches even
-    when every individual read is selective.  A single envelope around a
-    geographically distributed batch is also catastrophic: 100 points spread
-    across a country can turn that envelope into an almost-full geometry read.
-    Keep one Parquet scan, but predicate it against the actual point set so WKB
-    is projected only for polygons that can contain at least one input point.
+    when every individual read is selective. A shared envelope alone can also
+    admit unrelated polygons between distant points, so multi-point batches
+    retain an exact per-point bbox predicate after the pushdown envelope.
+    Hosted geometry banks can be hundreds of MB while their metadata columns
+    are tiny. A single coordinate uses a pushed-down one-pass exact read.
+    Distributed batches first find candidate IDs with metadata only, then
+    fetch WKB by those IDs from the same bank. No other geometry file is opened.
     """
     if not points:
         return pd.DataFrame(columns=[*META_COLUMN_NAMES, "geometry"])
     unique_points = list(dict.fromkeys(
         (float(point["lon"]), float(point["lat"])) for point in points
     ))
-    point_values = ", ".join("(?, ?)" for _ in unique_points)
-    parameters: list[Any] = [
-        coordinate
-        for point in unique_points
-        for coordinate in point
-    ]
-    parameters.append(path_to_uri(path))
+    # A few separated points are better served by independent pushdown scans
+    # than by the correlated EXISTS plan, which reads all bbox metadata.
+    # Keep this bounded: many UNION branches would multiply remote scans.
+    if 1 < len(unique_points) <= MAX_DIRECT_POINT_BRANCHES:
+        uri = path_to_uri(path)
+        branches: list[str] = []
+        parameters: list[Any] = []
+        for lon, lat in unique_points:
+            clauses = [
+                "bbox_min_lon <= ?", "bbox_max_lon >= ?",
+                "bbox_min_lat <= ?", "bbox_max_lat >= ?",
+            ]
+            branch_params: list[Any] = [uri, lon, lon, lat, lat]
+            if maximum_level is not None:
+                clauses.append("admin_level <= ?")
+                branch_params.append(int(maximum_level))
+            if admin3:
+                clauses.append("admin_3_loc_id = ?")
+                branch_params.append(admin3)
+            branches.append(
+                f"SELECT {META_COLUMNS}, ST_AsWKB(geometry) AS geometry "
+                f"FROM read_parquet(?) WHERE {' AND '.join(clauses)}"
+            )
+            parameters.extend(branch_params)
+        started = time.perf_counter()
+        frame = connection.execute(" UNION ALL ".join(branches), parameters).fetchdf()
+        if stage_timing_ms is not None:
+            stage_timing_ms["direct_point_bank_ms"] = (
+                stage_timing_ms.get("direct_point_bank_ms", 0)
+                + int((time.perf_counter() - started) * 1000)
+            )
+            stage_timing_ms["bbox_candidate_count"] = (
+                stage_timing_ms.get("bbox_candidate_count", 0) + len(frame)
+            )
+        return frame.drop_duplicates(subset="loc_id").sort_values(
+            ["admin_level", "loc_id"]
+        ).reset_index(drop=True) if not frame.empty else frame
+    multiple = len(unique_points) > 1
+    point_values = ", ".join("(?, ?)" for _ in unique_points) if multiple else ""
+    parameters: list[Any] = (
+        [coordinate for point in unique_points for coordinate in point]
+        if multiple else []
+    )
+    uri = path_to_uri(path)
+    parameters.append(uri)
     clauses = []
     if maximum_level is not None:
         clauses.append("admin_level <= ?")
@@ -229,21 +280,135 @@ def _metadata_with_geometry_bbox(
     if admin3:
         clauses.append("admin_3_loc_id = ?")
         parameters.append(admin3)
-    clauses.append(
-        "EXISTS (SELECT 1 FROM input_points AS point "
-        "WHERE regions.bbox_max_lon >= point.lon "
-        "AND regions.bbox_min_lon <= point.lon "
-        "AND regions.bbox_max_lat >= point.lat "
-        "AND regions.bbox_min_lat <= point.lat)"
-    )
-    cursor = connection.execute(
-        f"WITH input_points(lon, lat) AS (VALUES {point_values}) "
-        f"SELECT {META_COLUMNS}, ST_AsWKB(geometry) AS geometry "
+    # DuckDB does not push a correlated EXISTS predicate into Parquet's row
+    # group scan. Constant bounds do push down, avoiding an all-row metadata
+    # read for the common single-point and tightly clustered requests.
+    clauses.extend([
+        "regions.bbox_min_lon <= ?", "regions.bbox_max_lon >= ?",
+        "regions.bbox_min_lat <= ?", "regions.bbox_max_lat >= ?",
+    ])
+    if multiple:
+        lons, lats = zip(*unique_points)
+        parameters.extend([max(lons), min(lons), max(lats), min(lats)])
+        clauses.append(
+            "EXISTS (SELECT 1 FROM input_points AS point "
+            "WHERE regions.bbox_max_lon >= point.lon "
+            "AND regions.bbox_min_lon <= point.lon "
+            "AND regions.bbox_max_lat >= point.lat "
+            "AND regions.bbox_min_lat <= point.lat)"
+        )
+    else:
+        lon, lat = unique_points[0]
+        parameters.extend([lon, lon, lat, lat])
+    point_cte = f"WITH input_points(lon, lat) AS (VALUES {point_values}) " if multiple else ""
+    projection = META_COLUMNS if multiple else f"{META_COLUMNS}, ST_AsWKB(geometry) AS geometry"
+    started = time.perf_counter()
+    metadata = connection.execute(
+        f"{point_cte}SELECT {projection} "
         f"FROM read_parquet(?) AS regions WHERE {' AND '.join(clauses)} "
         "ORDER BY admin_level, loc_id",
         parameters,
-    )
-    return cursor.fetchdf()
+    ).fetchdf()
+    if stage_timing_ms is not None:
+        timing_key = "bbox_metadata_ms" if multiple else "direct_point_bank_ms"
+        stage_timing_ms[timing_key] = stage_timing_ms.get(timing_key, 0) + int((time.perf_counter() - started) * 1000)
+        stage_timing_ms["bbox_candidate_count"] = stage_timing_ms.get("bbox_candidate_count", 0) + len(metadata)
+    if not multiple:
+        return metadata
+    if metadata.empty:
+        metadata["geometry"] = pd.Series(dtype="object")
+        return metadata
+    ids = list(dict.fromkeys(str(value) for value in metadata["loc_id"]))
+    placeholders = ", ".join("?" for _ in ids)
+    started = time.perf_counter()
+    shapes = connection.execute(
+        f"SELECT loc_id, ST_AsWKB(geometry) AS geometry FROM read_parquet(?) "
+        f"WHERE loc_id IN ({placeholders})",
+        [uri, *ids],
+    ).fetchdf()
+    if stage_timing_ms is not None:
+        stage_timing_ms["candidate_wkb_ms"] = stage_timing_ms.get("candidate_wkb_ms", 0) + int((time.perf_counter() - started) * 1000)
+    if len(shapes) != len(ids) or shapes["loc_id"].duplicated().any():
+        raise ValueError(f"{path} candidate geometry lookup did not return one shape per loc_id")
+    return metadata.merge(shapes, on="loc_id", how="left", validate="many_to_one", sort=False)
+
+
+def _spatial_join_point_matches(
+    connection,
+    path: Path,
+    points: list[dict[str, Any]],
+    *,
+    maximum_level: int | None = None,
+    admin3: str = "",
+    stage_timing_ms: dict[str, int] | None = None,
+) -> list[dict[int, dict[str, Any]]]:
+    """Exact-match a point batch with DuckDB's native one-bank spatial join."""
+    if not points:
+        return []
+    point_values = ", ".join("(?, ?, ?)" for _ in points)
+    parameters: list[Any] = [
+        coordinate
+        for index, point in enumerate(points)
+        for coordinate in (index, float(point["lon"]), float(point["lat"]))
+    ]
+    clauses: list[str] = []
+    parameters.append(path_to_uri(path))
+    if maximum_level is not None:
+        clauses.append("regions.admin_level <= ?")
+        parameters.append(int(maximum_level))
+    if admin3:
+        clauses.append("regions.admin_3_loc_id = ?")
+        parameters.append(admin3)
+    where = " WHERE " + " AND ".join(clauses) if clauses else ""
+    try:
+        connection.execute("LOAD spatial")
+    except Exception:
+        connection.execute("INSTALL spatial")
+        connection.execute("LOAD spatial")
+    started = time.perf_counter()
+    frame = connection.execute(
+        f"WITH input_points(point_index, lon, lat) AS (VALUES {point_values}) "
+        f"SELECT {META_COLUMNS}, points.point_index, "
+        f"ST_Area(regions.geometry) AS match_area "
+        f"FROM read_parquet(?) AS regions JOIN input_points AS points "
+        f"ON ST_Covers(regions.geometry, ST_Point(points.lon, points.lat)){where}",
+        parameters,
+    ).fetchdf()
+    if stage_timing_ms is not None:
+        stage_timing_ms["spatial_join_bank_ms"] = stage_timing_ms.get("spatial_join_bank_ms", 0) + int((time.perf_counter() - started) * 1000)
+        stage_timing_ms["spatial_join_match_count"] = stage_timing_ms.get("spatial_join_match_count", 0) + len(frame)
+    results: list[dict[int, dict[str, Any]]] = [dict() for _ in points]
+    if frame.empty:
+        return results
+    frame = frame.sort_values(["point_index", "admin_level", "match_area", "loc_id"])
+    for row in frame.drop_duplicates(["point_index", "admin_level"]).to_dict("records"):
+        point_index = int(row.pop("point_index"))
+        level = int(row.get("admin_level", 0))
+        row.pop("match_area", None)
+        results[point_index][level] = row
+    return results
+
+
+def _spatial_join_bank_eligible(iso3: str, path: Path, points: list[dict[str, Any]]) -> bool:
+    """Use one exact spatial join for broad batches in bounded geometry banks."""
+    unique = list(dict.fromkeys((float(item["lon"]), float(item["lat"])) for item in points))
+    if len(unique) < SPATIAL_JOIN_MIN_POINTS:
+        return False
+    lons, lats = zip(*unique)
+    if max(max(lons) - min(lons), max(lats) - min(lats)) < 2.0:
+        return False
+    root = layout_root(iso3)
+    try:
+        relative = path.relative_to(root).as_posix()
+    except ValueError:
+        return False
+    manifest = _layout_manifest(iso3)
+    outputs = manifest.get("outputs") or []
+    sizes = [
+        int(item.get("bytes") or 0) for item in outputs
+        if isinstance(item, dict) and item.get("path") == relative
+    ]
+    return len(sizes) == 1 and 0 < sizes[0] <= SPATIAL_JOIN_MAX_BANK_BYTES
 
 
 def _identity_rows(connection, path: Path, loc_ids: list[str]) -> list[dict[str, Any]]:
@@ -382,8 +547,9 @@ def resolve_points(
     *,
     target_admin_level: int | None = None,
     admin_1_scope: str | None = None,
+    stage_timing_ms: dict[str, int] | None = None,
 ) -> list[dict[str, Any]] | None:
-    """Resolve a point batch with one read/index pass per physical bank.
+    """Resolve a point batch using one physical bank per scope.
 
     ``None`` means the country has no admitted layout and callers may use a
     compatibility reader.  Once a layout is admitted, individual misses are
@@ -401,21 +567,26 @@ def resolve_points(
     shallow_maximum = 3 if target is None else min(3, target)
     connection = _connection()
     try:
-        shallow = _metadata_with_geometry_bbox(
-            connection,
-            root / "admin_0_3.parquet",
-            point_items,
-            maximum_level=shallow_maximum,
-        )
         matches: list[dict[int, dict[str, Any]]] = [dict() for _ in point_items]
-        if not shallow.empty:
-            for level in sorted(int(value) for value in shallow["admin_level"].dropna().unique()):
-                level_frame = shallow[shallow["admin_level"] == level].reset_index(drop=True)
-                index = geometry_spine_index_for_frame(level_frame)
-                level_matches = index.match_points(point_items) if index is not None else [None] * len(point_items)
-                for position, match in enumerate(level_matches):
-                    if match is not None:
-                        matches[position][level] = match.row.to_dict()
+        shallow_path = root / "admin_0_3.parquet"
+        if _spatial_join_bank_eligible(country, shallow_path, point_items):
+            matches = _spatial_join_point_matches(
+                connection, shallow_path, point_items,
+                maximum_level=shallow_maximum, stage_timing_ms=stage_timing_ms,
+            )
+        else:
+            shallow = _metadata_with_geometry_bbox(
+                connection, shallow_path, point_items,
+                maximum_level=shallow_maximum, stage_timing_ms=stage_timing_ms,
+            )
+            if not shallow.empty:
+                for level in sorted(int(value) for value in shallow["admin_level"].dropna().unique()):
+                    level_frame = shallow[shallow["admin_level"] == level].reset_index(drop=True)
+                    index = geometry_spine_index_for_frame(level_frame)
+                    level_matches = index.match_points(point_items) if index is not None else [None] * len(point_items)
+                    for position, match in enumerate(level_matches):
+                        if match is not None:
+                            matches[position][level] = match.row.to_dict()
 
         needs_deep = target is None or target > 3
         if needs_deep:
@@ -455,11 +626,18 @@ def resolve_points(
                 if not is_cloud_mode() and not deep_path.is_file():
                     continue
                 owned_points = [point for _, point in owned]
+                if _spatial_join_bank_eligible(country, deep_path, owned_points):
+                    deep_matches = _spatial_join_point_matches(
+                        connection, deep_path, owned_points,
+                        maximum_level=target, stage_timing_ms=stage_timing_ms,
+                    )
+                    for owned_position, level_matches in enumerate(deep_matches):
+                        original_position = owned[owned_position][0]
+                        matches[original_position].update(level_matches)
+                    continue
                 deep = _metadata_with_geometry_bbox(
-                    connection,
-                    deep_path,
-                    owned_points,
-                    maximum_level=target,
+                    connection, deep_path, owned_points,
+                    maximum_level=target, stage_timing_ms=stage_timing_ms,
                 )
                 if deep.empty:
                     continue
