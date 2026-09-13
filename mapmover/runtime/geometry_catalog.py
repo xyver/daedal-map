@@ -8,14 +8,13 @@ API, and MCP path the same name -> canonical ``loc_id`` lookup.
 from __future__ import annotations
 
 import json
-import os
 import re
-import time
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
 from ..paths import GEOMETRY_DIR
+from ..catalog_cache_policy import control_catalog_cache_epoch
 from ..runtime_config import force_remote_data_reads, get_data_plane_mode
 from .published_artifacts import read_artifact_json
 from geometry_catalog_shared import (
@@ -78,11 +77,7 @@ def _fetch_geometry_catalog_from_s3() -> dict[str, Any] | None:
 
 
 def _catalog_cache_epoch() -> int:
-    try:
-        seconds = max(1, int(os.environ.get("GEOMETRY_CATALOG_REVALIDATE_SECONDS", "300")))
-    except ValueError:
-        seconds = 300
-    return int(time.monotonic() // seconds)
+    return control_catalog_cache_epoch()
 
 
 @lru_cache(maxsize=2)
@@ -122,10 +117,9 @@ def load_geometry_catalog() -> dict[str, Any]:
     return _load_geometry_catalog_cached(_catalog_cache_epoch())
 
 
-@lru_cache(maxsize=64)
-def load_country_geometry_catalog(country_scope: str) -> dict[str, Any]:
+@lru_cache(maxsize=128)
+def _load_country_geometry_catalog_cached(country: str, _epoch: int) -> dict[str, Any]:
     """Load the additive detailed catalog for one maintained country."""
-    country = str(country_scope or "").strip().upper()
     if not re.fullmatch(r"[A-Z]{3}", country):
         return _empty_country_catalog(country)
     relative = f"geometry/countries/{country}/{country}_catalog.json"
@@ -147,9 +141,14 @@ def load_country_geometry_catalog(country_scope: str) -> dict[str, Any]:
     return _empty_country_catalog(country)
 
 
+def load_country_geometry_catalog(country_scope: str) -> dict[str, Any]:
+    country = str(country_scope or "").strip().upper()
+    return _load_country_geometry_catalog_cached(country, _catalog_cache_epoch())
+
+
 def clear_geometry_catalog_cache() -> None:
     _load_geometry_catalog_cached.cache_clear()
-    load_country_geometry_catalog.cache_clear()
+    _load_country_geometry_catalog_cached.cache_clear()
     _named_index.cache_clear()
     _named_group_index.cache_clear()
     # Imported late: geometry_inventory reads this module's catalog loader.
@@ -178,8 +177,8 @@ def geometry_capability_summary(catalog: dict[str, Any] | None = None) -> dict[s
     return build_geometry_capability_summary(payload if isinstance(payload, dict) else {})
 
 
-@lru_cache(maxsize=1)
-def _named_index() -> dict[str, dict[str, Any]]:
+@lru_cache(maxsize=2)
+def _named_index(_epoch: int) -> dict[str, dict[str, Any]]:
     index: dict[str, dict[str, Any]] = {}
     catalog = load_geometry_catalog()
     for entry in catalog.get("named_reference_objects") or []:
@@ -203,8 +202,8 @@ def _named_index() -> dict[str, dict[str, Any]]:
     return index
 
 
-@lru_cache(maxsize=1)
-def _named_group_index() -> dict[str, dict[str, Any]]:
+@lru_cache(maxsize=2)
+def _named_group_index(_epoch: int) -> dict[str, dict[str, Any]]:
     """Index explicit human-name groups before individual geometry aliases.
 
     A whole-ocean name can represent multiple IHO polygons (Pacific and
@@ -233,13 +232,14 @@ def _named_group_index() -> dict[str, dict[str, Any]]:
 def resolve_geometry_name(value: str | None) -> dict[str, Any] | None:
     """Resolve a named shared geometry without falling back to land aliases."""
     key = _normalize(value)
-    group = _named_group_index().get(key)
+    epoch = _catalog_cache_epoch()
+    group = _named_group_index(epoch).get(key)
     if group:
         # Return an explicitly unresolved group as well. Callers can then give
         # a truthful "no approved geometry" result instead of treating a known
         # ocean name as an unknown place or falling back to an X* SST zone.
         return dict(group)
-    entry = _named_index().get(key)
+    entry = _named_index(epoch).get(key)
     if not entry or not bool(entry.get("resolvable", True)):
         return None
     return dict(entry)
@@ -281,7 +281,7 @@ def expand_geometry_loc_id(value: str | None) -> list[str]:
 
 
 def is_known_geometry_loc_id(value: str | None) -> bool:
-    entry = _named_index().get(_normalize(value))
+    entry = _named_index(_catalog_cache_epoch()).get(_normalize(value))
     return bool(entry and entry.get("loc_id") == str(value or "").strip().upper() and entry.get("resolvable", True))
 
 
@@ -289,6 +289,7 @@ def geometry_bank_access_facts(
     *,
     scopes: set[str] | None = None,
     families: set[str] | None = None,
+    surface: str = "hosted_results",
 ) -> tuple[set[str], bool]:
     """Return commercial-use permissions and hosted publication clearance.
 
@@ -305,21 +306,48 @@ def geometry_bank_access_facts(
 
     normalized_scopes = {str(value).strip().upper() for value in (scopes or set()) if str(value).strip()}
     normalized_families = {str(value).strip().lower() for value in (families or set()) if str(value).strip()}
+    valid_surfaces = {"hosted_results", "server_rendered_display", "client_geometry", "download"}
+    if surface not in valid_surfaces:
+        return set(), False
     matched_banks: list[dict[str, Any]] = []
+    partition_permissions: set[str] = set()
+    partition_surface_decisions: list[bool] = []
     for bank in banks:
         if not isinstance(bank, dict):
             continue
         bank_scope = str(bank.get("scope") or "").strip().upper()
         bank_family = str(bank.get("family") or "").strip().lower()
+        partition_contract = (
+            bank.get("partition_surface_contract")
+            if isinstance(bank.get("partition_surface_contract"), dict) else {}
+        )
         if normalized_scopes and bank_scope not in normalized_scopes:
-            continue
+            allowlist = set((partition_contract.get("allowed_partitions") or {}).get(surface) or [])
+            known = set().union(*(
+                set(values or [])
+                for values in (partition_contract.get("allowed_partitions") or {}).values()
+            )) if partition_contract else set()
+            if not normalized_scopes.issubset(known):
+                continue
+            partition_surface_decisions.append(normalized_scopes.issubset(allowlist))
+            if surface == "hosted_results":
+                lane_map = partition_contract.get("hosted_permission_partitions") or {}
+                for lane in ("free", "paid"):
+                    if normalized_scopes.issubset(set(lane_map.get(lane) or [])):
+                        partition_permissions.add(lane)
         if normalized_families and bank_family not in normalized_families:
             continue
         matched_banks.append(bank)
     combined = combine_material_access(matched_banks)
-    return set(combined.get("permissions") or set()), bool(combined.get("publication_cleared"))
+    if partition_surface_decisions:
+        permissions = partition_permissions or set(combined.get("permissions") or set())
+        return permissions, all(partition_surface_decisions)
+    return (
+        set(combined.get("permissions") or set()),
+        bool((combined.get("surface_access") or {}).get(surface)),
+    )
 
 
 def is_deprecated_geometry_loc_id(value: str | None) -> bool:
-    entry = _named_index().get(_normalize(value))
+    entry = _named_index(_catalog_cache_epoch()).get(_normalize(value))
     return bool(entry and entry.get("loc_id") == str(value or "").strip().upper() and not entry.get("resolvable", True))

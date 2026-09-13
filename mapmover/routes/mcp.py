@@ -9,6 +9,7 @@ import re
 import time
 import threading
 import uuid
+from contextlib import suppress
 from functools import lru_cache, wraps
 from typing import Any
 
@@ -17,6 +18,7 @@ from fastapi.responses import JSONResponse, Response
 
 from access_policy_shared import resolve_effective_access, tool_rate_limit
 from mcp_surface_shared import build_mcp_instructions, build_tool_definitions
+from mcp_data_contract_shared import normalize_data_tool_error
 from mcp_tool_help_shared import geometry_family_help_payload, tool_help_payload
 from pack_registry_shared import (
     pack_mcp_server_profile,
@@ -273,6 +275,7 @@ PACK_SERVER_PROFILES = {
     pack_id: pack_mcp_server_profile(pack_id)
     for pack_id in (*published_pack_ids(), *tool_family_ids(), *tool_family_alias_ids())
 }
+STATIC_UTILITY_FACADE_IDS = frozenset((*tool_family_ids(), *tool_family_alias_ids()))
 
 PACK_TOOL_ALLOWLIST: dict[str, set[str]] = pack_tool_allowlists()
 
@@ -328,22 +331,39 @@ PACK_RESOURCE_COMMON_URIS = {
 
 
 def _free_pack_ids() -> frozenset[str]:
-    from mapmover.pack_pricing import FREE_PACK_IDS, PAID_PACK_IDS
-
-    all_ids = set(FREE_PACK_IDS) | set(PAID_PACK_IDS)
-    return frozenset(pack_id for pack_id in all_ids if not pack_requires_commercial_access(pack_id))
+    pack_ids = {
+        str(pack.get("pack_id") or "").strip().lower()
+        for pack in (load_api_catalog() or {}).get("packs") or []
+        if isinstance(pack, dict) and str(pack.get("pack_id") or "").strip()
+    }
+    return frozenset(pack_id for pack_id in pack_ids if not pack_requires_commercial_access(pack_id))
 
 
 def _paid_pack_ids() -> frozenset[str]:
-    from mapmover.pack_pricing import FREE_PACK_IDS, PAID_PACK_IDS
+    pack_ids = {
+        str(pack.get("pack_id") or "").strip().lower()
+        for pack in (load_api_catalog() or {}).get("packs") or []
+        if isinstance(pack, dict) and str(pack.get("pack_id") or "").strip()
+    }
+    return frozenset(pack_id for pack_id in pack_ids if pack_requires_commercial_access(pack_id))
 
-    all_ids = set(FREE_PACK_IDS) | set(PAID_PACK_IDS)
-    return frozenset(pack_id for pack_id in all_ids if pack_requires_commercial_access(pack_id))
+
+def _catalog_access_profiles(pack_id: str | None = None) -> dict[str, str]:
+    normalized = str(pack_id or "").strip().lower()
+    profiles: dict[str, str] = {}
+    for pack in (load_api_catalog() or {}).get("packs") or []:
+        if not isinstance(pack, dict):
+            continue
+        candidate = str(pack.get("pack_id") or "").strip().lower()
+        if not candidate or (normalized and candidate != normalized):
+            continue
+        profiles[candidate] = "paid" if pack_requires_commercial_access(candidate) else "free"
+    return profiles
 
 
 def _normalize_pack_id(pack_id: str | None) -> str | None:
     normalized = str(pack_id or "").strip().lower()
-    if normalized in PACK_SERVER_PROFILES:
+    if normalized in STATIC_UTILITY_FACADE_IDS:
         return normalized
     return normalized if _api_catalog_pack(normalized) is not None else None
 
@@ -361,8 +381,8 @@ def _api_catalog_pack(pack_id: str | None) -> dict[str, Any] | None:
 
 
 def _server_profile(pack_id: str) -> dict[str, Any]:
-    static = PACK_SERVER_PROFILES.get(pack_id)
-    if static:
+    static = PACK_SERVER_PROFILES.get(pack_id) if pack_id in STATIC_UTILITY_FACADE_IDS else None
+    if isinstance(static, dict):
         return dict(static)
     pack = _api_catalog_pack(pack_id) or {}
     title = str(pack.get("title") or pack.get("pack_name") or pack_id.replace("_", " ").title())
@@ -393,13 +413,19 @@ def _tool_allowed_for_facade(tool_name: str, pack_id: str | None) -> bool:
     return True if allowed is None else tool_name in allowed
 
 
-@lru_cache(maxsize=64)
-def _facade_tools(pack_id: str | None) -> list[dict[str, Any]]:
+@lru_cache(maxsize=128)
+def _facade_tools_cached(pack_id: str | None, _epoch: int) -> list[dict[str, Any]]:
     allowed = _facade_tool_names(pack_id)
     tools = _tool_definitions()
     if allowed is None:
         return tools
     return [tool for tool in tools if str(tool.get("name") or "") in allowed]
+
+
+def _facade_tools(pack_id: str | None) -> list[dict[str, Any]]:
+    from mapmover.catalog_cache_policy import control_catalog_cache_epoch
+
+    return _facade_tools_cached(pack_id, control_catalog_cache_epoch())
 
 
 def _tool_facade_urls(tool_name: str) -> list[str]:
@@ -409,7 +435,7 @@ def _tool_facade_urls(tool_name: str) -> list[str]:
         for pack in (load_api_catalog() or {}).get("packs") or []
         if isinstance(pack, dict) and str(pack.get("pack_id") or "").strip()
     }
-    for pack_id in sorted(set(PACK_TOOL_ALLOWLIST) | catalog_pack_ids):
+    for pack_id in sorted(set(STATIC_UTILITY_FACADE_IDS) | catalog_pack_ids):
         if tool_name in _facade_tool_names(pack_id):
             urls.append(f"/mcp/{pack_id}")
     return urls
@@ -895,7 +921,7 @@ def _point_lookup_quote_payload(
     free_limit: int,
     paid_limit: int,
 ) -> dict[str, Any]:
-    return tool_payment_required_payload(
+    payload = tool_payment_required_payload(
         "resolve_point",
         point_count,
         free_limit=free_limit,
@@ -903,6 +929,16 @@ def _point_lookup_quote_payload(
         request_id=request_id,
         batch_id=batch_id,
     )
+    quote = payload.get("quote") if isinstance(payload.get("quote"), dict) else {}
+    quote_id = "pointquote_" + hashlib.sha256(json.dumps({
+        "request_id": request_id or batch_id or "",
+        "quantity": int(point_count),
+        "pricing_version": quote.get("pricing_version"),
+        "amount": quote.get("amount_usdc_base_units"),
+    }, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()[:24]
+    quote["quote_id"] = quote_id
+    payload["quote_id"] = quote_id
+    return payload
 
 
 def _trusted_artifact_access(request: Request) -> tuple[str | None, str | None]:
@@ -1226,6 +1262,8 @@ def _finish_data_helper(
     These helpers are the data-side equivalent so the whole tool universe is
     visible on one ledger instead of only as anonymous route hits.
     """
+    if is_error:
+        payload = normalize_data_tool_error(tool_name, payload)
     capability_id = DATA_HELPER_CAPABILITIES.get(tool_name, tool_name)
     _log_mcp_tool_usage_event(
         request,
@@ -1601,8 +1639,8 @@ def _ensure_request_id(arguments: dict[str, Any], tool_name: str) -> dict[str, A
     return normalized
 
 
-@lru_cache(maxsize=1)
-def _tool_definitions() -> list[dict[str, Any]]:
+@lru_cache(maxsize=2)
+def _tool_definitions_cached(_epoch: int) -> list[dict[str, Any]]:
     definitions = build_tool_definitions()
     claim = str(geometry_capability_summary().get("public_claim") or "").strip()
     if not claim:
@@ -1611,6 +1649,21 @@ def _tool_definitions() -> list[dict[str, Any]]:
         if definition.get("name") in {"how_geometry_works", "read_geometry_catalog", "resolve_point"}:
             definition["description"] = f"{definition.get('description', '').rstrip()} Current catalog: {claim}"
     return definitions
+
+
+def _tool_definitions() -> list[dict[str, Any]]:
+    from mapmover.catalog_cache_policy import control_catalog_cache_epoch
+
+    return _tool_definitions_cached(control_catalog_cache_epoch())
+
+
+def clear_catalog_derived_mcp_caches() -> None:
+    """Invalidate MCP views whose contents are derived from control catalogs."""
+    from mapmover.api_query_runtime import clear_api_source_spec_cache
+
+    _facade_tools_cached.cache_clear()
+    _tool_definitions_cached.cache_clear()
+    clear_api_source_spec_cache()
 
 
 def _prompt_definitions() -> list[dict[str, Any]]:
@@ -1801,7 +1854,7 @@ def _resource_definitions() -> list[dict[str, Any]]:
         if isinstance(pack, dict) and str(pack.get("pack_id") or "").strip()
     }
     pack_resources = []
-    for pid in sorted(set(PACK_SERVER_PROFILES) | catalog_pack_ids):
+    for pid in sorted(set(STATIC_UTILITY_FACADE_IDS) | catalog_pack_ids):
         profile = _server_profile(pid)
         title = str(profile.get("title") or pid.replace("_", " ").title())
         pack_resources.append({
@@ -1839,11 +1892,7 @@ def _read_resource(uri: str, pack_id: str | None = None) -> dict[str, Any] | Non
                     "query_url": f"{app_url}/api/v1/query/dataset",
                     "mcp_url": f"{app_url}/mcp",
                     "docs_url": f"{site_url}/docs/for-agents",
-                    "current_access_model": {
-                        pid: p["pricing"]
-                        for pid, p in PACK_SERVER_PROFILES.items()
-                        if not normalized_pack_id or pid == normalized_pack_id
-                    },
+                    "current_access_model": _catalog_access_profiles(normalized_pack_id),
                 },
                 indent=2,
             ),
@@ -1929,19 +1978,15 @@ def _read_resource(uri: str, pack_id: str | None = None) -> dict[str, Any] | Non
             ),
         )
     if uri == "daedalmap://access":
-        profiles = {
-            pid: p
-            for pid, p in PACK_SERVER_PROFILES.items()
-            if not normalized_pack_id or pid == normalized_pack_id
-        }
+        profiles = _catalog_access_profiles(normalized_pack_id)
         return _resource_text_result(
             uri,
             (
                 "# Access Model\n\n"
                 "Live hosted pack access split:\n"
                 + "".join(
-                    f"- {pid}: {'free' if p['pricing'] == 'free' else 'paid via account credit or x402'}\n"
-                    for pid, p in profiles.items()
+                    f"- {pid}: {'free' if access == 'free' else 'paid via account credit or x402'}\n"
+                    for pid, access in profiles.items()
                 )
                 + "\nDiscovery endpoints are always free:\n"
                 f"- {app_url}/api/v1/guide\n"
@@ -2013,12 +2058,18 @@ async def _execute_paid_tool(request: Request, tool_name: str, arguments: dict[s
                     parsed_body["payment_options"] = denial["payment_options"]
                 if denial["challenge"]:
                     parsed_body["challenge"] = denial["challenge"]
-        return _jsonrpc_response(_tool_result(parsed_body, is_error=True), rpc_request_id)
+        return _jsonrpc_response(
+            _tool_result(normalize_data_tool_error(tool_name, parsed_body, status_code=402), is_error=True),
+            rpc_request_id,
+        )
 
     if response.status_code == 200:
         return _jsonrpc_response(_tool_result(parsed_body), rpc_request_id)
 
-    return _jsonrpc_response(_tool_result(parsed_body, is_error=True), rpc_request_id)
+    return _jsonrpc_response(
+        _tool_result(normalize_data_tool_error(tool_name, parsed_body, status_code=response.status_code), is_error=True),
+        rpc_request_id,
+    )
 
 
 async def _execute_live_earthquake_tool(arguments: dict[str, Any], rpc_request_id: Any) -> Response:
@@ -2042,13 +2093,10 @@ async def _execute_live_earthquake_tool(arguments: dict[str, Any], rpc_request_i
     except ValueError as exc:
         return _jsonrpc_response(
             _tool_result(
-                {
+                normalize_data_tool_error("get_live_earthquake_events", {
                     "request_id": payload.get("request_id"),
-                    "error": {
-                        "code": "invalid_live_earthquake_request",
-                        "message": str(exc),
-                    },
-                },
+                    "error": {"code": "invalid_live_earthquake_request", "message": str(exc)},
+                }, status_code=400),
                 is_error=True,
             ),
             rpc_request_id,
@@ -2056,13 +2104,10 @@ async def _execute_live_earthquake_tool(arguments: dict[str, Any], rpc_request_i
     except Exception as exc:
         return _jsonrpc_response(
             _tool_result(
-                {
+                normalize_data_tool_error("get_live_earthquake_events", {
                     "request_id": payload.get("request_id"),
-                    "error": {
-                        "code": "live_earthquake_upstream_error",
-                        "message": f"USGS live earthquake request failed: {exc}",
-                    },
-                },
+                    "error": {"code": "live_earthquake_upstream_error", "message": f"USGS live earthquake request failed: {exc}"},
+                }, status_code=502),
                 is_error=True,
             ),
             rpc_request_id,
@@ -2286,12 +2331,34 @@ async def _execute_resolve_point_tool(request: Request, arguments: dict[str, Any
             # an advisory notice: ask the shared verifier, which prices from the
             # same compute+egress model as the dataset lane and settles through
             # the same ledger.
+            point_quote_payload = _point_lookup_quote_payload(
+                request_id=request_id,
+                batch_id=batch_id,
+                point_count=len(points),
+                free_limit=limit,
+                paid_limit=paid_limit,
+            )
+            point_quote = point_quote_payload.get("quote") if isinstance(point_quote_payload.get("quote"), dict) else {}
+            from mapmover.credit_action_authorization import verified_credit_action_user_id
+
+            credit_user_id = verified_credit_action_user_id(
+                request,
+                capability_id="point_lookup",
+                quote_id=str(point_quote_payload.get("quote_id") or ""),
+                request_id=request_id or batch_id or "",
+                user_id=caller_identity.auth_user_id,
+            )
+            if credit_user_id:
+                request.state.auth_user_id = credit_user_id
             decision, verifier_payload = await _commercial_access_decision(
                 request,
                 tool_name="resolve_point",
                 capability_id="point_lookup",
                 units=len(points),
+                pricing_quote=point_quote,
                 request_id=request_id or batch_id or "",
+                credit_authorized=bool(credit_user_id),
+                credit_user_id=credit_user_id,
             )
             if decision == "allow":
                 settlement_id = str(
@@ -2316,13 +2383,7 @@ async def _execute_resolve_point_tool(request: Request, arguments: dict[str, Any
                     batch_limit=limit,
                     paid_batch_limit=paid_limit,
                 )
-                quote_payload = _point_lookup_quote_payload(
-                    request_id=request_id,
-                    batch_id=batch_id,
-                    point_count=len(points),
-                    free_limit=limit,
-                    paid_limit=paid_limit,
-                )
+                quote_payload = point_quote_payload
                 # Carry the verifier's own pricing and challenge so the caller
                 # can actually settle instead of guessing the amount.
                 context = verifier_payload.get("context")
@@ -3343,6 +3404,8 @@ async def _execute_identify_dataset_geography_tool(request: Request, arguments: 
         finally:
             cancellation_event.set()
             disconnect_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await disconnect_task
         stages = {"dataset_identification_ms": _elapsed_ms(runtime_started)}
     except IdentificationCancelled:
         result = {
@@ -4881,13 +4944,10 @@ async def _execute_live_volcano_tool(arguments: dict[str, Any], rpc_request_id: 
     except ValueError as exc:
         return _jsonrpc_response(
             _tool_result(
-                {
+                normalize_data_tool_error("get_live_volcano_events", {
                     "request_id": payload.get("request_id"),
-                    "error": {
-                        "code": "invalid_live_volcano_request",
-                        "message": str(exc),
-                    },
-                },
+                    "error": {"code": "invalid_live_volcano_request", "message": str(exc)},
+                }, status_code=400),
                 is_error=True,
             ),
             rpc_request_id,
@@ -4895,13 +4955,10 @@ async def _execute_live_volcano_tool(arguments: dict[str, Any], rpc_request_id: 
     except Exception as exc:
         return _jsonrpc_response(
             _tool_result(
-                {
+                normalize_data_tool_error("get_live_volcano_events", {
                     "request_id": payload.get("request_id"),
-                    "error": {
-                        "code": "live_volcano_upstream_error",
-                        "message": f"Smithsonian/GVP live volcano request failed: {exc}",
-                    },
-                },
+                    "error": {"code": "live_volcano_upstream_error", "message": f"Smithsonian/GVP live volcano request failed: {exc}"},
+                }, status_code=502),
                 is_error=True,
             ),
             rpc_request_id,
@@ -4923,7 +4980,7 @@ async def _execute_disaster_links_for_event_tool(arguments: dict[str, Any], rpc_
     event_id = str(payload.get("event_id") or "").strip()
     if not event_id:
         return _jsonrpc_response(
-            _tool_result({"request_id": payload.get("request_id"), "error": {"code": "invalid_event_id", "message": "event_id is required"}}, is_error=True),
+            _tool_result(normalize_data_tool_error("get_disaster_links_for_event", {"request_id": payload.get("request_id"), "error": {"code": "invalid_event_id", "message": "event_id is required"}}, status_code=400), is_error=True),
             rpc_request_id,
         )
     try:
@@ -4935,13 +4992,16 @@ async def _execute_disaster_links_for_event_tool(arguments: dict[str, Any], rpc_
         body = _json_body_payload(response)
     except Exception as exc:
         return _jsonrpc_response(
-            _tool_result({"request_id": payload.get("request_id"), "error": {"code": "disaster_links_failed", "message": str(exc)}}, is_error=True),
+            _tool_result(normalize_data_tool_error("get_disaster_links_for_event", {"request_id": payload.get("request_id"), "error": {"code": "disaster_links_failed", "message": str(exc)}}, status_code=500), is_error=True),
             rpc_request_id,
         )
     if response.status_code != 200:
         if isinstance(body, dict):
             body.setdefault("request_id", payload.get("request_id"))
-        return _jsonrpc_response(_tool_result(body, is_error=True), rpc_request_id)
+        return _jsonrpc_response(
+            _tool_result(normalize_data_tool_error("get_disaster_links_for_event", body, status_code=response.status_code), is_error=True),
+            rpc_request_id,
+        )
     if isinstance(body, dict):
         body.setdefault("request_id", payload.get("request_id"))
     return _jsonrpc_response(_tool_result(body), rpc_request_id)
@@ -4952,7 +5012,7 @@ async def _execute_disaster_link_chain_tool(arguments: dict[str, Any], rpc_reque
     event_id = str(payload.get("event_id") or "").strip()
     if not event_id:
         return _jsonrpc_response(
-            _tool_result({"request_id": payload.get("request_id"), "error": {"code": "invalid_event_id", "message": "event_id is required"}}, is_error=True),
+            _tool_result(normalize_data_tool_error("get_disaster_link_chain", {"request_id": payload.get("request_id"), "error": {"code": "invalid_event_id", "message": "event_id is required"}}, status_code=400), is_error=True),
             rpc_request_id,
         )
     try:
@@ -4965,13 +5025,16 @@ async def _execute_disaster_link_chain_tool(arguments: dict[str, Any], rpc_reque
         body = _json_body_payload(response)
     except Exception as exc:
         return _jsonrpc_response(
-            _tool_result({"request_id": payload.get("request_id"), "error": {"code": "disaster_link_chain_failed", "message": str(exc)}}, is_error=True),
+            _tool_result(normalize_data_tool_error("get_disaster_link_chain", {"request_id": payload.get("request_id"), "error": {"code": "disaster_link_chain_failed", "message": str(exc)}}, status_code=500), is_error=True),
             rpc_request_id,
         )
     if response.status_code != 200:
         if isinstance(body, dict):
             body.setdefault("request_id", payload.get("request_id"))
-        return _jsonrpc_response(_tool_result(body, is_error=True), rpc_request_id)
+        return _jsonrpc_response(
+            _tool_result(normalize_data_tool_error("get_disaster_link_chain", body, status_code=response.status_code), is_error=True),
+            rpc_request_id,
+        )
     if isinstance(body, dict):
         body.setdefault("request_id", payload.get("request_id"))
     return _jsonrpc_response(_tool_result(body), rpc_request_id)
@@ -4991,13 +5054,16 @@ async def _execute_search_disaster_links_tool(arguments: dict[str, Any], rpc_req
         body = _json_body_payload(response)
     except Exception as exc:
         return _jsonrpc_response(
-            _tool_result({"request_id": payload.get("request_id"), "error": {"code": "disaster_links_search_failed", "message": str(exc)}}, is_error=True),
+            _tool_result(normalize_data_tool_error("search_disaster_links", {"request_id": payload.get("request_id"), "error": {"code": "disaster_links_search_failed", "message": str(exc)}}, status_code=500), is_error=True),
             rpc_request_id,
         )
     if isinstance(body, dict):
         body.setdefault("request_id", payload.get("request_id"))
     if response.status_code != 200:
-        return _jsonrpc_response(_tool_result(body, is_error=True), rpc_request_id)
+        return _jsonrpc_response(
+            _tool_result(normalize_data_tool_error("search_disaster_links", body, status_code=response.status_code), is_error=True),
+            rpc_request_id,
+        )
     return _jsonrpc_response(_tool_result(body), rpc_request_id)
 
 

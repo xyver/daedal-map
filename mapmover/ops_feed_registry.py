@@ -9,13 +9,13 @@ are explicit flags on each record.
 from __future__ import annotations
 
 import json
-import os
 import threading
 import time
 from pathlib import Path
 from typing import Any
 
 from mapmover.paths import DATA_ROOT
+from mapmover.catalog_cache_policy import CONTROL_CATALOG_CACHE_TTL_SECONDS
 
 
 REGISTRY_PATH = DATA_ROOT / "ops_feed_registry.json"
@@ -55,13 +55,7 @@ OPS_DISPLAY_CONTRACT_SCHEMA_VERSION = 3
 OPS_CHAT_DEFAULT_SCHEMA_VERSION = 5
 OPS_SITE_PROFILE_SCHEMA_VERSION = 4
 OPS_LICENSE_POLICY_SCHEMA_VERSION = 6
-try:
-    OPS_FEED_REGISTRY_CACHE_TTL_SECONDS = max(
-        30,
-        min(int(os.environ.get("OPS_FEED_REGISTRY_CACHE_TTL_SECONDS", "300")), 3600),
-    )
-except ValueError:
-    OPS_FEED_REGISTRY_CACHE_TTL_SECONDS = 300
+OPS_FEED_REGISTRY_CACHE_TTL_SECONDS = CONTROL_CATALOG_CACHE_TTL_SECONDS
 _OPS_FEED_REGISTRY_CACHE_LOCK = threading.Lock()
 _OPS_FEED_REGISTRY_CACHE: tuple[float, list[dict]] | None = None
 

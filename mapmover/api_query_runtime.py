@@ -11,7 +11,8 @@ import re
 import pandas as pd
 
 from .data_loading import get_source_path, load_catalog, load_source_metadata
-from .catalog_surface import is_mcp_distribution_source
+from .catalog_cache_policy import control_catalog_cache_epoch
+from .catalog_surface import has_catalog_product_surface, is_mcp_distribution_source
 from .duckdb_helpers import parquet_available, parquet_columns, path_to_uri, quote_ident, run_df
 from .paths import DATA_ROOT
 from .runtime.aggregate_primitives import resolve_aggregate_admin2_dir
@@ -480,6 +481,19 @@ MIXED_TEMPORAL_TRANSITION_YEARS: dict[str, int | None] = {}
 PLAIN_YEAR_RE = re.compile(r"^-?\d{1,6}$")
 
 
+def _catalog_api_source(source_id: str) -> dict[str, Any] | None:
+    return next(
+        (
+            source
+            for source in (load_catalog() or {}).get("sources", [])
+            if isinstance(source, dict)
+            and str(source.get("source_id") or "").strip() == source_id
+            and has_catalog_product_surface(source, "api")
+        ),
+        None,
+    )
+
+
 def _normalize_string_tuple(value: Any) -> tuple[str, ...]:
     if not isinstance(value, list):
         return ()
@@ -795,12 +809,37 @@ def _build_metric_specs_from_metadata(metadata: dict[str, Any] | None) -> dict[s
 
 
 def _build_dynamic_source_spec(source_id: str) -> ApiSourceSpec | None:
-    source_defaults = SUPPORTED_DYNAMIC_SOURCES.get(source_id)
-    if source_defaults is None:
+    source_defaults = dict(SUPPORTED_DYNAMIC_SOURCES.get(source_id) or {})
+    catalog_source = _catalog_api_source(source_id)
+    # API publication is the admission contract. The Python defaults above are
+    # optional layout specializers; they must not be a second source registry.
+    if catalog_source is None:
         return None
 
     metadata_source_id = str(source_defaults.get("metadata_source_id") or source_id)
-    metadata = load_source_metadata(metadata_source_id) or {}
+    metadata = load_source_metadata(metadata_source_id) or catalog_source or {}
+    runtime_primary_file = str(metadata.get("runtime_primary_file") or "").strip()
+    pack_id = str(metadata.get("pack_id") or source_defaults.get("pack_id") or "").strip()
+    location_field_default = str(metadata.get("location_field") or "loc_id").strip()
+    temporal_coverage = metadata.get("temporal_coverage") if isinstance(metadata.get("temporal_coverage"), dict) else {}
+    declared_time_field = temporal_coverage.get("field") or metadata.get("time_field")
+    if not source_defaults:
+        if not pack_id or not runtime_primary_file:
+            return None
+        data_type = str(metadata.get("data_type") or "").strip().lower()
+        source_defaults = {
+            "pack_id": pack_id,
+            "parquet_name": runtime_primary_file,
+            "query_mode": (
+                str(metadata.get("query_mode") or "").strip()
+                or ("single_source_events" if data_type in {"event", "events"} else "single_source" if declared_time_field else "single_source_static")
+            ),
+            "location_field": location_field_default,
+            "time_field": declared_time_field,
+            "time_granularity": temporal_coverage.get("granularity") or metadata.get("time_granularity"),
+            "default_limit": DEFAULT_LIMIT,
+            "max_limit": MAX_LIMIT,
+        }
     metrics = _build_metric_specs_from_metadata(metadata)
     if str(source_defaults.get("query_mode") or "").strip() == "single_source_events":
         metrics.setdefault(
@@ -818,7 +857,6 @@ def _build_dynamic_source_spec(source_id: str) -> ApiSourceSpec | None:
     location_field = str(
         metadata.get("location_field") or source_defaults["location_field"]
     ).strip()
-    temporal_coverage = metadata.get("temporal_coverage") if isinstance(metadata.get("temporal_coverage"), dict) else {}
     time_field = temporal_coverage.get("field") or source_defaults.get("time_field")
     time_granularity = normalize_time_granularity(
         temporal_coverage.get("granularity") or source_defaults.get("time_granularity")
@@ -1003,15 +1041,24 @@ def parse_analysis_dimensions(
     return parsed
 
 
+@lru_cache(maxsize=512)
+def _get_dynamic_api_source_spec(source_id: str, _catalog_epoch: int) -> ApiSourceSpec | None:
+    return _build_dynamic_source_spec(source_id)
+
+
 def get_api_source_spec(source_id: str) -> ApiSourceSpec | None:
     normalized_source_id = str(source_id or "").strip()
+    if _catalog_api_source(normalized_source_id) is None:
+        return None
     cached = API_SOURCE_SPECS.get(normalized_source_id)
     if cached is not None:
         return cached
-    built = _build_dynamic_source_spec(normalized_source_id)
-    if built is not None:
-        API_SOURCE_SPECS[normalized_source_id] = built
-    return built
+    return _get_dynamic_api_source_spec(normalized_source_id, control_catalog_cache_epoch())
+
+
+def clear_api_source_spec_cache() -> None:
+    """Invalidate source contracts derived from the current published catalog."""
+    _get_dynamic_api_source_spec.cache_clear()
 
 
 def get_mixed_temporal_transition_year(spec: ApiSourceSpec) -> int | None:

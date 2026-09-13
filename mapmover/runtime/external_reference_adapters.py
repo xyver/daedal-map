@@ -109,25 +109,90 @@ _ADAPTERS = {
     ),
 }
 
+_ADAPTER_FIELDS = {
+    "external_id_column", "internal_id_column", "source_release_column",
+    "internal_release_column", "country_column", "relationship_column",
+    "primary_column", "source_level_column", "external_subtype_column",
+    "identity_confidence_column", "geometry_confidence_column",
+    "external_name_column", "internal_name_column",
+}
+
+
+def _normalized_system(value: Any) -> str:
+    return str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+
+
+def _adapter_from_catalog_record(record: dict[str, Any]) -> ExternalReferenceAdapter | None:
+    spec = record.get("adapter") if isinstance(record.get("adapter"), dict) else {}
+    system = _normalized_system(record.get("external_system"))
+    pattern = str(spec.get("identifier_pattern") or "").strip()
+    columns = spec.get("columns") if isinstance(spec.get("columns"), dict) else {}
+    required = {"external_id_column", "internal_id_column", "source_release_column",
+                "internal_release_column", "country_column"}
+    if not re.fullmatch(r"[a-z][a-z0-9_]*", system) or not pattern or not required.issubset(columns):
+        return None
+    try:
+        re.compile(pattern)
+    except re.error:
+        return None
+    if len(pattern) > 512 or any(not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", str(value)) for value in columns.values()):
+        return None
+    pointer_path = f"geometry/external_references/{system}/current.json"
+    if spec.get("pointer_path", pointer_path) != pointer_path:
+        return None
+    aliases = spec.get("aliases") or []
+    if not isinstance(aliases, list):
+        return None
+    values = {key: str(value) for key, value in columns.items() if key in _ADAPTER_FIELDS}
+    return ExternalReferenceAdapter(
+        system=system,
+        label=str(spec.get("label") or system),
+        aliases=tuple(
+            alias for alias in (_normalized_system(value) for value in aliases)
+            if alias and alias != system
+        ),
+        identifier_pattern=pattern,
+        pointer_path=pointer_path,
+        **values,
+    )
+
+
+def _catalog_adapters() -> dict[str, ExternalReferenceAdapter]:
+    try:
+        from .geometry_catalog import load_geometry_catalog
+        records = load_geometry_catalog().get("external_reference_bridges") or []
+    except Exception:
+        return {}
+    result: dict[str, ExternalReferenceAdapter] = {}
+    for record in records:
+        adapter = _adapter_from_catalog_record(record) if isinstance(record, dict) else None
+        if adapter is not None:
+            result[adapter.system] = adapter
+    return result
+
+
+def _all_adapters() -> dict[str, ExternalReferenceAdapter]:
+    return {**_ADAPTERS, **_catalog_adapters()}
+
 
 def normalize_external_system(value: Any) -> str:
-    text = str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
-    for adapter in _ADAPTERS.values():
+    text = _normalized_system(value)
+    for adapter in _all_adapters().values():
         if text == adapter.system or text in adapter.aliases:
             return adapter.system
     return text
 
 
 def external_system_aliases() -> dict[str, str]:
-    return {alias: adapter.system for adapter in _ADAPTERS.values() for alias in (adapter.system, *adapter.aliases)}
+    return {alias: adapter.system for adapter in _all_adapters().values() for alias in (adapter.system, *adapter.aliases)}
 
 
 def get_external_adapter(system: Any) -> ExternalReferenceAdapter | None:
-    return _ADAPTERS.get(normalize_external_system(system))
+    return _all_adapters().get(normalize_external_system(system))
 
 
 def admitted_external_adapters() -> list[ExternalReferenceAdapter]:
-    return [adapter for adapter in _ADAPTERS.values() if admitted_bridge(adapter) is not None]
+    return [adapter for adapter in _all_adapters().values() if admitted_bridge(adapter) is not None]
 
 
 def identifier_matches(adapter: ExternalReferenceAdapter, value: str) -> bool:
@@ -160,6 +225,7 @@ def _release_fingerprint(manifest: dict[str, Any]) -> str:
     return stable_fingerprint({
         "external_system": manifest.get("external_system"),
         "external_release": manifest.get("external_release"),
+        "adapter": manifest.get("adapter") or {},
         "partitions": manifest.get("partitions") or [],
     })
 
@@ -178,7 +244,7 @@ def _catalog_record(adapter: ExternalReferenceAdapter) -> tuple[dict[str, Any], 
         from .geometry_catalog import load_geometry_catalog
         matching = [
             row for row in load_geometry_catalog().get("external_reference_bridges") or []
-            if isinstance(row, dict) and normalize_external_system(row.get("external_system")) == adapter.system
+            if isinstance(row, dict) and _normalized_system(row.get("external_system")) == adapter.system
         ]
     except Exception:
         matching = []

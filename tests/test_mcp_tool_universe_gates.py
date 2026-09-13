@@ -322,6 +322,22 @@ class CatalogDrivenPackFacadeTests(unittest.TestCase):
             response = self.client.get("/mcp/not_published")
         self.assertEqual(response.status_code, 404)
 
+    def test_static_data_pack_registry_cannot_override_catalog_admission(self) -> None:
+        with mock.patch("mapmover.routes.mcp.load_api_catalog", return_value={"packs": []}):
+            response = self.client.get("/mcp/currency")
+        self.assertEqual(response.status_code, 404)
+
+    def test_catalog_text_overrides_static_data_pack_profile(self) -> None:
+        catalog = {"packs": [{
+            "pack_id": "currency",
+            "title": "Current Catalog Currency",
+            "description": "Current catalog description.",
+        }]}
+        with mock.patch("mapmover.routes.mcp.load_api_catalog", return_value=catalog):
+            response = self.client.get("/mcp/currency")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["serverInfo"]["title"], "Current Catalog Currency")
+
 
 class BlindCallerHelpTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -337,6 +353,87 @@ class BlindCallerHelpTests(unittest.TestCase):
         names = {str(tool.get("name") or "") for tool in definitions}
         self.assertEqual(validate_tool_guidance(names), [])
         self.assertEqual(validate_guidance_examples(definitions), [])
+
+    def test_data_universe_has_formulaic_publication_contract(self) -> None:
+        from jsonschema import Draft202012Validator
+        from mcp_data_contract_shared import (
+            DATA_TOOL_IDS,
+            normalize_data_tool_error,
+        )
+        from mcp_surface_shared import build_tool_definitions
+        from tool_access_shared import tool_capability_id, tool_pricing
+
+        definitions = {
+            definition["name"]: definition
+            for definition in build_tool_definitions()
+        }
+        self.assertTrue(DATA_TOOL_IDS)
+        for name in sorted(DATA_TOOL_IDS):
+            with self.subTest(tool=name):
+                definition = definitions[name]
+                schema = definition.get("outputSchema") or {}
+                Draft202012Validator.check_schema(schema)
+                self.assertEqual(schema.get("type"), "object")
+                self.assertIn("error", schema.get("properties", {}))
+                access = (definition.get("_meta") or {}).get("com.daedalmap/access") or {}
+                data_contract = (definition.get("_meta") or {}).get("com.daedalmap/data-contract") or {}
+                self.assertEqual(access.get("capability_id"), tool_capability_id(name))
+                self.assertEqual(access.get("pricing"), tool_pricing(name))
+                self.assertEqual(access.get("help", {}).get("tool"), "get_tool_help")
+                self.assertIn(data_contract.get("input_family"), {
+                    "none", "pack_selector", "structured_query", "live_window",
+                    "exact_event", "relationship_search",
+                })
+                self.assertIn(data_contract.get("result_family"), {"catalog", "rows", "relationships"})
+                self.assertEqual(definition.get("annotations", {}).get("destructiveHint"), False)
+                self.assertEqual(definition.get("annotations", {}).get("idempotentHint"), True)
+
+        canonical_fields = {"request_id", "metrics", "filters", "sort", "limit", "output"}
+        for name in {
+            "get_earthquake_events", "get_volcanic_activity", "get_tsunami_events", "get_fx_rates",
+        }:
+            with self.subTest(canonical_input=name):
+                self.assertEqual(set(definitions[name]["inputSchema"]["properties"]), canonical_fields)
+        self.assertEqual(
+            set(definitions["query_dataset"]["inputSchema"]["properties"]),
+            canonical_fields | {"source_id", "pack_id"},
+        )
+
+        # Geometry is the deliberately separate second universe.
+        self.assertNotIn("outputSchema", definitions["resolve_point"])
+        self.assertNotIn("com.daedalmap/access", definitions["resolve_point"].get("_meta") or {})
+
+        # Help is the free convention above both universes, not a data query.
+        help_definition = definitions["get_tool_help"]
+        Draft202012Validator.check_schema(help_definition["outputSchema"])
+        self.assertEqual(help_definition["_meta"]["com.daedalmap/help"]["access"], "free")
+
+        examples = {
+            "get_catalog": {"packs": []},
+            "get_pack": {"pack_id": "currency"},
+            "query_dataset": {"source_id": "example", "row_count": 0, "rows": []},
+            "get_earthquake_events": {"source_id": "earthquakes", "row_count": 0, "rows": []},
+            "get_volcanic_activity": {"source_id": "volcanoes", "row_count": 0, "rows": []},
+            "get_tsunami_events": {"source_id": "tsunamis", "row_count": 0, "rows": []},
+            "get_fx_rates": {"source_id": "currency", "row_count": 0, "rows": []},
+            "get_live_earthquake_events": {"source_id": "usgs_live", "row_count": 0, "rows": []},
+            "get_live_volcano_events": {"source_id": "gvp_live", "row_count": 0, "rows": []},
+            "get_disaster_links_for_event": {"event_id": "event-1", "related": [], "count": 0},
+            "get_disaster_link_chain": {"links": [], "count": 0, "depth": 1},
+            "search_disaster_links": {"chains": [], "count": 0},
+        }
+        for name, payload in examples.items():
+            with self.subTest(result=name):
+                Draft202012Validator(definitions[name]["outputSchema"]).validate(payload)
+
+        denial = normalize_data_tool_error(
+            "query_dataset",
+            {"error": "Account credits are required."},
+            status_code=402,
+        )
+        Draft202012Validator(definitions["query_dataset"]["outputSchema"]).validate(denial)
+        self.assertEqual(denial["reason"], "payment_required")
+        self.assertEqual(denial["next_step"]["action"], "choose_payment")
 
     def test_geometry_get_info_advertises_cold_start_sequence(self) -> None:
         response = self.client.get("/mcp/geography")

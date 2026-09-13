@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pack_pricing_shared import FREE_PACK_IDS, PAID_PACK_IDS
+from mcp_data_contract_shared import decorate_data_tool_definition, decorate_shared_help_definition
 
 def _pack_id_description() -> str:
     return "Pack identifier from get_catalog. Newly catalog-admitted packs require no MCP schema change."
@@ -33,11 +33,15 @@ def _query_tool(name: str, title: str, description: str, required: list[str]) ->
 
 
 def build_mcp_instructions(*, safety_notice: str | None = None) -> str:
-    free = ", ".join(sorted(FREE_PACK_IDS))
-    paid = ", ".join(sorted(PAID_PACK_IDS))
     base = (
-        f"Geospatial data MCP server. Free packs: {free}. Paid packs: {paid} "
-        "(x402 Base USDC). The calling LLM translates the user's natural-language request into strict tool JSON; execution tools do not parse prose. Start with get_catalog, then get_pack before querying a new pack. Call get_tool_help before an unfamiliar tool. On a typed error, preserve the user's intent, inspect error/guidance/clarification, correct the arguments from the schema, and ask the user only when clarification.required is true."
+        "Geospatial data MCP server. get_catalog is the current authority for "
+        "available packs and each pack's free or paid access lane. The calling "
+        "LLM translates the user's natural-language request into strict tool "
+        "JSON; execution tools do not parse prose. Start with get_catalog, then "
+        "get_pack before querying a new pack. Call get_tool_help before an "
+        "unfamiliar tool. On a typed error, preserve the user's intent, inspect "
+        "error/guidance/clarification, correct the arguments from the schema, "
+        "and ask the user only when clarification.required is true."
     )
     if safety_notice:
         return f"{base} Safety: {safety_notice}"
@@ -45,7 +49,7 @@ def build_mcp_instructions(*, safety_notice: str | None = None) -> str:
 
 
 def build_tool_definitions() -> list[dict]:
-    return [
+    definitions = [
         {
             "name": "get_tool_help",
             "title": "Get Tool Help",
@@ -881,11 +885,7 @@ def build_tool_definitions() -> list[dict]:
         {
             "name": "query_dataset",
             "title": "Query Dataset",
-            "description": "Generic structured query for direct source_id or pack_id access using the same contract as POST /api/v1/query/dataset. Free packs: "
-            + ", ".join(sorted(FREE_PACK_IDS))
-            + ". Paid packs: "
-            + ", ".join(sorted(PAID_PACK_IDS))
-            + " (x402 Base USDC).",
+            "description": "Generic structured query for direct source_id or pack_id access using the same contract as POST /api/v1/query/dataset. Call get_catalog for the current pack list and each pack's effective access lane.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -902,4 +902,8 @@ def build_tool_definitions() -> list[dict]:
             },
             "annotations": {"readOnlyHint": True},
         },
+    ]
+    return [
+        decorate_shared_help_definition(decorate_data_tool_definition(definition))
+        for definition in definitions
     ]

@@ -1,0 +1,321 @@
+"""Formulaic publication contract for the public data-tool universe.
+
+Geometry tools intentionally remain outside this module. They have richer,
+tool-specific result shapes and will adopt their own contract after this
+smaller data universe is proven.
+"""
+
+from __future__ import annotations
+
+from copy import deepcopy
+from typing import Any
+
+from tool_access_shared import (
+    tool_account_item_limit,
+    tool_capability_id,
+    tool_family,
+    tool_free_item_limit,
+    tool_meter,
+    tool_paid_item_limit,
+    tool_price_micro_usd,
+    tool_pricing,
+    tool_pricing_version,
+)
+
+
+DATA_DISCOVERY_TOOL_IDS = frozenset({"get_catalog", "get_pack"})
+DATA_QUERY_TOOL_IDS = frozenset({
+    "query_dataset",
+    "get_earthquake_events",
+    "get_volcanic_activity",
+    "get_tsunami_events",
+    "get_fx_rates",
+})
+DATA_LIVE_TOOL_IDS = frozenset({"get_live_earthquake_events", "get_live_volcano_events"})
+DATA_RELATIONSHIP_TOOL_IDS = frozenset({
+    "get_disaster_links_for_event",
+    "get_disaster_link_chain",
+    "search_disaster_links",
+})
+DATA_TOOL_IDS = frozenset().union(
+    DATA_DISCOVERY_TOOL_IDS,
+    DATA_QUERY_TOOL_IDS,
+    DATA_LIVE_TOOL_IDS,
+    DATA_RELATIONSHIP_TOOL_IDS,
+)
+
+DATA_TOOL_DESCRIPTIONS = {
+    "get_catalog": "List the current catalog-published data packs and their access lanes. Start here, then call get_pack for one selected pack.",
+    "get_pack": "Describe one catalog-published pack, including sources, metrics, coverage, freshness, access, and a first query. Call this before querying an unfamiliar pack.",
+    "query_dataset": "Query one catalog-published source or pack with structured metrics, filters, sorting, and a row limit. Call get_catalog and get_pack before an unfamiliar dataset.",
+    "get_earthquake_events": "Query canonical earthquake history with structured metrics, filters, sorting, and a row limit. Use get_live_earthquake_events only for preliminary upstream data.",
+    "get_volcanic_activity": "Query canonical eruption history with structured metrics, year filters, sorting, and a row limit. Use get_live_volcano_events only for preliminary upstream data.",
+    "get_tsunami_events": "Query canonical tsunami history with structured metrics, filters, sorting, and a row limit. Region filters accept published land or named-water loc_ids.",
+    "get_fx_rates": "Query canonical currency rates with loc_id country filters and daily, weekly, or monthly time granularity.",
+    "get_live_earthquake_events": "Fetch recent preliminary USGS earthquake events in the shared data-result shape. Use get_earthquake_events for canonical enriched history.",
+    "get_live_volcano_events": "Fetch recent preliminary Smithsonian/GVP eruption updates in the shared data-result shape. Use get_volcanic_activity for canonical history.",
+    "get_disaster_links_for_event": "Return published cross-hazard links for one exact event ID. Use a canonical event row to obtain the ID first.",
+    "get_disaster_link_chain": "Expand one exact event ID into a bounded published cross-hazard chain. Use a canonical event row to obtain the ID first.",
+    "search_disaster_links": "Find published cross-hazard relationship families by event type and optional year range before choosing an exact event.",
+}
+
+_ERROR_PROPERTY = {
+    "type": "object",
+    "properties": {
+        "code": {"type": "string"},
+        "message": {"type": "string"},
+        "details": {"type": "object"},
+        "retry_hint": {"type": "string"},
+    },
+    "required": ["code", "message"],
+    "additionalProperties": True,
+}
+
+_NEXT_STEP_PROPERTY = {
+    "type": "object",
+    "properties": {
+        "action": {"type": "string"},
+        "url": {"type": "string"},
+        "tool": {"type": "string"},
+        "arguments": {"type": "object"},
+    },
+    "required": ["action"],
+    "additionalProperties": True,
+}
+
+_COMMON_PROPERTIES: dict[str, Any] = {
+    "request_id": {"type": ["string", "null"]},
+    "error": _ERROR_PROPERTY,
+    "reason": {"type": "string"},
+    "next_step": _NEXT_STEP_PROPERTY,
+    "warnings": {"type": "array", "items": {"type": "object"}},
+    "guidance": {"type": "object"},
+    "clarification": {"type": "object"},
+    "provenance": {"type": "object"},
+}
+
+
+def _result_schema(*, success_required: list[str], properties: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {**deepcopy(_COMMON_PROPERTIES), **deepcopy(properties)},
+        "anyOf": [
+            {"required": list(success_required)},
+            {"required": ["error"]},
+        ],
+        "additionalProperties": True,
+    }
+
+
+def data_tool_output_schema(tool_name: str) -> dict[str, Any] | None:
+    name = str(tool_name or "").strip()
+    if name in DATA_QUERY_TOOL_IDS | DATA_LIVE_TOOL_IDS:
+        return _result_schema(
+            success_required=["source_id", "row_count", "rows"],
+            properties={
+                "capability_id": {"type": "string"},
+                "pack_id": {"type": "string"},
+                "source_id": {"type": "string"},
+                "query_mode": {"type": "string"},
+                "filters_applied": {"type": "object"},
+                "sort": {"type": "array"},
+                "limit": {"type": "integer"},
+                "row_count": {"type": "integer", "minimum": 0},
+                "truncated": {"type": "boolean"},
+                "rows": {"type": "array", "items": {"type": "object"}},
+            },
+        )
+    if name == "get_catalog":
+        return _result_schema(
+            success_required=["packs"],
+            properties={
+                "catalog_version": {"type": "string"},
+                "generated_at": {"type": ["string", "null"]},
+                "pack_count": {"type": "integer", "minimum": 0},
+                "packs": {"type": "array", "items": {"type": "object"}},
+                "tool_families": {"type": "array", "items": {"type": "object"}},
+            },
+        )
+    if name == "get_pack":
+        return _result_schema(
+            success_required=["pack_id"],
+            properties={
+                "pack_id": {"type": "string"},
+                "sources": {"type": "array", "items": {"type": "object"}},
+                "material_policy": {"type": "object"},
+            },
+        )
+    if name in DATA_RELATIONSHIP_TOOL_IDS:
+        if name == "get_disaster_links_for_event":
+            required = ["event_id", "related", "count"]
+        elif name == "get_disaster_link_chain":
+            required = ["links", "count", "depth"]
+        else:
+            required = ["chains", "count"]
+        return _result_schema(
+            success_required=required,
+            properties={
+                "query_event_id": {"type": "string"},
+                "resolved_event": {"type": "object"},
+                "event_id": {"type": "string"},
+                "related": {"type": "array", "items": {"type": "object"}},
+                "links": {"type": "array", "items": {"type": "object"}},
+                "chains": {"type": "array", "items": {"type": "object"}},
+                "count": {"type": "integer", "minimum": 0},
+                "depth": {"type": "integer", "minimum": 0},
+            },
+        )
+    return None
+
+
+def data_tool_publication_meta(tool_name: str) -> dict[str, Any] | None:
+    name = str(tool_name or "").strip()
+    if name not in DATA_TOOL_IDS:
+        return None
+    pricing = tool_pricing(name)
+    limits = {
+        "free": tool_free_item_limit(name),
+        "account": tool_account_item_limit(name),
+        "paid": tool_paid_item_limit(name),
+    }
+    access: dict[str, Any] = {
+        "contract_version": "1.0.0",
+        "capability_id": tool_capability_id(name),
+        "family": tool_family(name),
+        "pricing": pricing,
+        "limits": {key: value for key, value in limits.items() if value is not None},
+        "help": {"tool": "get_tool_help", "arguments": {"tool_name": name}},
+    }
+    if pricing == "by_pack":
+        access["pricing_authority"] = {"tool": "get_catalog", "field": "packs[].material_policy"}
+    else:
+        access["meter"] = tool_meter(name)
+        access["pricing_version"] = tool_pricing_version(name)
+        access["price_micro_usd"] = tool_price_micro_usd(name)
+    if name in DATA_DISCOVERY_TOOL_IDS:
+        result_family = "catalog"
+        input_family = "none" if name == "get_catalog" else "pack_selector"
+    elif name in DATA_QUERY_TOOL_IDS | DATA_LIVE_TOOL_IDS:
+        result_family = "rows"
+        input_family = "structured_query" if name in DATA_QUERY_TOOL_IDS else "live_window"
+    else:
+        result_family = "relationships"
+        input_family = "relationship_search" if name == "search_disaster_links" else "exact_event"
+    return {
+        "com.daedalmap/access": access,
+        "com.daedalmap/data-contract": {
+            "contract_version": "1.0.0",
+            "input_family": input_family,
+            "result_family": result_family,
+            "canonical_help_tool": "get_tool_help",
+        },
+    }
+
+
+def decorate_data_tool_definition(definition: dict[str, Any]) -> dict[str, Any]:
+    """Attach the shared data publication contract without touching geometry."""
+    name = str(definition.get("name") or "").strip()
+    if name not in DATA_TOOL_IDS:
+        return definition
+    decorated = deepcopy(definition)
+    decorated["description"] = DATA_TOOL_DESCRIPTIONS[name]
+    decorated["outputSchema"] = data_tool_output_schema(name)
+    decorated["annotations"] = {
+        **(decorated.get("annotations") if isinstance(decorated.get("annotations"), dict) else {}),
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": name in DATA_LIVE_TOOL_IDS,
+    }
+    decorated["_meta"] = {
+        **(decorated.get("_meta") if isinstance(decorated.get("_meta"), dict) else {}),
+        **(data_tool_publication_meta(name) or {}),
+    }
+    return decorated
+
+
+def decorate_shared_help_definition(definition: dict[str, Any]) -> dict[str, Any]:
+    """Publish the free help convention that sits above both universes."""
+    if str(definition.get("name") or "").strip() != "get_tool_help":
+        return definition
+    decorated = deepcopy(definition)
+    decorated["description"] = (
+        "Describe one tool visible on this facade, including its input contract, "
+        "access limits, refusals, example, outputs, and recommended next calls."
+    )
+    decorated["outputSchema"] = _result_schema(
+        success_required=["ok", "tool_name"],
+        properties={
+            "ok": {"type": "boolean"},
+            "tool_name": {"type": "string"},
+            "title": {"type": ["string", "null"]},
+            "purpose": {"type": "string"},
+            "input_schema": {"type": "object"},
+            "access": {"type": "object"},
+            "examples": {"type": "array"},
+            "important_output_fields": {"type": "array"},
+            "recommended_next_calls": {"type": "array"},
+        },
+    )
+    decorated["annotations"] = {
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    }
+    decorated["_meta"] = {
+        "com.daedalmap/help": {
+            "contract_version": "1.0.0",
+            "scope": "current_facade",
+            "discovery_predecessor": "tools/list",
+            "access": "free",
+        }
+    }
+    return decorated
+
+
+def normalize_data_tool_error(
+    tool_name: str,
+    payload: Any,
+    *,
+    status_code: int | None = None,
+) -> dict[str, Any]:
+    """Give every data-tool denial one branchable error and next step."""
+    normalized = dict(payload) if isinstance(payload, dict) else {}
+    raw_error = normalized.get("error")
+    if isinstance(raw_error, dict):
+        error = dict(raw_error)
+    else:
+        error = {"message": str(raw_error or payload or "Data tool request failed.")}
+    status = int(status_code or 0)
+    default_codes = {
+        400: "invalid_request",
+        401: "authentication_required",
+        402: "payment_required",
+        403: "permission_required",
+        404: "not_found",
+        429: "rate_limit_exceeded",
+    }
+    code = str(error.get("code") or default_codes.get(status) or "data_tool_failed")
+    error["code"] = code
+    error["message"] = str(error.get("message") or "Data tool request failed.")
+    normalized["error"] = error
+    normalized["reason"] = code
+
+    if status == 401:
+        next_step = {"action": "sign_in", "url": "https://www.daedalmap.com/login"}
+    elif status == 402:
+        next_step = {"action": "choose_payment", "url": "https://www.daedalmap.com/account?tab=payments"}
+    elif status == 403:
+        next_step = {"action": "check_mcp_key_permissions", "url": "https://www.daedalmap.com/account?tab=agents"}
+    elif status == 429:
+        next_step = {"action": "retry_after_delay"}
+    else:
+        next_step = {
+            "action": "review_tool_contract",
+            "tool": "get_tool_help",
+            "arguments": {"tool_name": str(tool_name or "")},
+        }
+    normalized["next_step"] = next_step
+    return normalized

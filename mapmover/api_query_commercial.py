@@ -11,7 +11,6 @@ from fastapi import Request
 from fastapi.responses import JSONResponse, Response
 
 from access_policy_shared import resolve_effective_access
-from mapmover.pack_pricing import PAID_PACK_IDS as _PAID_PACK_IDS
 from mapmover.paths import SITE_URL
 from mapmover.artifact_access import (
     artifact_token_records,
@@ -32,9 +31,6 @@ COMMERCIAL_ACCESS_FORWARDED_HEADERS = {
     "x-payment",
     "x-payment-response",
 }
-PAID_QUERY_PACK_IDS = _PAID_PACK_IDS
-
-
 def commercial_access_enabled() -> bool:
     return str(os.getenv("COMMERCIAL_ACCESS_ENABLED", "")).strip().lower() in {"1", "true", "yes", "on"}
 
@@ -59,12 +55,27 @@ def pack_effective_access(
     trusted_artifact: bool = False,
 ) -> dict[str, Any]:
     normalized = str(pack_id or "").strip().lower()
-    authored_pricing = "paid_x402_base_usdc" if normalized in PAID_QUERY_PACK_IDS else "free"
-    # Existing promoted data packs were admitted through the unified licence
-    # audit before this runtime overlay existed.  Callers that have the exact
-    # source envelope should pass it; the compatibility default preserves the
-    # established commercial eligibility of an admitted pack.
-    permissions = {"paid"} if license_permissions is None else license_permissions
+    from mapmover.data_loading import get_pack_metadata, load_catalog
+
+    pack = get_pack_metadata(normalized, load_catalog())
+    if not isinstance(pack, dict):
+        return resolve_effective_access(
+            resource_kind="pack",
+            resource_id=normalized,
+            authored_pricing="free",
+            license_permissions=set(),
+            publication_cleared=False,
+            caller_authenticated=caller_authenticated,
+            caller_entitled=caller_entitled,
+            local_installed=local_installed,
+            trusted_artifact=trusted_artifact,
+        )
+    material_policy = pack.get("material_policy") if isinstance(pack.get("material_policy"), dict) else {}
+    hosted_access = material_policy.get("hosted_access") if isinstance(material_policy.get("hosted_access"), dict) else {}
+    catalog_permission = str(material_policy.get("permission") or hosted_access.get("maximum_lane") or "").strip().lower()
+    authored_pricing = "paid_x402_base_usdc" if catalog_permission == "paid" else "free"
+    permissions = ({catalog_permission} if catalog_permission else set()) if license_permissions is None else license_permissions
+    publication_cleared = bool(hosted_access.get("publication_ready", False))
     return resolve_effective_access(
         resource_kind="pack",
         resource_id=normalized,
@@ -86,10 +97,8 @@ def pack_requires_commercial_access(
 ) -> bool:
     """Return the *effective* settlement requirement for one hosted pack.
 
-    The authored pack registry remains stable product intent.  Launch pricing
-    and other operator choices are read from the external access policy, so
-    switching a pack temporarily free does not rewrite pack metadata or force a
-    catalog build.
+    catalog.json owns the authored free/paid lane and licensing clearance.
+    Temporary operator overrides remain external access-policy decisions.
     """
     normalized = str(pack_id or "").strip().lower()
     if not normalized:

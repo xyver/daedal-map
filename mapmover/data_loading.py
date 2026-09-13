@@ -39,6 +39,10 @@ from pathlib import Path
 from copy import deepcopy
 
 from .catalog_surface import catalog_product_surface, get_catalog_surface_override
+from .catalog_cache_policy import (
+    CONTROL_CATALOG_CACHE_TTL_SECONDS,
+    CONTROL_CATALOG_MISS_TTL_SECONDS,
+)
 from .pack_state import build_active_catalog
 from pack_registry_shared import pack_routing_hints
 from .paths import CATALOG_PATH, COUNTRIES_DIR, DATA_ROOT, GEOMETRY_DIR, WIP_CATALOG_PATH
@@ -59,9 +63,9 @@ _metadata_cache = {}
 # After the TTL expires the next request re-reads catalog.json from disk.
 _catalog_cache = None
 _catalog_cache_time = 0.0
-_CATALOG_TTL_SECONDS = 300  # 5 minutes
+_CATALOG_TTL_SECONDS = CONTROL_CATALOG_CACHE_TTL_SECONDS
 _catalog_missing_time = 0.0
-_CATALOG_MISS_TTL_SECONDS = 15
+_CATALOG_MISS_TTL_SECONDS = CONTROL_CATALOG_MISS_TTL_SECONDS
 _full_catalog_cache = None
 _full_catalog_cache_time = 0.0
 _full_catalog_missing_time = 0.0
@@ -75,11 +79,10 @@ _api_guide_missing_time = 0.0
 _api_pack_cache: dict[str, dict] = {}
 _api_pack_cache_time: dict[str, float] = {}
 _api_pack_missing_time: dict[str, float] = {}
-# Agent/API catalog changes only on deliberate publish, not on every live-source
-# tick. Use a longer TTL than the human catalog to avoid cold R2 round trips on
-# frequent external probes (e.g. 402 Index health checks). clear_api_discovery_cache()
-# forces an immediate refresh when a new pack is published.
-_API_CATALOG_TTL_SECONDS = 3600  # 1 hour
+# MCP discovery follows the same five-minute publication window as catalog.json.
+# The generated Agent Catalog adds descriptions and examples, but it must never
+# delay or suppress a newly published data pack.
+_API_CATALOG_TTL_SECONDS = _CATALOG_TTL_SECONDS
 
 PACK_LOAD_MAX_SOURCES = 8
 PACK_LOAD_MAX_FILE_SIZE_MB = 200.0
@@ -90,18 +93,6 @@ RETIRED_PACK_SOURCE_IDS = {
 PACK_MCP_ROUTING_HINTS: dict[str, dict[str, str]] = pack_routing_hints()
 
 
-def _free_pack_ids() -> frozenset[str]:
-    from .pack_pricing import FREE_PACK_IDS
-
-    return FREE_PACK_IDS
-
-
-def _paid_pack_ids() -> frozenset[str]:
-    from .pack_pricing import PAID_PACK_IDS
-
-    return PAID_PACK_IDS
-
-
 def _pack_is_paid(pack_id: str | None) -> bool:
     from .api_query_commercial import pack_requires_commercial_access
 
@@ -109,10 +100,39 @@ def _pack_is_paid(pack_id: str | None) -> bool:
 
 
 def _effective_pack_pricing_sets() -> tuple[list[str], list[str]]:
-    pack_ids = sorted(set(_free_pack_ids()) | set(_paid_pack_ids()))
+    pack_ids = sorted(
+        str(pack.get("pack_id") or "").strip()
+        for pack in get_catalog_packs(load_catalog())
+        if str(pack.get("pack_id") or "").strip()
+    )
     paid = [pack_id for pack_id in pack_ids if _pack_is_paid(pack_id)]
     free = [pack_id for pack_id in pack_ids if pack_id not in set(paid)]
     return free, paid
+
+
+def _merge_api_catalog_with_published(payload: dict | None) -> dict:
+    """Keep Agent Catalog prose, but let catalog.json own pack admission/facts."""
+    generated = deepcopy(payload) if isinstance(payload, dict) else {}
+    published = get_catalog_packs(load_catalog())
+    generated_by_id = {
+        str(pack.get("pack_id") or "").strip(): pack
+        for pack in (generated.get("packs") or [])
+        if isinstance(pack, dict) and str(pack.get("pack_id") or "").strip()
+    }
+    packs = []
+    for live_pack in published:
+        if not isinstance(live_pack, dict):
+            continue
+        pack_id = str(live_pack.get("pack_id") or "").strip()
+        if not pack_id:
+            continue
+        # Current catalog fields win. Generated discovery may contribute richer
+        # examples/schema but cannot retain a retired pack or stale release fact.
+        packs.append({**deepcopy(generated_by_id.get(pack_id) or {}), **deepcopy(live_pack)})
+    generated["packs"] = packs
+    generated["pack_count"] = len(packs)
+    generated["source_mode"] = "catalog.json+agent_catalog"
+    return generated
 
 
 def _hydrate_api_catalog_payload(payload: dict | None) -> dict:
@@ -330,7 +350,8 @@ def load_api_catalog() -> dict:
         return {"catalog_version": "1.0", "generated_at": None, "source_mode": "agent_catalog", "pack_count": 0, "packs": []}
 
     payload = _load_json_from_runtime_or_s3("api_catalog.json", use_agent_prefix=True)
-    if payload is None:
+    payload = _merge_api_catalog_with_published(payload)
+    if not payload.get("packs"):
         _api_catalog_missing_time = now
         return {"catalog_version": "1.0", "generated_at": None, "source_mode": "agent_catalog", "pack_count": 0, "packs": []}
 
@@ -376,9 +397,29 @@ def load_api_pack_detail(pack_id: str) -> dict | None:
         return None
 
     payload = _load_json_from_runtime_or_s3(f"packs/{pack_id}.json", use_agent_prefix=True)
-    if payload is None:
+    live_catalog = load_catalog() or {}
+    live_pack = get_pack_metadata(pack_id, live_catalog)
+    if live_pack is None:
         _api_pack_missing_time[pack_id] = now
         return None
+    payload = {**(payload if isinstance(payload, dict) else {}), **deepcopy(live_pack)}
+    source_ids = set(live_pack.get("source_ids") or [])
+    generated_sources = {
+        str(source.get("source_id") or "").strip(): source
+        for source in (payload.get("sources") or [])
+        if isinstance(source, dict) and str(source.get("source_id") or "").strip()
+    }
+    # As with packs, catalog.json owns current source membership and facts.
+    # Generated per-source detail can enrich only a source that is still a
+    # member of the published pack.
+    payload["sources"] = [
+        {
+            **deepcopy(generated_sources.get(str(source.get("source_id") or "").strip()) or {}),
+            **deepcopy(source),
+        }
+        for source in (live_catalog.get("sources") or [])
+        if isinstance(source, dict) and str(source.get("source_id") or "") in source_ids
+    ]
 
     payload = _hydrate_api_pack_detail_from_source_metadata(payload)
     if isinstance(payload, dict):

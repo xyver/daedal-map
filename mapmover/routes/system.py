@@ -30,6 +30,7 @@ from mapmover.hosted_runtime_account import load_account_context
 from mapmover.hosted_runtime_events import submit_runtime_feedback
 from mapmover.order_queue import order_queue
 from mapmover.prewarm_status import begin_prewarm, prewarm_readiness, run_prewarm_task
+from mapmover.catalog_cache_policy import CONTROL_CATALOG_CACHE_TTL_SECONDS
 from mapmover.runtime_config import get_runtime_config
 from mapmover.runtime_build_info import runtime_build_info
 from mapmover.routes.disasters.helpers import msgpack_error, msgpack_response
@@ -41,7 +42,7 @@ BASE_DIR = Path(__file__).resolve().parents[2]
 _release_marker_cache = None
 _release_marker_cache_time = 0.0
 _RELEASE_MARKER_TTL_SECONDS = 60
-_PUBLIC_PACK_CATALOG_TTL_SECONDS = 300
+_PUBLIC_PACK_CATALOG_TTL_SECONDS = CONTROL_CATALOG_CACHE_TTL_SECONDS
 _public_pack_list_cache: dict[bool, dict[str, object]] = {
     False: {"value": None, "cached_at": 0.0},
     True: {"value": None, "cached_at": 0.0},
@@ -2743,6 +2744,7 @@ async def set_local_data_plane(req: Request):
     from mapmover.paths import RUNTIME_MODE
     from mapmover.ops_feed_registry import clear_ops_feed_registry_cache
     from mapmover.runtime.geometry_catalog import clear_geometry_catalog_cache
+    from mapmover.routes.mcp import clear_catalog_derived_mcp_caches
     from mapmover.runtime_config import get_data_plane_mode, set_local_data_plane_mode
 
     _context, error = _require_local_or_admin(req)
@@ -2772,6 +2774,7 @@ async def set_local_data_plane(req: Request):
     _dl.clear_api_discovery_cache()
     clear_ops_feed_registry_cache()
     clear_geometry_catalog_cache()
+    clear_catalog_derived_mcp_caches()
     clear_foundation_helper_cache()
     clear_geometry_cache()
     clear_data_cascade_cache()
@@ -3243,6 +3246,7 @@ async def admin_catalog_refresh(req: Request):
     import mapmover.data_loading as _dl
     from mapmover.ops_feed_registry import clear_ops_feed_registry_cache
     from mapmover.runtime.geometry_catalog import clear_geometry_catalog_cache
+    from mapmover.routes.mcp import clear_catalog_derived_mcp_caches
 
     forbidden = _admin_catalog_refresh_forbidden_response(req)
     if forbidden is not None:
@@ -3261,11 +3265,13 @@ async def admin_catalog_refresh(req: Request):
         from mapmover.control_catalog_prewarm import prewarm_control_catalogs
 
         _dl.clear_catalog_cache()
+        _dl.clear_api_discovery_cache()
         clear_ops_feed_registry_cache()
         clear_metadata_cache()
         clear_public_pack_catalog_cache()
         clear_release_marker_cache()
         clear_geometry_catalog_cache()
+        clear_catalog_derived_mcp_caches()
         initialize_catalog()
         control_counts = await asyncio.to_thread(prewarm_control_catalogs)
         source_count = control_counts["published"]
@@ -3273,6 +3279,7 @@ async def admin_catalog_refresh(req: Request):
 
     if surface in {"all", "agent"}:
         _dl.clear_api_discovery_cache()
+        clear_catalog_derived_mcp_caches()
         api_pack_count = len((_dl.load_api_catalog() or {}).get("packs", []))
         refreshed.append("agent")
 
@@ -3298,6 +3305,7 @@ async def admin_runtime_refresh(req: Request):
     from mapmover.geometry_handlers import clear_cache as clear_geometry_cache
     from mapmover.ops_feed_registry import clear_ops_feed_registry_cache
     from mapmover.runtime.geometry_catalog import clear_geometry_catalog_cache
+    from mapmover.routes.mcp import clear_catalog_derived_mcp_caches
 
     forbidden = _admin_catalog_refresh_forbidden_response(req)
     if forbidden is not None:
@@ -3312,6 +3320,7 @@ async def admin_runtime_refresh(req: Request):
     _dl.clear_api_discovery_cache()
     clear_ops_feed_registry_cache()
     clear_geometry_catalog_cache()
+    clear_catalog_derived_mcp_caches()
     clear_geometry_cache()
     clear_data_cascade_cache()
     cache_clear()
@@ -3354,6 +3363,7 @@ async def admin_runtime_soft_refresh(req: Request):
     from mapmover.geometry_handlers import clear_cache as clear_geometry_cache
     from mapmover.ops_feed_registry import clear_ops_feed_registry_cache
     from mapmover.runtime.geometry_catalog import clear_geometry_catalog_cache
+    from mapmover.routes.mcp import clear_catalog_derived_mcp_caches
 
     forbidden = _admin_catalog_refresh_forbidden_response(req)
     if forbidden is not None:
@@ -3368,6 +3378,7 @@ async def admin_runtime_soft_refresh(req: Request):
     _dl.clear_api_discovery_cache()
     clear_ops_feed_registry_cache()
     clear_geometry_catalog_cache()
+    clear_catalog_derived_mcp_caches()
     clear_geometry_cache()
     clear_data_cascade_cache()
     cache_clear()

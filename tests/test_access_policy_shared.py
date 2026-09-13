@@ -101,12 +101,42 @@ class AccessPolicySharedTests(unittest.TestCase):
                 {
                     "scope": "USA",
                     "family": "admin_boundary",
-                    "source_license": {"permission": "paid", "license_review_status": "approved"},
+                    "material_policy": {
+                        "permission": "paid",
+                        "hosted_access": {
+                            "publication_ready": True,
+                            "free_allowed": True,
+                            "paid_allowed": True,
+                            "maximum_lane": "paid",
+                        },
+                        "redistribution": {"status": "allowed", "allowed": True},
+                        "surface_access": {
+                            "hosted_results": True,
+                            "server_rendered_display": True,
+                            "client_geometry": True,
+                            "download": True,
+                        },
+                    },
                 },
                 {
                     "scope": None,
                     "family": "eez",
-                    "source_license": {"permission": "free", "license_review_status": "needs_review"},
+                    "material_policy": {
+                        "permission": "free",
+                        "hosted_access": {
+                            "publication_ready": False,
+                            "free_allowed": False,
+                            "paid_allowed": False,
+                            "maximum_lane": "blocked",
+                        },
+                        "redistribution": {"status": "unknown", "allowed": False},
+                        "surface_access": {
+                            "hosted_results": False,
+                            "server_rendered_display": False,
+                            "client_geometry": False,
+                            "download": False,
+                        },
+                    },
                 },
             ]
         }
@@ -116,6 +146,57 @@ class AccessPolicySharedTests(unittest.TestCase):
                 ({"paid"}, True),
             )
             self.assertEqual(geometry_bank_access_facts(), ({"paid", "free"}, False))
+
+    def test_partition_surface_contract_is_scoped_and_fail_closed(self) -> None:
+        from mapmover.runtime.geometry_catalog import geometry_bank_access_facts
+
+        catalog = {
+            "geometry_banks": [{
+                "scope": None,
+                "family": "admin_boundary",
+                "material_policy": {
+                    "permission": "free",
+                    "hosted_access": {"publication_ready": True, "free_allowed": True},
+                    "redistribution": {"status": "restricted", "allowed": False},
+                    "surface_access": {
+                        "hosted_results": True,
+                        "server_rendered_display": True,
+                        "client_geometry": False,
+                        "download": False,
+                    },
+                },
+                "partition_surface_contract": {
+                    "allowed_partitions": {
+                        "hosted_results": ["OMN", "USA"],
+                        "server_rendered_display": ["OMN", "USA"],
+                        "client_geometry": ["USA"],
+                        "download": ["USA"],
+                    },
+                    "hosted_permission_partitions": {
+                        "free": ["OMN"], "paid": ["USA"],
+                    },
+                },
+            }],
+        }
+        with mock.patch("mapmover.runtime.geometry_catalog.load_geometry_catalog", return_value=catalog):
+            self.assertEqual(
+                geometry_bank_access_facts(
+                    scopes={"USA"}, families={"admin_boundary"}, surface="client_geometry",
+                ),
+                ({"free"}, True),
+            )
+            self.assertEqual(
+                geometry_bank_access_facts(
+                    scopes={"OMN"}, families={"admin_boundary"}, surface="client_geometry",
+                ),
+                ({"free"}, False),
+            )
+            self.assertEqual(
+                geometry_bank_access_facts(
+                    scopes={"NEW"}, families={"admin_boundary"}, surface="hosted_results",
+                ),
+                (set(), False),
+            )
 
     def test_publication_clearance_is_not_a_payment_bypass(self) -> None:
         decision = resolve_effective_access(

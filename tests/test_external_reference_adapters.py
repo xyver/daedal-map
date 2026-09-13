@@ -61,7 +61,7 @@ def _write_contract(root: Path, specs: list[tuple[str, str, str, str]], *, admit
                 "by_internal_id": {"path": reverse.name, "sha256": _sha(reverse)},
             },
         })
-    identity = {"external_system": "overture_gers", "external_release": "gers-2026-07", "partitions": partitions}
+    identity = {"external_system": "overture_gers", "external_release": "gers-2026-07", "adapter": {}, "partitions": partitions}
     state = "published" if admitted else "candidate_blocked"
     manifest = {
         "profile": "external_reference_bridge", **identity,
@@ -82,6 +82,29 @@ def _write_contract(root: Path, specs: list[tuple[str, str, str, str]], *, admit
 
 
 class ExternalReferenceRegistryTests(unittest.TestCase):
+    def test_second_provider_adapter_is_loaded_from_the_admitted_catalog(self) -> None:
+        record = {
+            "external_system": "example_ids",
+            "adapter": {
+                "label": "Example IDs", "aliases": ["example"],
+                "identifier_pattern": r"EX-[0-9]+",
+                "columns": {
+                    "external_id_column": "external_id", "internal_id_column": "loc_id",
+                    "source_release_column": "source_release",
+                    "internal_release_column": "internal_release",
+                    "country_column": "iso3",
+                },
+            },
+        }
+        with mock.patch(
+            "mapmover.runtime.geometry_catalog.load_geometry_catalog",
+            return_value={"external_reference_bridges": [record]},
+        ):
+            adapter = adapters.get_external_adapter("example")
+        self.assertIsNotNone(adapter)
+        self.assertEqual("example_ids", adapter.system)
+        self.assertTrue(adapters.identifier_matches(adapter, "EX-123"))
+
     def test_no_current_registry_and_candidate_registry_both_fail_closed(self) -> None:
         adapter = adapters.get_external_adapter("gers")
         with tempfile.TemporaryDirectory() as temporary, mock.patch.object(adapters, "DATA_ROOT", Path(temporary)):
@@ -150,7 +173,7 @@ class ExternalReferenceRegistryTests(unittest.TestCase):
                 "by_internal_id": {"path": "cloud/by-internal.parquet", "sha256": "c" * 64},
             },
         }
-        identity = {"external_system": "overture_gers", "external_release": "gers-2026-07", "partitions": [partition]}
+        identity = {"external_system": "overture_gers", "external_release": "gers-2026-07", "adapter": {}, "partitions": [partition]}
         record = {
             **identity, "release_fingerprint": adapters.stable_fingerprint(identity), "status": "admitted",
             "publication_state": "published", "publication": {"state": "published", "hosted_publication_cleared": True},

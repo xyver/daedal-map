@@ -513,14 +513,20 @@ def public_geometry_inventory_payload(payload: dict[str, Any]) -> dict[str, Any]
     }
 
 
-@lru_cache(maxsize=1)
-def build_public_geometry_inventory_payload() -> dict[str, Any]:
+@lru_cache(maxsize=2)
+def _build_public_geometry_inventory_payload_cached(_epoch: int) -> dict[str, Any]:
     """Build the public visual catalog from the current operator atlas."""
     return public_geometry_inventory_payload(build_geometry_inventory_payload())
 
 
-@lru_cache(maxsize=1)
-def build_geometry_inventory_payload() -> dict[str, Any]:
+def build_public_geometry_inventory_payload() -> dict[str, Any]:
+    from ..catalog_cache_policy import control_catalog_cache_epoch
+
+    return _build_public_geometry_inventory_payload_cached(control_catalog_cache_epoch())
+
+
+@lru_cache(maxsize=2)
+def _build_geometry_inventory_payload_cached(_epoch: int) -> dict[str, Any]:
     """Join catalog inventory facts onto the bounded Admin0 display shapes."""
     from ..foundation_helpers import load_global_country_display_frame
 
@@ -590,7 +596,13 @@ def build_geometry_inventory_payload() -> dict[str, Any]:
     }
 
 
+def build_geometry_inventory_payload() -> dict[str, Any]:
+    from ..catalog_cache_policy import control_catalog_cache_epoch
+
+    return _build_geometry_inventory_payload_cached(control_catalog_cache_epoch())
+
+
 def clear_geometry_inventory_cache() -> None:
     """Drop the built payload so a rebuilt catalog is picked up in place."""
-    build_geometry_inventory_payload.cache_clear()
-    build_public_geometry_inventory_payload.cache_clear()
+    _build_geometry_inventory_payload_cached.cache_clear()
+    _build_public_geometry_inventory_payload_cached.cache_clear()

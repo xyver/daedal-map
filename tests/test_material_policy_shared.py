@@ -18,6 +18,12 @@ def _policy(*, lane: str, published: bool = True, redistribution: bool = True) -
                 "status": "allowed" if redistribution else "restricted",
                 "allowed": published and redistribution,
             },
+            "surface_access": {
+                "hosted_results": published,
+                "server_rendered_display": published,
+                "client_geometry": published and redistribution,
+                "download": published and redistribution,
+            },
             "attribution": {"status": "resolved", "lines": []},
             "citation": {"entries": []},
             "policy_fingerprint": "abc123",
@@ -32,6 +38,7 @@ def test_reads_generated_material_policy_without_reinterpreting_license() -> Non
     assert facts["permission"] == "paid"
     assert facts["paid_hosted_allowed"] is True
     assert facts["redistribution_allowed"] is True
+    assert facts["surface_access"]["client_geometry"] is True
 
 
 def test_combination_uses_strictest_contributing_material() -> None:
@@ -41,6 +48,7 @@ def test_combination_uses_strictest_contributing_material() -> None:
     assert combined["free_hosted_allowed"] is True
     assert combined["paid_hosted_allowed"] is False
     assert combined["maximum_hosted_lane"] == "free"
+    assert combined["surface_access"]["hosted_results"] is True
 
 
 def test_redistribution_is_independent_from_hosted_service_permission() -> None:
@@ -48,6 +56,8 @@ def test_redistribution_is_independent_from_hosted_service_permission() -> None:
 
     assert facts["paid_hosted_allowed"] is True
     assert facts["redistribution_allowed"] is False
+    assert facts["surface_access"]["client_geometry"] is False
+    assert facts["surface_access"]["hosted_results"] is True
 
 
 def test_legacy_projection_is_not_accepted_without_material_policy() -> None:

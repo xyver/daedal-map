@@ -337,6 +337,8 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         self.assertTrue(payload["payment_required"])
         self.assertEqual(payload["limits"]["free_batch_limit"], 100)
         self.assertEqual(payload["error"]["code"], "payment_required")
+        self.assertTrue(payload["quote_id"].startswith("pointquote_"))
+        self.assertEqual(payload["quote"]["quote_id"], payload["quote_id"])
         # The caller must receive the verifier's real price, not a guess.
         self.assertEqual(payload["daedalmap_pricing"]["amount_usdc_base_units"], 11306)
         self.assertTrue(payload["challenge"]["opaque"])
@@ -536,7 +538,8 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
                 "mapmover.routes.mcp._tool_effective_access",
                 return_value={"allow": True, "settlement_required": True, "access_lane": "metered"},
             ),
-            mock.patch("mapmover.routes.mcp._commercial_access_decision", return_value=allow),
+            mock.patch("mapmover.credit_action_authorization.verified_credit_action_user_id", return_value="user-1"),
+            mock.patch("mapmover.routes.mcp._commercial_access_decision", return_value=allow) as access_mock,
             mock.patch(
                 "mapmover.routes.mcp.settle_commercial_access",
                 return_value=(True, {"status": "allow", "context": {"account_credit": {"charged_micro_usd": 0}}}),
@@ -551,6 +554,10 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
             )
 
         self.assertEqual(payload["point_count"], 101)
+        access_kwargs = access_mock.call_args.kwargs
+        self.assertTrue(access_kwargs["credit_authorized"])
+        self.assertEqual(access_kwargs["credit_user_id"], "user-1")
+        self.assertTrue(access_kwargs["pricing_quote"]["quote_id"].startswith("pointquote_"))
         settle_kwargs = settle_mock.call_args.kwargs
         self.assertEqual(settle_kwargs["actual_pricing"]["amount_usdc_base_units"], 0)
         self.assertEqual(settle_kwargs["meter_receipt"]["successful_distinct_items"], 1)
