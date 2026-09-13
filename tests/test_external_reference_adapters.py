@@ -189,6 +189,32 @@ class ExternalReferenceRegistryTests(unittest.TestCase):
         self.assertEqual(discovery["license"], {"license": "catalog-owned"})
         self.assertNotIn("partitions", discovery)
 
+    def test_hosted_compact_catalog_does_not_require_partition_inventory(self) -> None:
+        record = {
+            "external_system": "overture_gers",
+            "external_release": "gers-2026-07",
+            "adapter": {},
+            "release_fingerprint": "d" * 64,
+            "status": "admitted",
+            "publication_state": "published",
+            "publication": {"state": "published", "hosted_publication_cleared": True},
+            "runtime_layout": "compact_parquet",
+            "runtime_artifact": {
+                "path": "cloud/overture-bridge.parquet",
+                "sha256": "e" * 64,
+            },
+            "source_license": {"license": "catalog-owned"},
+        }
+        with mock.patch.object(adapters, "is_cloud_mode", return_value=True), mock.patch(
+            "mapmover.runtime.geometry_catalog.load_geometry_catalog",
+            return_value={"external_reference_bridges": [record]},
+        ):
+            bridge = adapters.admitted_bridge(adapters.get_external_adapter("gers"))
+
+        self.assertIsNotNone(bridge)
+        self.assertEqual(bridge.partitions, ())
+        self.assertEqual(bridge.runtime_path, "cloud/overture-bridge.parquet")
+
 
 class ExternalReferenceRuntimeTests(unittest.TestCase):
     def test_relationship_only_edge_never_resolves_as_identity(self) -> None:

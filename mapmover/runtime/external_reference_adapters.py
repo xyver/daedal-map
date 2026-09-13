@@ -63,6 +63,8 @@ class AdmittedExternalBridge:
     source_release: str
     partitions: tuple[ExternalReferencePartition, ...]
     source_license: dict[str, Any]
+    runtime_path: str | None = None
+    runtime_sha256: str | None = None
 
 
 @dataclass(frozen=True)
@@ -266,6 +268,19 @@ def _local_release(adapter: ExternalReferenceAdapter) -> dict[str, Any]:
         or _release_fingerprint(manifest) != declared
     ):
         return {}
+    runtime_manifest_path = _bounded_data_path(pointer.get("runtime_manifest"))
+    runtime_manifest = _load_json(runtime_manifest_path) if runtime_manifest_path else {}
+    runtime_artifact = (
+        runtime_manifest.get("artifact")
+        if isinstance(runtime_manifest.get("artifact"), dict) else {}
+    )
+    if (
+        runtime_manifest.get("profile") == "external_reference_bridge_compact_runtime"
+        and runtime_manifest.get("bridge_release_fingerprint") == declared
+        and runtime_artifact.get("path")
+        and runtime_artifact.get("sha256")
+    ):
+        manifest = {**manifest, "runtime_layout": "compact_parquet", "runtime_artifact": runtime_artifact}
     return manifest
 
 
@@ -310,18 +325,31 @@ def admitted_bridge(adapter: ExternalReferenceAdapter) -> AdmittedExternalBridge
     if not manifest or not _publication_admitted(manifest):
         return None
     fingerprint = str(manifest.get("release_fingerprint") or "")
-    if _release_fingerprint(manifest) != fingerprint:
+    compact_runtime = (
+        manifest.get("runtime_layout") == "compact_parquet"
+        and isinstance(manifest.get("runtime_artifact"), dict)
+    )
+    if not compact_runtime and _release_fingerprint(manifest) != fingerprint:
         return None
     source_release = str(manifest.get("external_release") or manifest.get("active_release") or "").strip()
     partitions = tuple(
         partition for record in manifest.get("partitions") or []
         if isinstance(record, dict) and (partition := _normalize_partition(record, source_release)) is not None
     )
-    if not partitions or len({partition.partition_id for partition in partitions}) != len(partitions):
+    if (
+        not compact_runtime
+        and (not partitions or len({partition.partition_id for partition in partitions}) != len(partitions))
+    ):
+        return None
+    runtime = manifest.get("runtime_artifact") if isinstance(manifest.get("runtime_artifact"), dict) else {}
+    runtime_path = str(runtime.get("path") or "").strip() or None
+    runtime_sha256 = str(runtime.get("sha256") or "").strip().lower() or None
+    if bool(runtime_path) != bool(runtime_sha256):
         return None
     return AdmittedExternalBridge(
         adapter=adapter, release_fingerprint=fingerprint, source_release=source_release,
         partitions=partitions, source_license=dict(manifest.get("source_license") or {}),
+        runtime_path=runtime_path, runtime_sha256=runtime_sha256,
     )
 
 
@@ -373,6 +401,8 @@ def _bridge_available(bridge: AdmittedExternalBridge | None) -> bool:
         return False
     if is_cloud_mode():
         return True
+    if bridge.runtime_path and bridge.runtime_sha256:
+        return _artifact_verified(bridge.runtime_path, bridge.runtime_sha256)
     return all(
         _artifact_verified(partition.forward_path, partition.forward_sha256)
         and _artifact_verified(partition.reverse_path, partition.reverse_sha256)
@@ -421,21 +451,40 @@ def _edge(adapter: ExternalReferenceAdapter, row: dict[str, Any], partition: Ext
 
 def _query_edges(
     bridge: AdmittedExternalBridge, partitions: tuple[ExternalReferencePartition, ...],
-    *, reverse: bool, values: list[str],
+    *, reverse: bool, values: list[str], source_release: str | None = None,
+    internal_release: str | None = None, country_scope: str | None = None,
 ) -> list[ExternalReferenceEdge]:
-    if not partitions or not values:
+    if not values or (not partitions and not bridge.runtime_path):
         return []
     adapter = bridge.adapter
-    paths = [partition.reverse_path if reverse else partition.forward_path for partition in partitions]
-    hashes = [partition.reverse_sha256 if reverse else partition.forward_sha256 for partition in partitions]
-    if not is_cloud_mode() and not all(_artifact_verified(path, digest) for path, digest in zip(paths, hashes)):
+    if bridge.runtime_path and bridge.runtime_sha256:
+        paths = [bridge.runtime_path]
+        hashes = [bridge.runtime_sha256]
+    else:
+        paths = [partition.reverse_path if reverse else partition.forward_path for partition in partitions]
+        hashes = [partition.reverse_sha256 if reverse else partition.forward_sha256 for partition in partitions]
+    if not is_cloud_mode() and not all(
+        _artifact_verified(path, digest) for path, digest in zip(paths, hashes)
+    ):
         return []
     uris = [path_to_uri(DATA_ROOT / path) for path in paths]
     column = adapter.internal_id_column if reverse else adapter.external_id_column
-    placeholders = ", ".join("?" for _ in values)
-    sql = f"SELECT * FROM read_parquet(?, union_by_name=true, filename=true) WHERE {quote_ident(column)} IN ({placeholders})"
+    clauses = [f"{quote_ident(column)} IN ({', '.join('?' for _ in values)})"]
+    parameters: list[Any] = [uris, *values]
+    for value, filter_column in (
+        (source_release, adapter.source_release_column),
+        (internal_release, adapter.internal_release_column),
+        (str(country_scope or "").strip().upper() or None, adapter.country_column),
+    ):
+        if value:
+            clauses.append(f"{quote_ident(filter_column)} = ?")
+            parameters.append(value)
+    sql = (
+        "SELECT * FROM read_parquet(?, union_by_name=true, filename=true) WHERE "
+        + " AND ".join(clauses)
+    )
     try:
-        frame = run_df(sql, [uris, *values])
+        frame = run_df(sql, parameters)
     except Exception:
         return []
     by_uri = {str(uri): partition for uri, partition in zip(uris, partitions)}
@@ -455,7 +504,11 @@ def lookup_external_edges(
         return []
     assert bridge is not None
     partitions = _selected_partitions(bridge, source_release=source_release, internal_release=internal_release, country_scope=country_scope)
-    return _query_edges(bridge, partitions, reverse=False, values=[str(external_id).strip()])
+    return _query_edges(
+        bridge, partitions, reverse=False, values=[str(external_id).strip()],
+        source_release=source_release, internal_release=internal_release,
+        country_scope=country_scope,
+    )
 
 
 def lookup_external_edges_batch(
@@ -487,7 +540,11 @@ def lookup_external_edges_batch(
         country_scope=country_scope,
     )
     grouped: dict[str, list[ExternalReferenceEdge]] = {value: [] for value in requested}
-    for edge in _query_edges(bridge, partitions, reverse=False, values=requested):
+    for edge in _query_edges(
+        bridge, partitions, reverse=False, values=requested,
+        source_release=source_release, internal_release=internal_release,
+        country_scope=country_scope,
+    ):
         grouped.setdefault(edge.external_id, []).append(edge)
     return grouped
 
@@ -503,7 +560,11 @@ def lookup_loc_id_edges(
         return []
     assert bridge is not None
     partitions = _selected_partitions(bridge, source_release=source_release, internal_release=internal_release, country_scope=country_scope)
-    edges = _query_edges(bridge, partitions, reverse=True, values=[str(loc_id).strip()])
+    edges = _query_edges(
+        bridge, partitions, reverse=True, values=[str(loc_id).strip()],
+        source_release=source_release, internal_release=internal_release,
+        country_scope=country_scope,
+    )
     edges.sort(key=lambda edge: (not edge.is_equivalence, -(edge.geometry_confidence or 0.0), edge.external_id))
     return edges if limit is None else edges[:max(0, int(limit))]
 
@@ -533,7 +594,11 @@ def lookup_loc_id_edges_batch(
         country_scope=country_scope,
     )
     grouped: dict[str, list[ExternalReferenceEdge]] = {value: [] for value in requested}
-    for edge in _query_edges(bridge, partitions, reverse=True, values=requested):
+    for edge in _query_edges(
+        bridge, partitions, reverse=True, values=requested,
+        source_release=source_release, internal_release=internal_release,
+        country_scope=country_scope,
+    ):
         grouped.setdefault(edge.loc_id, []).append(edge)
     maximum = None if limit is None else max(0, int(limit))
     for loc_id, edges in grouped.items():
@@ -554,7 +619,13 @@ def external_equivalence_matches(
         return {"matches": {}, "source_releases": [], "internal_releases": []}
     assert bridge is not None
     partitions = _selected_partitions(bridge, source_release=source_release, internal_release=internal_release, country_scope=country_scope)
-    equivalences = [edge for edge in _query_edges(bridge, partitions, reverse=False, values=requested) if edge.is_equivalence]
+    equivalences = [
+        edge for edge in _query_edges(
+            bridge, partitions, reverse=False, values=requested,
+            source_release=source_release, internal_release=internal_release,
+            country_scope=country_scope,
+        ) if edge.is_equivalence
+    ]
     matches: dict[str, list[str]] = {}
     for edge in equivalences:
         matches.setdefault(edge.external_id, []).append(edge.loc_id)
