@@ -249,6 +249,32 @@ class ExternalReferenceRuntimeTests(unittest.TestCase):
         self.assertEqual([row["edge_content_hash"] for row in external], ["sha256:unchanged-edge", "sha256:changed-edge"])
         self.assertTrue(all("scope_id" not in row and "last_verified_at" not in row for row in external))
 
+    def test_convert_loc_id_to_external_bridge_skips_general_crosswalks(self) -> None:
+        with mock.patch.object(
+            reference_exchange, "lookup_loc_id_edges", return_value=[EQUIVALENCE]
+        ) as lookup, mock.patch.object(
+            reference_exchange, "_direct_crosswalk_matches"
+        ) as general_crosswalk:
+            payload = reference_exchange.convert_reference(
+                from_system="loc_id",
+                value=EQUIVALENCE.loc_id,
+                to_system="gers",
+                iso3="USA",
+            )
+
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["loc_id"], EQUIVALENCE.loc_id)
+        self.assertEqual(payload["results"][0]["value"], EQUIVALENCE.external_id)
+        general_crosswalk.assert_not_called()
+        lookup.assert_called_once_with(
+            "overture_gers",
+            EQUIVALENCE.loc_id,
+            country_scope="CAN",
+            source_release=None,
+            internal_release=None,
+            limit=10,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -2326,7 +2326,51 @@ def convert_reference(
     internal_release: str | None = None,
 ) -> dict[str, Any]:
     """Convert a value from one reference system to another through ``loc_id``."""
+    source = _normalize_system(from_system)
     target = _normalize_system(to_system)
+    target_adapter = get_external_adapter(target)
+    if source in {LOC_ID_SYSTEM, "admin_local", "admin_geometry"} and target_adapter:
+        # A typed external bridge is already a loc_id <-> external-id index.
+        # Do not scan the general crosswalk catalog or reference graph for this
+        # explicit reverse lookup: besides adding no evidence, that work can
+        # turn a millisecond Parquet predicate into a hosted timeout.
+        canonical = canonicalize_loc_id(value)
+        loc_country = canonical.split("-", 1)[0] if "-" in canonical else ""
+        edges = lookup_loc_id_edges(
+            target_adapter.system,
+            canonical,
+            country_scope=loc_country or None,
+            source_release=source_release,
+            internal_release=internal_release,
+            limit=limit,
+        )
+        results = [_external_edge_reference(target_adapter.system, edge) for edge in edges]
+        if results:
+            return _clean_json({
+                "ok": True,
+                "from": {
+                    "ok": True,
+                    "from_system": source,
+                    "input": value,
+                    "resolved_loc_id": canonical,
+                    "match_type": "loc_id_bridge_lookup",
+                },
+                "to_system": target_adapter.system,
+                "results": results,
+                "loc_id": canonical,
+            })
+        return _clean_json({
+            "ok": False,
+            "from_system": source,
+            "input": value,
+            "to_system": target_adapter.system,
+            "results": [],
+            "loc_id": canonical,
+            "error": {
+                "code": "external_reference_not_found",
+                "message": f"no {target_adapter.system} reference is published for that loc_id",
+            },
+        })
     direct_record, direct_results = _direct_crosswalk_matches(
         from_system=from_system,
         value=value,
