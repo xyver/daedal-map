@@ -26,6 +26,7 @@ from .geometry_catalog import load_geometry_catalog
 from .geometry_predicate_query import (
     read_bbox_candidates,
     read_bbox_candidates_for_points,
+    read_geojson_containment_for_points,
     read_hash_sharded_rows,
     read_rows_by_ids,
 )
@@ -233,8 +234,9 @@ def load_marine_geometry_for_points(
         domain["bbox_index"], point_items, columns=["loc_id"],
     )
     jurisdiction_ids = set(jurisdiction_pairs["loc_id"].astype(str)) if not jurisdiction_pairs.empty else set()
+    jurisdiction_frame = pd.DataFrame(columns=_MARINE_POINT_COLUMNS)
     if jurisdiction_ids:
-        frames.append(read_hash_sharded_rows(
+        jurisdiction_frame = read_hash_sharded_rows(
             domain["point_shards"], jurisdiction_ids,
             shard_count=32,
             id_column="loc_id",
@@ -242,16 +244,17 @@ def load_marine_geometry_for_points(
                 "name", "geometry_wkb", "area_km2",
                 "bbox_min_lon", "bbox_min_lat", "bbox_max_lon", "bbox_max_lat",
             ],
-        ))
-    for row in jurisdiction_pairs.to_dict("records"):
-        candidate_ids.setdefault(int(row["point_position"]), set()).add(str(row["loc_id"]))
+        )
+        frames.append(jurisdiction_frame)
+    for position, loc_ids in _exact_jurisdiction_matches(point_items, jurisdiction_frame).items():
+        candidate_ids.setdefault(position, set()).update(loc_ids)
 
     water_columns = ["loc_id", "name", "geometry", "centroid_lon", "centroid_lat"]
     for path in (domain["water_bodies"], domain["named_water_areas"]):
-        # These are already compact single banks. Project the shape during the
-        # bbox join so a batch does not reopen the same Parquet merely to fetch
-        # the candidate rows it just identified.
-        pairs = read_bbox_candidates_for_points(path, point_items, columns=water_columns)
+        # These are compact physical-water banks (172 total polygons). DuckDB
+        # can do exact containment during each bank's only scan, leaving the
+        # larger overlapping jurisdiction family on its separate path.
+        pairs = read_geojson_containment_for_points(path, point_items, columns=water_columns)
         if not pairs.empty:
             frames.append(
                 pairs.drop(columns=["point_position"], errors="ignore")
@@ -268,6 +271,43 @@ def load_marine_geometry_for_points(
     return combined.reset_index(drop=True), {
         position: sorted(ids) for position, ids in candidate_ids.items()
     }
+
+
+def _exact_jurisdiction_matches(
+    points: list[dict[str, Any]],
+    jurisdictions: pd.DataFrame,
+) -> dict[int, set[str]]:
+    """Bulk-test hydrated jurisdiction shapes once with an in-memory STRtree."""
+    if jurisdictions is None or jurisdictions.empty or not points:
+        return {}
+    from shapely import STRtree, from_wkb, points as make_points
+
+    shapes = jurisdictions.dropna(subset=["loc_id", "geometry_wkb"]).drop_duplicates(
+        subset=["loc_id"], keep="first",
+    )
+    if shapes.empty:
+        return {}
+    shape_values = from_wkb([bytes(value) for value in shapes["geometry_wkb"]])
+    point_positions: list[int] = []
+    coordinates: list[tuple[float, float]] = []
+    for position, point in enumerate(points):
+        try:
+            coordinates.append((float(point["lon"]), float(point["lat"])))
+            point_positions.append(position)
+        except (KeyError, TypeError, ValueError):
+            continue
+    if not coordinates:
+        return {}
+    pair_indexes = STRtree(shape_values).query(
+        make_points(coordinates), predicate="covered_by",
+    )
+
+    loc_ids = shapes["loc_id"].astype(str).tolist()
+    matches: dict[int, set[str]] = {}
+    for point_index, shape_index in zip(pair_indexes[0], pair_indexes[1]):
+        position = point_positions[int(point_index)]
+        matches.setdefault(position, set()).add(loc_ids[int(shape_index)])
+    return matches
 
 
 def load_marine_geometry(loc_ids: Optional[Iterable[str]] = None, *, columns: Optional[list[str]] = None) -> pd.DataFrame:

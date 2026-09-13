@@ -18,6 +18,27 @@ from mapmover.runtime.geography_reference import is_named_water_loc_id
 
 
 class MarineGeometryRuntimeTests(unittest.TestCase):
+    def test_jurisdiction_batch_tree_returns_only_exact_point_matches(self):
+        from shapely.geometry import Polygon
+
+        jurisdictions = pd.DataFrame([
+            {
+                "loc_id": "LEFT",
+                "geometry_wkb": Polygon([(0, 0), (0, 2), (2, 2), (2, 0)]).wkb,
+            },
+            {
+                "loc_id": "RIGHT",
+                "geometry_wkb": Polygon([(3, 0), (3, 2), (5, 2), (5, 0)]).wkb,
+            },
+        ])
+
+        matches = marine_runtime._exact_jurisdiction_matches(
+            [{"lon": 1, "lat": 1}, {"lon": 4, "lat": 1}, {"lon": 10, "lat": 1}],
+            jurisdictions,
+        )
+
+        self.assertEqual(matches, {0: {"LEFT"}, 1: {"RIGHT"}})
+
     def test_catalog_domain_projection_exposes_activation_without_component_bloat(self):
         catalog = {"domain_profiles": [{
             "release_unit_id": "MARINE",
@@ -162,7 +183,7 @@ class MarineGeometryRuntimeTests(unittest.TestCase):
             "named_water_areas": Path("marine/named.parquet"),
         }
 
-        def candidates(path, _points, *, columns):
+        def exact_candidates(path, _points, *, columns):
             if path == domain["water_bodies"]:
                 return pd.DataFrame([{
                     "point_position": 0,
@@ -179,7 +200,11 @@ class MarineGeometryRuntimeTests(unittest.TestCase):
             return pd.DataFrame(columns=["point_position", *columns])
 
         with patch.object(marine_runtime, "_active_domain_paths", return_value=domain), patch.object(
-            marine_runtime, "read_bbox_candidates_for_points", side_effect=candidates,
+            marine_runtime, "read_bbox_candidates_for_points", return_value=pd.DataFrame(
+                columns=["point_position", "loc_id"],
+            ),
+        ), patch.object(
+            marine_runtime, "read_geojson_containment_for_points", side_effect=exact_candidates,
         ), patch.object(
             marine_runtime, "read_rows_by_ids",
             side_effect=AssertionError("water candidate bank must only be scanned once"),

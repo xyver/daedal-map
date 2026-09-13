@@ -96,7 +96,9 @@ def _resolve_point_to_marine_stack(
     include_geometry: bool = False,
     marine_df: pd.DataFrame | None = None,
     candidate_loc_ids: set[str] | None = None,
+    candidates_are_exact: bool = False,
     geometry_cache: dict[str, Any] | None = None,
+    marine_rows_by_loc_id: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any] | None:
     if marine_df is None:
         marine_df = load_marine_geometry_at_point(lon, lat)
@@ -108,22 +110,31 @@ def _resolve_point_to_marine_stack(
     except Exception:
         return None
 
-    point = Point(float(lon), float(lat))
+    point = None if candidates_are_exact else Point(float(lon), float(lat))
+    candidate_rows: list[Any] | None = None
+    if marine_rows_by_loc_id is not None and candidate_loc_ids is not None:
+        candidate_rows = [
+            marine_rows_by_loc_id[loc_id]
+            for loc_id in candidate_loc_ids
+            if loc_id in marine_rows_by_loc_id
+        ]
+        if not candidate_rows:
+            return None
     candidates = marine_df
-    if candidate_loc_ids is not None:
+    if candidate_rows is None and candidate_loc_ids is not None:
         candidates = candidates[candidates["loc_id"].astype(str).isin(candidate_loc_ids)]
         if candidates.empty:
             return None
     bbox_cols = {"bbox_min_lon", "bbox_max_lon", "bbox_min_lat", "bbox_max_lat"}
-    if bbox_cols.issubset(set(marine_df.columns)):
-        candidates = marine_df[
-            (marine_df["bbox_max_lon"] >= lon) &
-            (marine_df["bbox_min_lon"] <= lon) &
-            (marine_df["bbox_max_lat"] >= lat) &
-            (marine_df["bbox_min_lat"] <= lat)
+    if candidate_rows is None and bbox_cols.issubset(set(candidates.columns)):
+        candidates = candidates[
+            (candidates["bbox_max_lon"] >= lon) &
+            (candidates["bbox_min_lon"] <= lon) &
+            (candidates["bbox_max_lat"] >= lat) &
+            (candidates["bbox_min_lat"] <= lat)
         ]
-    if candidates.empty:
-        candidates = marine_df
+    if candidate_rows is None and candidates.empty:
+        return None
 
     # A reviewed named IHO water polygon is the location answer. Legacy X*
     # water zones are SST product aggregates, not point-location geography;
@@ -131,17 +142,26 @@ def _resolve_point_to_marine_stack(
     # overlapping jurisdictions, but not the physical water-body answer.
     family_order = {"named_water": 0, "marine_jurisdiction": 1, "marine_eez": 1, "water_body": 2}
     matches: list[dict[str, Any]] = []
-    for _, row in candidates.iterrows():
+    rows = candidate_rows if candidate_rows is not None else (
+        row for _, row in candidates.iterrows()
+    )
+    for row in rows:
         loc_id = str(row.get("loc_id") or "").strip()
         if not loc_id:
             continue
+        family = classify_loc_id_family(loc_id)
+        named_water = is_named_water_loc_id(loc_id)
         wkb_value = row.get("geometry_wkb")
         geom_value = wkb_value if isinstance(wkb_value, (bytes, bytearray, memoryview)) else row.get("geometry")
-        if not geom_value:
+        if not geom_value and not candidates_are_exact:
             continue
+        exact_shape = None
         try:
-            exact_shape = geometry_cache.get(loc_id) if geometry_cache is not None else None
-            if exact_shape is None:
+            area_value = row.get("area_km2")
+            geometry_area = float(area_value) if pd.notna(area_value) else None
+            if not candidates_are_exact or geometry_area is None:
+                exact_shape = geometry_cache.get(loc_id) if geometry_cache is not None else None
+            if exact_shape is None and (not candidates_are_exact or geometry_area is None):
                 if isinstance(geom_value, (bytes, bytearray, memoryview)):
                     from shapely import wkb
 
@@ -153,18 +173,20 @@ def _resolve_point_to_marine_stack(
                     exact_shape = shape(geometry)
                 if geometry_cache is not None:
                     geometry_cache[loc_id] = exact_shape
-            if exact_shape.geom_type == "Point" or not exact_shape.covers(point):
+            if not candidates_are_exact and (
+                exact_shape.geom_type == "Point" or not exact_shape.covers(point)
+            ):
                 continue
+            if geometry_area is None:
+                geometry_area = float(exact_shape.area)
         except Exception:
             continue
-        family = classify_loc_id_family(loc_id)
-        named_water = is_named_water_loc_id(loc_id)
         matches.append({
             "loc_id": loc_id,
             "name": row.get("name"),
             "family": family,
             "family_rank": family_order["named_water"] if named_water else family_order.get(family, 99),
-            "geometry_area": float(row.get("area_km2") or exact_shape.area),
+            "geometry_area": geometry_area,
             "named_water": named_water,
         })
 
@@ -255,13 +277,18 @@ def _resolve_points_to_marine_stacks(
         ]
     marine_df, candidate_ids = batch
     geometry_cache: dict[str, Any] = {}
+    marine_rows_by_loc_id = {
+        str(row.get("loc_id") or ""): row for row in marine_df.to_dict("records")
+    }
     return [
         _resolve_point_to_marine_stack(
             float(point["lon"]), float(point["lat"]),
             include_geometry=include_geometry,
             marine_df=marine_df,
             candidate_loc_ids=set(candidate_ids.get(position, [])),
+            candidates_are_exact=True,
             geometry_cache=geometry_cache,
+            marine_rows_by_loc_id=marine_rows_by_loc_id,
         )
         for position, point in enumerate(point_items)
     ]

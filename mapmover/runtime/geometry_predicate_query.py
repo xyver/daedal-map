@@ -13,7 +13,13 @@ from typing import Any, Iterable, Mapping
 
 import pandas as pd
 
-from ..duckdb_helpers import parquet_available, path_to_uri, quote_ident, run_df
+from ..duckdb_helpers import (
+    lease_query_connection,
+    parquet_available,
+    path_to_uri,
+    quote_ident,
+    run_df,
+)
 
 
 BBOX_COLUMNS = ("bbox_min_lon", "bbox_min_lat", "bbox_max_lon", "bbox_max_lat")
@@ -82,6 +88,55 @@ def read_bbox_candidates_for_points(
         "AND candidate.bbox_max_lat >= query_point.lat",
         parameters,
     )
+
+
+def read_geojson_containment_for_points(
+    path: Path,
+    points: Iterable[dict[str, Any]],
+    *,
+    columns: Iterable[str],
+) -> pd.DataFrame:
+    """Exact-match a point batch against one compact GeoJSON geometry bank.
+
+    The admitted bank still uses its bbox columns to prune pairs, but DuckDB
+    performs the final point-in-polygon predicate in the same file scan. This
+    avoids returning broad bbox candidates to Python for shape parsing.
+    """
+    point_rows: list[tuple[int, float, float]] = []
+    for position, point in enumerate(points):
+        try:
+            point_rows.append((position, float(point["lon"]), float(point["lat"])))
+        except (KeyError, TypeError, ValueError):
+            continue
+    selected = list(dict.fromkeys([*columns, *BBOX_COLUMNS]))
+    result_columns = ["point_position", *selected]
+    if not point_rows or not parquet_available(path):
+        return pd.DataFrame(columns=result_columns)
+
+    values_sql = ", ".join("(?, ?, ?)" for _ in point_rows)
+    parameters: list[Any] = [path_to_uri(path)]
+    for position, lon, lat in point_rows:
+        parameters.extend([position, lon, lat])
+    projection = ", ".join(f"candidate.{quote_ident(column)}" for column in selected)
+    sql = (
+        "WITH candidate AS (SELECT * FROM read_parquet(?)), "
+        f"query_point(point_position, lon, lat) AS (VALUES {values_sql}) "
+        f"SELECT query_point.point_position, {projection} "
+        "FROM candidate JOIN query_point ON "
+        "candidate.bbox_min_lon <= query_point.lon "
+        "AND candidate.bbox_max_lon >= query_point.lon "
+        "AND candidate.bbox_min_lat <= query_point.lat "
+        "AND candidate.bbox_max_lat >= query_point.lat "
+        "AND ST_Covers(ST_GeomFromGeoJSON(candidate.geometry), "
+        "ST_Point(query_point.lon, query_point.lat))"
+    )
+    with lease_query_connection() as connection:
+        try:
+            connection.execute("LOAD spatial")
+        except Exception:
+            connection.execute("INSTALL spatial")
+            connection.execute("LOAD spatial")
+        return connection.execute(sql, parameters).fetchdf()
 
 
 def read_rows_by_ids(

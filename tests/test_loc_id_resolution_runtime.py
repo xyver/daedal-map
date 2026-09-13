@@ -35,6 +35,43 @@ class LocIdResolutionRuntimeTests(unittest.TestCase):
         self.assertEqual(resolved["deepest_resolved_loc_id"], "XOP-EEZ-MRGID-8456")
         self.assertEqual(resolved["resolution_family"], "marine")
 
+    def test_batch_marine_point_keeps_its_candidate_subset_during_bbox_filter(self):
+        from shapely.geometry import Polygon
+
+        polygon = Polygon([(-120, 32), (-120, 34), (-118, 34), (-118, 32)])
+        candidates = pd.DataFrame([
+            {
+                "loc_id": "XOP-EEZ-MRGID-8456",
+                "name": "United States Pacific EEZ",
+                "geometry_wkb": polygon.wkb,
+                "area_km2": 10.0,
+                "bbox_min_lon": -120.0,
+                "bbox_min_lat": 32.0,
+                "bbox_max_lon": -118.0,
+                "bbox_max_lat": 34.0,
+            },
+            {
+                "loc_id": "IHO1953-1",
+                "name": "Unrelated batch candidate",
+                "geometry_wkb": polygon.wkb,
+                "area_km2": 5.0,
+                "bbox_min_lon": -120.0,
+                "bbox_min_lat": 32.0,
+                "bbox_max_lon": -118.0,
+                "bbox_max_lat": 34.0,
+            },
+        ])
+
+        resolved = _resolve_point_to_marine_stack(
+            -119.0,
+            33.0,
+            marine_df=candidates,
+            candidate_loc_ids={"XOP-EEZ-MRGID-8456"},
+            geometry_cache={},
+        )
+
+        self.assertEqual(resolved["deepest_resolved_loc_id"], "XOP-EEZ-MRGID-8456")
+
     def test_direct_loc_id_passthrough_normalizes_geometry_family_to_local(self):
         resolved = resolve_admin_text_to_loc_id("USA-G125186-G282830")
         self.assertEqual(resolved["match_type"], "direct_loc_id")
