@@ -259,6 +259,7 @@ def _candidate(
 
 def _reference_graph_candidates(
     identifiers: list[str], *, country_scope: str = "", reference_system: str | None = None,
+    expected_level: str | None = None,
     cancelled: Callable[[], bool] | None = None,
 ) -> list[dict[str, Any]]:
     lookup_to_original: dict[str, list[str]] = defaultdict(list)
@@ -319,6 +320,15 @@ def _reference_graph_candidates(
 
     results = []
     for system, matches in grouped.items():
+        if expected_level:
+            matches = {
+                external_id: [
+                    loc_id for loc_id in loc_ids
+                    if identity_levels.get(loc_id) == expected_level
+                ]
+                for external_id, loc_ids in matches.items()
+            }
+            matches = {external_id: loc_ids for external_id, loc_ids in matches.items() if loc_ids}
         levels = {}
         for external_id, loc_ids in matches.items():
             found = {identity_levels.get(loc_id) for loc_id in loc_ids if identity_levels.get(loc_id)}
@@ -737,6 +747,7 @@ def identify_reference_system(
         graph_kwargs: dict[str, Any] = {
             "country_scope": country,
             "reference_system": expected_system or None,
+            "expected_level": expected_level,
         }
         if cancelled is not None:
             graph_kwargs["cancelled"] = cancelled
@@ -888,6 +899,17 @@ def identify_reference_system(
         # vintage remains unbound because retrying with supported source
         # context is required before conversion.
         selected = candidates[0]
+    mixed_binding_reason = ""
+    if selected and selected.get("system") == "admin.native_id":
+        selected_levels = selected.get("geo_levels") or []
+        selected_scopes = selected.get("country_scopes") or []
+        if len(selected_scopes) != 1:
+            mixed_binding_reason = "more than one country scope"
+        elif len(selected_levels) != 1:
+            mixed_binding_reason = "more than one administrative level"
+        if mixed_binding_reason:
+            selected = None
+            status = "mixed_geography"
     recommended_binding = None
     if selected:
         levels = selected.get("geo_levels") or []
@@ -921,7 +943,29 @@ def identify_reference_system(
             "code": "sample_validation_only",
             "message": "Only the supplied sample was checked. Use validation_scope='all_distinct_identifiers' with every distinct key before treating the binding as dataset-wide.",
         })
-    if status == "ambiguous":
+    if status == "mixed_geography":
+        warnings.append({
+            "code": "mixed_dataset_geography",
+            "message": (
+                f"The supplied native identifiers contain {mixed_binding_reason}. "
+                "No file-wide binding was selected because a default country or level would only convert part of the data."
+            ),
+        })
+        guidance = {
+            "action": "split_or_use_advanced_converter",
+            "message": "Split the file into separate tool calls, or use the advanced data converter (coming soon).",
+        }
+        clarification = {
+            "required": True,
+            "reason": "mixed_dataset_geography",
+            "questions": [{
+                "id": "row_geography_scope",
+                "prompt": "Which country and administrative level applies to each group of identifiers?",
+                "answer_schema": {"type": "string"},
+                "maps_to": None,
+            }],
+        }
+    elif status == "ambiguous":
         choices = [
             {
                 "value": candidate.get("system"),
@@ -994,7 +1038,7 @@ def identify_reference_system(
         }
 
     return {
-        "ok": status in {"matched", "ambiguous", "partial_match"},
+        "ok": status in {"matched", "ambiguous", "partial_match", "mixed_geography"},
         "status": status,
         "validation_scope": str(validation_scope or "sample"),
         "identifier_count": len(identifiers),
@@ -1151,8 +1195,13 @@ def _dataset_expected_hint(
 def _dataset_graph_evidence(
     columns: list[dict[str, Any]], *, country_scope: str | None = None,
     cancelled: Callable[[], bool] | None = None,
-) -> dict[str, tuple[int, int, str, str]]:
-    """Score columns from one catalog-backed alias scan, independent of headers."""
+) -> dict[str, dict[str, Any]]:
+    """Narrow columns from global discovery into one country and admin layer.
+
+    Unknown-country discovery opens the compact global identifier index. Route
+    metadata is loaded only for values whose country has already converged, so
+    a mixed-country sample stops before touching several country partitions.
+    """
     try:
         from .reference_graph import identify_aliases
 
@@ -1165,29 +1214,11 @@ def _dataset_graph_evidence(
             iso3=country_scope,
             cancelled=lambda: _cancel_point(cancelled),
         )
-        loc_ids = list(dict.fromkeys(
-            str(alias.get("loc_id") or "") for alias in aliases if alias.get("loc_id")
-        ))
-        # Ranking a dataset column only needs to know whether an exact alias is
-        # on the admin spine and how deep it is. Do not hydrate sidechain
-        # identity graphs here; the selected column gets full verification in
-        # identify_reference_system immediately afterward.
-        identities = _admin_route_metadata_for_loc_ids(loc_ids)
     except IdentificationCancelled:
         raise
     except Exception:
         return {}
-    levels_by_value: dict[str, list[int]] = defaultdict(list)
-    for alias in aliases:
-        value = str(alias.get("external_id") or "")
-        node = identities.get(str(alias.get("loc_id") or "")) or {}
-        raw_level = node.get("admin_level")
-        try:
-            level = int(str(raw_level).removeprefix("admin_"))
-        except (TypeError, ValueError):
-            level = -1
-        levels_by_value[value].append(level)
-    evidence: dict[str, tuple[int, int, str, str]] = {}
+    aliases_by_value: dict[str, list[dict[str, Any]]] = defaultdict(list)
     countries_by_value: dict[str, list[str]] = defaultdict(list)
     systems_by_value: dict[str, list[str]] = defaultdict(list)
     for alias in aliases:
@@ -1195,17 +1226,18 @@ def _dataset_graph_evidence(
         loc_id = str(alias.get("loc_id") or "")
         country = str(alias.get("country_scope") or loc_id.split("-", 1)[0]).upper()
         system = normalize_identifier_system(alias.get("reference_system"))
+        if external_id:
+            aliases_by_value[external_id].append(alias)
         if external_id and len(country) == 3:
             countries_by_value[external_id].append(country)
         if external_id and system:
             systems_by_value[external_id].append(system)
+
+    preliminary: dict[str, dict[str, Any]] = {}
+    scoped_loc_ids: list[str] = []
     for column in columns:
         values = column.get("values") or []
-        matched = sum(1 for value in values if value in levels_by_value)
-        deepest = max(
-            (level for value in values for level in levels_by_value.get(value, [])),
-            default=-1,
-        )
+        matched = sum(1 for value in values if aliases_by_value.get(value))
         country_counts: dict[str, int] = defaultdict(int)
         system_counts: dict[str, int] = defaultdict(int)
         for value in values:
@@ -1223,9 +1255,8 @@ def _dataset_graph_evidence(
         )
         threshold = max(1, round(len(values) * 0.8))
         # Native admin IDs often also carry public aliases for the same loc_id.
-        # When the route index proves they are admin-spine identities, prefer
-        # the native system instead of treating those concurring names as an
-        # unresolved tie.
+        # Prefer the catalog's explicit native-system evidence instead of
+        # treating concurring aliases as an unresolved tie.
         inferred_system = (
             "admin.native_id"
             if system_counts.get("admin.native_id", 0) >= threshold and matched >= threshold
@@ -1234,7 +1265,108 @@ def _dataset_graph_evidence(
             and (len(ranked_systems) == 1 or ranked_systems[0][1] > ranked_systems[1][1])
             else ""
         )
-        evidence[column["name"]] = (matched, deepest, inferred_country, inferred_system)
+        preliminary[column["name"]] = {
+            "values": values,
+            "matched": matched,
+            "country": inferred_country,
+            "system": inferred_system,
+            "country_counts": dict(country_counts),
+        }
+    strongest_name = min(
+        preliminary,
+        key=lambda name: (
+            -(preliminary[name]["matched"] / max(1, len(preliminary[name]["values"]))),
+            -len(preliminary[name]["values"]),
+            -len(_dataset_header_tokens(name) & _DATASET_GEO_HEADER_TOKENS),
+            name.lower(),
+        ),
+    )
+    strongest_item = preliminary[strongest_name]
+    mixed_country_branch = bool(
+        strongest_item["system"] == "admin.native_id"
+        and not strongest_item["country"]
+        and len(strongest_item["values"]) > 1
+        and strongest_item["matched"] >= max(1, round(len(strongest_item["values"]) * 0.8))
+    )
+    if mixed_country_branch:
+        # Country discovery branched. Stop here: loading country route files
+        # would violate the narrowing contract and could privilege whichever
+        # country happened to contain the deepest coincidental match.
+        return {
+            name: {
+                "matched": item["matched"],
+                "deepest": -1,
+                "country": item["country"],
+                "system": item["system"],
+                "level": -1,
+                "country_counts": item["country_counts"],
+                "level_counts": {},
+            }
+            for name, item in preliminary.items()
+        }
+
+    # Country has converged. Only now select loc_ids for that one country's
+    # route layer; other columns cannot make this call fan out across roots.
+    selected_country = strongest_item["country"]
+    scoped_loc_ids.extend(
+        str(alias.get("loc_id") or "")
+        for value in strongest_item["values"]
+        for alias in aliases_by_value.get(value, [])
+        if str(alias.get("country_scope") or str(alias.get("loc_id") or "").split("-", 1)[0]).upper()
+        == selected_country
+    )
+
+    try:
+        # This is the next layer after country convergence. It reads only the
+        # owning country route file(s), never every country's identity graph.
+        identities = _admin_route_metadata_for_loc_ids(list(dict.fromkeys(filter(None, scoped_loc_ids))))
+    except IdentificationCancelled:
+        raise
+    except Exception:
+        identities = {}
+
+    evidence: dict[str, dict[str, Any]] = {}
+    for column in columns:
+        item = preliminary[column["name"]]
+        values = item["values"]
+        inferred_country = item["country"]
+        level_counts: dict[int, int] = defaultdict(int)
+        if inferred_country:
+            for value in values:
+                levels = set()
+                for alias in aliases_by_value.get(value, []):
+                    alias_country = str(
+                        alias.get("country_scope") or str(alias.get("loc_id") or "").split("-", 1)[0]
+                    ).upper()
+                    if alias_country != inferred_country:
+                        continue
+                    node = identities.get(str(alias.get("loc_id") or "")) or {}
+                    raw_level = node.get("admin_level")
+                    try:
+                        levels.add(int(str(raw_level).removeprefix("admin_")))
+                    except (TypeError, ValueError):
+                        continue
+                for level in levels:
+                    if level >= 0:
+                        level_counts[level] += 1
+        deepest = max(level_counts, default=-1)
+        threshold = max(1, round(len(values) * 0.8))
+        ranked_levels = sorted(level_counts.items(), key=lambda item: (-item[1], item[0]))
+        inferred_level = (
+            ranked_levels[0][0]
+            if ranked_levels and ranked_levels[0][1] >= threshold
+            and (len(ranked_levels) == 1 or ranked_levels[0][1] > ranked_levels[1][1])
+            else -1
+        )
+        evidence[column["name"]] = {
+            "matched": item["matched"],
+            "deepest": deepest,
+            "country": inferred_country,
+            "system": item["system"],
+            "level": inferred_level,
+            "country_counts": item["country_counts"],
+            "level_counts": {f"admin_{level}": count for level, count in level_counts.items()},
+        }
     return evidence
 
 
@@ -1316,27 +1448,99 @@ def identify_dataset_geography(
             -_dataset_level_rank({"catalog": {"recommended_binding": {
                 "geo_level": (authored_hints[column["name"]][0] or {}).get("geo_level")
             }}}),
-            -(graph_evidence.get(column["name"], (0, -1))[0] / max(1, len(column["values"]))),
-            -graph_evidence.get(column["name"], (0, -1))[1],
+            -(graph_evidence.get(column["name"], {}).get("matched", 0) / max(1, len(column["values"]))),
+            -len(column["values"]),
             -len(_dataset_header_tokens(column["name"]) & _DATASET_GEO_HEADER_TOKENS),
-            len(column["values"]),
+            -graph_evidence.get(column["name"], {}).get("deepest", -1),
             column["name"].lower(),
         ),
     )
+    strongest = ranked_columns[0]
+    strongest_evidence = graph_evidence.get(strongest["name"]) or {}
+    mixed_strongest = bool(
+        authored_hints[strongest["name"]][0] is None
+        and strongest_evidence.get("system") == "admin.native_id"
+        and strongest_evidence.get("matched", 0) >= max(1, round(len(strongest["values"]) * 0.8))
+        and (
+            not strongest_evidence.get("country")
+            or int(strongest_evidence.get("level", -1)) < 0
+        )
+    )
+    if mixed_strongest:
+        country_counts = strongest_evidence.get("country_counts") or {}
+        level_counts = strongest_evidence.get("level_counts") or {}
+        reasons = []
+        if not strongest_evidence.get("country") and len(country_counts) > 1:
+            reasons.append("more than one country")
+        if int(strongest_evidence.get("level", -1)) < 0 and len(level_counts) > 1:
+            reasons.append("more than one administrative level")
+        detail = " and ".join(reasons) or "no single country and administrative level"
+        warning = {
+            "code": "mixed_dataset_geography",
+            "message": (
+                f"The sampled native identifiers contain {detail}. A single file-wide binding was not created. "
+                "Split the file into separate tool calls, or use the advanced data converter (coming soon)."
+            ),
+        }
+        mixed_candidate = {
+            "id": "dataset-column-1",
+            "kind": "reference",
+            "header": strongest["name"],
+            "columns": [strongest["name"]],
+            "sampleValues": strongest["values"],
+            "nonempty": int(strongest.get("nonempty_count") or len(strongest["values"])),
+            "formatMatchRate": 1.0,
+            "localConfidence": "",
+            "serverHinted": True,
+            "confidenceScore": 1.0,
+            "expectedSystem": "",
+            "expectedLevel": "",
+            "countryScope": str(strongest_evidence.get("country") or ""),
+            "catalog": {
+                "ok": True,
+                "status": "mixed_geography",
+                "distinct_identifier_count": len(strongest["values"]),
+                "candidates": [{
+                    "system": "admin.native_id",
+                    "match_count": int(strongest_evidence.get("matched") or 0),
+                    "match_rate": round(
+                        int(strongest_evidence.get("matched") or 0) / max(1, len(strongest["values"])), 6,
+                    ),
+                    "country_scopes": sorted(country_counts),
+                    "geo_levels": sorted(level_counts),
+                }],
+                "dataset_interpretations": [],
+                "recommended_binding": None,
+                "warnings": [warning],
+                "guidance": {
+                    "action": "split_or_use_advanced_converter",
+                    "message": "Split the file into separate tool calls, or use the advanced data converter (coming soon).",
+                },
+            },
+        }
+        return {
+            "ok": True,
+            "status": "mixed_geography",
+            "column_count": len(clean_columns),
+            "sample_value_count": total_values,
+            "candidates": [mixed_candidate],
+            "recommended_candidate_id": None,
+            "warnings": [warning],
+        }
     # The graph evidence pass has already ranked every supplied column. Probe
     # only the strongest bounded set instead of reopening reference partitions
     # for a long tail of low-signal scalar fields.
     for index, column in enumerate(ranked_columns[:DATASET_CANDIDATE_LIMIT]):
         _cancel_point(cancelled)
         expected_hint, expected_country = authored_hints[column["name"]]
-        detected = graph_evidence.get(column["name"]) or (0, -1, "", "")
-        if expected_hint is None and not detected[0]:
+        detected = graph_evidence.get(column["name"]) or {}
+        if expected_hint is None and not detected.get("matched"):
             continue
-        inferred_country = detected[2]
-        if expected_hint is None and detected[3]:
-            expected_hint = {"system": detected[3]}
-            if detected[1] >= 0:
-                expected_hint["geo_level"] = f"admin_{detected[1]}"
+        inferred_country = str(detected.get("country") or "")
+        if expected_hint is None and detected.get("system"):
+            expected_hint = {"system": detected["system"]}
+            if int(detected.get("level", -1)) >= 0:
+                expected_hint["geo_level"] = f"admin_{detected['level']}"
         result = identify_reference_system(
             column["values"],
             expected=expected_hint,
@@ -1349,6 +1553,48 @@ def identify_dataset_geography(
             },
             cancelled=cancelled,
         )
+        mixed_native_geography = bool(
+            expected_hint
+            and expected_hint.get("system") == "admin.native_id"
+            and (
+                not inferred_country
+                or int(detected.get("level", -1)) < 0
+            )
+        )
+        if mixed_native_geography and result.get("candidates"):
+            country_counts = detected.get("country_counts") or {}
+            level_counts = detected.get("level_counts") or {}
+            reasons = []
+            if not inferred_country and len(country_counts) > 1:
+                reasons.append("more than one country")
+            if int(detected.get("level", -1)) < 0 and len(level_counts) > 1:
+                reasons.append("more than one administrative level")
+            detail = " and ".join(reasons) or "no single country and administrative level"
+            result["status"] = "mixed_geography"
+            result["recommended_binding"] = None
+            result["next_call"] = None
+            result["dataset_interpretations"] = []
+            result["warnings"] = list(result.get("warnings") or []) + [{
+                "code": "mixed_dataset_geography",
+                "message": (
+                    f"The sampled native identifiers contain {detail}. "
+                    "A single file-wide binding would convert only part of the data or resolve codes in the wrong scope."
+                ),
+            }]
+            result["guidance"] = {
+                "action": "split_or_use_advanced_converter",
+                "message": "Split the file into separate tool calls, or use the advanced data converter (coming soon).",
+            }
+            result["clarification"] = {
+                "required": True,
+                "reason": "mixed_dataset_geography",
+                "questions": [{
+                    "id": "row_geography_scope",
+                    "prompt": "Which country and administrative level applies to each group of rows?",
+                    "answer_schema": {"type": "string"},
+                    "maps_to": None,
+                }],
+            }
         interpretations = result.get("dataset_interpretations") or []
         if result.get("status") == "ambiguous" and interpretations:
             top = interpretations[0]
@@ -1438,7 +1684,10 @@ def identify_dataset_geography(
     status = "matched" if candidates else "unmatched"
     recommended = next((item for item in candidates if (
         item.get("kind") == "coordinates"
-        or float(item.get("confidenceScore") or 0) >= DATASET_AUTO_CONFIDENCE
+        or (
+            (item.get("catalog", {}).get("recommended_binding") or {}).get("mode")
+            and float(item.get("confidenceScore") or 0) >= DATASET_AUTO_CONFIDENCE
+        )
     )), None)
     return {
         "ok": True,

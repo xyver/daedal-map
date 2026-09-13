@@ -23,7 +23,11 @@ from mapmover.runtime.reference_exchange import (
     resolve_references_batch,
     verify_loc_ids,
 )
-from mapmover.runtime.reference_identification import identify_dataset_geography, identify_reference_system
+from mapmover.runtime.reference_identification import (
+    _dataset_graph_evidence,
+    identify_dataset_geography,
+    identify_reference_system,
+)
 
 
 # A real Overture GERS division id and the loc_id the crosswalk assigns it.
@@ -336,6 +340,94 @@ class GersResolutionTests(unittest.TestCase):
         self.assertEqual(selected["confidenceScore"], 0.8)
         self.assertEqual(payload["recommended_candidate_id"], selected["id"])
         graph_scan.assert_not_called()
+
+    def test_dataset_identification_refuses_one_binding_for_mixed_native_scopes(self) -> None:
+        identified = {
+            "ok": True,
+            "status": "matched",
+            "distinct_identifier_count": 4,
+            "candidates": [{
+                "system": "admin.native_id",
+                "match_count": 4,
+                "match_rate": 1.0,
+                "geo_levels": ["admin_2", "admin_5"],
+                "country_scopes": ["AUS", "MEX"],
+            }],
+            "dataset_interpretations": [{
+                "system": "admin.native_id",
+                "geo_level": "admin_5",
+                "confidence_score": 1.0,
+                "verified": True,
+            }],
+            "recommended_binding": {
+                "mode": "reference",
+                "system": "admin.native_id",
+                "geo_level": "admin_5",
+                "country_scope": None,
+            },
+            "warnings": [],
+        }
+        evidence = {
+            "place_code": {
+                "matched": 4,
+                "deepest": 5,
+                "country": "",
+                "system": "admin.native_id",
+                "level": -1,
+                "country_counts": {"AUS": 2, "MEX": 2},
+                "level_counts": {"admin_2": 2, "admin_5": 2},
+            },
+        }
+        with mock.patch(
+            "mapmover.runtime.reference_identification._dataset_graph_evidence",
+            return_value=evidence,
+        ), mock.patch(
+            "mapmover.runtime.reference_identification.identify_reference_system",
+            return_value=identified,
+        ):
+            payload = identify_dataset_geography([{
+                "name": "place_code",
+                "values": ["code-a", "code-b", "code-c", "code-d"],
+            }])
+
+        candidate = payload["candidates"][0]
+        self.assertEqual(candidate["catalog"]["status"], "mixed_geography")
+        self.assertIsNone(candidate["catalog"]["recommended_binding"])
+        self.assertIsNone(payload["recommended_candidate_id"])
+        self.assertIn(
+            "mixed_dataset_geography",
+            {item["code"] for item in candidate["catalog"]["warnings"]},
+        )
+
+    def test_mixed_country_discovery_stops_before_country_route_files(self) -> None:
+        aliases = [
+            {
+                "external_id": "mx-code",
+                "reference_system": "admin.native_id",
+                "loc_id": "MEX-A-B",
+                "country_scope": "MEX",
+            },
+            {
+                "external_id": "ca-code",
+                "reference_system": "admin.native_id",
+                "loc_id": "CAN-AB-C",
+                "country_scope": "CAN",
+            },
+        ]
+        with mock.patch(
+            "mapmover.runtime.reference_graph.identify_aliases",
+            return_value=aliases,
+        ), mock.patch(
+            "mapmover.runtime.reference_identification._admin_route_metadata_for_loc_ids",
+        ) as route_lookup:
+            evidence = _dataset_graph_evidence([{
+                "name": "place_code",
+                "values": ["mx-code", "ca-code"],
+            }])
+
+        self.assertEqual(evidence["place_code"]["country"], "")
+        self.assertEqual(evidence["place_code"]["level"], -1)
+        route_lookup.assert_not_called()
 
     def test_global_admin_codes_resolve_without_an_invented_country_scope(self) -> None:
         payload = resolve_references_batch([
