@@ -344,14 +344,87 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         self.assertEqual(analytics["decision"], "challenge")
         self.assertEqual(analytics["payment_rail"], "commercial_access")
 
-    def test_resolve_point_bulk_requires_one_country_and_level(self) -> None:
+    def test_resolve_point_deep_bulk_requires_one_country(self) -> None:
         payload = _tool_call(
             self.client,
             "resolve_point",
-            {"points": [{"lon": 0, "lat": 0} for _ in range(101)]},
+            {
+                "lookup_mode": "deep",
+                "target_admin_level": "admin_5",
+                "points": [{"lon": 0, "lat": 0} for _ in range(101)],
+            },
         )
-        self.assertEqual(payload["error"]["code"], "bulk_scope_required")
-        self.assertEqual(payload["error"]["missing_fields"], ["country_scope", "target_admin_level"])
+        self.assertEqual(payload["error"]["code"], "deep_country_scope_required")
+
+    def test_resolve_point_deep_requires_one_admin_1_owner(self) -> None:
+        payload = _tool_call(
+            self.client,
+            "resolve_point",
+            {
+                "lookup_mode": "deep",
+                "country_scope": "USA",
+                "target_admin_level": "admin_5",
+                "points": [{"lon": -118.2, "lat": 34.0}],
+            },
+        )
+        self.assertEqual(payload["error"]["code"], "deep_admin_1_scope_required")
+
+    def test_standard_bulk_passes_admin3_io_ceiling_without_country_scope(self) -> None:
+        identity = CallerIdentity(KIND_ACCOUNT, "user-1", CONFIDENCE_VERIFIED, auth_user_id="user-1")
+
+        def fake_resolve(points, include_geometry=False, **_kwargs):
+            return [
+                {
+                    "matched": {"loc_id": "USA-CA-037", "admin_level": 2},
+                    "stack": [{"loc_id": "USA"}, {"loc_id": "USA-CA-037"}],
+                }
+                for _ in points
+            ]
+
+        with (
+            mock.patch("mapmover.routes.mcp.request_caller_identity", return_value=identity),
+            mock.patch("mapmover.geometry_handlers.resolve_points_to_locations", side_effect=fake_resolve) as resolver,
+            mock.patch("mapmover.routes.mcp.log_api_query_event"),
+        ):
+            payload = _tool_call(
+                self.client,
+                "resolve_point",
+                {"lookup_mode": "standard", "points": [{"lon": -118.2, "lat": 34.0} for _ in range(101)]},
+            )
+
+        self.assertEqual(payload["lookup_mode"], "standard")
+        self.assertEqual(payload["target_admin_level"], "up_to_admin_3")
+        self.assertIsNone(resolver.call_args.kwargs["target_admin_level"])
+        self.assertEqual(resolver.call_args.kwargs["max_admin_level"], 3)
+        self.assertIsNone(resolver.call_args.kwargs["country_scope"])
+        self.assertTrue(resolver.call_args.kwargs["shallow_banks_only"])
+
+    def test_scoped_deep_bulk_removes_the_standard_io_ceiling(self) -> None:
+        def fake_resolve(points, include_geometry=False, **_kwargs):
+            return [{"matched": {"loc_id": "USA-CA-037-1-001", "admin_level": 5}, "stack": []} for _ in points]
+
+        with (
+            mock.patch("mapmover.geometry_handlers.resolve_points_to_locations", side_effect=fake_resolve) as resolver,
+            mock.patch("mapmover.routes.mcp.log_api_query_event"),
+        ):
+            payload = _tool_call(
+                self.client,
+                "resolve_point",
+                {
+                    "lookup_mode": "deep",
+                    "country_scope": "USA",
+                    "admin_1_scope": "USA-CA",
+                    "target_admin_level": "admin_5",
+                    "points": [{"lon": -118.2, "lat": 34.0}],
+                },
+            )
+
+        self.assertEqual(payload["lookup_mode"], "deep")
+        self.assertEqual(resolver.call_args.kwargs["target_admin_level"], 5)
+        self.assertIsNone(resolver.call_args.kwargs["max_admin_level"])
+        self.assertEqual(resolver.call_args.kwargs["country_scope"], "USA")
+        self.assertEqual(resolver.call_args.kwargs["admin_1_scope"], "USA-CA")
+        self.assertFalse(resolver.call_args.kwargs["shallow_banks_only"])
 
     def test_verified_account_uses_included_bulk_without_commercial_verifier(self) -> None:
         def fake_resolve(points, include_geometry=False, **_kwargs):
@@ -407,6 +480,7 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
 
         self.assertEqual(payload["bulk_preset"], "global_admin_1")
         self.assertEqual(resolver_mock.call_args.kwargs["target_admin_level"], 1)
+        self.assertEqual(resolver_mock.call_args.kwargs["max_admin_level"], 3)
         self.assertIsNone(resolver_mock.call_args.kwargs["country_scope"])
 
     def test_global_preset_rejects_conflicting_country_scope(self) -> None:

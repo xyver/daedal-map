@@ -147,7 +147,7 @@ def build_tool_definitions() -> list[dict]:
         {
             "name": "resolve_point",
             "title": "Resolve Point to loc_id",
-            "description": "Compact reverse geocoding. Converts one WGS84 point, or a bounded point list, into the latest-available administrative loc_id chain. Each chain row is intentionally small: loc_id, name, admin level, and vintage when available. This tool does not return polygons, hierarchy analysis, references, overlap percentages, lifecycle, provenance, or release-conversion detail. Pass the returned stack loc_ids to loc_id_info for details; use get_geometry for shapes and compare_geographies for relationships. Small exploratory calls may omit scope and resolve through the deepest served tier. Batches above the 25-point preview must declare exactly one country_scope and one target_admin_level; split multi-country input into one call per country. Cross-country admin-0/admin-1 batches may instead use bulk_preset. Anonymous callers pay above 25, while verified accounts receive included bulk throughput through 10,000 points.",
+            "description": "Compact reverse geocoding. Converts one WGS84 point, or a bounded point list, into an administrative loc_id chain. Standard mode accepts cross-country input, resolves as deep as available through Admin 3, and never opens deep or legacy country partitions. Deep mode resolves Admin 4-6 and requires exactly one country_scope plus one admin_1_scope, so each call opens at most one Admin1-owned deep bank. Use the Admin 1 loc_id returned by standard mode, and split points by that value. Each chain row is intentionally small: loc_id, name, admin level, and vintage when available. This tool does not return polygons, hierarchy analysis, references, overlap percentages, lifecycle, provenance, or release-conversion detail. Pass the returned stack loc_ids to loc_id_info for details; use get_geometry for shapes and compare_geographies for relationships. Larger deep batches must also declare one target_admin_level.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -167,15 +167,18 @@ def build_tool_definitions() -> list[dict]:
                             "required": ["lat", "lon"],
                             "additionalProperties": False,
                         },
-                        "description": "Points to resolve. Up to 25 may be exploratory. Above 25, country_scope and target_admin_level are required. Anonymous callers receive a payment challenge; verified accounts have included throughput through 10,000 points.",
+                        "description": "Points to resolve. Standard mode accepts cross-country batches and caps geometry I/O at Admin 3. Deep batches require one country_scope and one admin_1_scope; larger deep batches also require target_admin_level. Anonymous callers may receive a payment challenge; verified accounts have included throughput through 10,000 points.",
                     },
                     "target_admin_level": {
                         "anyOf": [{"type": "string"}, {"type": "integer"}],
-                        "description": "Stopping level such as admin_0 through admin_5. Optional for up to 100 exploratory points and required for larger batches.",
+                        "description": "Optional exact requested level. Standard mode accepts Admin 0-3; deep mode accepts Admin 4-6. Omit it to return the deepest available level permitted by the selected mode.",
                     },
-                    "country_scope": {"type": "string", "description": "ISO3/admin_0 loc_id scope such as USA or CAN. Optional for up to 100 exploratory points and required for larger batches; every point must belong to this one country."},
+                    "lookup_mode": {"type": "string", "enum": ["standard", "deep"], "description": "Standard (default) caps I/O at Admin 3. Deep requires exactly one country_scope and one admin_1_scope, and opens at most one deep partition."},
+                    "country_scope": {"type": "string", "description": "ISO3/Admin 0 loc_id scope such as USA or CAN. Optional in standard mode and required in deep mode; every deep-mode point must belong to this one country."},
+                    "admin_1_scope": {"type": "string", "description": "Required in deep mode. One Admin 1 loc_id returned by the standard pass, such as USA-CA. Every point must belong to this owner partition."},
                     "country_hint": {"type": "string", "description": "Alias for country_scope for clients that already use hint terminology."},
-                    "bulk_preset": {"type": "string", "enum": ["global_admin_0", "global_admin_1"], "description": "Cross-country fast path that fixes the result level to admin_0 or admin_1. Use instead of country_scope; target_admin_level may be omitted."},
+                    "include_marine_context": {"type": "boolean", "description": "Include parallel Marine overlaps for land matches. Defaults to true; set false for fast administrative loc_id previews. Offshore Marine fallback still applies."},
+                    "bulk_preset": {"type": "string", "enum": ["global_admin_0", "global_admin_1"], "description": "Cross-country standard-mode path that fixes the exact result level. Use instead of country_scope; target_admin_level may be omitted."},
                     "batch_id": {"type": "string", "description": "Optional caller-supplied batch id echoed in the result."},
                     "request_id": {"type": "string", "description": "Optional caller-supplied request id for tracing."},
                 },

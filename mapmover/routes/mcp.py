@@ -874,7 +874,7 @@ def _caller_included_item_limit(tool_name: str, caller_identity, *, free_limit: 
 
 def _point_bulk_shape_error(
     *, point_count: int, country_scope: str | None, target_admin_level: int | None,
-    bulk_preset: str | None = None, threshold: int
+    bulk_preset: str | None = None, lookup_mode: str = "standard", threshold: int
 ) -> dict[str, Any] | None:
     """Require a predictable one-country/one-level plan for non-preview work."""
     from mapmover.point_bulk_policy import point_bulk_shape_error
@@ -882,6 +882,7 @@ def _point_bulk_shape_error(
     return point_bulk_shape_error(
         point_count=point_count, country_scope=country_scope,
         target_admin_level=target_admin_level, bulk_preset=bulk_preset,
+        lookup_mode=lookup_mode,
         threshold=threshold,
     )
 
@@ -1322,7 +1323,7 @@ def get_server_description(pack_id: str | None = None) -> str:
             f"{PACK_SERVER_PROFILES[normalized]['description']} Safety: {AGENT_SAFETY_NOTICE} {coverage_prefix}"
             "The calling LLM translates the user's natural-language request into strict tool JSON; geometry execution tools do not accept prose unless a schema explicitly says they do. Call get_tool_help before an unfamiliar tool. On error, inspect error, warnings, guidance, and clarification; ask the user only when clarification.required is true. "
             "Start with free discovery: call read_geometry_catalog with view='capabilities' for the current global baseline and catalog-admitted country enrichment; use its focused inventory views for admin depths, shape-backed families, crosswalks, named geometries, and package availability. Then call list_reference_systems to see supported exchange systems, relationship vintages, counts, and license/source context. "
-            "For coordinates, call resolve_point with lat/lon or points; it returns only the compact complete latest-available chain and defaults to the deepest served tier. Do not request geometry or relationship detail in that call. "
+            "For coordinates, call resolve_point with lat/lon or points; standard mode returns the compact chain through the deepest available tier at or below Admin 3 without opening deep partitions. For Admin 4-6, group the standard results by Admin 1 loc_id, then call deep mode once per country_scope/admin_1_scope pair. Do not request geometry or relationship detail in that call. "
             "When the caller asks for details about that chain, pass its stack loc_ids to loc_id_info; use get_geometry only for shapes and compare_geographies only for overlap, topology, validity, or successor questions. Mixed-vintage point context is not strict parentage. "
             "For a user dataset with unknown or informally declared geography keys, pass bounded scalar column samples to identify_dataset_geography; the caller may filter transport noise but must not choose the geography itself. Then pass its unambiguous geography_binding to the conversion-job tools. Use identify_reference_system only when one identifier column is already selected. For one known outside geography code or name, call resolve_reference. For bulk geometry, call resolve_loc_id_scope only for one strict hierarchy, then estimate_geometry_package before create_geometry_export. "
             "Geometry export and conversion creates are synchronous operations with operational safety limits (currently 250 selected geometries and 7,500 conversion rows by default) sized around a 10-20 second response budget. Local and hosted tools use the same item ceilings for now; local access does not require hosted settlement. Call the estimate tool or get_tool_help for the effective access lane. This facade does not promise a durable queue that is not deployed."
@@ -2161,7 +2162,8 @@ async def _execute_resolve_point_tool(request: Request, arguments: dict[str, Any
         )
         target_admin_level = _point_lookup_target_admin_level(payload)
         country_scope = str(payload.get("country_scope") or payload.get("country_hint") or "").strip().upper() or None
-        from mapmover.point_bulk_policy import apply_global_bulk_preset
+        admin_1_scope = str(payload.get("admin_1_scope") or "").strip() or None
+        from mapmover.point_bulk_policy import apply_global_bulk_preset, apply_point_lookup_mode
 
         bulk_preset, country_scope, target_admin_level, preset_error = apply_global_bulk_preset(
             payload.get("bulk_preset"), country_scope=country_scope,
@@ -2169,6 +2171,16 @@ async def _execute_resolve_point_tool(request: Request, arguments: dict[str, Any
         )
         if preset_error is not None:
             error_payload = {"request_id": request_id, "batch_id": batch_id, "error": preset_error}
+            return _jsonrpc_response(_tool_result(error_payload, is_error=True), rpc_request_id)
+        lookup_mode, target_admin_level, max_admin_level, mode_error = apply_point_lookup_mode(
+            payload.get("lookup_mode"),
+            country_scope=country_scope,
+            target_admin_level=target_admin_level,
+            admin_1_scope=admin_1_scope,
+            bulk_preset=bulk_preset,
+        )
+        if mode_error is not None:
+            error_payload = {"request_id": request_id, "batch_id": batch_id, "error": mode_error}
             return _jsonrpc_response(_tool_result(error_payload, is_error=True), rpc_request_id)
         tool_access = _tool_effective_access("resolve_point", country_scope=country_scope)
         paid_bulk = bool(tool_access.get("settlement_required"))
@@ -2182,7 +2194,8 @@ async def _execute_resolve_point_tool(request: Request, arguments: dict[str, Any
         )
         shape_error = _point_bulk_shape_error(
             point_count=len(points), country_scope=country_scope,
-            target_admin_level=target_admin_level, bulk_preset=bulk_preset, threshold=limit,
+            target_admin_level=target_admin_level, bulk_preset=bulk_preset,
+            lookup_mode=lookup_mode, threshold=limit,
         )
         if shape_error is not None:
             error_payload = {
@@ -2415,6 +2428,7 @@ async def _execute_resolve_point_tool(request: Request, arguments: dict[str, Any
                 continue
             valid_points.append({"index": index, "row_index": row_index, "id": caller_point_id, "lat": lat, "lon": lon})
         resolver_stages: dict[str, int] = {}
+        include_marine_context = payload.get("include_marine_context") is not False
         try:
             raw_results = await run_mcp_blocking(
                 "resolve_point",
@@ -2423,7 +2437,11 @@ async def _execute_resolve_point_tool(request: Request, arguments: dict[str, Any
                 include_geometry=include_geometry,
                 timing_ms=resolver_stages,
                 target_admin_level=target_admin_level,
+                max_admin_level=max_admin_level,
                 country_scope=country_scope,
+                admin_1_scope=admin_1_scope,
+                include_marine_context=include_marine_context,
+                shallow_banks_only=lookup_mode == "standard",
             )
         except Exception as exc:
             raw_results = [{"error": str(exc), "point": {"lat": point.get("lat"), "lon": point.get("lon")}} for point in valid_points]
@@ -2466,9 +2484,14 @@ async def _execute_resolve_point_tool(request: Request, arguments: dict[str, Any
             "point_count": len(points),
             "resolved_count": resolved_count,
             "unresolved_count": unresolved_count,
-            "target_admin_level": f"admin_{target_admin_level}" if target_admin_level is not None else "deepest",
+            "target_admin_level": (
+                f"admin_{target_admin_level}" if target_admin_level is not None
+                else (f"up_to_admin_{max_admin_level}" if max_admin_level is not None else "deepest")
+            ),
             "country_scope": country_scope,
+            "admin_1_scope": admin_1_scope,
             "bulk_preset": bulk_preset,
+            "lookup_mode": lookup_mode,
             "results": results,
         }
         settlement_payload = None
@@ -2606,6 +2629,20 @@ async def _execute_resolve_point_tool(request: Request, arguments: dict[str, Any
 
         target_admin_level = _point_lookup_target_admin_level(payload)
         country_scope = str(payload.get("country_scope") or payload.get("country_hint") or "").strip().upper() or None
+        admin_1_scope = str(payload.get("admin_1_scope") or "").strip() or None
+        from mapmover.point_bulk_policy import apply_point_lookup_mode
+
+        lookup_mode, target_admin_level, max_admin_level, mode_error = apply_point_lookup_mode(
+            payload.get("lookup_mode"),
+            country_scope=country_scope,
+            target_admin_level=target_admin_level,
+            admin_1_scope=admin_1_scope,
+        )
+        if mode_error is not None:
+            return _jsonrpc_response(
+                _tool_result({"request_id": request_id, "error": mode_error}, is_error=True),
+                rpc_request_id,
+            )
         runtime_started = time.perf_counter()
         resolver_stages: dict[str, int] = {}
         raw_results = await run_mcp_blocking(
@@ -2615,7 +2652,11 @@ async def _execute_resolve_point_tool(request: Request, arguments: dict[str, Any
             include_geometry=False,
             timing_ms=resolver_stages,
             target_admin_level=target_admin_level,
+            max_admin_level=max_admin_level,
             country_scope=country_scope,
+            admin_1_scope=admin_1_scope,
+            include_marine_context=payload.get("include_marine_context") is not False,
+            shallow_banks_only=lookup_mode == "standard",
         )
         raw = raw_results[0] if raw_results else {"error": "point did not resolve", "point": {"lon": lon, "lat": lat}}
         stages = {"point_resolver_ms": _elapsed_ms(runtime_started), **resolver_stages}
@@ -2639,6 +2680,8 @@ async def _execute_resolve_point_tool(request: Request, arguments: dict[str, Any
             rpc_request_id,
         )
     result = _shape_resolve_point_payload(raw, request_id)
+    result["lookup_mode"] = lookup_mode
+    result["admin_1_scope"] = admin_1_scope
     resolved = not bool(result.get("error"))
     _log_mcp_tool_usage_event(
         request,
