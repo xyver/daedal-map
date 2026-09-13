@@ -392,6 +392,40 @@ def lookup_external_edges(
     return _query_edges(bridge, partitions, reverse=False, values=[str(external_id).strip()])
 
 
+def lookup_external_edges_batch(
+    system: str,
+    external_ids: list[str],
+    *,
+    source_release: str | None = None,
+    internal_release: str | None = None,
+    country_scope: str | None = None,
+) -> dict[str, list[ExternalReferenceEdge]] | None:
+    """Resolve many external IDs with one query over the selected partitions.
+
+    ``None`` means the bridge is unavailable. An available bridge returns an
+    entry for every distinct non-empty input, including identifiers with no
+    matching edge.
+    """
+    adapter = get_external_adapter(system)
+    bridge = admitted_bridge(adapter) if adapter else None
+    if not _bridge_available(bridge):
+        return None
+    assert bridge is not None
+    requested = list(dict.fromkeys(
+        str(value).strip() for value in external_ids if str(value).strip()
+    ))
+    partitions = _selected_partitions(
+        bridge,
+        source_release=source_release,
+        internal_release=internal_release,
+        country_scope=country_scope,
+    )
+    grouped: dict[str, list[ExternalReferenceEdge]] = {value: [] for value in requested}
+    for edge in _query_edges(bridge, partitions, reverse=False, values=requested):
+        grouped.setdefault(edge.external_id, []).append(edge)
+    return grouped
+
+
 def lookup_loc_id_edges(
     system: str, loc_id: str, *, source_release: str | None = None,
     internal_release: str | None = None, country_scope: str | None = None,

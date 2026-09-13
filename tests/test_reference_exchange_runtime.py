@@ -22,9 +22,47 @@ from mapmover.runtime.reference_exchange import (
 )
 from mapmover.runtime.reference_identification import identify_reference_system
 from mapmover.runtime.reference_graph import clear_reference_graph_cache
+from mapmover.runtime.external_reference_adapters import ExternalReferenceEdge
 
 
 class ReferenceExchangeRuntimeTests(unittest.TestCase):
+    def test_external_reference_batch_queries_shared_partition_once(self) -> None:
+        first = "11111111-1111-1111-1111-111111111111"
+        second = "22222222-2222-2222-2222-222222222222"
+        edges = [
+            ExternalReferenceEdge(
+                external_id=first, loc_id="CAN-AB", relationship_type="equivalent_identity",
+                is_primary=True, source_release="gers-v1", internal_release="can-v1",
+                country="CAN", source_level=1, external_subtype="region",
+                identity_confidence="high", geometry_confidence=1.0,
+                external_name="Alberta", loc_name="Alberta",
+            ),
+            ExternalReferenceEdge(
+                external_id=second, loc_id="CAN-BC", relationship_type="equivalent_identity",
+                is_primary=True, source_release="gers-v1", internal_release="can-v1",
+                country="CAN", source_level=1, external_subtype="region",
+                identity_confidence="high", geometry_confidence=1.0,
+                external_name="British Columbia", loc_name="British Columbia",
+            ),
+        ]
+        requests = [
+            {"from_system": "gers", "value": first, "country_hint": "CAN"},
+            {"from_system": "gers", "value": second, "country_hint": "CAN"},
+        ]
+        with (
+            mock.patch.object(reference_exchange, "lookup_external_edges_batch", return_value={
+                first: [edges[0]], second: [edges[1]],
+            }) as query,
+        ):
+            results = resolve_references_batch(requests)
+
+        query.assert_called_once_with(
+            "overture_gers", [first, second],
+            source_release=None, internal_release=None, country_scope="CAN",
+        )
+        self.assertEqual([row["resolved_loc_id"] for row in results], ["CAN-AB", "CAN-BC"])
+        self.assertEqual(results[0]["overture_release"], "gers-v1")
+
     def test_global_admin0_batch_uses_compact_identity_index_once(self) -> None:
         requests = [
             {"from_system": "geoboundaries.code", "value": "afg", "target_admin_level": "admin_0"},

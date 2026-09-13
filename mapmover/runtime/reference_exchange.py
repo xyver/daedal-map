@@ -41,6 +41,7 @@ from .external_reference_adapters import (
     external_system_aliases,
     get_external_adapter,
     lookup_external_edges,
+    lookup_external_edges_batch,
     lookup_loc_id_edges,
 )
 from .geography_relationships import resolve_historical_country_reference
@@ -212,8 +213,20 @@ def resolve_external_reference(
         internal_release=internal_release,
         country_scope=country_scope,
     )
+    return _external_reference_payload(adapter, value, text, edges, limit=limit)
+
+
+def _external_reference_payload(
+    adapter,
+    original_value: Any,
+    text: str,
+    edges: list[Any],
+    *,
+    limit: int | None,
+) -> dict[str, Any]:
+    """Shape one external-reference result after a shared edge query."""
     if not edges:
-        return {"ok": False, "from_system": adapter.system, "input": value,
+        return {"ok": False, "from_system": adapter.system, "input": original_value,
                 "error": {"code": "external_reference_not_found", "message": "no admitted typed edge matches that external identifier"}}
     equivalences = [edge for edge in edges if edge.is_equivalence]
     relationships = [edge for edge in edges if not edge.is_equivalence]
@@ -226,7 +239,7 @@ def resolve_external_reference(
             "ok": False,
             "status": "relationship_only",
             "from_system": adapter.system,
-            "input": value,
+            "input": original_value,
             "resolved_loc_id": None,
             "error": {
                 "code": "external_reference_has_no_equivalence",
@@ -243,7 +256,7 @@ def resolve_external_reference(
             "ok": False,
             "status": "conflicting_equivalence",
             "from_system": adapter.system,
-            "input": value,
+            "input": original_value,
             "resolved_loc_id": None,
             "error": {
                 "code": "external_reference_conflicting_equivalence",
@@ -257,7 +270,7 @@ def resolve_external_reference(
     return _clean_json({
         "ok": True,
         "from_system": adapter.system,
-        "input": value,
+        "input": original_value,
         "resolved_loc_id": primary.loc_id,
         "resolved_family": _reference_family(primary.loc_id),
         "match_type": "exact_identifier_equivalence",
@@ -1703,6 +1716,7 @@ def resolve_references_batch(requests: list[dict[str, Any]]) -> list[dict[str, A
     groups: dict[tuple[Any, ...], list[tuple[int, dict[str, Any]]]] = {}
     census_candidates: list[tuple[int, dict[str, Any], str, str | None, str | None]] = []
     global_admin0_candidates: list[tuple[int, dict[str, Any], str]] = []
+    external_groups: dict[tuple[Any, ...], list[tuple[int, dict[str, Any], str]]] = {}
     native_admin_groups: dict[str, list[tuple[int, dict[str, Any], str]]] = {}
     unscoped_alias_groups: dict[str, list[tuple[int, dict[str, Any], str]]] = {}
     for index, request in enumerate(requests):
@@ -1727,7 +1741,16 @@ def resolve_references_batch(requests: list[dict[str, Any]]) -> list[dict[str, A
             native_admin_groups.setdefault(country, []).append((index, request, value))
             continue
         if get_external_adapter(system):
-            results[index] = resolve_reference(**request)
+            key = (
+                system,
+                str(request.get("country_hint") or "").strip().upper(),
+                str(request.get("source_release") or "").strip(),
+                str(request.get("internal_release") or "").strip(),
+                request.get("limit", 10),
+            )
+            external_groups.setdefault(key, []).append(
+                (index, request, str(request.get("value") or "").strip())
+            )
             continue
         requested_country = str(request.get("iso3") or "").strip().upper()
         if not requested_country:
@@ -1760,6 +1783,38 @@ def resolve_references_batch(requests: list[dict[str, Any]]) -> list[dict[str, A
             int(request.get("limit") or 10),
         )
         groups.setdefault(key, []).append((index, request))
+
+    if external_groups:
+        # External bridges are already partitioned by system/release/country.
+        # Query all requested identifiers in a group together instead of
+        # reopening the same bridge partition once per conversion row.
+        for (system, country, source_release, internal_release, limit), members in external_groups.items():
+            adapter = get_external_adapter(system)
+            requested = list(dict.fromkeys(text for _index, _request, text in members if text))
+            by_value = lookup_external_edges_batch(
+                system,
+                requested,
+                source_release=source_release or None,
+                internal_release=internal_release or None,
+                country_scope=country or None,
+            )
+            if adapter is None or by_value is None:
+                for index, request, _text in members:
+                    results[index] = resolve_reference(**request)
+                continue
+            for index, request, text in members:
+                if not text:
+                    results[index] = resolve_reference(**request)
+                    continue
+                payload = _external_reference_payload(
+                    adapter, request.get("value"), text, by_value.get(text, []), limit=limit,
+                )
+                if system == GERS_SYSTEM:
+                    payload.setdefault("admin_level", payload.get("source_level"))
+                    payload.setdefault("overture_subtype", payload.get("external_subtype"))
+                    payload.setdefault("overture_release", payload.get("source_release"))
+                    payload.setdefault("spine_vintage", payload.get("internal_release"))
+                results[index] = _clean_json(payload)
 
     if census_candidates:
         from .admin_spine_query import cached_shallow_identity_rows, load_rows_by_loc_ids
