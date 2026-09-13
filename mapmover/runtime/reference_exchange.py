@@ -372,6 +372,20 @@ def resolve_loc_id_input(loc_id: str) -> dict[str, Any]:
         return fallback
 
 
+def resolve_loc_id_inputs(loc_ids: list[str]) -> list[dict[str, Any]]:
+    """Batch form of :func:`resolve_loc_id_input` for geometry tool paths."""
+    canonical = [canonicalize_loc_id(loc_id) for loc_id in loc_ids]
+    try:
+        from .reference_graph import resolve_public_loc_ids
+
+        return resolve_public_loc_ids(canonical)
+    except Exception:
+        return [{
+            "ok": True, "status": "unchanged", "requested_loc_id": value,
+            "loc_id": value, "resolved_from_public_alias": False,
+        } for value in canonical]
+
+
 def _public_alias_error(resolution: dict[str, Any], *, shape: bool = False) -> dict[str, Any]:
     result = {
         "ok": False,
@@ -2710,6 +2724,11 @@ def get_geometry_references(
             canonicalize_loc_id(str(row.get("loc_id") or row.get("source_loc_id") or ""))
             for row in direct_rows if row.get("loc_id") or row.get("source_loc_id")
         })
+    pending_resolution_ids = [
+        requested for requested in requested_ids
+        if requested not in direct_ids or requested in retired_public_ids
+    ]
+    pending_resolutions = iter(resolve_loc_id_inputs(pending_resolution_ids))
     resolutions = [
         {
             "ok": True,
@@ -2718,7 +2737,7 @@ def get_geometry_references(
             "loc_id": requested,
             "resolved_from_public_alias": False,
         }
-        if requested in direct_ids and requested not in retired_public_ids else resolve_loc_id_input(requested)
+        if requested in direct_ids and requested not in retired_public_ids else next(pending_resolutions)
         for requested in requested_ids
     ]
     canonical_ids = [str(item.get("loc_id")) for item in resolutions if item.get("ok") and item.get("loc_id")]
@@ -2813,6 +2832,11 @@ def get_geometry_availability(loc_ids: list[str]) -> dict[str, Any]:
         canonicalize_loc_id(str(row.get("loc_id") or row.get("source_loc_id") or ""))
         for row in rows if row.get("loc_id") or row.get("source_loc_id")
     }
+    pending_resolution_ids = [
+        requested for requested in requested_ids
+        if requested not in direct_ids or requested in retired_public_ids
+    ]
+    pending_resolutions = iter(resolve_loc_id_inputs(pending_resolution_ids))
     resolutions = [
         {
             "ok": True,
@@ -2821,7 +2845,7 @@ def get_geometry_availability(loc_ids: list[str]) -> dict[str, Any]:
             "loc_id": requested,
             "resolved_from_public_alias": False,
         }
-        if requested in direct_ids and requested not in retired_public_ids else resolve_loc_id_input(requested)
+        if requested in direct_ids and requested not in retired_public_ids else next(pending_resolutions)
         for requested in requested_ids
     ]
     canonical_ids = [str(item.get("loc_id")) for item in resolutions if item.get("ok") and item.get("loc_id")]

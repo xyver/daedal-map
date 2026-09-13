@@ -872,6 +872,111 @@ def resolve_public_loc_id(loc_id: str) -> dict[str, Any]:
     }
 
 
+def resolve_public_loc_ids(loc_ids: list[str]) -> list[dict[str, Any]]:
+    """Resolve public loc_id aliases in bulk while preserving caller order."""
+    requested = [str(loc_id or "").strip().upper() for loc_id in loc_ids]
+    unique = list(dict.fromkeys(value for value in requested if value))
+    unchanged = {
+        value: {
+            "ok": True, "status": "unchanged", "requested_loc_id": value,
+            "loc_id": value, "resolved_from_public_alias": False,
+        }
+        for value in unique
+    }
+    if not unique or not reference_graph_available():
+        return [unchanged.get(value, {
+            "ok": True, "status": "unchanged", "requested_loc_id": value,
+            "loc_id": value, "resolved_from_public_alias": False,
+        }) for value in requested]
+
+    canonical = {str(row.get("loc_id") or "") for row in identities(unique)}
+    results = dict(unchanged)
+    for value in canonical:
+        results[value] = {**unchanged[value], "status": "canonical"}
+    remaining = [value for value in unique if value not in canonical]
+    aliases_by_id: dict[str, list[dict[str, Any]]] = {value: [] for value in remaining}
+    groups: dict[tuple[Path, ...], list[str]] = {}
+    for value in remaining:
+        groups.setdefault(tuple(graph_roots_for_loc_id(value)), []).append(value)
+
+    connection = _connection()
+    try:
+        for roots, values in groups.items():
+            source = _table_source_for_roots("aliases", list(roots))
+            if not source:
+                continue
+            placeholders = ", ".join("?" for _ in values)
+            cursor = connection.execute(
+                f"""SELECT * FROM read_parquet({source}, union_by_name=True)
+                    WHERE upper(external_id) IN ({placeholders})
+                      AND lower(alias_type) = ?
+                      AND (lower(reference_system) LIKE ? OR lower(reference_system) LIKE ?)
+                    ORDER BY external_id, reference_system, loc_id""",
+                [*values, PUBLIC_ALIAS_TYPE, f"{PUBLIC_REFERENCE_PREFIX}%", f"{LEGACY_PUBLIC_REFERENCE_PREFIX}%"],
+            )
+            columns = [item[0] for item in cursor.description]
+            for row in cursor.fetchall():
+                item = dict(zip(columns, row))
+                aliases_by_id.setdefault(str(item.get("external_id") or "").upper(), []).append(item)
+    finally:
+        connection.close()
+
+    legacy_zcta = {
+        match.group(1): value for value in remaining
+        if not aliases_by_id.get(value) and (match := re.fullmatch(r"USA-Z-(\d{5})", value))
+    }
+    legacy_tribal = {
+        match.group(1): value for value in remaining
+        if not aliases_by_id.get(value) and (match := re.fullmatch(r"USA-TRIBAL-(\d{4})", value))
+    }
+    for system, values in (
+        ("usa.census.2020.zcta5.geoid", legacy_zcta),
+        ("usa.census.2025.aiannhce", legacy_tribal),
+    ):
+        if not values:
+            continue
+        for row in identify_aliases(list(values), iso3="USA", reference_system=system, limit=max(25, len(values) * 5)):
+            requested_id = values.get(str(row.get("external_id") or ""))
+            if requested_id:
+                aliases_by_id[requested_id].append(row)
+
+    target_ids = list(dict.fromkeys(
+        str(row.get("loc_id") or "").strip()
+        for rows in aliases_by_id.values() for row in rows
+        if str(row.get("loc_id") or "").strip()
+    ))
+    valid_targets = {str(row.get("loc_id") or "") for row in identities(target_ids)}
+    for value in remaining:
+        rows = aliases_by_id.get(value) or []
+        if not rows:
+            continue
+        targets = sorted({str(row.get("loc_id") or "").strip() for row in rows if str(row.get("loc_id") or "").strip()})
+        systems = sorted({str(row.get("reference_system") or "").strip() for row in rows if str(row.get("reference_system") or "").strip()})
+        if len(targets) != 1:
+            results[value] = {
+                **unchanged[value], "ok": False, "status": "ambiguous", "loc_id": None,
+                "candidate_loc_ids": targets, "reference_systems": systems,
+                "error": {"code": "ambiguous_public_loc_id", "message": "preferred public loc_id resolves to more than one canonical identity"},
+            }
+        elif targets[0] not in valid_targets:
+            results[value] = {
+                **unchanged[value], "ok": False, "status": "invalid_target", "loc_id": None,
+                "candidate_loc_ids": targets, "reference_systems": systems,
+                "error": {"code": "invalid_public_loc_id_target", "message": "preferred public loc_id points to an identity absent from the active graph"},
+            }
+        else:
+            results[value] = {
+                **unchanged[value], "ok": True, "status": "resolved", "loc_id": targets[0],
+                "resolved_from_public_alias": True, "public_alias": value,
+                "reference_system": systems[0] if len(systems) == 1 else None,
+                "reference_systems": systems,
+            }
+    return [results.get(value, unchanged.get(value, {
+        "ok": True, "status": "unchanged", "requested_loc_id": value,
+        "loc_id": value, "resolved_from_public_alias": False,
+    })) for value in requested]
+
+
 def public_alias_reference_systems(*, iso3: str | None = None) -> list[dict[str, Any]]:
     """Describe callable preferred-public alias systems in active graphs."""
     roots_by_country = reference_graph_roots()

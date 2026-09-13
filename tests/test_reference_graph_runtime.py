@@ -27,6 +27,7 @@ from mapmover.runtime.reference_graph import (
     public_alias_reference_systems,
     relationships_for_loc_id,
     resolve_public_loc_id,
+    resolve_public_loc_ids,
     where_is_geography_data,
 )
 from mapmover.runtime import reference_graph
@@ -240,6 +241,14 @@ class ReferenceGraphRuntimeTests(unittest.TestCase):
         )
         self.assertFalse(direct["ok"])
         self.assertIsNone(direct["resolved_loc_id"])
+
+    def test_public_loc_id_batch_matches_single_resolution_semantics(self) -> None:
+        requested = ["TST-A-001", "TST-PUBLIC-A", "TST-PUBLIC-AMBIG", "TST-MISSING", "TST-PUBLIC-A"]
+
+        batched = resolve_public_loc_ids(requested)
+        singles = [resolve_public_loc_id(value) for value in requested]
+
+        self.assertEqual(batched, singles)
 
     def test_geometry_calls_preserve_canonical_output_and_requested_public_alias(self) -> None:
         metadata = [{
