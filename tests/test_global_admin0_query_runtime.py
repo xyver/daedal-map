@@ -8,16 +8,44 @@ from shapely.geometry import box
 
 from mapmover.runtime.geometry_predicate_query import stable_hash_shard
 from mapmover.runtime.global_admin0_query import (
+    _active_layout,
     load_global_admin0_geometries,
     resolve_global_admin0_query_points,
 )
 
 
 class GlobalAdmin0QueryRuntimeTests(unittest.TestCase):
+    def test_active_layout_accepts_one_physical_point_bank(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bank = root / "point_bank.parquet"
+            pd.DataFrame([{"candidate_id": "AAA~full"}]).to_parquet(bank, index=False)
+            catalog = {
+                "catalog_fingerprint": "single-bank-test",
+                "runtime_query_layouts": {"global_admin0_point": {
+                    "layout_id": "global_admin0_point_query_v2",
+                    "source_fingerprint": "source-test",
+                    "representation": "full",
+                    "authoritative_for_containment": True,
+                    "point_bank": {"path": "geometry/runtime/global_admin0_point/point_bank.parquet"},
+                }},
+            }
+            with (
+                patch("mapmover.runtime.global_admin0_query.load_geometry_catalog", return_value=catalog),
+                patch("mapmover.runtime.global_admin0_query.GEOMETRY_DIR", root / "geometry"),
+            ):
+                # _artifact_path resolves relative to GEOMETRY_DIR.parent.
+                expected = root / "geometry" / "runtime" / "global_admin0_point" / "point_bank.parquet"
+                expected.parent.mkdir(parents=True)
+                bank.replace(expected)
+                layout = _active_layout()
+
+        self.assertEqual(layout["point_bank"], expected)
+
     def test_exact_candidates_choose_smallest_covering_full_polygon(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            bbox_path = root / "bbox.parquet"
+            point_bank = root / "point_bank.parquet"
             candidates = [
                 {
                     "candidate_id": "AAA~global", "loc_id": "AAA", "name": "Host",
@@ -32,17 +60,11 @@ class GlobalAdmin0QueryRuntimeTests(unittest.TestCase):
                     "geometry_wkb": box(2, 2, 4, 4).wkb,
                 },
             ]
-            pd.DataFrame(candidates).drop(columns=["geometry_wkb"]).to_parquet(bbox_path, index=False)
-            shard_paths = {}
-            for index in range(2):
-                shard = f"{index:02d}"
-                path = root / f"{shard}.parquet"
-                rows = [row for row in candidates if stable_hash_shard(row["candidate_id"], 2) == shard]
-                pd.DataFrame(rows, columns=list(candidates[0])).to_parquet(path, index=False, row_group_size=1)
-                shard_paths[shard] = path
+            pd.DataFrame(candidates).to_parquet(
+                point_bank, index=False, row_group_size=1,
+            )
             layout = {
-                "layout_id": "test", "bbox_index": bbox_path,
-                "point_shards": shard_paths, "shard_count": 2,
+                "layout_id": "test", "point_bank": point_bank,
             }
             with patch("mapmover.runtime.global_admin0_query._active_layout", return_value=layout):
                 matches = resolve_global_admin0_query_points([

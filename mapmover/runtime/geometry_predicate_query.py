@@ -113,20 +113,29 @@ def read_hash_sharded_rows(
     id_column: str,
     columns: Iterable[str],
 ) -> pd.DataFrame:
-    """Group exact IDs by deterministic shard and open each selected file once."""
+    """Read every routed shard once through one DuckDB query."""
     by_shard: dict[str, set[str]] = {}
     for value in {str(item) for item in values if str(item)}:
         by_shard.setdefault(stable_hash_shard(value, shard_count), set()).add(value)
-    frames = [
-        read_rows_by_ids(
-            shard_paths.get(shard), ids,
-            id_column=id_column,
-            columns=columns,
-        )
-        for shard, ids in sorted(by_shard.items())
+    selected = list(dict.fromkeys([id_column, *columns]))
+    routed = [
+        (shard, shard_paths.get(shard))
+        for shard in sorted(by_shard)
         if shard_paths.get(shard) is not None
+        and parquet_available(shard_paths[shard])
     ]
-    frames = [frame for frame in frames if not frame.empty]
-    if not frames:
-        return pd.DataFrame(columns=list(dict.fromkeys([id_column, *columns])))
-    return pd.concat(frames, ignore_index=True).reset_index(drop=True)
+    requested = sorted({value for shard, _path in routed for value in by_shard[shard]})
+    if not routed or not requested:
+        return pd.DataFrame(columns=selected)
+
+    # DuckDB accepts parameterized path lists. Keeping every selected shard in
+    # one read_parquet relation avoids leasing and scheduling one query per
+    # hash bucket while preserving the invariant that no shard is listed twice.
+    path_placeholders = ", ".join("?" for _ in routed)
+    value_placeholders = ", ".join("?" for _ in requested)
+    projection = ", ".join(quote_ident(column) for column in selected)
+    return run_df(
+        f"SELECT {projection} FROM read_parquet([{path_placeholders}], union_by_name=true) "
+        f"WHERE {quote_ident(id_column)} IN ({value_placeholders})",
+        [*[path_to_uri(path) for _shard, path in routed], *requested],
+    ).reset_index(drop=True)

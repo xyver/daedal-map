@@ -61,9 +61,9 @@ def _active_layout() -> dict[str, Any] | None:
     if (
         layout.get("representation") != "full"
         or layout.get("authoritative_for_containment") is not True
-        or layout.get("shard_function") != "sha256_mod"
     ):
         return None
+    point_bank = _artifact_path(layout.get("point_bank"))
     shard_count = int(layout.get("shard_count") or 0)
     bbox_index = _artifact_path(layout.get("bbox_index"))
     point_shards = {
@@ -72,7 +72,17 @@ def _active_layout() -> dict[str, Any] | None:
         if (path := _artifact_path(record)) is not None
     }
     value = None
-    if bbox_index is not None and shard_count > 0 and len(point_shards) == shard_count:
+    if point_bank is not None:
+        value = {
+            "layout_id": layout.get("layout_id"),
+            "point_bank": point_bank,
+        }
+    elif (
+        layout.get("shard_function") == "sha256_mod"
+        and bbox_index is not None
+        and shard_count > 0
+        and len(point_shards) == shard_count
+    ):
         value = {
             "layout_id": layout.get("layout_id"),
             "bbox_index": bbox_index,
@@ -94,19 +104,27 @@ def resolve_global_admin0_query_points(
     if layout is None:
         return None
     try:
+        candidate_path = layout.get("point_bank") or layout["bbox_index"]
         bbox = read_bbox_candidates_for_points(
-            layout["bbox_index"], point_items,
+            candidate_path, point_items,
             columns=["candidate_id", "loc_id", "name", "source_kind", "area_sq_degrees"],
         )
         candidate_ids = set(bbox["candidate_id"].astype(str)) if not bbox.empty else set()
-        exact = read_hash_sharded_rows(
-            layout["point_shards"], candidate_ids,
-            shard_count=layout["shard_count"],
-            id_column="candidate_id",
-            columns=[
-                "loc_id", "name", "source_kind", "area_sq_degrees", "geometry_wkb",
-                "bbox_min_lon", "bbox_min_lat", "bbox_max_lon", "bbox_max_lat",
-            ],
+        exact_columns = [
+            "loc_id", "name", "source_kind", "area_sq_degrees", "geometry_wkb",
+            "bbox_min_lon", "bbox_min_lat", "bbox_max_lon", "bbox_max_lat",
+        ]
+        exact = (
+            read_rows_by_ids(
+                layout["point_bank"], candidate_ids,
+                id_column="candidate_id", columns=exact_columns,
+            )
+            if layout.get("point_bank") else
+            read_hash_sharded_rows(
+                layout["point_shards"], candidate_ids,
+                shard_count=layout["shard_count"],
+                id_column="candidate_id", columns=exact_columns,
+            )
         )
     except Exception:
         logger.warning("Global Admin0 point-query layout failed; using Full CSV fallback", exc_info=True)
@@ -167,7 +185,7 @@ def load_global_admin0_identities(loc_ids: Iterable[str]) -> dict[str, pd.Series
     wanted = {str(value).strip().upper() for value in loc_ids if str(value).strip()}
     try:
         rows = read_rows_by_ids(
-            layout["bbox_index"], wanted,
+            layout.get("point_bank") or layout["bbox_index"], wanted,
             id_column="loc_id",
             columns=["name", "source_kind"],
         )
@@ -196,21 +214,27 @@ def load_global_admin0_geometries(loc_ids: Iterable[str]) -> pd.DataFrame | None
         return pd.DataFrame()
     try:
         index_rows = read_rows_by_ids(
-            layout["bbox_index"],
+            layout.get("point_bank") or layout["bbox_index"],
             wanted,
             id_column="loc_id",
             columns=["candidate_id", "name", "source_kind", "area_sq_degrees"],
         )
         candidate_ids = set(index_rows["candidate_id"].astype(str)) if not index_rows.empty else set()
-        exact = read_hash_sharded_rows(
-            layout["point_shards"],
-            candidate_ids,
-            shard_count=layout["shard_count"],
-            id_column="candidate_id",
-            columns=[
-                "loc_id", "name", "source_kind", "area_sq_degrees", "geometry_wkb",
-                "bbox_min_lon", "bbox_min_lat", "bbox_max_lon", "bbox_max_lat",
-            ],
+        exact_columns = [
+            "loc_id", "name", "source_kind", "area_sq_degrees", "geometry_wkb",
+            "bbox_min_lon", "bbox_min_lat", "bbox_max_lon", "bbox_max_lat",
+        ]
+        exact = (
+            read_rows_by_ids(
+                layout["point_bank"], candidate_ids,
+                id_column="candidate_id", columns=exact_columns,
+            )
+            if layout.get("point_bank") else
+            read_hash_sharded_rows(
+                layout["point_shards"], candidate_ids,
+                shard_count=layout["shard_count"],
+                id_column="candidate_id", columns=exact_columns,
+            )
         )
     except Exception:
         logger.warning("Global Admin0 exact shape lookup failed; using Full CSV fallback", exc_info=True)
