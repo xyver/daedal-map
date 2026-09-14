@@ -631,6 +631,106 @@ class GeometryPointResolutionRuntimeTests(unittest.TestCase):
         self.assertEqual(result["matched"]["admin_level"], 2)
         self.assertEqual(result["target_admin_level"], "up_to_admin_3")
 
+    def test_standard_single_reports_declared_deep_levels_without_opening_deep_geometry(self):
+        import pandas as pd
+
+        country = pd.Series({"loc_id": "CAN", "name": "Canada", "admin_level": 0})
+        shallow_match = {
+            "stack": [
+                {"loc_id": "CAN", "name": "Canada", "admin_level": 0},
+                {"loc_id": "CAN-BC", "name": "British Columbia", "admin_level": 1},
+                {"loc_id": "CAN-BC-5915", "name": "Greater Vancouver", "admin_level": 2},
+                {"loc_id": "CAN-BC-5915-001", "name": "Census tract", "admin_level": 3},
+            ],
+            "matched": {"loc_id": "CAN-BC-5915-001", "name": "Census tract", "admin_level": 3},
+        }
+        with (
+            patch("mapmover.geometry_handlers.load_global_admin0_identities", return_value={"CAN": country}),
+            patch("mapmover.geometry_handlers.resolve_admin_spine_query_points", return_value=[shallow_match]),
+            patch("mapmover.geometry_handlers.get_country_supported_deep_admin_levels", return_value=[3, 4, 5, 6]),
+            patch("mapmover.geometry_handlers.load_subcounty_geometry") as deep_load,
+        ):
+            result = resolve_points_to_locations(
+                [{"lon": -123.12, "lat": 49.28}],
+                country_scope="CAN",
+                max_admin_level=3,
+                shallow_banks_only=True,
+            )[0]
+
+        self.assertTrue(result["deeper_available"])
+        self.assertEqual(
+            result["available_deeper_admin_levels"],
+            ["admin_4", "admin_5", "admin_6"],
+        )
+        deep_load.assert_not_called()
+
+    def test_standard_bulk_reports_declared_deep_levels_for_every_result(self):
+        import pandas as pd
+
+        country = pd.Series({"loc_id": "CAN", "name": "Canada", "admin_level": 0})
+        shallow_matches = [
+            {
+                "stack": [
+                    {"loc_id": "CAN", "name": "Canada", "admin_level": 0},
+                    {"loc_id": "CAN-BC", "name": "British Columbia", "admin_level": 1},
+                    {"loc_id": f"CAN-BC-5915-00{index}", "name": f"Area {index}", "admin_level": 3},
+                ],
+                "matched": {"loc_id": f"CAN-BC-5915-00{index}", "name": f"Area {index}", "admin_level": 3},
+            }
+            for index in (1, 2)
+        ]
+        with (
+            patch("mapmover.geometry_handlers.load_global_admin0_identities", return_value={"CAN": country}),
+            patch("mapmover.geometry_handlers.resolve_admin_spine_query_points", return_value=shallow_matches),
+            patch("mapmover.geometry_handlers.get_country_supported_deep_admin_levels", return_value=[4, 5, 6]) as levels,
+            patch("mapmover.geometry_handlers.load_subcounty_geometry") as deep_load,
+        ):
+            results = resolve_points_to_locations(
+                [
+                    {"lon": -123.12, "lat": 49.28},
+                    {"lon": -123.10, "lat": 49.26},
+                ],
+                country_scope="CAN",
+                max_admin_level=3,
+                shallow_banks_only=True,
+            )
+
+        self.assertEqual([result["deeper_available"] for result in results], [True, True])
+        self.assertEqual(
+            [result["available_deeper_admin_levels"] for result in results],
+            [["admin_4", "admin_5", "admin_6"]] * 2,
+        )
+        levels.assert_called_once_with("CAN")
+        deep_load.assert_not_called()
+
+    def test_standard_single_preserves_no_deeper_levels_for_unsupported_country(self):
+        import pandas as pd
+
+        country = pd.Series({"loc_id": "NZL", "name": "New Zealand", "admin_level": 0})
+        shallow_match = {
+            "stack": [
+                {"loc_id": "NZL", "name": "New Zealand", "admin_level": 0},
+                {"loc_id": "NZL-AUK", "name": "Auckland", "admin_level": 1},
+                {"loc_id": "NZL-AUK-001", "name": "Central", "admin_level": 2},
+                {"loc_id": "NZL-AUK-001-007", "name": "Meshblock", "admin_level": 3},
+            ],
+            "matched": {"loc_id": "NZL-AUK-001-007", "name": "Meshblock", "admin_level": 3},
+        }
+        with (
+            patch("mapmover.geometry_handlers.load_global_admin0_identities", return_value={"NZL": country}),
+            patch("mapmover.geometry_handlers.resolve_admin_spine_query_points", return_value=[shallow_match]),
+            patch("mapmover.geometry_handlers.get_country_supported_deep_admin_levels", return_value=[]),
+        ):
+            result = resolve_points_to_locations(
+                [{"lon": 174.76, "lat": -36.85}],
+                country_scope="NZL",
+                max_admin_level=3,
+                shallow_banks_only=True,
+            )[0]
+
+        self.assertFalse(result["deeper_available"])
+        self.assertEqual(result["available_deeper_admin_levels"], [])
+
     def test_standard_mode_does_not_open_legacy_country_files(self):
         import pandas as pd
 

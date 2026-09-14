@@ -1837,6 +1837,16 @@ def resolve_points_to_locations(
         )
         if query_matches is None:
             query_matches = [None] * len(country_items)
+        # Standard point resolution intentionally opens only the national
+        # Admin 0-3 bank.  Its returned stack therefore cannot by itself say
+        # whether the country has Admin1-owned Admin 4-6 banks.  The country
+        # profile declares those levels without opening their geometry, so use
+        # it to advertise the deep follow-up tools accurately.
+        declared_deep_levels = (
+            get_country_supported_deep_admin_levels(iso3)
+            if shallow_banks_only
+            else []
+        )
         for item, query_match in zip(country_items, query_matches):
             if query_match is None:
                 unresolved_items.append(item)
@@ -1895,7 +1905,11 @@ def resolve_points_to_locations(
                 }
                 continue
             selected_level = int(selected.get("admin_level", 0))
-            deeper_levels = [level for level in available_levels if level > selected_level]
+            deeper_levels = [
+                level
+                for level in sorted(set(available_levels + declared_deep_levels))
+                if level > selected_level
+            ]
             results[item["index"]] = {
                 "point": {"lon": float(item["lon"]), "lat": float(item["lat"])},
                 "country": {"loc_id": iso3, "name": country_name},
