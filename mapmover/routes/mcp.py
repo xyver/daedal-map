@@ -21,6 +21,7 @@ from access_policy_shared import resolve_effective_access, tool_rate_limit
 from mcp_surface_shared import build_mcp_instructions, build_tool_definitions
 from mcp_data_contract_shared import normalize_data_tool_error
 from mcp_tool_help_shared import geometry_family_help_payload, tool_help_payload
+from mcp_runtime_shared import jsonrpc_error_envelope, jsonrpc_result_envelope, mcp_tool_error_payload
 from pack_registry_shared import (
     pack_mcp_server_profile,
     pack_prompt_allowlists,
@@ -278,13 +279,19 @@ def _guard_mcp_execution(tool_name: str):
                 request.state.analytics_error_code = code
                 request.state.analytics_concurrency_rejected = not timeout
                 _stamp_mcp_tool_analytics(request, **analytics_metadata)
-                payload = {
-                    "request_id": str(arguments.get("request_id") or ""),
-                    "ok": False,
-                    "tool_name": tool_name,
-                    "retry_after": retry_after,
-                    "error": {"code": code, "message": str(exc)},
-                }
+                noun = "geography" if tool_name in MCP_GEOMETRY_READ_TOOLS | MCP_GEOMETRY_BULK_TOOLS else "MCP"
+                message = (
+                    f"DaedalMap is handling other {noun} requests. Retry in {retry_after} seconds."
+                    if not timeout
+                    else f"DaedalMap could not finish {tool_name} within the hosted time limit. Retry in {retry_after} seconds."
+                )
+                payload = mcp_tool_error_payload(
+                    request_id=str(arguments.get("request_id") or ""),
+                    tool_name=tool_name,
+                    code=code,
+                    message=message,
+                    retry_after=retry_after,
+                )
                 _log_mcp_tool_usage_event(
                     request,
                     request_id=str(arguments.get("request_id") or ""),
@@ -1480,28 +1487,15 @@ def _json_safe(value: Any) -> Any:
 
 
 def _jsonrpc_response(result: dict[str, Any], request_id: Any) -> JSONResponse:
-    response = JSONResponse(
-        {
-            "jsonrpc": "2.0",
-            "id": request_id,
-            "result": _json_safe(result),
-        }
-    )
+    response = JSONResponse(jsonrpc_result_envelope(_json_safe(result), request_id))
     response.headers["MCP-Protocol-Version"] = MCP_PROTOCOL_VERSION
     response.headers["Cache-Control"] = "no-store"
     return response
 
 
 def _jsonrpc_error(request_id: Any, code: int, message: str, *, data: dict[str, Any] | None = None, status_code: int = 200) -> JSONResponse:
-    error: dict[str, Any] = {"code": code, "message": message}
-    if data:
-        error["data"] = _json_safe(data)
     response = JSONResponse(
-        {
-            "jsonrpc": "2.0",
-            "id": request_id,
-            "error": error,
-        },
+        jsonrpc_error_envelope(request_id, code, message, data=_json_safe(data) if data is not None else None),
         status_code=status_code,
     )
     response.headers["MCP-Protocol-Version"] = MCP_PROTOCOL_VERSION
