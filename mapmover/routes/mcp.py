@@ -5,6 +5,7 @@ import json
 import hashlib
 import math
 import numbers
+import os
 import re
 import time
 import threading
@@ -36,6 +37,7 @@ from mapmover.live_volcano_smithsonian import fetch_live_volcanoes
 from mapmover.mcp_execution import (
     MCPExecutionCapacityError,
     MCPExecutionTimeoutError,
+    execution_status,
     run_mcp_blocking,
 )
 from mapmover.runtime.geometry_catalog import geometry_capability_summary
@@ -242,18 +244,60 @@ def _guard_mcp_execution(tool_name: str):
     def decorate(function):
         @wraps(function)
         async def guarded(request: Request, arguments: dict[str, Any], rpc_request_id: Any, *args, **kwargs):
+            started_at = time.perf_counter()
             try:
                 return await function(request, arguments, rpc_request_id, *args, **kwargs)
             except (MCPExecutionCapacityError, MCPExecutionTimeoutError) as exc:
                 timeout = isinstance(exc, MCPExecutionTimeoutError)
                 code = "mcp_execution_timeout" if timeout else "mcp_execution_capacity"
+                retry_after = 5 if timeout else 2
+                status = execution_status()
+                item_list = next(
+                    (
+                        arguments.get(field)
+                        for field in ("points", "loc_ids", "items")
+                        if isinstance(arguments.get(field), list)
+                    ),
+                    None,
+                )
+                quantity = len(item_list) if item_list is not None else 1
+                tool_mode = "bulk" if item_list is not None else "single"
+                analytics_metadata = {
+                    "event": "mcp_execution_failure",
+                    "tool_mode": tool_mode,
+                    "quantity": quantity,
+                    "execution_layer": "worker_pool",
+                    "execution_failure_kind": "timeout" if timeout else "capacity",
+                    "execution_active_workers": status["active_workers"],
+                    "execution_max_workers": status["max_workers"],
+                    "execution_timeout_seconds": status["default_timeout_seconds"] if timeout else None,
+                    "retry_after_seconds": retry_after,
+                    "railway_replica_id": str(os.getenv("RAILWAY_REPLICA_ID", "") or "").strip() or None,
+                    "railway_replica_region": str(os.getenv("RAILWAY_REPLICA_REGION", "") or "").strip() or None,
+                }
+                request.state.analytics_error_code = code
+                request.state.analytics_concurrency_rejected = not timeout
+                _stamp_mcp_tool_analytics(request, **analytics_metadata)
                 payload = {
                     "request_id": str(arguments.get("request_id") or ""),
                     "ok": False,
                     "tool_name": tool_name,
-                    "retry_after": 5 if timeout else 2,
+                    "retry_after": retry_after,
                     "error": {"code": code, "message": str(exc)},
                 }
+                _log_mcp_tool_usage_event(
+                    request,
+                    request_id=str(arguments.get("request_id") or ""),
+                    tool_name=tool_name,
+                    capability_id=tool_capability_id(tool_name),
+                    decision="deny",
+                    started_at=started_at,
+                    row_count=0,
+                    query_granularity=f"bulk_{quantity}" if tool_mode == "bulk" else "single",
+                    response_payload=payload,
+                    error_code=code,
+                    metadata=analytics_metadata,
+                )
                 return _jsonrpc_response(_tool_result(payload, is_error=True), rpc_request_id)
 
         return guarded
@@ -2662,6 +2706,8 @@ async def _execute_point_lookup_tool(
                 include_marine_context=include_marine_context,
                 shallow_banks_only=lookup_mode == "standard",
             )
+        except (MCPExecutionCapacityError, MCPExecutionTimeoutError):
+            raise
         except Exception as exc:
             raw_results = [{"error": str(exc), "point": {"lat": point.get("lat"), "lon": point.get("lon")}} for point in valid_points]
 
@@ -2877,6 +2923,8 @@ async def _execute_point_lookup_tool(
         )
         raw = raw_results[0] if raw_results else {"error": "point did not resolve", "point": {"lon": lon, "lat": lat}}
         stages = {"point_resolver_ms": _elapsed_ms(runtime_started), **resolver_stages}
+    except (MCPExecutionCapacityError, MCPExecutionTimeoutError):
+        raise
     except Exception as exc:  # surface a clean tool error, never a 500
         error_payload = {"request_id": request_id, "error": {"code": "resolve_failed", "message": str(exc)}}
         _log_mcp_tool_usage_event(
@@ -3392,6 +3440,8 @@ async def _execute_list_reference_systems_tool(request: Request, arguments: dict
             read_wip=read_wip,
         )
         stages = {"catalog_lookup_ms": _elapsed_ms(runtime_started)}
+    except (MCPExecutionCapacityError, MCPExecutionTimeoutError):
+        raise
     except Exception as exc:
         error_payload = {"request_id": request_id, "error": {"code": "reference_systems_failed", "message": str(exc)}}
         _log_mcp_tool_usage_event(
@@ -3483,6 +3533,8 @@ async def _execute_identify_reference_system_tool(request: Request, arguments: d
             dataset_context=payload.get("dataset_context"),
         )
         stages = {"identifier_lookup_ms": _elapsed_ms(runtime_started)}
+    except (MCPExecutionCapacityError, MCPExecutionTimeoutError):
+        raise
     except Exception as exc:
         result = {"ok": False, "status": "failed", "error": {"code": "reference_identification_failed", "message": str(exc)}}
         stages = {}
@@ -3573,6 +3625,8 @@ async def _execute_identify_dataset_geography_tool(request: Request, arguments: 
             },
         }
         stages = {}
+    except (MCPExecutionCapacityError, MCPExecutionTimeoutError):
+        raise
     except Exception as exc:
         result = {"ok": False, "status": "failed", "error": {"code": "dataset_geography_identification_failed", "message": str(exc)}}
         stages = {}
@@ -3646,6 +3700,8 @@ async def _execute_read_geometry_catalog_tool(request: Request, arguments: dict[
             read_wip=read_wip,
         )
         stages = {"catalog_lookup_ms": _elapsed_ms(runtime_started)}
+    except (MCPExecutionCapacityError, MCPExecutionTimeoutError):
+        raise
     except Exception as exc:
         error_payload = {"request_id": request_id, "error": {"code": "geometry_catalog_read_failed", "message": str(exc)}}
         _log_mcp_tool_usage_event(
@@ -4382,6 +4438,8 @@ async def _execute_get_geometry_tool(request: Request, arguments: dict[str, Any]
                 include_info=include_info,
             )
             stages = {"geometry_fetch_ms": _elapsed_ms(runtime_started)}
+        except (MCPExecutionCapacityError, MCPExecutionTimeoutError):
+            raise
         except Exception as exc:
             error_payload = _batch_error_payload(request_id=request_id, batch_id=batch_id, code="get_geometry_failed", message=str(exc), loc_id_count=len(loc_ids))
             _log_mcp_tool_usage_event(
@@ -4465,6 +4523,8 @@ async def _execute_get_geometry_tool(request: Request, arguments: dict[str, Any]
             "get_geometry", get_geometry_reference, loc_id, include_polygon=include_polygon
         )
         stages = {"geometry_fetch_ms": _elapsed_ms(runtime_started)}
+    except (MCPExecutionCapacityError, MCPExecutionTimeoutError):
+        raise
     except Exception as exc:
         error_payload = {"request_id": request_id, "error": {"code": "get_geometry_failed", "message": str(exc)}}
         _log_mcp_tool_usage_event(
@@ -4763,6 +4823,8 @@ async def _execute_geometry_job_runtime_tool(request: Request, arguments: dict[s
         else:
             return _jsonrpc_error(rpc_request_id, -32601, f"Tool '{tool_name}' not found")
         stages = {"runtime_ms": _elapsed_ms(runtime_started)}
+    except (MCPExecutionCapacityError, MCPExecutionTimeoutError):
+        raise
     except Exception as exc:
         result = {"ok": False, "request_id": request_id, "error": {"code": f"{tool_name}_failed", "message": str(exc)}}
         capability_id = tool_name
@@ -4917,6 +4979,8 @@ async def _execute_check_geometry_tool(request: Request, arguments: dict[str, An
                 "check_geometry", get_geometry_availability, [str(loc_id) for loc_id in loc_ids]
             )
             stages = {"geometry_availability_ms": _elapsed_ms(runtime_started)}
+        except (MCPExecutionCapacityError, MCPExecutionTimeoutError):
+            raise
         except Exception as exc:
             _stamp_mcp_tool_analytics(
                 request,
@@ -5017,6 +5081,8 @@ async def _execute_check_geometry_tool(request: Request, arguments: dict[str, An
         runtime_started = time.perf_counter()
         result = await run_mcp_blocking("check_geometry", get_geometry_availability, [loc_id])
         stages = {"geometry_availability_ms": _elapsed_ms(runtime_started)}
+    except (MCPExecutionCapacityError, MCPExecutionTimeoutError):
+        raise
     except Exception as exc:
         error_payload = {"request_id": request_id, "error": {"code": "check_geometry_failed", "message": str(exc)}}
         _log_mcp_tool_usage_event(

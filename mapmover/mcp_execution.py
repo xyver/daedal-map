@@ -47,9 +47,24 @@ _MAX_WORKERS = _env_int("MCP_EXECUTION_MAX_WORKERS", 2)
 _DEFAULT_TIMEOUT_SECONDS = _env_int("MCP_EXECUTION_TIMEOUT_SECONDS", 120)
 _EXECUTOR = ThreadPoolExecutor(max_workers=_MAX_WORKERS, thread_name_prefix="mcp-tool")
 _CAPACITY = threading.BoundedSemaphore(_MAX_WORKERS)
+_STATE_LOCK = threading.Lock()
+_ACTIVE_WORKERS = 0
+
+
+def _increment_active_workers() -> None:
+    global _ACTIVE_WORKERS
+    with _STATE_LOCK:
+        _ACTIVE_WORKERS += 1
+
+
+def _decrement_active_workers() -> None:
+    global _ACTIVE_WORKERS
+    with _STATE_LOCK:
+        _ACTIVE_WORKERS = max(0, _ACTIVE_WORKERS - 1)
 
 
 def _release_capacity(_future: Future[Any]) -> None:
+    _decrement_active_workers()
     _CAPACITY.release()
 
 
@@ -73,10 +88,12 @@ async def run_mcp_blocking(
         raise MCPExecutionCapacityError(
             f"MCP execution capacity is busy; retry {tool_name} shortly"
         )
+    _increment_active_workers()
 
     try:
         future = _EXECUTOR.submit(partial(function, *args, **kwargs))
     except BaseException:
+        _decrement_active_workers()
         _CAPACITY.release()
         raise
     future.add_done_callback(_release_capacity)
@@ -96,7 +113,10 @@ async def run_mcp_blocking(
 def execution_status() -> dict[str, int]:
     """Return non-sensitive configuration for diagnostics and readiness logs."""
 
+    with _STATE_LOCK:
+        active_workers = _ACTIVE_WORKERS
     return {
         "max_workers": _MAX_WORKERS,
+        "active_workers": active_workers,
         "default_timeout_seconds": _DEFAULT_TIMEOUT_SECONDS,
     }

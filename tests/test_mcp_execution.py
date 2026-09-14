@@ -29,18 +29,27 @@ class MCPExecutionTests(unittest.IsolatedAsyncioTestCase):
         gate = threading.Event()
         test_capacity = threading.BoundedSemaphore(1)
         test_executor = mcp_execution.ThreadPoolExecutor(max_workers=1)
-        with mock.patch.object(mcp_execution, "_CAPACITY", test_capacity), mock.patch.object(
-            mcp_execution, "_EXECUTOR", test_executor
+        with (
+            mock.patch.object(mcp_execution, "_CAPACITY", test_capacity),
+            mock.patch.object(mcp_execution, "_EXECUTOR", test_executor),
+            mock.patch.object(mcp_execution, "_MAX_WORKERS", 1),
+            mock.patch.object(mcp_execution, "_ACTIVE_WORKERS", 0),
         ):
             with self.assertRaises(mcp_execution.MCPExecutionTimeoutError):
                 await mcp_execution.run_mcp_blocking(
                     "slow_tool", lambda: gate.wait(timeout=2), timeout_seconds=0.01
                 )
+            self.assertEqual(
+                mcp_execution.execution_status(),
+                {"max_workers": 1, "active_workers": 1, "default_timeout_seconds": 120},
+            )
             with self.assertRaises(mcp_execution.MCPExecutionCapacityError):
                 await mcp_execution.run_mcp_blocking("second_tool", lambda: None)
             gate.set()
             await asyncio.sleep(0.05)
             self.assertIsNone(await mcp_execution.run_mcp_blocking("third_tool", lambda: None))
+            await asyncio.sleep(0.01)
+            self.assertEqual(mcp_execution.execution_status()["active_workers"], 0)
         test_executor.shutdown(wait=True)
 
     async def test_timeout_signals_cooperative_cancellation(self):

@@ -11,6 +11,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from mapmover.caller_identity import CONFIDENCE_VERIFIED, KIND_ACCOUNT, CallerIdentity
+from mapmover.mcp_execution import MCPExecutionCapacityError, MCPExecutionTimeoutError
 from mapmover.runtime.reference_exchange import get_geometry_availability, get_geometry_references
 from mapmover.routes.mcp import (
     _jsonrpc_response,
@@ -49,6 +50,18 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         self._rate_limit_env.start()
         self.addCleanup(self._rate_limit_env.stop)
         app = FastAPI()
+        self.analytics_state: dict[str, object] = {}
+
+        @app.middleware("http")
+        async def capture_analytics_state(request, call_next):
+            response = await call_next(request)
+            self.analytics_state = {
+                "error_code": getattr(request.state, "analytics_error_code", None),
+                "concurrency_rejected": getattr(request.state, "analytics_concurrency_rejected", False),
+                "metadata": getattr(request.state, "analytics_metadata", {}),
+            }
+            return response
+
         app.include_router(mcp_router)
         self.client = TestClient(app)
 
@@ -312,6 +325,78 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         self.assertEqual(analytics["metadata"]["compute"]["input_count"], 2)
         self.assertEqual(analytics["metadata"]["compute"]["output_count"], 2)
         self.assertIn("point_resolver_ms", analytics["metadata"]["compute"]["stage_ms"])
+
+    def test_worker_capacity_rejection_is_recorded_as_denied_tool_usage(self) -> None:
+        with (
+            mock.patch(
+                "mapmover.routes.mcp.run_mcp_blocking",
+                side_effect=MCPExecutionCapacityError("MCP execution capacity is busy"),
+            ),
+            mock.patch(
+                "mapmover.routes.mcp.execution_status",
+                return_value={"max_workers": 2, "active_workers": 2, "default_timeout_seconds": 120},
+            ),
+            mock.patch("mapmover.routes.mcp.log_api_query_event") as analytics_mock,
+        ):
+            payload = _tool_call(
+                self.client,
+                "resolve_points",
+                {
+                    "request_id": "capacity-test",
+                    "points": [
+                        {"lon": -123.1, "lat": 49.2},
+                        {"lon": -122.9, "lat": 49.1},
+                    ],
+                },
+            )
+
+        self.assertEqual(payload["error"]["code"], "mcp_execution_capacity")
+        self.assertEqual(payload["retry_after"], 2)
+        self.assertEqual(self.analytics_state["error_code"], "mcp_execution_capacity")
+        self.assertTrue(self.analytics_state["concurrency_rejected"])
+        analytics = analytics_mock.call_args.kwargs
+        self.assertEqual(analytics["source_id"], "resolve_points")
+        self.assertEqual(analytics["capability_id"], "point_lookup")
+        self.assertEqual(analytics["decision"], "deny")
+        self.assertEqual(analytics["error_code"], "mcp_execution_capacity")
+        self.assertEqual(analytics["row_count"], 0)
+        self.assertEqual(analytics["query_granularity"], "bulk_2")
+        self.assertEqual(analytics["metadata"]["execution_layer"], "worker_pool")
+        self.assertEqual(analytics["metadata"]["execution_failure_kind"], "capacity")
+        self.assertEqual(analytics["metadata"]["execution_active_workers"], 2)
+        self.assertEqual(analytics["metadata"]["execution_max_workers"], 2)
+        self.assertNotIn("execution_timeout_seconds", {
+            key: value for key, value in analytics["metadata"].items() if value is not None
+        })
+
+    def test_worker_timeout_is_recorded_without_concurrency_rejection(self) -> None:
+        with (
+            mock.patch(
+                "mapmover.routes.mcp.run_mcp_blocking",
+                side_effect=MCPExecutionTimeoutError("resolve_point exceeded its budget"),
+            ),
+            mock.patch(
+                "mapmover.routes.mcp.execution_status",
+                return_value={"max_workers": 2, "active_workers": 1, "default_timeout_seconds": 120},
+            ),
+            mock.patch("mapmover.routes.mcp.log_api_query_event") as analytics_mock,
+        ):
+            payload = _tool_call(
+                self.client,
+                "resolve_point",
+                {"request_id": "timeout-test", "lon": -123.1, "lat": 49.2},
+            )
+
+        self.assertEqual(payload["error"]["code"], "mcp_execution_timeout")
+        self.assertEqual(payload["retry_after"], 5)
+        self.assertEqual(self.analytics_state["error_code"], "mcp_execution_timeout")
+        self.assertFalse(self.analytics_state["concurrency_rejected"])
+        analytics = analytics_mock.call_args.kwargs
+        self.assertEqual(analytics["decision"], "deny")
+        self.assertEqual(analytics["error_code"], "mcp_execution_timeout")
+        self.assertEqual(analytics["query_granularity"], "single")
+        self.assertEqual(analytics["metadata"]["execution_failure_kind"], "timeout")
+        self.assertEqual(analytics["metadata"]["execution_timeout_seconds"], 120)
 
     def test_resolve_points_tool_challenges_point_batch_over_free_limit(self) -> None:
         """Over the free allowance the verifier decides, and its price is passed through."""
