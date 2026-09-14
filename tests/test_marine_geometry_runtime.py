@@ -56,10 +56,7 @@ class MarineGeometryRuntimeTests(unittest.TestCase):
                         "USA": {"path": "geometry/domains/MARINE/country_components/USA.parquet"},
                         "CAN": {"path": "geometry/domains/MARINE/country_components/CAN.parquet"},
                     },
-                    "point_shards": {
-                        f"{index:02d}": {"path": f"geometry/domains/MARINE/point_shards/{index:02d}.parquet"}
-                        for index in range(32)
-                    },
+                    "point_bank": {"path": "geometry/domains/MARINE/point_bank.parquet"},
                 },
             },
         }]}
@@ -70,9 +67,11 @@ class MarineGeometryRuntimeTests(unittest.TestCase):
         self.assertEqual(domains[0]["release_unit_id"], "MARINE")
         self.assertEqual(domains[0]["release_id"], "marine_geometry_1_0_1")
         self.assertEqual(domains[0]["country_component_count"], 2)
-        self.assertEqual(domains[0]["point_shard_count"], 32)
         self.assertNotIn("country_components", domains[0]["runtime_artifacts"])
-        self.assertNotIn("point_shards", domains[0]["runtime_artifacts"])
+        self.assertEqual(
+            domains[0]["runtime_artifacts"]["point_bank"]["path"],
+            "geometry/domains/MARINE/point_bank.parquet",
+        )
 
     def test_active_domain_uses_catalog_paths_without_runtime_pointer(self):
         with TemporaryDirectory() as tmp:
@@ -84,10 +83,7 @@ class MarineGeometryRuntimeTests(unittest.TestCase):
                 "water_bodies": {"path": f"{release_rel}/exact/water_bodies.parquet"},
                 "named_water_areas": {"path": f"{release_rel}/exact/named_water_areas.parquet"},
                 "bbox_index": {"path": f"{release_rel}/predicate/bbox_index.parquet"},
-                "point_shards": {
-                    f"{index:02d}": {"path": f"{release_rel}/predicate/point_shards/{index:02d}.parquet"}
-                    for index in range(32)
-                },
+                "point_bank": {"path": f"{release_rel}/predicate/point_bank.parquet"},
                 "country_components": {
                     "USA": {"path": f"{release_rel}/country_components/USA/marine_jurisdictions.parquet"},
                 },
@@ -107,9 +103,58 @@ class MarineGeometryRuntimeTests(unittest.TestCase):
                     data_root / runtime_artifacts["named_water_areas"]["path"],
                 )
                 self.assertEqual(
+                    marine_runtime._active_domain_paths()["point_bank"],
+                    data_root / runtime_artifacts["point_bank"]["path"],
+                )
+                self.assertEqual(
                     marine_bank_for_loc_id("USA-EEZ-MRGID-8456"),
                     data_root / runtime_artifacts["country_components"]["USA"]["path"],
                 )
+
+    def test_active_domain_rejects_legacy_point_shards_without_point_bank(self):
+        runtime_artifacts = {
+            key: {"path": f"geometry/domains/MARINE/{key}.parquet"}
+            for key in ("jurisdictions", "water_bodies", "named_water_areas", "bbox_index")
+        }
+        runtime_artifacts["point_shards"] = {
+            f"{index:02d}": {
+                "path": f"geometry/domains/MARINE/point_shards/{index:02d}.parquet",
+            }
+            for index in range(32)
+        }
+        catalog = {"catalog_fingerprint": "legacy-shards", "domain_profiles": [{
+            "release_unit_id": "MARINE",
+            "active_release": {
+                "publication_status": "published",
+                "runtime_artifacts": runtime_artifacts,
+            },
+        }]}
+        with patch.object(marine_runtime, "load_geometry_catalog", return_value=catalog):
+            marine_runtime.clear_marine_geometry_cache()
+            self.assertIsNone(marine_runtime._active_domain_paths())
+
+    def test_point_lookup_hydrates_jurisdiction_ids_from_single_point_bank(self):
+        domain = {
+            "bbox_index": Path("marine/bbox.parquet"),
+            "point_bank": Path("marine/point_bank.parquet"),
+            "water_bodies": Path("marine/water.parquet"),
+            "named_water_areas": Path("marine/named.parquet"),
+        }
+        bbox = pd.DataFrame([{"loc_id": "EEZ-MRGID-1"}])
+        jurisdiction = pd.DataFrame([{
+            "loc_id": "EEZ-MRGID-1", "name": "Example", "geometry_wkb": b"shape",
+        }])
+        with patch.object(marine_runtime, "_active_domain_paths", return_value=domain), patch.object(
+            marine_runtime, "read_rows_by_ids", return_value=jurisdiction,
+        ) as exact_read, patch.object(
+            marine_runtime, "read_bbox_candidates", side_effect=[bbox, pd.DataFrame(), pd.DataFrame()],
+        ):
+            result = marine_runtime.load_marine_geometry_at_point(-120.0, 30.0)
+
+        self.assertEqual(set(result["loc_id"]), {"EEZ-MRGID-1"})
+        exact_read.assert_called_once()
+        self.assertEqual(exact_read.call_args.args[0], domain["point_bank"])
+        self.assertEqual(exact_read.call_args.args[1], {"EEZ-MRGID-1"})
 
     def test_classification(self):
         self.assertTrue(is_marine_loc_id("EEZ-USA"))
@@ -178,7 +223,7 @@ class MarineGeometryRuntimeTests(unittest.TestCase):
     def test_batch_water_candidates_are_not_reopened_for_shape_hydration(self):
         domain = {
             "bbox_index": Path("marine/bbox.parquet"),
-            "point_shards": {},
+            "point_bank": Path("marine/point_bank.parquet"),
             "water_bodies": Path("marine/water.parquet"),
             "named_water_areas": Path("marine/named.parquet"),
         }
@@ -215,6 +260,37 @@ class MarineGeometryRuntimeTests(unittest.TestCase):
 
         self.assertEqual(set(frame["loc_id"]), {"XOP"})
         self.assertEqual(candidates_by_point, {0: ["XOP"]})
+
+    def test_batch_jurisdictions_are_hydrated_from_single_point_bank(self):
+        domain = {
+            "bbox_index": Path("marine/bbox.parquet"),
+            "point_bank": Path("marine/point_bank.parquet"),
+            "water_bodies": Path("marine/water.parquet"),
+            "named_water_areas": Path("marine/named.parquet"),
+        }
+        pairs = pd.DataFrame([{"point_position": 0, "loc_id": "EEZ-MRGID-1"}])
+        jurisdiction = pd.DataFrame([{
+            "loc_id": "EEZ-MRGID-1", "name": "Example", "geometry_wkb": b"shape",
+        }])
+        with patch.object(marine_runtime, "_active_domain_paths", return_value=domain), patch.object(
+            marine_runtime, "read_bbox_candidates_for_points", return_value=pairs,
+        ), patch.object(
+            marine_runtime, "read_rows_by_ids", return_value=jurisdiction,
+        ) as exact_read, patch.object(
+            marine_runtime, "_exact_jurisdiction_matches", return_value={0: {"EEZ-MRGID-1"}},
+        ), patch.object(
+            marine_runtime, "read_geojson_containment_for_points",
+            return_value=pd.DataFrame(columns=["point_position", "loc_id"]),
+        ):
+            frame, candidates_by_point = marine_runtime.load_marine_geometry_for_points([
+                {"lon": -120.0, "lat": 30.0},
+            ])
+
+        self.assertEqual(set(frame["loc_id"]), {"EEZ-MRGID-1"})
+        self.assertEqual(candidates_by_point, {0: ["EEZ-MRGID-1"]})
+        exact_read.assert_called_once()
+        self.assertEqual(exact_read.call_args.args[0], domain["point_bank"])
+        self.assertEqual(exact_read.call_args.args[1], {"EEZ-MRGID-1"})
 
     @unittest.skipUnless(has_marine_geometry(), "marine geometry banks not present locally")
     def test_load_geometry_for_loc_ids(self):

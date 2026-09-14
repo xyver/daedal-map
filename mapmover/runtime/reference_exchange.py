@@ -1283,7 +1283,6 @@ def _geometry_catalog_domains(catalog: dict[str, Any], *, read_wip: bool = False
         active = profile.get("active_release") if isinstance(profile.get("active_release"), dict) else {}
         artifacts = active.get("runtime_artifacts") if isinstance(active.get("runtime_artifacts"), dict) else {}
         country_components = artifacts.get("country_components") if isinstance(artifacts.get("country_components"), dict) else {}
-        point_shards = artifacts.get("point_shards") if isinstance(artifacts.get("point_shards"), dict) else {}
         rows.append({
             "release_unit_id": profile.get("release_unit_id"),
             "release_unit_kind": profile.get("release_unit_kind"),
@@ -1296,10 +1295,9 @@ def _geometry_catalog_domains(catalog: dict[str, Any], *, read_wip: bool = False
             "version_manifest_sha256": active.get("version_manifest_sha256"),
             "runtime_artifacts": {
                 key: value for key, value in artifacts.items()
-                if key not in {"country_components", "point_shards"}
+                if key != "country_components"
             },
             "country_component_count": len(country_components),
-            "point_shard_count": len(point_shards),
         })
     return sorted(rows, key=lambda item: str(item.get("release_unit_id") or ""))
 

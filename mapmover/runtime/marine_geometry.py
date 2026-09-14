@@ -27,7 +27,6 @@ from .geometry_predicate_query import (
     read_bbox_candidates,
     read_bbox_candidates_for_points,
     read_geojson_containment_for_points,
-    read_hash_sharded_rows,
     read_rows_by_ids,
 )
 
@@ -91,7 +90,9 @@ def _active_domain_paths() -> Optional[dict[str, Any]]:
             return _ACTIVE_DOMAIN_CACHE_VALUE
     paths = {
         key: _catalog_artifact_path(artifacts.get(key))
-        for key in ("jurisdictions", "water_bodies", "named_water_areas", "bbox_index")
+        for key in (
+            "jurisdictions", "water_bodies", "named_water_areas", "bbox_index", "point_bank",
+        )
     }
     if any(path is None for path in paths.values()):
         return None
@@ -100,14 +101,9 @@ def _active_domain_paths() -> Optional[dict[str, Any]]:
         for country, record in (artifacts.get("country_components") or {}).items()
         if (path := _catalog_artifact_path(record)) is not None
     }
-    point_shards = {
-        str(shard): path
-        for shard, record in (artifacts.get("point_shards") or {}).items()
-        if (path := _catalog_artifact_path(record)) is not None
-    }
-    if len(point_shards) != 32 or any(paths.get(key) is None for key in paths):
+    if any(paths.get(key) is None for key in paths):
         return None
-    value = {**paths, "country_components": country_components, "point_shards": point_shards}
+    value = {**paths, "country_components": country_components}
     with _ACTIVE_DOMAIN_CACHE_LOCK:
         _ACTIVE_DOMAIN_CACHE_SIGNATURE = signature
         _ACTIVE_DOMAIN_CACHE_VALUE = value
@@ -173,7 +169,7 @@ def _read_bank(path: Path, want: Optional[set], columns: Optional[list[str]] = N
 
 
 def load_marine_geometry_at_point(lon: float, lat: float) -> pd.DataFrame:
-    """Load bbox-filtered candidates from every approved marine point bank."""
+    """Load bbox-filtered candidates from the approved marine point bank."""
     domain = _active_domain_paths()
     if domain:
         bbox_candidates = read_bbox_candidates(
@@ -187,10 +183,9 @@ def load_marine_geometry_at_point(lon: float, lat: float) -> pd.DataFrame:
             "loc_id", "name", "geometry_wkb", "area_km2",
             "bbox_min_lon", "bbox_min_lat", "bbox_max_lon", "bbox_max_lat",
         ]
-        frames = [read_hash_sharded_rows(
-            domain["point_shards"],
+        frames = [read_rows_by_ids(
+            domain["point_bank"],
             jurisdiction_ids,
-            shard_count=32,
             id_column="loc_id",
             columns=jurisdiction_columns,
         )]
@@ -236,9 +231,8 @@ def load_marine_geometry_for_points(
     jurisdiction_ids = set(jurisdiction_pairs["loc_id"].astype(str)) if not jurisdiction_pairs.empty else set()
     jurisdiction_frame = pd.DataFrame(columns=_MARINE_POINT_COLUMNS)
     if jurisdiction_ids:
-        jurisdiction_frame = read_hash_sharded_rows(
-            domain["point_shards"], jurisdiction_ids,
-            shard_count=32,
+        jurisdiction_frame = read_rows_by_ids(
+            domain["point_bank"], jurisdiction_ids,
             id_column="loc_id",
             columns=[
                 "name", "geometry_wkb", "area_km2",
