@@ -61,7 +61,8 @@ class PublicDiscoveryCatalogTests(unittest.TestCase):
         expected_tools = {
             "geography": {
                 "get_tool_help", "how_geometry_works", "get_catalog", "get_pack",
-                "resolve_point", "loc_id_info", "read_geometry_catalog",
+                "resolve_point", "resolve_points", "resolve_deep_point", "resolve_deep_points",
+                "loc_id_info", "read_geometry_catalog",
                 "list_reference_systems", "identify_dataset_geography", "identify_reference_system",
                 "resolve_reference", "convert_reference", "check_geometry",
                 "compare_geographies", "get_geometry", "resolve_loc_id_scope",
@@ -70,6 +71,7 @@ class PublicDiscoveryCatalogTests(unittest.TestCase):
             },
             "reverse-geocoding": {
                 "get_tool_help", "get_catalog", "get_pack", "resolve_point",
+                "resolve_points", "resolve_deep_point", "resolve_deep_points",
             },
             "boundaries": {
                 "get_tool_help", "get_catalog", "get_pack", "loc_id_info",
@@ -95,7 +97,8 @@ class PublicDiscoveryCatalogTests(unittest.TestCase):
             "/.well-known/mcp/geography/server-card.json"
         ).json()
         paid_by_name = {tool["name"]: tool["paid"] for tool in geography["tools"]}
-        self.assertTrue(paid_by_name["resolve_point"])
+        self.assertFalse(paid_by_name["resolve_point"])
+        self.assertTrue(paid_by_name["resolve_points"])
         self.assertTrue(paid_by_name["create_geometry_export"])
         self.assertFalse(paid_by_name["read_geometry_catalog"])
 
@@ -298,7 +301,7 @@ class PublicDiscoveryCatalogTests(unittest.TestCase):
         self.assertTrue(body["payment_required"])
         self.assertEqual(body["limits"]["free_batch_limit"], 100)
         self.assertEqual(body["quote"]["capability_id"], "point_lookup")
-        self.assertEqual(body["quote"]["pricing_version"], "geography-tools-2026-08-16.1")
+        self.assertEqual(body["quote"]["pricing_version"], "geography-tools-2026-08-16.1+credit-q1000")
         self.assertIsInstance(body["quote"]["amount_usdc_base_units"], int)
         self.assertEqual(body["quote"]["payment_rails"], ["account_credit", "x402"])
         analytics = analytics_mock.call_args.kwargs
@@ -368,12 +371,12 @@ class PublicDiscoveryCatalogTests(unittest.TestCase):
         self.assertTrue(analytics_mock.call_args.kwargs["metadata"]["included_account_bulk"])
         self.assertEqual(analytics_mock.call_args.kwargs["auth_user_id"], "user-1")
 
-    def test_mcp_verified_account_gets_same_included_bulk(self) -> None:
+    def test_mcp_bulk_authorized_key_gets_same_included_bulk(self) -> None:
         def fake_resolve(points, include_geometry=False, **_kwargs):
             return [{"matched": {"loc_id": "USA-CA-037", "admin_level": 2, "iso3": "USA"}, "stack": [{"loc_id": "USA"}, {"loc_id": "USA-CA-037"}]} for _ in points]
 
         with (
-            mock.patch("app.get_authenticated_user_async", return_value={"id": "user-mcp"}),
+            mock.patch("mapmover.hosted_runtime_account.verify_mcp_credential", return_value={"account_id": "user-mcp", "credential_id": "key-mcp", "permissions": ["geometry:read", "geometry:bulk"], "plan_id": "free"}),
             mock.patch("mapmover.routes.mcp.rate_limiter.check", return_value=(True, 0)),
             mock.patch("mapmover.routes.mcp._commercial_access_decision") as verifier_mock,
             mock.patch("mapmover.geometry_handlers.resolve_points_to_locations", side_effect=fake_resolve),
@@ -381,12 +384,13 @@ class PublicDiscoveryCatalogTests(unittest.TestCase):
         ):
             response = self.client.post(
                 "/mcp/geography",
-                headers={"Authorization": "Bearer account-mcp-test"},
-                json={"jsonrpc": "2.0", "id": "account-bulk", "method": "tools/call", "params": {"name": "resolve_point", "arguments": {"country_scope": "USA", "target_admin_level": "admin_2", "points": [{"lon": -118.2, "lat": 34.0} for _ in range(101)]}}},
+                headers={"x-api-key": "account-mcp-test"},
+                json={"jsonrpc": "2.0", "id": "account-bulk", "method": "tools/call", "params": {"name": "resolve_points", "arguments": {"target_admin_level": "admin_2", "points": [{"lon": -118.2, "lat": 34.0} for _ in range(101)]}}},
             )
-        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.status_code, 200, response.text)
         payload = response.json()["result"]["structuredContent"]
-        self.assertEqual(payload["resolved_count"], 101)
+        self.assertIn("resolved_count", payload, payload)
+        self.assertEqual(payload["resolved_count"], 101, payload)
         verifier_mock.assert_not_called()
 
     def test_rest_global_admin_0_preset_sets_bounded_resolver_plan(self) -> None:

@@ -458,7 +458,7 @@ class BlindCallerHelpTests(unittest.TestCase):
         envelope = _tool_call_envelope(
             self.client,
             "get_tool_help",
-            {"tool_name": "resolve_point"},
+            {"tool_name": "resolve_points"},
             path="/mcp/geography",
         )
         payload = envelope["result"]["structuredContent"]
@@ -655,14 +655,14 @@ class ToolAccessRegistryTests(unittest.TestCase):
         source = Path(mcp_module.__file__).read_text(encoding="utf-8")
         # An inline default would mean the registry is no longer the single
         # place to change a limit.
-        self.assertNotIn("_tool_batch_item_limit(\"resolve_point\", default=", source)
+        self.assertNotIn("_tool_batch_item_limit(\"resolve_points\", default=", source)
         self.assertNotIn("fallback_env_names=(\"POINT_LOOKUP_BATCH_LIMIT\",)", source)
 
     def test_registry_values_reach_the_runtime(self) -> None:
         import mapmover.routes.mcp as mcp_module
         from tool_access_shared import tool_free_item_limit
 
-        for tool in ("resolve_point", "get_geometry", "check_geometry", "loc_id_info"):
+        for tool in ("resolve_points", "get_geometry", "check_geometry", "loc_id_info"):
             with self.subTest(tool=tool):
                 self.assertEqual(
                     mcp_module._tool_batch_item_limit(tool),
@@ -672,8 +672,8 @@ class ToolAccessRegistryTests(unittest.TestCase):
     def test_env_override_still_wins_over_the_registry(self) -> None:
         import mapmover.routes.mcp as mcp_module
 
-        with mock.patch.dict("os.environ", {"MCP_TOOL_BATCH_LIMIT_RESOLVE_POINT": "7"}, clear=False):
-            self.assertEqual(mcp_module._tool_batch_item_limit("resolve_point"), 7)
+        with mock.patch.dict("os.environ", {"MCP_TOOL_BATCH_LIMIT_RESOLVE_POINTS": "7"}, clear=False):
+            self.assertEqual(mcp_module._tool_batch_item_limit("resolve_points"), 7)
 
 
 class PaidBulkLicensingTests(unittest.TestCase):
@@ -701,7 +701,7 @@ class PaidBulkLicensingTests(unittest.TestCase):
             "mapmover.runtime.geometry_catalog.geometry_bank_access_facts",
             return_value=({"paid", "free"}, True),
         ):
-            self.assertFalse(mcp_module._tool_paid_bulk_enforced("resolve_point"))
+            self.assertFalse(mcp_module._tool_paid_bulk_enforced("resolve_points"))
 
     def test_paid_bulk_allowed_when_every_bank_permits_paid(self) -> None:
         import mapmover.routes.mcp as mcp_module
@@ -710,7 +710,7 @@ class PaidBulkLicensingTests(unittest.TestCase):
             "mapmover.runtime.geometry_catalog.geometry_bank_access_facts",
             return_value=({"paid"}, True),
         ):
-            self.assertTrue(mcp_module._tool_paid_bulk_enforced("resolve_point"))
+            self.assertTrue(mcp_module._tool_paid_bulk_enforced("resolve_points"))
 
     def test_conversion_billing_does_not_inherit_geometry_redistribution_terms(self) -> None:
         """Identity-only conversion may meter work without returning source geometry."""

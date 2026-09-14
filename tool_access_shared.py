@@ -82,8 +82,14 @@ TOOL_ACCESS_REGISTRY: dict[str, dict] = {
         "pricing": PRICING_FREE,
         "notes": "Family-level geometry orientation must stay free on the full geography facade.",
     },
-    # ---- geography: bulk-capable, licence-eligible for paid throughput ----
     "resolve_point": {
+        "family": FAMILY_GEOGRAPHY,
+        "capability_id": "point_lookup",
+        "pricing": PRICING_FREE,
+        "notes": "Single-coordinate Admin0-3 lookup.",
+    },
+    # ---- geography: bulk-capable, licence-eligible for paid throughput ----
+    "resolve_points": {
         "family": FAMILY_GEOGRAPHY,
         "capability_id": "point_lookup",
         "pricing": PRICING_PAID_BULK,
@@ -102,6 +108,21 @@ TOOL_ACCESS_REGISTRY: dict[str, dict] = {
             "base_usd": ("POINT_LOOKUP_PAID_BASE_USD",),
             "per_unit_usd": ("POINT_LOOKUP_PAID_PER_POINT_USD",),
         },
+    },
+    "resolve_deep_point": {
+        "family": FAMILY_GEOGRAPHY,
+        "capability_id": "deep_point_lookup",
+        "pricing": PRICING_FREE,
+        "notes": "Single-coordinate Admin4-6 lookup scoped by one Admin1 loc_id.",
+    },
+    "resolve_deep_points": {
+        "family": FAMILY_GEOGRAPHY,
+        "capability_id": "deep_point_lookup",
+        "pricing": PRICING_FREE,
+        "item_field": "points",
+        "free_item_limit": 100,
+        "paid_item_limit": 100,
+        "notes": "Initial technical rollout is bounded to one Admin1 partition and 100 points; payment policy comes later.",
     },
     "check_geometry": {
         "family": FAMILY_GEOGRAPHY,

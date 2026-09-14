@@ -58,11 +58,32 @@ TOOL_GUIDANCE: dict[str, dict[str, Any]] = {
         ["query_dataset", "get_tool_help"], ["source metadata", "release/freshness fields"]
     ),
     "resolve_point": _g(
-        ["You have WGS84 latitude/longitude and need an administrative loc_id chain."],
-        ["Resolving names or outside codes", "Returning polygons", "Using deep mode without exactly one country_scope and one admin_1_scope"],
-        {"points": [{"id": "row-1", "lat": 49.2827, "lon": -123.1207}], "lookup_mode": "standard"},
+        ["You have one WGS84 latitude/longitude pair and need a first-pass administrative loc_id chain through Admin 3."],
+        ["Point arrays", "Resolving names or outside codes", "Returning polygons", "Resolving Admin 4-6"],
+        {"lat": 49.2827, "lon": -123.1207},
         ["deepest_resolved_loc_id", "stack", "resolution_mode", "available_deeper_admin_levels"],
-        ["loc_id_info", "check_geometry", "get_geometry", "compare_geographies"]
+        ["resolve_deep_point", "loc_id_info", "check_geometry", "get_geometry"]
+    ),
+    "resolve_points": _g(
+        ["You have a WGS84 point array and need Admin 0-3 loc_id chains in one call."],
+        ["One coordinate", "Admin 4-6", "Returning polygons"],
+        {"points": [{"id": "row-1", "lat": 49.2827, "lon": -123.1207}]},
+        ["results", "resolved_count", "unresolved_count", "batch_id"],
+        ["resolve_deep_points", "loc_id_info", "check_geometry"]
+    ),
+    "resolve_deep_point": _g(
+        ["A shallow point lookup returned an Admin 1 loc_id and you need Admin 4-6 detail."],
+        ["First-pass country discovery", "Mixed-Admin1 batches", "Returning polygons"],
+        {"lat": 34.0522, "lon": -118.2437, "admin_1_loc_id": "USA-CA"},
+        ["deepest_resolved_loc_id", "stack", "target_admin_level", "admin_1_loc_id"],
+        ["loc_id_info", "check_geometry", "get_geometry"]
+    ),
+    "resolve_deep_points": _g(
+        ["A shallow bulk lookup returned Admin 1 loc_ids and one grouped point array needs Admin 4-6 detail."],
+        ["One coordinate", "First-pass country discovery", "Mixed-Admin1 batches", "Returning polygons"],
+        {"admin_1_loc_id": "USA-CA", "points": [{"id": "row-1", "lat": 34.0522, "lon": -118.2437}]},
+        ["results", "resolved_count", "unresolved_count", "admin_1_loc_id", "batch_id"],
+        ["loc_id_info", "check_geometry", "get_geometry"]
     ),
     "loc_id_info": _g(
         ["You already have loc_id values and need identity, hierarchy, lifecycle, or attached references."],
@@ -292,15 +313,15 @@ def geometry_family_help_payload(
         "request_rules": [
             {
                 "request": "one exploratory point",
-                "rule": "Call resolve_point in standard mode. It infers the country and returns the deepest available result through Admin 3 without opening deep partitions.",
+                "rule": "Call resolve_point. It infers the country and returns the deepest available result through Admin 3 without opening deep partitions.",
             },
             {
                 "request": "multiple administrative points",
-                "rule": "Use standard mode for a cross-country batch; it performs global Admin 0 discovery and then opens only each discovered country's Admin 0-3 bank.",
+                "rule": "Use resolve_points for a cross-country batch; it performs global Admin 0 discovery and then opens only each discovered country's Admin 0-3 bank.",
             },
             {
                 "request": "points at a partitioned deep level",
-                "rule": "Use lookup_mode='deep' with exactly one country_scope and one admin_1_scope. First run standard mode, then split points by the returned Admin 1 loc_id.",
+                "rule": "First call resolve_points, split results by the returned Admin 1 loc_id, then call resolve_deep_points once per admin_1_loc_id.",
             },
             {
                 "request": "geometry for known loc_ids",
@@ -329,12 +350,11 @@ def geometry_family_help_payload(
                 "steps": ["resolve_point", "loc_id_info only when details are requested", "check_geometry then get_geometry only when shapes are requested"],
             },
             {
-                "name": "country_scoped_administrative_points",
+                "name": "shallow_administrative_points",
                 "example": {
-                    "tool": "resolve_point",
+                    "tool": "resolve_points",
                     "arguments": {
                         "points": [{"lat": 45.039641, "lon": -103.313618}],
-                        "country_scope": "USA",
                         "target_admin_level": 3,
                     },
                 },
@@ -346,9 +366,9 @@ def geometry_family_help_payload(
                     "read the selected country's catalog entry and query_guidance",
                     "resolve to the declared partition-owner level",
                     "group points by the returned owner loc_id",
-                    "call resolve_point separately for each owner group at the requested deeper level",
+                    "call resolve_deep_points separately for each owner group with its admin_1_loc_id",
                 ],
-                "important": "Use only fields accepted by resolve_point. Grouping is expressed by putting one declared owner region's points in each call.",
+                "important": "resolve_points is the shallow bulk pass. resolve_deep_points is the only bulk Admin 4-6 entry point and accepts exactly one Admin 1 partition per call.",
             },
             {
                 "name": "known_loc_ids_to_shapes",
@@ -432,18 +452,25 @@ def tool_help_payload(
             "payment_required": False,
             "resource_boundary": "local machine memory, disk, and process availability",
         })
-    if name == "resolve_point" and not local_installed:
+    if name == "resolve_points" and not local_installed:
         access["caller_tiers"] = {
             "anonymous": {"included_items": limits.get("free_item_limit"), "above_limit": "payment_required"},
             "verified_account": {"included_items": limits.get("paid_item_limit"), "above_limit": "paid_export_or_dashboard"},
         }
         access["bulk_shape"] = {
             "threshold": limits.get("free_item_limit"),
-            "standard_mode": "cross-country; global Admin0 discovery then Admin0-3 country banks only",
-            "deep_mode": "exactly one country_scope and one admin_1_scope; target_admin_level also required above threshold",
-            "deep_required_above_threshold": ["country_scope", "target_admin_level"],
-            "cross_country_presets": ["global_admin_0", "global_admin_1"],
-            "preset_field": "bulk_preset",
+            "shallow_tool": "resolve_points: cross-country Admin0 discovery followed by Admin0-3 country banks only",
+            "deep_tool": "resolve_deep_points: point array plus exactly one admin_1_loc_id; Admin4-6 only",
+        }
+    elif name == "resolve_deep_points" and not local_installed:
+        access["caller_tiers"] = {
+            "anonymous": {"included_items": limits.get("free_item_limit"), "above_limit": "not_available"},
+            "verified_account": {"included_items": limits.get("paid_item_limit"), "above_limit": "not_available"},
+        }
+        access["bulk_shape"] = {
+            "partition_scope": "exactly one admin_1_loc_id per call",
+            "maximum_items": limits.get("free_item_limit"),
+            "payment_policy": "deferred during technical rollout",
         }
     return {
         "ok": True,

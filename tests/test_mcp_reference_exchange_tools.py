@@ -68,6 +68,9 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         self.assertIn("get_geometry", tool_names)
         self.assertIn("compare_geographies", tool_names)
         self.assertIn("resolve_point", tool_names)
+        self.assertIn("resolve_points", tool_names)
+        self.assertIn("resolve_deep_point", tool_names)
+        self.assertIn("resolve_deep_points", tool_names)
         self.assertIn("loc_id_info", tool_names)
         self.assertIn("resolve_loc_id_scope", tool_names)
         self.assertIn("estimate_geometry_package", tool_names)
@@ -76,7 +79,6 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         self.assertIn("create_conversion_job", tool_names)
         self.assertIn("get_job_status", tool_names)
         self.assertNotIn("check_geometries", tool_names)
-        self.assertNotIn("resolve_points", tool_names)
         self.assertNotIn("loc_id_references", tool_names)
         self.assertNotIn("get_boundary", tool_names)
         self.assertNotIn("loc_id_hierarchy", tool_names)
@@ -117,7 +119,7 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         )
 
         self.assertEqual(envelope["result"]["serverInfo"]["name"], "com.daedalmap/geography")
-        self.assertEqual(envelope["result"]["serverInfo"]["version"], "1.1.0")
+        self.assertEqual(envelope["result"]["serverInfo"]["version"], "1.3.0")
 
     def test_browser_mcp_metadata_is_bounded_and_reaches_usage_analytics(self) -> None:
         with mock.patch("mapmover.routes.mcp.log_api_query_event") as analytics_mock:
@@ -218,7 +220,7 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
             workflow for workflow in payload["workflows"]
             if workflow["name"] == "partitioned_deep_points_across_multiple_regions"
         )
-        self.assertIn("fields accepted by resolve_point", deep_workflow["important"])
+        self.assertIn("resolve_deep_points is the only bulk Admin 4-6 entry point", deep_workflow["important"])
         self.assertIn("identify_reference_system", payload["available_tools"])
         self.assertNotIn("query_dataset", payload["available_tools"])
         self.assertEqual(analytics_mock.call_args.kwargs["capability_id"], "geometry_family_help")
@@ -228,7 +230,9 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         tool_names = {tool["name"] for tool in envelope["result"]["tools"]}
 
         self.assertIn("resolve_point", tool_names)
-        self.assertNotIn("resolve_points", tool_names)
+        self.assertIn("resolve_points", tool_names)
+        self.assertIn("resolve_deep_point", tool_names)
+        self.assertIn("resolve_deep_points", tool_names)
         self.assertNotIn("get_boundary", tool_names)
 
     def test_boundaries_facade_lists_geometry_preflight_tools(self) -> None:
@@ -245,7 +249,7 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         self.assertIn("create_geometry_export", tool_names)
         self.assertIn("get_job_status", tool_names)
 
-    def test_resolve_point_tool_accepts_point_batch(self) -> None:
+    def test_resolve_points_tool_accepts_point_batch(self) -> None:
         def fake_resolve(points, include_geometry=False, **_kwargs):
             return [
                 {
@@ -268,7 +272,7 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         ):
             payload = _tool_call(
                 self.client,
-                "resolve_point",
+                "resolve_points",
                 {
                     "request_id": "mcp-bulk-test",
                     "batch_id": "batch-1",
@@ -295,7 +299,7 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         analytics = analytics_mock.call_args.kwargs
         self.assertEqual(analytics["capability_id"], "point_lookup")
         self.assertEqual(analytics["pack_id"], "geography_tools")
-        self.assertEqual(analytics["source_id"], "resolve_point")
+        self.assertEqual(analytics["source_id"], "resolve_points")
         self.assertEqual(analytics["decision"], "allow")
         self.assertEqual(analytics["payment_rail"], "free")
         self.assertEqual(analytics["row_count"], 2)
@@ -309,7 +313,7 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         self.assertEqual(analytics["metadata"]["compute"]["output_count"], 2)
         self.assertIn("point_resolver_ms", analytics["metadata"]["compute"]["stage_ms"])
 
-    def test_resolve_point_tool_challenges_point_batch_over_free_limit(self) -> None:
+    def test_resolve_points_tool_challenges_point_batch_over_free_limit(self) -> None:
         """Over the free allowance the verifier decides, and its price is passed through."""
         challenge = (
             "challenge",
@@ -330,8 +334,8 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         ):
             payload = _tool_call(
                 self.client,
-                "resolve_point",
-                {"points": [{"lon": 0, "lat": 0} for _ in range(101)], "country_scope": "USA", "target_admin_level": "admin_2"},
+                "resolve_points",
+                {"points": [{"lon": 0, "lat": 0} for _ in range(101)], "target_admin_level": "admin_2"},
             )
 
         self.assertTrue(payload["payment_required"])
@@ -346,30 +350,48 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         self.assertEqual(analytics["decision"], "challenge")
         self.assertEqual(analytics["payment_rail"], "commercial_access")
 
-    def test_resolve_point_deep_bulk_requires_one_country(self) -> None:
+    def test_shallow_point_rejects_legacy_deep_fields(self) -> None:
         payload = _tool_call(
             self.client,
-            "resolve_point",
+            "resolve_points",
             {
                 "lookup_mode": "deep",
                 "target_admin_level": "admin_5",
-                "points": [{"lon": 0, "lat": 0} for _ in range(101)],
+                "points": [{"lon": 0, "lat": 0}],
             },
         )
-        self.assertEqual(payload["error"]["code"], "deep_country_scope_required")
+        self.assertEqual(payload["error"]["code"], "shallow_point_contract_violation")
 
-    def test_resolve_point_deep_requires_one_admin_1_owner(self) -> None:
+    def test_deep_point_requires_one_admin_1_loc_id(self) -> None:
         payload = _tool_call(
             self.client,
-            "resolve_point",
+            "resolve_deep_points",
             {
-                "lookup_mode": "deep",
-                "country_scope": "USA",
                 "target_admin_level": "admin_5",
                 "points": [{"lon": -118.2, "lat": 34.0}],
             },
         )
-        self.assertEqual(payload["error"]["code"], "deep_admin_1_scope_required")
+        self.assertEqual(payload["error"]["code"], "invalid_admin_1_loc_id")
+
+    def test_point_tools_enforce_disjoint_admin_ranges(self) -> None:
+        shallow = _tool_call(
+            self.client,
+            "resolve_point",
+            {"lat": 34.0, "lon": -118.2, "target_admin_level": "admin_4"},
+        )
+        deep = _tool_call(
+            self.client,
+            "resolve_deep_point",
+            {
+                "lat": 34.0,
+                "lon": -118.2,
+                "admin_1_loc_id": "USA-CA",
+                "target_admin_level": "admin_3",
+            },
+        )
+
+        self.assertEqual(shallow["error"]["code"], "shallow_admin_level_required")
+        self.assertEqual(deep["error"]["code"], "deep_admin_level_required")
 
     def test_standard_bulk_passes_admin3_io_ceiling_without_country_scope(self) -> None:
         identity = CallerIdentity(KIND_ACCOUNT, "user-1", CONFIDENCE_VERIFIED, auth_user_id="user-1")
@@ -390,18 +412,17 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         ):
             payload = _tool_call(
                 self.client,
-                "resolve_point",
-                {"lookup_mode": "standard", "points": [{"lon": -118.2, "lat": 34.0} for _ in range(101)]},
+                "resolve_points",
+                {"points": [{"lon": -118.2, "lat": 34.0} for _ in range(101)]},
             )
 
-        self.assertEqual(payload["lookup_mode"], "standard")
         self.assertEqual(payload["target_admin_level"], "up_to_admin_3")
         self.assertIsNone(resolver.call_args.kwargs["target_admin_level"])
         self.assertEqual(resolver.call_args.kwargs["max_admin_level"], 3)
         self.assertIsNone(resolver.call_args.kwargs["country_scope"])
         self.assertTrue(resolver.call_args.kwargs["shallow_banks_only"])
 
-    def test_scoped_deep_bulk_removes_the_standard_io_ceiling(self) -> None:
+    def test_deep_points_use_admin_1_loc_id_as_the_partition_scope(self) -> None:
         def fake_resolve(points, include_geometry=False, **_kwargs):
             return [{"matched": {"loc_id": "USA-CA-037-1-001", "admin_level": 5}, "stack": []} for _ in points]
 
@@ -411,22 +432,39 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         ):
             payload = _tool_call(
                 self.client,
-                "resolve_point",
+                "resolve_deep_points",
                 {
-                    "lookup_mode": "deep",
-                    "country_scope": "USA",
-                    "admin_1_scope": "USA-CA",
+                    "admin_1_loc_id": "USA-CA",
                     "target_admin_level": "admin_5",
                     "points": [{"lon": -118.2, "lat": 34.0}],
                 },
             )
 
-        self.assertEqual(payload["lookup_mode"], "deep")
+        self.assertEqual(payload["admin_1_loc_id"], "USA-CA")
         self.assertEqual(resolver.call_args.kwargs["target_admin_level"], 5)
         self.assertIsNone(resolver.call_args.kwargs["max_admin_level"])
         self.assertEqual(resolver.call_args.kwargs["country_scope"], "USA")
         self.assertEqual(resolver.call_args.kwargs["admin_1_scope"], "USA-CA")
         self.assertFalse(resolver.call_args.kwargs["shallow_banks_only"])
+
+    def test_singular_point_tools_route_to_shallow_and_deep_banks(self) -> None:
+        def fake_resolve(points, include_geometry=False, **_kwargs):
+            return [{"point": points[0], "matched": {"loc_id": "USA-CA-037", "admin_level": 2}, "stack": [{"loc_id": "USA"}, {"loc_id": "USA-CA"}]}]
+
+        for tool, arguments, shallow in (
+            ("resolve_point", {"lat": 34.0, "lon": -118.2}, True),
+            ("resolve_deep_point", {"lat": 34.0, "lon": -118.2, "admin_1_loc_id": "USA-CA"}, False),
+        ):
+            with self.subTest(tool=tool):
+                with (
+                    mock.patch("mapmover.geometry_handlers.resolve_points_to_locations", side_effect=fake_resolve) as resolver,
+                    mock.patch("mapmover.routes.mcp.log_api_query_event"),
+                ):
+                    payload = _tool_call(self.client, tool, arguments)
+                self.assertEqual(payload["matched"]["loc_id"], "USA-CA-037")
+                self.assertEqual(resolver.call_args.args[0], [{"lon": -118.2, "lat": 34.0}])
+                self.assertEqual(resolver.call_args.kwargs["shallow_banks_only"], shallow)
+                self.assertEqual(resolver.call_args.kwargs["admin_1_scope"], None if shallow else "USA-CA")
 
     def test_verified_account_uses_included_bulk_without_commercial_verifier(self) -> None:
         def fake_resolve(points, include_geometry=False, **_kwargs):
@@ -452,49 +490,30 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         ):
             payload = _tool_call(
                 self.client,
-                "resolve_point",
-                {"points": [{"lon": -118.2, "lat": 34.0} for _ in range(101)], "country_scope": "USA", "target_admin_level": "admin_2"},
+                "resolve_points",
+                {"points": [{"lon": -118.2, "lat": 34.0} for _ in range(101)], "target_admin_level": "admin_2"},
             )
         self.assertEqual(payload["point_count"], 101)
         self.assertEqual(payload["resolved_count"], 101)
         verifier_mock.assert_not_called()
 
-    def test_global_admin_1_preset_replaces_country_scope_and_level(self) -> None:
-        def fake_resolve(points, include_geometry=False, **_kwargs):
-            return [
-                {"matched": {"loc_id": "CAN-ON", "admin_level": 1}, "stack": [{"loc_id": "CAN"}, {"loc_id": "CAN-ON"}]}
-                for _ in points
-            ]
-
-        # A real identity, not a Mock: the included allowance now depends on the
-        # caller's access tier, so a Mock would silently invent a lane.
-        identity = CallerIdentity(KIND_ACCOUNT, "user-1", CONFIDENCE_VERIFIED, auth_user_id="user-1")
-        with (
-            mock.patch("mapmover.routes.mcp.request_caller_identity", return_value=identity),
-            mock.patch("mapmover.geometry_handlers.resolve_points_to_locations", side_effect=fake_resolve) as resolver_mock,
-            mock.patch("mapmover.routes.mcp.log_api_query_event"),
-        ):
-            payload = _tool_call(
-                self.client,
-                "resolve_point",
-                {"points": [{"lon": -79.4, "lat": 43.7} for _ in range(101)], "bulk_preset": "global_admin_1"},
-            )
-
-        self.assertEqual(payload["bulk_preset"], "global_admin_1")
-        self.assertEqual(resolver_mock.call_args.kwargs["target_admin_level"], 1)
-        self.assertEqual(resolver_mock.call_args.kwargs["max_admin_level"], 3)
-        self.assertIsNone(resolver_mock.call_args.kwargs["country_scope"])
-
-    def test_global_preset_rejects_conflicting_country_scope(self) -> None:
+    def test_shallow_point_rejects_removed_bulk_preset(self) -> None:
         payload = _tool_call(
             self.client,
-            "resolve_point",
-            {"points": [{"lon": 0, "lat": 0} for _ in range(101)], "bulk_preset": "global_admin_0", "country_scope": "USA"},
+            "resolve_points",
+            {"points": [{"lon": -79.4, "lat": 43.7}], "bulk_preset": "global_admin_1"},
         )
-        self.assertEqual(payload["error"]["code"], "bulk_preset_conflict")
-        self.assertEqual(payload["error"]["conflicting_fields"], ["country_scope"])
+        self.assertEqual(payload["error"]["code"], "shallow_point_contract_violation")
 
-    def test_resolve_point_refuses_when_the_verifier_is_unreachable(self) -> None:
+    def test_shallow_point_rejects_country_scope(self) -> None:
+        payload = _tool_call(
+            self.client,
+            "resolve_points",
+            {"points": [{"lon": 0, "lat": 0}], "country_scope": "USA"},
+        )
+        self.assertEqual(payload["error"]["code"], "shallow_point_contract_violation")
+
+    def test_resolve_points_refuses_when_the_verifier_is_unreachable(self) -> None:
         """Fail closed: a paid request must never execute for free."""
         with (
             mock.patch(
@@ -509,14 +528,14 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         ):
             payload = _tool_call(
                 self.client,
-                "resolve_point",
-                {"points": [{"lon": 0, "lat": 0} for _ in range(101)], "country_scope": "USA", "target_admin_level": "admin_2"},
+                "resolve_points",
+                {"points": [{"lon": 0, "lat": 0} for _ in range(101)], "target_admin_level": "admin_2"},
             )
 
         self.assertEqual(payload["error"]["code"], "commercial_access_unavailable")
         self.assertEqual(analytics_mock.call_args.kwargs["decision"], "deny")
 
-    def test_resolve_point_executes_and_records_settlement_when_allowed(self) -> None:
+    def test_resolve_points_executes_and_records_settlement_when_allowed(self) -> None:
         """A settled call runs, and lands in analytics as paid rather than free."""
 
         def fake_resolve(points, include_geometry=False, **_kwargs):
@@ -549,8 +568,8 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         ):
             payload = _tool_call(
                 self.client,
-                "resolve_point",
-                {"points": [{"lon": 0, "lat": 0} for _ in range(101)], "country_scope": "USA", "target_admin_level": "admin_2"},
+                "resolve_points",
+                {"points": [{"lon": 0, "lat": 0} for _ in range(101)], "target_admin_level": "admin_2"},
             )
 
         self.assertEqual(payload["point_count"], 101)
@@ -566,7 +585,7 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         self.assertEqual(analytics["payment_rail"], "paid")
         self.assertEqual(analytics["metadata"]["settlement_id"], "settle-abc")
 
-    def test_resolve_point_tool_trusted_token_executes_over_free_limit(self) -> None:
+    def test_resolve_points_tool_trusted_token_executes_over_free_limit(self) -> None:
         def fake_resolve(points, include_geometry=False, **_kwargs):
             return [
                 {
@@ -587,8 +606,8 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
             ):
                 payload = _tool_call(
                     self.client,
-                    "resolve_point",
-                    {"points": [{"lon": 0, "lat": 0, "row_index": index} for index in range(101)], "country_scope": "USA", "target_admin_level": "admin_2"},
+                    "resolve_points",
+                    {"points": [{"lon": 0, "lat": 0, "row_index": index} for index in range(101)], "target_admin_level": "admin_2"},
                     headers={"Authorization": "Bearer tok_test_bypass"},
                 )
 
@@ -600,9 +619,9 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         self.assertEqual(analytics["payment_rail"], "trusted_artifact")
         self.assertIsNotNone(analytics["artifact_token_id"])
 
-    def test_resolve_point_tool_uses_per_tool_batch_limit_override(self) -> None:
+    def test_resolve_points_tool_uses_per_tool_batch_limit_override(self) -> None:
         challenge = ("challenge", {"status": "challenge", "context": {}, "challenge": {}})
-        with mock.patch.dict("os.environ", {"MCP_TOOL_BATCH_LIMIT_RESOLVE_POINT": "2"}):
+        with mock.patch.dict("os.environ", {"MCP_TOOL_BATCH_LIMIT_RESOLVE_POINTS": "2"}):
             with (
                 mock.patch(
                     "mapmover.routes.mcp._tool_effective_access",
@@ -613,8 +632,8 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
             ):
                 payload = _tool_call(
                     self.client,
-                    "resolve_point",
-                    {"points": [{"lon": 0, "lat": 0} for _ in range(3)], "country_scope": "USA", "target_admin_level": "admin_2"},
+                    "resolve_points",
+                    {"points": [{"lon": 0, "lat": 0} for _ in range(3)], "target_admin_level": "admin_2"},
                 )
 
         self.assertEqual(payload["limits"]["free_batch_limit"], 2)
@@ -657,10 +676,9 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
             ):
                 payload = _tool_call(
                     self.client,
-                    "resolve_point",
+                    "resolve_points",
                     {
                         "points": [{"lon": 0, "lat": 0} for _ in range(3)],
-                        "country_scope": "USA",
                         "target_admin_level": "admin_2",
                     },
                 )
@@ -671,16 +689,16 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         self.assertEqual(payload["resolved_count"], 3)
         verifier_mock.assert_not_called()
 
-    def test_resolve_point_above_interactive_ceiling_returns_honest_v0_limit(self) -> None:
+    def test_resolve_points_above_interactive_ceiling_returns_honest_v0_limit(self) -> None:
         with (
-            mock.patch.dict("os.environ", {"MCP_TOOL_BATCH_LIMIT_RESOLVE_POINT": "2", "MCP_TOOL_PAID_BATCH_LIMIT_RESOLVE_POINT": "3"}),
+            mock.patch.dict("os.environ", {"MCP_TOOL_BATCH_LIMIT_RESOLVE_POINTS": "2", "MCP_TOOL_PAID_BATCH_LIMIT_RESOLVE_POINTS": "3"}),
             mock.patch("mapmover.routes.mcp._tool_paid_bulk_enforced", return_value=True),
             mock.patch("mapmover.routes.mcp.log_api_query_event"),
         ):
             payload = _tool_call(
                 self.client,
-                "resolve_point",
-                {"points": [{"lon": 0, "lat": 0} for _ in range(4)], "country_scope": "USA", "target_admin_level": "admin_2"},
+                "resolve_points",
+                {"points": [{"lon": 0, "lat": 0} for _ in range(4)], "target_admin_level": "admin_2"},
             )
         self.assertFalse(payload["payment_required"])
         self.assertEqual(payload["error"]["code"], "interactive_limit_exceeded")
@@ -861,8 +879,17 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         tools = {tool["name"]: tool for tool in envelope["result"]["tools"]}
 
         self.assertNotIn("include_geometry", tools["resolve_point"]["inputSchema"]["properties"])
+        self.assertNotIn("points", tools["resolve_point"]["inputSchema"]["properties"])
+        self.assertIn("points", tools["resolve_points"]["inputSchema"]["properties"])
+        self.assertNotIn("lat", tools["resolve_points"]["inputSchema"]["properties"])
+        self.assertNotIn("lookup_mode", tools["resolve_point"]["inputSchema"]["properties"])
+        self.assertNotIn("country_scope", tools["resolve_point"]["inputSchema"]["properties"])
+        self.assertIn("admin_1_loc_id", tools["resolve_deep_point"]["inputSchema"]["properties"])
+        self.assertNotIn("points", tools["resolve_deep_point"]["inputSchema"]["properties"])
+        self.assertIn("points", tools["resolve_deep_points"]["inputSchema"]["properties"])
+        self.assertNotIn("lookup_mode", tools["resolve_deep_point"]["inputSchema"]["properties"])
         self.assertNotIn("include_info", tools["get_geometry"]["inputSchema"]["properties"])
-        self.assertIn("Pass the returned stack loc_ids to loc_id_info", tools["resolve_point"]["description"])
+        self.assertIn("For multiple coordinates use resolve_points", tools["resolve_point"]["description"])
         self.assertIn("drill-down tool", tools["loc_id_info"]["description"])
         self.assertIn("does not explain hierarchy", tools["get_geometry"]["description"])
         self.assertIn("never substituted", tools["get_geometry"]["description"])

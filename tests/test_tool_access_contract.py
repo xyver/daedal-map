@@ -66,7 +66,7 @@ class ToolAccessContractTests(unittest.TestCase):
 
     def test_shared_challenge_preserves_the_canonical_quote(self) -> None:
         payload = tool_payment_required_payload(
-            "resolve_point", 101, free_limit=100, paid_limit=10_000, request_id="req-1"
+            "resolve_points", 101, free_limit=100, paid_limit=10_000, request_id="req-1"
         )
         self.assertEqual(payload["quote"]["capability_id"], "point_lookup")
         self.assertEqual(payload["quote"]["amount_usdc_base_units"], 10_000)
@@ -108,7 +108,7 @@ class AccountLaneTests(unittest.TestCase):
     """
 
     def test_account_lane_sits_between_free_and_paid(self) -> None:
-        for tool in ("resolve_point", "resolve_reference", "convert_reference", "loc_id_info"):
+        for tool in ("resolve_points", "resolve_reference", "convert_reference", "loc_id_info"):
             with self.subTest(tool=tool):
                 free = tool_effective_item_limit(tool, lane="free")
                 account = tool_effective_item_limit(tool, lane="account")
@@ -118,14 +118,14 @@ class AccountLaneTests(unittest.TestCase):
 
     def test_account_limit_never_exceeds_the_paid_limit(self) -> None:
         """The derived 10x must clamp, or a free account could outrank a paying one."""
-        for tool in ("resolve_point", "check_geometry", "get_geometry", "resolve_loc_id_scope"):
+        for tool in ("resolve_points", "check_geometry", "get_geometry", "resolve_loc_id_scope"):
             with self.subTest(tool=tool):
                 self.assertLessEqual(tool_account_item_limit(tool), tool_effective_item_limit(tool, lane="paid"))
 
     def test_account_lane_has_its_own_env_override(self) -> None:
-        with mock.patch.dict(os.environ, {"MCP_TOOL_ACCOUNT_BATCH_LIMIT_RESOLVE_POINT": "777"}, clear=False):
-            self.assertEqual(tool_effective_item_limit("resolve_point", lane="account"), 777)
-            self.assertEqual(tool_effective_item_limit("resolve_point", lane="free"), 100)
+        with mock.patch.dict(os.environ, {"MCP_TOOL_ACCOUNT_BATCH_LIMIT_RESOLVE_POINTS": "777"}, clear=False):
+            self.assertEqual(tool_effective_item_limit("resolve_points", lane="account"), 777)
+            self.assertEqual(tool_effective_item_limit("resolve_points", lane="free"), 100)
 
 
 if __name__ == "__main__":

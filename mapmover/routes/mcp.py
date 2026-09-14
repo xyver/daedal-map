@@ -82,7 +82,8 @@ router = APIRouter()
 
 MCP_PACK_READ_TOOLS = {"get_tool_help", "get_catalog", "get_pack"}
 MCP_GEOMETRY_READ_TOOLS = {
-    "how_geometry_works", "resolve_point", "loc_id_info", "read_geometry_catalog",
+    "how_geometry_works", "resolve_point", "resolve_points", "resolve_deep_point", "resolve_deep_points",
+    "loc_id_info", "read_geometry_catalog",
     "list_reference_systems", "identify_dataset_geography", "identify_reference_system", "resolve_reference",
     "convert_reference", "compare_geographies", "check_geometry", "get_geometry",
     "resolve_loc_id_scope", "estimate_geometry_package", "estimate_conversion_job",
@@ -828,7 +829,8 @@ def _tool_effective_access(tool_name: str, *, country_scope: str | None = None) 
         from mapmover.runtime.geometry_catalog import geometry_bank_access_facts
 
         scopes = {str(country_scope).strip().upper()} if country_scope else None
-        families = {"admin_boundary"} if tool_name == "resolve_point" else None
+        point_tools = {"resolve_point", "resolve_points", "resolve_deep_point", "resolve_deep_points"}
+        families = {"admin_boundary"} if tool_name in point_tools else None
         permissions, publication_cleared = geometry_bank_access_facts(
             scopes=scopes,
             families=families,
@@ -885,10 +887,6 @@ def _tool_paid_batch_limit(tool_name: str, free_limit: int) -> int:
     return max(free_limit, int(value or free_limit))
 
 
-def _point_lookup_paid_batch_limit(free_limit: int) -> int:
-    return _tool_paid_batch_limit("resolve_point", free_limit)
-
-
 def _caller_included_item_limit(tool_name: str, caller_identity, *, free_limit: int, paid_limit: int) -> int:
     """Included item allowance for this caller, clamped between free and paid."""
     lane = caller_identity.included_item_lane
@@ -915,6 +913,7 @@ def _point_bulk_shape_error(
 
 def _point_lookup_quote_payload(
     *,
+    tool_name: str,
     request_id: str | None,
     batch_id: str | None,
     point_count: int,
@@ -922,7 +921,7 @@ def _point_lookup_quote_payload(
     paid_limit: int,
 ) -> dict[str, Any]:
     payload = tool_payment_required_payload(
-        "resolve_point",
+        tool_name,
         point_count,
         free_limit=free_limit,
         paid_limit=paid_limit,
@@ -1361,7 +1360,7 @@ def get_server_description(pack_id: str | None = None) -> str:
             f"{PACK_SERVER_PROFILES[normalized]['description']} Safety: {AGENT_SAFETY_NOTICE} {coverage_prefix}"
             "The calling LLM translates the user's natural-language request into strict tool JSON; geometry execution tools do not accept prose unless a schema explicitly says they do. Call get_tool_help before an unfamiliar tool. On error, inspect error, warnings, guidance, and clarification; ask the user only when clarification.required is true. "
             "Start with free discovery: call read_geometry_catalog with view='capabilities' for the current global baseline and catalog-admitted country enrichment; use its focused inventory views for admin depths, shape-backed families, crosswalks, named geometries, and package availability. Then call list_reference_systems to see supported exchange systems, relationship vintages, counts, and license/source context. "
-            "For coordinates, call resolve_point with lat/lon or points; standard mode returns the compact chain through the deepest available tier at or below Admin 3 without opening deep partitions. For Admin 4-6, group the standard results by Admin 1 loc_id, then call deep mode once per country_scope/admin_1_scope pair. Do not request geometry or relationship detail in that call. "
+            "For one coordinate call resolve_point; for a point array call resolve_points. Both return compact chains through Admin 3 without opening deep partitions. For Admin 4-6, group bulk results by Admin 1 loc_id, then call resolve_deep_point for one coordinate or resolve_deep_points once per admin_1_loc_id group. Do not request geometry or relationship detail in these calls. "
             "When the caller asks for details about that chain, pass its stack loc_ids to loc_id_info; use get_geometry only for shapes and compare_geographies only for overlap, topology, validity, or successor questions. Mixed-vintage point context is not strict parentage. "
             "For a user dataset with unknown or informally declared geography keys, pass bounded scalar column samples to identify_dataset_geography; the caller may filter transport noise but must not choose the geography itself. Then pass its unambiguous geography_binding to the conversion-job tools. Use identify_reference_system only when one identifier column is already selected. For one known outside geography code or name, call resolve_reference. For bulk geometry, call resolve_loc_id_scope only for one strict hierarchy, then estimate_geometry_package before create_geometry_export. "
             "Geometry export and conversion creates are synchronous operations with operational safety limits (currently 250 selected geometries and 7,500 conversion rows by default) sized around a 10-20 second response budget. Local and hosted tools use the same item ceilings for now; local access does not require hosted settlement. Call the estimate tool or get_tool_help for the effective access lane. This facade does not promise a durable queue that is not deployed."
@@ -1646,7 +1645,7 @@ def _tool_definitions_cached(_epoch: int) -> list[dict[str, Any]]:
     if not claim:
         return definitions
     for definition in definitions:
-        if definition.get("name") in {"how_geometry_works", "read_geometry_catalog", "resolve_point"}:
+        if definition.get("name") in {"how_geometry_works", "read_geometry_catalog", "resolve_point", "resolve_points", "resolve_deep_point", "resolve_deep_points"}:
             definition["description"] = f"{definition.get('description', '').rstrip()} Current catalog: {claim}"
     return definitions
 
@@ -2115,6 +2114,163 @@ async def _execute_live_earthquake_tool(arguments: dict[str, Any], rpc_request_i
     return _jsonrpc_response(_tool_result(result), rpc_request_id)
 
 
+def _point_tool_contract_error(request_id: str, rpc_request_id: Any, *, code: str, message: str) -> Response:
+    return _jsonrpc_response(
+        _tool_result({"request_id": request_id, "error": {"code": code, "message": message}}, is_error=True),
+        rpc_request_id,
+    )
+
+
+@_guard_mcp_execution("resolve_point")
+async def _execute_resolve_point_tool(request: Request, arguments: dict[str, Any], rpc_request_id: Any) -> Response:
+    """Execute the public Admin0-3 point contract."""
+    payload = dict(arguments or {})
+    request_id = str(payload.get("request_id") or rpc_request_id or "")
+    if "points" in payload or "batch_id" in payload:
+        return _point_tool_contract_error(
+            request_id,
+            rpc_request_id,
+            code="single_point_required",
+            message="resolve_point accepts one lat/lon pair. Use resolve_points for a point array.",
+        )
+    legacy_fields = sorted(
+        {"lookup_mode", "country_scope", "admin_1_scope", "country_hint", "bulk_preset"}
+        .intersection(payload)
+    )
+    if legacy_fields:
+        return _point_tool_contract_error(
+            request_id,
+            rpc_request_id,
+            code="shallow_point_contract_violation",
+            message=(
+                "resolve_point is shallow and accepts coordinates only. Use "
+                "resolve_deep_point with admin_1_loc_id for Admin 4-6 lookup."
+            ),
+        )
+    target_admin_level = _point_lookup_target_admin_level(payload)
+    if target_admin_level is not None and target_admin_level > 3:
+        return _point_tool_contract_error(
+            request_id,
+            rpc_request_id,
+            code="shallow_admin_level_required",
+            message="resolve_point accepts only Admin 0-3 targets. Use resolve_deep_point for Admin 4-6.",
+        )
+    payload["lookup_mode"] = "standard"
+    return await _execute_point_lookup_tool(
+        request, payload, rpc_request_id, execution_tool_name="resolve_point"
+    )
+
+
+@_guard_mcp_execution("resolve_points")
+async def _execute_resolve_points_tool(request: Request, arguments: dict[str, Any], rpc_request_id: Any) -> Response:
+    """Execute the public Admin0-3 bulk point contract."""
+    payload = dict(arguments or {})
+    request_id = str(payload.get("request_id") or rpc_request_id or "")
+    if "points" not in payload or "lat" in payload or "lon" in payload:
+        return _point_tool_contract_error(
+            request_id,
+            rpc_request_id,
+            code="point_array_required",
+            message="resolve_points requires a points array and does not accept top-level lat/lon.",
+        )
+    legacy_fields = sorted(
+        {"lookup_mode", "country_scope", "admin_1_scope", "country_hint", "bulk_preset"}
+        .intersection(payload)
+    )
+    if legacy_fields:
+        return _point_tool_contract_error(
+            request_id,
+            rpc_request_id,
+            code="shallow_point_contract_violation",
+            message="resolve_points is shallow. Use resolve_deep_points with admin_1_loc_id for Admin 4-6.",
+        )
+    target_admin_level = _point_lookup_target_admin_level(payload)
+    if target_admin_level is not None and target_admin_level > 3:
+        return _point_tool_contract_error(
+            request_id,
+            rpc_request_id,
+            code="shallow_admin_level_required",
+            message="resolve_points accepts only Admin 0-3 targets. Use resolve_deep_points for Admin 4-6.",
+        )
+    payload["lookup_mode"] = "standard"
+    return await _execute_point_lookup_tool(
+        request, payload, rpc_request_id, execution_tool_name="resolve_points"
+    )
+
+
+@_guard_mcp_execution("resolve_deep_point")
+async def _execute_resolve_deep_point_tool(request: Request, arguments: dict[str, Any], rpc_request_id: Any) -> Response:
+    """Execute the public Admin4-6 point contract within one Admin1 partition."""
+    payload = dict(arguments or {})
+    request_id = str(payload.get("request_id") or rpc_request_id or "")
+    if "points" in payload or "batch_id" in payload:
+        return _point_tool_contract_error(
+            request_id,
+            rpc_request_id,
+            code="single_point_required",
+            message="resolve_deep_point accepts one lat/lon pair. Use resolve_deep_points for a point array.",
+        )
+    admin_1_loc_id = str(payload.pop("admin_1_loc_id", "") or "").strip().upper()
+    if not re.fullmatch(r"[A-Z]{3}-[^-]+", admin_1_loc_id):
+        return _point_tool_contract_error(
+            request_id,
+            rpc_request_id,
+            code="invalid_admin_1_loc_id",
+            message="admin_1_loc_id must be exactly one Admin 1 loc_id, such as USA-CA.",
+        )
+    target_admin_level = _point_lookup_target_admin_level(payload)
+    if target_admin_level is not None and target_admin_level <= 3:
+        return _point_tool_contract_error(
+            request_id,
+            rpc_request_id,
+            code="deep_admin_level_required",
+            message="resolve_deep_point accepts only Admin 4-6 targets. Use resolve_point for Admin 0-3.",
+        )
+
+    payload["lookup_mode"] = "deep"
+    payload["country_scope"] = admin_1_loc_id.split("-", 1)[0]
+    payload["admin_1_scope"] = admin_1_loc_id
+    return await _execute_point_lookup_tool(
+        request, payload, rpc_request_id, execution_tool_name="resolve_deep_point"
+    )
+
+
+@_guard_mcp_execution("resolve_deep_points")
+async def _execute_resolve_deep_points_tool(request: Request, arguments: dict[str, Any], rpc_request_id: Any) -> Response:
+    """Execute the public Admin4-6 bulk contract within one Admin1 partition."""
+    payload = dict(arguments or {})
+    request_id = str(payload.get("request_id") or rpc_request_id or "")
+    if "points" not in payload or "lat" in payload or "lon" in payload:
+        return _point_tool_contract_error(
+            request_id,
+            rpc_request_id,
+            code="point_array_required",
+            message="resolve_deep_points requires a points array and does not accept top-level lat/lon.",
+        )
+    admin_1_loc_id = str(payload.pop("admin_1_loc_id", "") or "").strip().upper()
+    if not re.fullmatch(r"[A-Z]{3}-[^-]+", admin_1_loc_id):
+        return _point_tool_contract_error(
+            request_id,
+            rpc_request_id,
+            code="invalid_admin_1_loc_id",
+            message="admin_1_loc_id must be exactly one Admin 1 loc_id, such as USA-CA.",
+        )
+    target_admin_level = _point_lookup_target_admin_level(payload)
+    if target_admin_level is not None and target_admin_level <= 3:
+        return _point_tool_contract_error(
+            request_id,
+            rpc_request_id,
+            code="deep_admin_level_required",
+            message="resolve_deep_points accepts only Admin 4-6 targets. Use resolve_points for Admin 0-3.",
+        )
+    payload["lookup_mode"] = "deep"
+    payload["country_scope"] = admin_1_loc_id.split("-", 1)[0]
+    payload["admin_1_scope"] = admin_1_loc_id
+    return await _execute_point_lookup_tool(
+        request, payload, rpc_request_id, execution_tool_name="resolve_deep_points"
+    )
+
+
 def _shape_resolve_point_payload(raw: Any, request_id: str) -> dict[str, Any]:
     if not isinstance(raw, dict):
         return {
@@ -2164,10 +2320,17 @@ def _shape_resolve_point_payload(raw: Any, request_id: str) -> dict[str, Any]:
     }
 
 
-@_guard_mcp_execution("resolve_point")
-async def _execute_resolve_point_tool(request: Request, arguments: dict[str, Any], rpc_request_id: Any) -> Response:
+async def _execute_point_lookup_tool(
+    request: Request,
+    arguments: dict[str, Any],
+    rpc_request_id: Any,
+    *,
+    execution_tool_name: str,
+) -> Response:
     started_at = time.perf_counter()
-    payload = _ensure_request_id(arguments, "resolve_point")
+    payload = _ensure_request_id(arguments, execution_tool_name)
+    deep_lookup = execution_tool_name in {"resolve_deep_point", "resolve_deep_points"}
+    capability_id = "deep_point_lookup" if deep_lookup else "point_lookup"
     request_id = str(payload.get("request_id") or "")
     if "points" in payload:
         batch_id = str(payload.get("batch_id") or "").strip() or None
@@ -2185,8 +2348,8 @@ async def _execute_resolve_point_tool(request: Request, arguments: dict[str, Any
             _log_mcp_tool_usage_event(
                 request,
                 request_id=request_id or batch_id or "",
-                tool_name="resolve_point",
-                capability_id="point_lookup",
+                tool_name=execution_tool_name,
+                capability_id=capability_id,
                 decision="deny",
                 started_at=started_at,
                 row_count=0,
@@ -2196,11 +2359,11 @@ async def _execute_resolve_point_tool(request: Request, arguments: dict[str, Any
                 metadata={"event": "point_lookup", "tool_mode": "bulk", "quantity": 0, "point_count": 0, "batch_id": batch_id},
             )
             return _jsonrpc_response(_tool_result(error_payload, is_error=True), rpc_request_id)
-        limit = _tool_batch_item_limit("resolve_point")
+        limit = _tool_batch_item_limit(execution_tool_name)
         # The authored interactive ceiling also defines the verified-account
         # allowance. Licensing decides whether anonymous overage may be sold;
         # it must not silently collapse an account's included entitlement.
-        paid_limit = _point_lookup_paid_batch_limit(limit)
+        paid_limit = _tool_paid_batch_limit(execution_tool_name, limit)
         trusted_token, trusted_token_id = _trusted_artifact_access(request)
         caller_identity = request_caller_identity(
             request, ip_hash=hash_ip_for_analytics(get_client_ip(request))
@@ -2208,15 +2371,9 @@ async def _execute_resolve_point_tool(request: Request, arguments: dict[str, Any
         target_admin_level = _point_lookup_target_admin_level(payload)
         country_scope = str(payload.get("country_scope") or payload.get("country_hint") or "").strip().upper() or None
         admin_1_scope = str(payload.get("admin_1_scope") or "").strip() or None
-        from mapmover.point_bulk_policy import apply_global_bulk_preset, apply_point_lookup_mode
+        from mapmover.point_bulk_policy import apply_point_lookup_mode
 
-        bulk_preset, country_scope, target_admin_level, preset_error = apply_global_bulk_preset(
-            payload.get("bulk_preset"), country_scope=country_scope,
-            target_admin_level=target_admin_level,
-        )
-        if preset_error is not None:
-            error_payload = {"request_id": request_id, "batch_id": batch_id, "error": preset_error}
-            return _jsonrpc_response(_tool_result(error_payload, is_error=True), rpc_request_id)
+        bulk_preset = None
         lookup_mode, target_admin_level, max_admin_level, mode_error = apply_point_lookup_mode(
             payload.get("lookup_mode"),
             country_scope=country_scope,
@@ -2227,7 +2384,7 @@ async def _execute_resolve_point_tool(request: Request, arguments: dict[str, Any
         if mode_error is not None:
             error_payload = {"request_id": request_id, "batch_id": batch_id, "error": mode_error}
             return _jsonrpc_response(_tool_result(error_payload, is_error=True), rpc_request_id)
-        tool_access = _tool_effective_access("resolve_point", country_scope=country_scope)
+        tool_access = _tool_effective_access(execution_tool_name, country_scope=country_scope)
         paid_bulk = bool(tool_access.get("settlement_required"))
         launch_free_bulk = bool(
             tool_access.get("allow") and tool_access.get("access_lane") == "launch_free"
@@ -2235,7 +2392,7 @@ async def _execute_resolve_point_tool(request: Request, arguments: dict[str, Any
         included_limit = (
             paid_limit
             if launch_free_bulk
-            else _caller_included_item_limit("resolve_point", caller_identity, free_limit=limit, paid_limit=paid_limit)
+            else _caller_included_item_limit(execution_tool_name, caller_identity, free_limit=limit, paid_limit=paid_limit)
         )
         shape_error = _point_bulk_shape_error(
             point_count=len(points), country_scope=country_scope,
@@ -2256,8 +2413,8 @@ async def _execute_resolve_point_tool(request: Request, arguments: dict[str, Any
             _log_mcp_tool_usage_event(
                 request,
                 request_id=request_id or batch_id or "",
-                tool_name="resolve_point",
-                capability_id="point_lookup",
+                tool_name=execution_tool_name,
+                capability_id=capability_id,
                 decision="deny",
                 started_at=started_at,
                 row_count=len(points),
@@ -2299,8 +2456,8 @@ async def _execute_resolve_point_tool(request: Request, arguments: dict[str, Any
             _log_mcp_tool_usage_event(
                 request,
                 request_id=request_id or batch_id or "",
-                tool_name="resolve_point",
-                capability_id="point_lookup",
+                tool_name=execution_tool_name,
+                capability_id=capability_id,
                 decision="deny",
                 started_at=started_at,
                 row_count=len(points),
@@ -2332,6 +2489,7 @@ async def _execute_resolve_point_tool(request: Request, arguments: dict[str, Any
             # same compute+egress model as the dataset lane and settles through
             # the same ledger.
             point_quote_payload = _point_lookup_quote_payload(
+                tool_name=execution_tool_name,
                 request_id=request_id,
                 batch_id=batch_id,
                 point_count=len(points),
@@ -2343,7 +2501,7 @@ async def _execute_resolve_point_tool(request: Request, arguments: dict[str, Any
 
             credit_user_id = verified_credit_action_user_id(
                 request,
-                capability_id="point_lookup",
+                capability_id=capability_id,
                 quote_id=str(point_quote_payload.get("quote_id") or ""),
                 request_id=request_id or batch_id or "",
                 user_id=caller_identity.auth_user_id,
@@ -2352,8 +2510,8 @@ async def _execute_resolve_point_tool(request: Request, arguments: dict[str, Any
                 request.state.auth_user_id = credit_user_id
             decision, verifier_payload = await _commercial_access_decision(
                 request,
-                tool_name="resolve_point",
-                capability_id="point_lookup",
+                tool_name=execution_tool_name,
+                capability_id=capability_id,
                 units=len(points),
                 pricing_quote=point_quote,
                 request_id=request_id or batch_id or "",
@@ -2400,8 +2558,8 @@ async def _execute_resolve_point_tool(request: Request, arguments: dict[str, Any
                 _log_mcp_tool_usage_event(
                     request,
                     request_id=request_id or batch_id or "",
-                    tool_name="resolve_point",
-                    capability_id="point_lookup",
+                    tool_name=execution_tool_name,
+                    capability_id=capability_id,
                     decision="challenge" if decision == "challenge" else "deny",
                     started_at=started_at,
                     row_count=len(points),
@@ -2423,7 +2581,7 @@ async def _execute_resolve_point_tool(request: Request, arguments: dict[str, Any
                 )
                 return _jsonrpc_response(_tool_result(quote_payload, is_error=True), rpc_request_id)
 
-        # resolve_point is the compact chain call; shapes are fetched by
+        # Point resolvers are compact chain calls; shapes are fetched by
         # get_geometry after the caller chooses which chain levels it needs.
         include_geometry = False
         results: list[dict[str, Any]] = []
@@ -2446,8 +2604,8 @@ async def _execute_resolve_point_tool(request: Request, arguments: dict[str, Any
             _log_mcp_tool_usage_event(
                 request,
                 request_id=request_id or batch_id or "",
-                tool_name="resolve_point",
-                capability_id="point_lookup",
+                tool_name=execution_tool_name,
+                capability_id=capability_id,
                 decision="deny",
                 started_at=started_at,
                 row_count=len(points),
@@ -2492,7 +2650,7 @@ async def _execute_resolve_point_tool(request: Request, arguments: dict[str, Any
         include_marine_context = payload.get("include_marine_context") is not False
         try:
             raw_results = await run_mcp_blocking(
-                "resolve_point",
+                execution_tool_name,
                 resolve_points_to_locations,
                 valid_points,
                 include_geometry=include_geometry,
@@ -2549,12 +2707,10 @@ async def _execute_resolve_point_tool(request: Request, arguments: dict[str, Any
                 f"admin_{target_admin_level}" if target_admin_level is not None
                 else (f"up_to_admin_{max_admin_level}" if max_admin_level is not None else "deepest")
             ),
-            "country_scope": country_scope,
-            "admin_1_scope": admin_1_scope,
-            "bulk_preset": bulk_preset,
-            "lookup_mode": lookup_mode,
             "results": results,
         }
+        if deep_lookup:
+            result_payload["admin_1_loc_id"] = admin_1_scope
         settlement_payload = None
         if settlement_id:
             import asyncio
@@ -2564,9 +2720,9 @@ async def _execute_resolve_point_tool(request: Request, arguments: dict[str, Any
                 for item in results
                 if not item.get("error") and isinstance(item.get("point"), dict)
             }
-            actual_quote = tool_quote("resolve_point", len(successful_coordinates))
+            actual_quote = tool_quote(execution_tool_name, len(successful_coordinates))
             meter_receipt = {
-                "tool_name": "resolve_point",
+                "tool_name": execution_tool_name,
                 "requested_items": len(points),
                 "successful_distinct_items": len(successful_coordinates),
                 "duplicate_items_collapsed": max(0, resolved_count - len(successful_coordinates)),
@@ -2596,8 +2752,8 @@ async def _execute_resolve_point_tool(request: Request, arguments: dict[str, Any
         _log_mcp_tool_usage_event(
             request,
             request_id=request_id or batch_id or "",
-            tool_name="resolve_point",
-            capability_id="point_lookup",
+            tool_name=execution_tool_name,
+            capability_id=capability_id,
             decision="allow",
             started_at=started_at,
             row_count=len(points),
@@ -2649,8 +2805,8 @@ async def _execute_resolve_point_tool(request: Request, arguments: dict[str, Any
         _log_mcp_tool_usage_event(
             request,
             request_id=request_id,
-            tool_name="resolve_point",
-            capability_id="point_lookup",
+            tool_name=execution_tool_name,
+            capability_id=capability_id,
             decision="deny",
             started_at=started_at,
             row_count=1,
@@ -2671,8 +2827,8 @@ async def _execute_resolve_point_tool(request: Request, arguments: dict[str, Any
         _log_mcp_tool_usage_event(
             request,
             request_id=request_id,
-            tool_name="resolve_point",
-            capability_id="point_lookup",
+            tool_name=execution_tool_name,
+            capability_id=capability_id,
             decision="deny",
             started_at=started_at,
             row_count=1,
@@ -2707,7 +2863,7 @@ async def _execute_resolve_point_tool(request: Request, arguments: dict[str, Any
         runtime_started = time.perf_counter()
         resolver_stages: dict[str, int] = {}
         raw_results = await run_mcp_blocking(
-            "resolve_point",
+            execution_tool_name,
             resolve_points_to_locations,
             [{"lon": lon, "lat": lat}],
             include_geometry=False,
@@ -2726,8 +2882,8 @@ async def _execute_resolve_point_tool(request: Request, arguments: dict[str, Any
         _log_mcp_tool_usage_event(
             request,
             request_id=request_id,
-            tool_name="resolve_point",
-            capability_id="point_lookup",
+            tool_name=execution_tool_name,
+            capability_id=capability_id,
             decision="deny",
             started_at=started_at,
             row_count=1,
@@ -2741,14 +2897,14 @@ async def _execute_resolve_point_tool(request: Request, arguments: dict[str, Any
             rpc_request_id,
         )
     result = _shape_resolve_point_payload(raw, request_id)
-    result["lookup_mode"] = lookup_mode
-    result["admin_1_scope"] = admin_1_scope
+    if deep_lookup:
+        result["admin_1_loc_id"] = admin_1_scope
     resolved = not bool(result.get("error"))
     _log_mcp_tool_usage_event(
         request,
         request_id=request_id,
-        tool_name="resolve_point",
-        capability_id="point_lookup",
+        tool_name=execution_tool_name,
+        capability_id=capability_id,
         decision="allow" if resolved else "deny",
         started_at=started_at,
         row_count=1,
@@ -5435,6 +5591,24 @@ async def mcp_endpoint(request: Request, pack_id: str | None = None):
         if rate_limit_response:
             return rate_limit_response
         return await _execute_resolve_point_tool(request, arguments, request_id)
+
+    if tool_name == "resolve_points":
+        rate_limit_response = _live_tool_rate_limit_response(request, tool_name, request_id)
+        if rate_limit_response:
+            return rate_limit_response
+        return await _execute_resolve_points_tool(request, arguments, request_id)
+
+    if tool_name == "resolve_deep_point":
+        rate_limit_response = _live_tool_rate_limit_response(request, tool_name, request_id)
+        if rate_limit_response:
+            return rate_limit_response
+        return await _execute_resolve_deep_point_tool(request, arguments, request_id)
+
+    if tool_name == "resolve_deep_points":
+        rate_limit_response = _live_tool_rate_limit_response(request, tool_name, request_id)
+        if rate_limit_response:
+            return rate_limit_response
+        return await _execute_resolve_deep_points_tool(request, arguments, request_id)
 
     if tool_name == "loc_id_info":
         rate_limit_response = _live_tool_rate_limit_response(request, tool_name, request_id)

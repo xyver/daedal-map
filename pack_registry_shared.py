@@ -361,6 +361,9 @@ PACK_REGISTRY: dict[str, dict] = {
             "check_geometry",
             "get_geometry",
             "resolve_point",
+            "resolve_points",
+            "resolve_deep_point",
+            "resolve_deep_points",
             "loc_id_info",
             "resolve_loc_id_scope",
             "estimate_geometry_package",
@@ -370,9 +373,9 @@ PACK_REGISTRY: dict[str, dict] = {
             "get_job_status",
         ),
         "mcp_name": "com.daedalmap/geography",
-        "mcp_version": "1.1.0",
+        "mcp_version": "1.3.0",
         "mcp_title": "DaedalMap Geography Tools (loc_id)",
-        "mcp_description": "Geography utilities built on the DaedalMap loc_id spine. Dataset identification accepts bounded column samples and selects geography through the current catalog-backed identity graph. Point lookup returns a compact latest-available chain; separate tools provide identity details, strict hierarchy, references, relationships, shapes, and exports. A utility family, not a queryable dataset pack. Interactive discovery and small lookups are free; large batches and exports may be quoted.",
+        "mcp_description": "Geography utilities built on the DaedalMap loc_id spine. Dataset identification accepts bounded column samples and selects geography through the current catalog-backed identity graph. Shallow point lookup returns Admin 0-3; a separate Admin1-scoped deep tool returns Admin 4-6. Other tools provide identity details, strict hierarchy, references, relationships, shapes, and exports. A utility family, not a queryable dataset pack. Interactive discovery and small lookups are free; large batches and exports may be quoted.",
         "registry_meta": {
             "categories": ["geospatial", "geocoding", "data"],
             "highlights": [
@@ -397,7 +400,10 @@ PACK_REGISTRY: dict[str, dict] = {
             {"name": "compare_geographies", "summary": "two loc_ids -> temporal validity, successors, topology, intersection area, and directional overlap shares"},
             {"name": "check_geometry", "summary": "loc_id or loc_ids -> available/missing shape preflight"},
             {"name": "get_geometry", "summary": "loc_id or loc_ids -> geometry metadata, bbox, centroid, and optional polygon"},
-            {"name": "resolve_point", "summary": "point(s) -> compact complete latest-available admin chain"},
+            {"name": "resolve_point", "summary": "one point -> compact Admin 0-3 chain and Admin 1 routing key"},
+            {"name": "resolve_points", "summary": "point array -> compact Admin 0-3 chains and Admin 1 routing keys"},
+            {"name": "resolve_deep_point", "summary": "one point + one Admin 1 loc_id -> compact Admin 4-6 chain"},
+            {"name": "resolve_deep_points", "summary": "point array + one Admin 1 loc_id -> compact Admin 4-6 chains"},
             {"name": "loc_id_info", "summary": "point-chain loc_ids or other loc_ids -> detailed metadata, strict hierarchy, lifecycle, and references"},
             {"name": "resolve_loc_id_scope", "summary": "strict parent loc_id + admin level -> coherent descendants"},
             {"name": "estimate_geometry_package", "summary": "dry-run selected geometry export count/bytes/price/delivery estimate"},
@@ -411,11 +417,11 @@ PACK_REGISTRY: dict[str, dict] = {
         "display_name": "Reverse Geocoding",
         "kind": "tool_family_alias",
         "pricing": "mixed",
-        "mcp_tool_allowlist": ("get_catalog", "get_pack", "resolve_point"),
+        "mcp_tool_allowlist": ("get_catalog", "get_pack", "resolve_point", "resolve_points", "resolve_deep_point", "resolve_deep_points"),
         "mcp_name": "com.daedalmap/reverse-geocoding",
-        "mcp_version": "1.0.4",
+        "mcp_version": "1.2.0",
         "mcp_title": "DaedalMap Reverse Geocoding (coordinates to loc_id)",
-        "mcp_description": "Compact reverse geocoding: convert one WGS84 point or a small point batch into the complete latest-available administrative loc_id chain. Use the main geography family's loc_id_info or get_geometry tools only when details or shapes are requested.",
+        "mcp_description": "Four explicit reverse-geocoding tools separate single from bulk and shallow from deep. resolve_point/resolve_points return Admin 0-3; resolve_deep_point/resolve_deep_points use one returned Admin 1 loc_id to resolve Admin 4-6.",
         "registry_meta": {
             "categories": ["geospatial", "geocoding", "data"],
             "highlights": [
@@ -427,7 +433,10 @@ PACK_REGISTRY: dict[str, dict] = {
         },
         "routing": {"preferred_tool": "resolve_point"},
         "tool_summaries": (
-            {"name": "resolve_point", "summary": "one point or point batch -> compact complete latest-available admin chain"},
+            {"name": "resolve_point", "summary": "one point -> compact Admin 0-3 chain"},
+            {"name": "resolve_points", "summary": "point array -> compact Admin 0-3 chains"},
+            {"name": "resolve_deep_point", "summary": "one point + one Admin 1 loc_id -> compact Admin 4-6 chain"},
+            {"name": "resolve_deep_points", "summary": "point array + one Admin 1 loc_id -> compact Admin 4-6 chains"},
         ),
     },
     "boundaries": {
@@ -569,7 +578,7 @@ def tool_family_pack_detail(pack_id: str | None) -> dict:
             "Use convert_reference when the caller wants one external geography system expressed in another.",
         ]
         important_rules = [
-            "These are direct utility tools, not a query_dataset pack; discovery and small calls are free, while resolve_point batches above 25 use paid hosted throughput.",
+            "These are direct utility tools, not a query_dataset pack; discovery and small calls are free, while hosted resolve_points bulk throughput follows the applicable access policy.",
             "loc_id is the reserve identifier: generic conversions should flow X -> loc_id -> Y.",
             "Use read_geometry_catalog for live catalog-backed coverage and package discovery instead of assuming a fixed list of countries or admin depths.",
             "Use list_reference_systems for live catalog-backed availability instead of assuming a fixed list of systems.",
@@ -588,9 +597,9 @@ def tool_family_pack_detail(pack_id: str | None) -> dict:
             "Only when more detail is requested, pass all stack loc_ids to loc_id_info; call get_geometry separately for shapes.",
         ]
         important_rules = [
-            "These are direct utility tools, not a query_dataset pack; the first 100 resolve_point items per call are free and larger hosted batches use paid throughput.",
+            "These are direct utility tools, not a query_dataset pack; bulk throughput belongs to resolve_points and resolve_deep_points.",
             "Coordinates must be WGS84 decimal degrees.",
-            "resolve_point defaults to standard mode: deepest available through Admin 3 without deep-partition reads. For Admin 4-6, group the standard results by Admin 1 and use deep mode with one country_scope and one admin_1_scope per call.",
+            "Use resolve_point/resolve_deep_point for one coordinate. Use resolve_points/resolve_deep_points for arrays; split deep arrays by Admin 1 and pass one admin_1_loc_id per call.",
             "A mixed-vintage point chain is context. loc_id_info hierarchy and resolve_loc_id_scope follow strict stored parentage within a coherent release.",
             "get_geometry returns bbox and centroid by default; request include_polygon only when you need the full geometry payload.",
             "Use convert_reference for ZIP/ZCTA, tribal-area, NWS public forecast-zone, or NWS fire weather-zone conversions in either direction.",
