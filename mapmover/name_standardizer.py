@@ -3,7 +3,7 @@ Name Standardizer Module
 Matches and standardizes place names against canonical geometry datasets.
 
 The geometry files are the source of truth for names:
-- geometry/admin0/full.parquet - countries (admin_0)
+- geometry/global/exact/admin_0.parquet - countries (admin_0)
 - {ISO3}.parquet - per-country admin levels
 
 This module:

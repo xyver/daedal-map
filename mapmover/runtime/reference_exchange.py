@@ -534,7 +534,11 @@ def _catalog_crosswalk_path(artifact: dict[str, Any]) -> Path | None:
     rel = str(artifact.get("artifact_path") or "").strip()
     if not rel:
         return None
-    return DATA_ROOT / rel
+    from .geometry_storage_layout import country_crosswalk_artifact_path
+
+    return country_crosswalk_artifact_path(
+        Path(DATA_ROOT), rel, cloud_mode=is_cloud_mode(),
+    )
 
 
 def _crosswalk_source_names(artifact: dict[str, Any]) -> set[str]:

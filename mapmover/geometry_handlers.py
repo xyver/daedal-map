@@ -3,8 +3,8 @@ Geometry endpoint handlers.
 Handles loading geometry files and country hierarchy for drill-down navigation.
 
 Data sources (resolved via paths.py DATA_ROOT):
-  geometry/admin0/display.parquet  - bounded Admin0 map/display geometry
-  geometry/admin0/full.parquet     - full-detail Admin0 product
+  geometry/global/display/admin_0.parquet - bounded Admin0 map/display geometry
+  geometry/global/exact/admin_0.parquet - full-detail Admin0 product
   geometry/{ISO3}.parquet          - global-fallback Admin0-2 country shards
 
 Schema (13 columns):
@@ -2394,7 +2394,7 @@ def get_countries_geometry(debug: bool = False):
     """
     Get bounded country geometries for initial map display.
 
-    This endpoint is a visual payload. Full `geometry/admin0/full.parquet` polygons are
+    This endpoint is a visual payload. Full `geometry/global/exact/admin_0.parquet` polygons are
     reserved for containment and compatibility query paths and must not leak
     into the browser bootstrap.
     Returns a GeoJSON FeatureCollection with polygon countries only.

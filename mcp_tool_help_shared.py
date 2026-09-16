@@ -72,17 +72,17 @@ TOOL_GUIDANCE: dict[str, dict[str, Any]] = {
         ["resolve_deep_points", "loc_id_info", "check_geometry"]
     ),
     "resolve_deep_point": _g(
-        ["A shallow point lookup returned an Admin 1 loc_id and you need Admin 4-6 detail."],
-        ["First-pass country discovery", "Mixed-Admin1 batches", "Returning polygons"],
-        {"lat": 34.0522, "lon": -118.2437, "admin_1_loc_id": "USA-CA"},
-        ["deepest_resolved_loc_id", "stack", "target_admin_level", "admin_1_loc_id"],
+        ["A shallow lookup returned an Admin 1-3 loc_id and you need either deeper administrative detail or one shape-backed family."],
+        ["First-pass country discovery", "Multiple families", "Returning polygons"],
+        {"lat": 34.0522, "lon": -118.2437, "shallow_loc_id": "USA-CA-037", "family": "postal_area"},
+        ["shallow_loc_id", "family", "family_result"],
         ["loc_id_info", "check_geometry", "get_geometry"]
     ),
     "resolve_deep_points": _g(
-        ["A shallow bulk lookup returned Admin 1 loc_ids and one grouped point array needs Admin 4-6 detail."],
-        ["One coordinate", "First-pass country discovery", "Mixed-Admin1 batches", "Returning polygons"],
-        {"admin_1_loc_id": "USA-CA", "points": [{"id": "row-1", "lat": 34.0522, "lon": -118.2437}]},
-        ["results", "resolved_count", "unresolved_count", "admin_1_loc_id", "batch_id"],
+        ["A shallow bulk lookup returned loc_ids and one scoped point array needs deeper administrative detail or one shape-backed family."],
+        ["One coordinate", "First-pass country discovery", "Multiple families", "Returning polygons"],
+        {"shallow_loc_id": "USA-CA-037", "family": "postal_area", "points": [{"id": "row-1", "lat": 34.0522, "lon": -118.2437}]},
+        ["results", "resolved_count", "unresolved_count", "shallow_loc_id", "family", "batch_id"],
         ["loc_id_info", "check_geometry", "get_geometry"]
     ),
     "loc_id_info": _g(
@@ -284,7 +284,7 @@ def geometry_family_help_payload(
                 "step": 1,
                 "tool": "read_geometry_catalog",
                 "arguments": {"view": "capabilities", "country_scope": "<ISO3 when known>"},
-                "purpose": "Read the selected country's current admin depth, available families, and query guidance. Omit country_scope for the concise global coverage model.",
+                "purpose": "Read the selected country's current admin depth, available_family_ids, family coverage, and query guidance. Omit country_scope for the concise global coverage model.",
             },
             {
                 "step": 2,
@@ -305,7 +305,7 @@ def geometry_family_help_payload(
             },
             "reference_families": {
                 "rule": "Postal areas, places, watersheds, electoral districts, Indigenous regions, weather zones, water bodies, and other families are independent reference systems unless the catalog says they belong to the selected spine.",
-                "discovery": "Use the country's available_family_ids, then list_reference_systems(country_scope='<ISO3>') for the canonical published and callable crosswalk subset. Family coverage alone does not promise a conversion.",
+                "discovery": "Use the country's available_family_ids for family point requests, then list_reference_systems(country_scope='<ISO3>') for the callable crosswalk subset. A published family may legitimately have no overlap at a requested point.",
             },
             "catalog_authority": "Coverage is generated from admitted releases. Do not assume that every country has the same depth, families, or physical query layout.",
             "query_cost": "Opening and searching geometry partitions is the main cold-path cost. Item count still matters, but calls aligned with the catalog's query guidance are usually faster than calls spread across unrelated regions or families.",
@@ -321,7 +321,7 @@ def geometry_family_help_payload(
             },
             {
                 "request": "points at a partitioned deep level",
-                "rule": "First call resolve_points, split results by the returned Admin 1 loc_id, then call resolve_deep_points once per admin_1_loc_id.",
+                "rule": "First call resolve_points, group by the shallow loc_id used as scope, then call resolve_deep_points once per scope and family.",
             },
             {
                 "request": "geometry for known loc_ids",
@@ -366,9 +366,9 @@ def geometry_family_help_payload(
                     "read the selected country's catalog entry and query_guidance",
                     "resolve to the declared partition-owner level",
                     "group points by the returned owner loc_id",
-                    "call resolve_deep_points separately for each owner group with its admin_1_loc_id",
+                    "call resolve_deep_points separately for each scope and family with shallow_loc_id",
                 ],
-                "important": "resolve_points is the shallow bulk pass. resolve_deep_points is the only bulk Admin 4-6 entry point and accepts exactly one Admin 1 partition per call.",
+                "important": "resolve_points is the shallow bulk pass. resolve_deep_points accepts one shallow scope and one family per call; administrative requests derive the Admin 1 partition internally.",
             },
             {
                 "name": "known_loc_ids_to_shapes",
@@ -460,7 +460,7 @@ def tool_help_payload(
         access["bulk_shape"] = {
             "threshold": limits.get("free_item_limit"),
             "shallow_tool": "resolve_points: cross-country Admin0 discovery followed by Admin0-3 country banks only",
-            "deep_tool": "resolve_deep_points: point array plus exactly one admin_1_loc_id; Admin4-6 only",
+            "deep_tool": "resolve_deep_points: point array plus one shallow_loc_id and one family; family defaults to administrative",
         }
     elif name == "resolve_deep_points" and not local_installed:
         access["caller_tiers"] = {

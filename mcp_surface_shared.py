@@ -151,7 +151,7 @@ def build_tool_definitions() -> list[dict]:
         {
             "name": "resolve_point",
             "title": "Resolve Point (Shallow)",
-            "description": "Compact first-pass reverse geocoding for one WGS84 coordinate. Returns an administrative loc_id chain through Admin 3 without opening Admin1-owned deep partitions. Use the returned Admin 1 loc_id with resolve_deep_point only when Admin 4-6 detail is needed. For multiple coordinates use resolve_points.",
+            "description": "Compact first-pass reverse geocoding for one WGS84 coordinate. Returns an administrative loc_id chain through Admin 3 without opening deep partitions or side-family shape banks. Use its deepest shallow loc_id with resolve_deep_point for Admin 4-6 or one explicit family. For multiple coordinates use resolve_points.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -172,7 +172,7 @@ def build_tool_definitions() -> list[dict]:
         {
             "name": "resolve_points",
             "title": "Resolve Points (Shallow Bulk)",
-            "description": "Bulk first-pass reverse geocoding through Admin 3. Accepts a bounded cross-country WGS84 point array and never opens Admin1-owned deep partitions. Group returned points by their Admin 1 loc_id before calling resolve_deep_points for Admin 4-6 detail.",
+            "description": "Bulk first-pass reverse geocoding through Admin 3. Accepts a bounded cross-country WGS84 point array and never opens deep partitions or side-family shape banks. Group results by shallow scope before calling resolve_deep_points once per scope and family.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -204,18 +204,18 @@ def build_tool_definitions() -> list[dict]:
         {
             "name": "resolve_deep_point",
             "title": "Resolve Point (Deep)",
-            "description": "Second-pass administrative resolution for one WGS84 coordinate at Admin 4-6. Supply exactly one admin_1_loc_id returned by resolve_point. That loc_id is the routing key, so the call opens at most one Admin1-owned deep bank. For multiple coordinates use resolve_deep_points.",
+            "description": "Second-pass resolution for one WGS84 coordinate. Supply a shallow_loc_id returned by resolve_point and one canonical family from read_geometry_catalog. family defaults to administrative; shape-backed families use direct bbox-to-exact-shape lookup without crosswalks. For multiple coordinates use resolve_deep_points.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "lat": {"type": "number", "minimum": -90, "maximum": 90, "description": "Latitude in WGS84 decimal degrees."},
                     "lon": {"type": "number", "minimum": -180, "maximum": 180, "description": "Longitude in WGS84 decimal degrees."},
-                    "admin_1_loc_id": {"type": "string", "minLength": 5, "description": "Exactly one Admin 1 loc_id from resolve_point, such as USA-CA."},
+                    "shallow_loc_id": {"type": "string", "minLength": 5, "description": "The deepest canonical Admin 1-3 loc_id returned by resolve_point, such as USA-NY-061-009903."},
                     "target_admin_level": {"anyOf": [{"type": "string"}, {"type": "integer"}], "description": "Optional exact Admin 4-6 level. Omit for the deepest available match."},
-                    "include_marine_context": {"type": "boolean", "description": "Include parallel Marine overlaps. Defaults to true."},
+                    "family": {"type": "string", "pattern": "^[a-z0-9_]+$", "default": "administrative", "description": "One family selector. Defaults to administrative; use marine for the direct Marine resolver, or a canonical country family such as postal_area, watershed, or land_management_region."},
                     "request_id": {"type": "string", "description": "Optional caller-supplied request id for tracing."},
                 },
-                "required": ["lat", "lon", "admin_1_loc_id"],
+                "required": ["lat", "lon", "shallow_loc_id"],
                 "additionalProperties": False,
             },
             "annotations": {"readOnlyHint": True},
@@ -223,7 +223,7 @@ def build_tool_definitions() -> list[dict]:
         {
             "name": "resolve_deep_points",
             "title": "Resolve Points (Deep Bulk)",
-            "description": "Bulk second-pass administrative resolution for Admin 4-6. Supply a bounded WGS84 point array plus exactly one admin_1_loc_id returned by resolve_points. Every point must belong to that Admin 1 partition. Split mixed batches by Admin 1 before calling.",
+            "description": "Bulk second-pass resolution for one family. Supply a bounded WGS84 point array, one shared shallow_loc_id scope, and one canonical family. family defaults to administrative; other shape-backed families use direct bbox candidates followed by exact containment without crosswalks.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -242,15 +242,15 @@ def build_tool_definitions() -> list[dict]:
                             "required": ["lat", "lon"],
                             "additionalProperties": False,
                         },
-                        "description": "Points already known to fall within admin_1_loc_id. Maximum 100 per call during the initial technical rollout.",
+                        "description": "Points already known to fall within the supplied shallow_loc_id scope. Maximum 100 per call during the initial technical rollout.",
                     },
-                    "admin_1_loc_id": {"type": "string", "minLength": 5, "description": "Exactly one Admin 1 loc_id from resolve_points, such as USA-CA. All coordinates in the call must belong to it."},
+                    "shallow_loc_id": {"type": "string", "minLength": 5, "description": "A canonical Admin 1-3 loc_id returned by resolve_points. All coordinates in the call must belong to its scope."},
                     "target_admin_level": {"anyOf": [{"type": "string"}, {"type": "integer"}], "description": "Optional exact Admin 4-6 level. Omit for the deepest available match."},
-                    "include_marine_context": {"type": "boolean", "description": "Include parallel Marine overlaps. Defaults to true."},
+                    "family": {"type": "string", "pattern": "^[a-z0-9_]+$", "default": "administrative", "description": "One canonical family ID for the entire batch."},
                     "batch_id": {"type": "string", "description": "Optional caller-supplied batch id echoed in the result."},
                     "request_id": {"type": "string", "description": "Optional caller-supplied request id for tracing."},
                 },
-                "required": ["points", "admin_1_loc_id"],
+                "required": ["points", "shallow_loc_id"],
                 "additionalProperties": False,
             },
             "annotations": {"readOnlyHint": True},
@@ -285,7 +285,7 @@ def build_tool_definitions() -> list[dict]:
         {
             "name": "read_geometry_catalog",
             "title": "Read Geometry Catalog",
-            "description": "Free geography discovery. Reads the published DaedalMap geometry catalog projection by default, excluding staged and candidate work. Use view='capabilities' first for the global baseline and enhanced countries; use focused inventory views for families, banks, crosswalk products, and named objects. A local loopback MCP may set read_wip=true for internal review. No payment required.",
+            "description": "Free geography discovery. Reads the published DaedalMap geometry catalog projection by default, excluding staged and candidate work. Use view='capabilities' with country_scope to learn the country's available_family_ids; a requested family may validly return no point overlap because family coverage can be partial. Use focused inventory views for banks, crosswalk products, and named objects. A local loopback MCP may set read_wip=true for internal review. No payment required.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -302,7 +302,7 @@ def build_tool_definitions() -> list[dict]:
                     },
                     "country_scope": {
                         "type": "string",
-                        "description": "Optional ISO3 country code for view='capabilities'. Returns the selected country's baseline, active depth, families, and query guidance.",
+                        "description": "Optional ISO3 country code for view='capabilities'. Returns active depth, published families, and query guidance.",
                     },
                     "read_wip": {
                         "type": "boolean",

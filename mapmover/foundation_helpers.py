@@ -23,6 +23,12 @@ from .duckdb_helpers import is_cloud_mode, parquet_columns, path_to_uri, run_df
 from .orchestrator_specs import list_orchestrator_specs
 from .paths import COUNTRIES_DIR, COUNTRY_GEOMETRY_DIR, DATA_ROOT, GEOMETRY_DIR
 from .runtime.explainer_response import build_explainer_response, looks_like_explainer_question
+from .runtime.geometry_storage_layout import (
+    global_admin0_display_path_from_geometry_root,
+    global_admin0_display_relative,
+    global_admin0_exact_path_from_geometry_root,
+    global_admin0_exact_relative,
+)
 from .runtime.read_posture import prefer_local_geometry_reads
 from .runtime.result_cap import (
     apply_runtime_feature_cap_to_payload,
@@ -52,9 +58,8 @@ FOUNDATION_HELPER_REGISTRY = {
     "country_crosswalks": "geometry/countries/{ISO3}/crosswalk.json",
     "country_json_assets": "countries/{ISO3}/{filename}",
     "global_country_geometry": {
-        "display": "geometry/admin0/display.parquet",
-        "full": "geometry/admin0/full.parquet",
-        "supplemental": "geometry/admin0/supplemental.parquet",
+        "display": global_admin0_display_relative(),
+        "full": global_admin0_exact_relative(),
     },
     "world_factbook_static": "global/world_factbook_static/all_countries.parquet",
     "orchestrator_specs": "mapmover/orchestrator_specs.py",
@@ -226,7 +231,7 @@ def _admin0_country_universe() -> set[str]:
 
     The Geometry Catalog overlay is the true read of which countries exist and
     how they are tracked, and it takes its shapes from
-    `geometry/admin0/display.parquet` and its facts from
+    `geometry/global/display/admin_0.parquet` and its facts from
     `geometry/geometry_catalog.json`. The exact bank follows that universe so a
     territory added to the published Display bank is recognized here without a
     second edit to the coverage reference.
@@ -249,125 +254,6 @@ def _admin0_country_universe() -> set[str]:
         if str(value).strip()
     )
     return codes
-
-
-def _load_supplemental_admin0_frame(
-    existing_columns: list[str],
-    existing_loc_ids: set[str],
-    *,
-    include_overlap_overrides: bool = True,
-) -> pd.DataFrame:
-    """Load approved supplemental Admin0 candidates for point containment.
-
-    A supplemental territory may intentionally share a loc_id with the shallow
-    global bank when its reviewed polygon corrects a coastal coverage gap. Keep
-    both candidates; the point matcher selects the smallest covering polygon.
-    """
-    path = GEOMETRY_DIR / "admin0" / "supplemental.parquet"
-    manifest_path = GEOMETRY_DIR / "admin0" / "manifest.json"
-    try:
-        manifest = (
-            read_artifact_json("geometry/admin0/manifest.json", lane="published")
-            if is_cloud_mode()
-            else json.loads(manifest_path.read_text(encoding="utf-8"))
-        )
-        index = manifest.get("supplemental_source_contract") or {}
-    except Exception as e:
-        logger.warning("Failed to load canonical Admin0 manifest: %s", e)
-        return pd.DataFrame(columns=existing_columns)
-
-    if str(index.get("license_review_status") or "").strip().lower() != "approved" or not index.get("usable_for_derivation"):
-        return pd.DataFrame(columns=existing_columns)
-
-    reference_codes = _admin0_country_universe()
-    try:
-        if is_cloud_mode():
-            raw = read_artifact_bytes("geometry/admin0/supplemental.parquet", lane="published")
-            supplemental = pd.read_parquet(BytesIO(raw))
-        else:
-            supplemental = pd.read_parquet(path)
-    except Exception as e:
-        logger.warning("Failed to load supplemental Admin0 geometry: %s", e)
-        return pd.DataFrame(columns=existing_columns)
-
-    if supplemental.empty or "loc_id" not in supplemental.columns:
-        return pd.DataFrame(columns=existing_columns)
-
-    supplemental = supplemental.copy()
-    supplemental["loc_id"] = supplemental["loc_id"].astype(str).str.strip().str.upper()
-    overlap_overrides = {
-        str(value).strip().upper()
-        for value in index.get("overlap_override_loc_ids") or []
-        if str(value).strip()
-    } if include_overlap_overrides else set()
-    supplemental = supplemental[
-        supplemental["loc_id"].isin(reference_codes)
-        & (
-            ~supplemental["loc_id"].isin(existing_loc_ids)
-            | supplemental["loc_id"].isin(overlap_overrides)
-        )
-    ]
-    if supplemental.empty:
-        return pd.DataFrame(columns=existing_columns)
-
-    rows: list[dict[str, Any]] = []
-    for record in supplemental.to_dict(orient="records"):
-        loc_id = str(record.get("loc_id") or "").strip().upper()
-        geometry = record.get("geometry")
-        row = {
-            "loc_id": loc_id,
-            "parent_id": "WORLD",
-            "admin_level": 0,
-            "type": "admin",
-            "name": record.get("name") or loc_id,
-            "name_local": "",
-            "code": loc_id,
-            "iso_3166_2": "",
-            "centroid_lon": None,
-            "centroid_lat": None,
-            "has_polygon": True,
-            "geometry": geometry,
-            "timezone": "",
-            "iso_a3": loc_id,
-            "land_area": None,
-            "water_area": None,
-            "bbox_min_lon": None,
-            "bbox_min_lat": None,
-            "bbox_max_lon": None,
-            "bbox_max_lat": None,
-            "children_count": 0,
-            "children_by_level": "{}",
-            "descendants_count": 0,
-            "descendants_by_level": "{}",
-            "source_system": record.get("source_system") or "supplemental_admin0",
-            "source_shape_id": "",
-            "source_shape_type": "SUPPLEMENTAL_ADM0",
-            "direct_children_count": 0,
-            "direct_children_by_level": "{}",
-        }
-        try:
-            from shapely.geometry import shape
-
-            geom_data = json.loads(geometry) if isinstance(geometry, str) else geometry
-            geom = shape(geom_data)
-            centroid = geom.centroid
-            row.update({
-                "centroid_lon": centroid.x,
-                "centroid_lat": centroid.y,
-                "bbox_min_lon": geom.bounds[0],
-                "bbox_min_lat": geom.bounds[1],
-                "bbox_max_lon": geom.bounds[2],
-                "bbox_max_lat": geom.bounds[3],
-            })
-        except Exception:
-            pass
-        rows.append(row)
-
-    frame = pd.DataFrame(rows)
-    for column in existing_columns:
-        if column not in frame.columns:
-            frame[column] = pd.NA
-    return frame[existing_columns]
 
 
 def load_country_crosswalk(iso3: str) -> dict | None:
@@ -448,7 +334,10 @@ def load_global_countries_frame():
     if _GLOBAL_COUNTRIES_CACHE is not None:
         return _GLOBAL_COUNTRIES_CACHE
 
-    full_file = GEOMETRY_DIR / "admin0" / "full.parquet"
+    remote_path = global_admin0_exact_relative()
+    full_file = global_admin0_exact_path_from_geometry_root(
+        GEOMETRY_DIR, cloud_mode=is_cloud_mode(),
+    )
 
     def _normalize_full(frame: pd.DataFrame) -> pd.DataFrame:
         if "geometry" in frame.columns or "geometry_wkb" not in frame.columns:
@@ -467,21 +356,19 @@ def load_global_countries_frame():
         return normalized
 
     lane = resolve_artifact_read(full_file)
-    if lane == READ_LOCAL:
-        try:
-            _GLOBAL_COUNTRIES_CACHE = _normalize_full(pd.read_parquet(full_file))
-            logger.info("Loaded %d countries from geometry/admin0/full.parquet", len(_GLOBAL_COUNTRIES_CACHE))
+    try:
+        if lane == READ_LOCAL:
+            frame = pd.read_parquet(full_file)
+        elif lane == READ_REMOTE:
+            frame = pd.read_parquet(BytesIO(read_artifact_bytes(remote_path, lane="published")))
+        else:
+            frame = None
+        if frame is not None:
+            _GLOBAL_COUNTRIES_CACHE = _normalize_full(frame)
+            logger.info("Loaded %d countries from %s", len(_GLOBAL_COUNTRIES_CACHE), remote_path if lane == READ_REMOTE else full_file)
             return _GLOBAL_COUNTRIES_CACHE
-        except Exception as e:
-            logger.warning("Failed to load geometry/admin0/full.parquet: %s", e)
-
-    if lane == READ_REMOTE:
-        try:
-            raw = read_artifact_bytes("geometry/admin0/full.parquet", lane="published")
-            _GLOBAL_COUNTRIES_CACHE = _normalize_full(pd.read_parquet(BytesIO(raw)))
-            return _GLOBAL_COUNTRIES_CACHE
-        except Exception as e:
-            logger.warning("Failed to load geometry/admin0/full.parquet from object storage: %s", e)
+    except Exception as e:
+        logger.warning("Failed to load exact Admin0 geometry at %s: %s", remote_path if lane == READ_REMOTE else full_file, e)
 
     logger.warning("Full Admin0 geometry is unavailable")
     return None
@@ -506,33 +393,32 @@ def load_global_country_display_frame():
     if _GLOBAL_COUNTRY_DISPLAY_CACHE is not None:
         return _GLOBAL_COUNTRY_DISPLAY_CACHE
 
-    candidates = ((
-        GEOMETRY_DIR / "admin0" / "display.parquet",
-        "geometry/admin0/display.parquet",
-    ),)
-    for display_file, remote_path in candidates:
-        lane = resolve_artifact_read(display_file)
-        try:
-            if lane == READ_LOCAL:
-                base = pd.read_parquet(display_file)
-            elif lane == READ_REMOTE:
-                base = pd.read_parquet(BytesIO(read_artifact_bytes(remote_path, lane="published")))
-            else:
-                base = None
+    remote_path = global_admin0_display_relative()
+    display_file = global_admin0_display_path_from_geometry_root(
+        GEOMETRY_DIR, cloud_mode=is_cloud_mode(),
+    )
+    lane = resolve_artifact_read(display_file)
+    try:
+        if lane == READ_LOCAL:
+            base = pd.read_parquet(display_file)
+        elif lane == READ_REMOTE:
+            base = pd.read_parquet(BytesIO(read_artifact_bytes(remote_path, lane="published")))
+        else:
+            base = None
 
-            if base is not None:
-                # The published Display artifact is self-contained. Runtime
-                # merging would hide an incomplete build and make its row
-                # universe depend on a second object-store read.
-                _GLOBAL_COUNTRY_DISPLAY_CACHE = base
-                logger.info(
-                    "Loaded %d countries from self-contained Admin0 Display bootstrap at %s",
-                    len(_GLOBAL_COUNTRY_DISPLAY_CACHE),
-                    remote_path,
-                )
-                return _GLOBAL_COUNTRY_DISPLAY_CACHE
-        except Exception as e:
-            logger.warning("Failed to load Admin0 Display bootstrap at %s: %s", remote_path, e)
+        if base is not None:
+            # The published Display artifact is self-contained. Runtime
+            # merging would hide an incomplete build and make its row
+            # universe depend on a second object-store read.
+            _GLOBAL_COUNTRY_DISPLAY_CACHE = base
+            logger.info(
+                "Loaded %d countries from self-contained Admin0 Display bootstrap at %s",
+                len(_GLOBAL_COUNTRY_DISPLAY_CACHE),
+                remote_path if lane == READ_REMOTE else display_file,
+            )
+            return _GLOBAL_COUNTRY_DISPLAY_CACHE
+    except Exception as e:
+        logger.warning("Failed to load Admin0 Display bootstrap at %s: %s", remote_path if lane == READ_REMOTE else display_file, e)
 
     # Display callers serialize this frame to clients. Failing closed prevents
     # a missing bounded artifact from silently shipping exact query polygons.

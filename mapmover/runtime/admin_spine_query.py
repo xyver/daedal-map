@@ -51,7 +51,10 @@ def layout_root(iso3: str) -> Path:
     if len(profiles) == 1:
         try:
             clean_root = country_admin_spine_root(Path(DATA_ROOT), country, profiles[0])
-            if is_cloud_mode() or (clean_root / "manifest.json").is_file():
+            if is_cloud_mode() or all(
+                (clean_root / name).is_file()
+                for name in ("manifest.json", "admin_0_3.parquet", ROUTE_INDEX_NAME)
+            ):
                 return clean_root
         except ValueError:
             pass

@@ -73,7 +73,7 @@ class FoundationGeometryCloudTests(unittest.TestCase):
         display.to_parquet(display_parquet, index=False)
 
         def artifact_bytes(path: str, **_kwargs):
-            if path == "geometry/admin0/display.parquet":
+            if path == "geometry/global/display/admin_0.parquet":
                 return display_parquet.getvalue()
             raise AssertionError(path)
 
@@ -101,6 +101,34 @@ class FoundationGeometryCloudTests(unittest.TestCase):
         self.assertEqual(145.0, mnp["bbox_min_lon"])
         self.assertEqual(146.0, mnp["bbox_max_lon"])
 
+    def test_cloud_exact_frame_uses_contained_global_namespace(self) -> None:
+        exact = pd.DataFrame([{
+            "loc_id": "USA",
+            "name": "United States",
+            "geometry": "{}",
+        }])
+        exact_parquet = io.BytesIO()
+        exact.to_parquet(exact_parquet, index=False)
+        requested: list[str] = []
+
+        def artifact_bytes(path: str, **_kwargs):
+            requested.append(path)
+            if path == "geometry/global/exact/admin_0.parquet":
+                return exact_parquet.getvalue()
+            raise AssertionError(path)
+
+        with tempfile.TemporaryDirectory() as temp_name, mock.patch.object(
+            foundation_helpers, "GEOMETRY_DIR", Path(temp_name) / "not-installed"
+        ), mock.patch.object(
+            foundation_helpers, "is_cloud_mode", return_value=True
+        ), mock.patch.object(
+            foundation_helpers, "read_artifact_bytes", side_effect=artifact_bytes
+        ):
+            frame = foundation_helpers.load_global_countries_frame()
+
+        self.assertEqual(["USA"], frame["loc_id"].tolist())
+        self.assertEqual(["geometry/global/exact/admin_0.parquet"], requested)
+
     def test_local_display_frame_prefers_display_bootstrap(self) -> None:
         with tempfile.TemporaryDirectory() as temp_name:
             root = Path(temp_name)
@@ -109,12 +137,7 @@ class FoundationGeometryCloudTests(unittest.TestCase):
                 root / "admin0" / "display.parquet",
                 index=False,
             )
-            with mock.patch.object(
-                foundation_helpers, "GEOMETRY_DIR", root
-            ), mock.patch.object(
-                foundation_helpers, "_load_supplemental_admin0_frame",
-                return_value=pd.DataFrame(),
-            ):
+            with mock.patch.object(foundation_helpers, "GEOMETRY_DIR", root):
                 frame = foundation_helpers.load_global_country_display_frame()
 
         self.assertEqual(["DSP"], frame["loc_id"].tolist())
@@ -149,12 +172,7 @@ class FoundationGeometryCloudTests(unittest.TestCase):
             pd.DataFrame([{"loc_id": "EXACT", "name": "Exact"}]).to_parquet(
                 root / "admin0" / "full.parquet", index=False,
             )
-            with mock.patch.object(
-                foundation_helpers, "GEOMETRY_DIR", root
-            ), mock.patch.object(
-                foundation_helpers, "_load_supplemental_admin0_frame",
-                return_value=pd.DataFrame(),
-            ):
+            with mock.patch.object(foundation_helpers, "GEOMETRY_DIR", root):
                 frame = foundation_helpers.load_global_countries_frame()
 
         self.assertEqual(["EXACT"], frame["loc_id"].tolist())

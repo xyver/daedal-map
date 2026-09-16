@@ -5,7 +5,11 @@ import pytest
 from mapmover.runtime.geometry_storage_layout import (
     catalog_artifact_path,
     country_admin_spine_root,
+    country_crosswalk_artifact_path,
     country_release_manifest_relative,
+    global_admin0_display_relative,
+    global_admin0_exact_relative,
+    global_admin0_point_relative,
     global_admin0_point_path,
     released_artifact_path,
     released_artifact_paths_by_hash,
@@ -15,10 +19,43 @@ from mapmover.runtime.geometry_storage_layout import (
 PROFILE = {"release_id": "usa_geometry_1_3_2", "release_version": "1.3.2"}
 
 
+def test_global_admin0_high_level_contract_keeps_three_distinct_worldwide_banks() -> None:
+    """Exact, Display, and point lookup are separate products, never loose country shards."""
+    assert {
+        "exact": global_admin0_exact_relative(),
+        "display": global_admin0_display_relative(),
+        "point": global_admin0_point_relative(),
+    } == {
+        "exact": "geometry/global/exact/admin_0.parquet",
+        "display": "geometry/global/display/admin_0.parquet",
+        "point": "geometry/global/runtime/admin_0_point.parquet",
+    }
+
+
 def test_country_paths_come_from_one_contained_layout_contract() -> None:
     assert country_admin_spine_root(Path("data"), "usa", PROFILE) == Path(
         "data/geometry/countries/USA/admin_spine/exact/usa_geometry_1_3_2"
     )
+
+
+def test_release_owned_crosswalk_uses_local_authoring_fallback(tmp_path: Path) -> None:
+    relative = (
+        "geometry/countries/USA/crosswalks/usa_geometry_1_3_2/"
+        "official/census/zcta_to_county.parquet"
+    )
+    local = (
+        tmp_path / "geometry/countries/USA/crosswalks/official/census/"
+        "zcta_to_county.parquet"
+    )
+    local.parent.mkdir(parents=True)
+    local.touch()
+
+    assert country_crosswalk_artifact_path(
+        tmp_path, relative, cloud_mode=False,
+    ) == local
+    assert country_crosswalk_artifact_path(
+        tmp_path, relative, cloud_mode=True,
+    ) == tmp_path / relative
 
 
 def test_catalog_artifact_path_rejects_paths_outside_geometry() -> None:

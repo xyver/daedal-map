@@ -276,7 +276,7 @@ def get_geometry_source(geographic_level, data_catalog):
     """
     # Map geographic levels to preferred geometry sources
     geometry_sources = {
-        'country': 'geometry/admin0/display.parquet',
+        'country': 'geometry/global/display/admin_0.parquet',
         'county': 'usplaces.csv',
         'state': 'usplaces.csv',  # Can filter to state level
         'city': 'Populated Places.csv',

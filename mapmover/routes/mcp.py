@@ -1411,7 +1411,7 @@ def get_server_description(pack_id: str | None = None) -> str:
             f"{PACK_SERVER_PROFILES[normalized]['description']} Safety: {AGENT_SAFETY_NOTICE} {coverage_prefix}"
             "The calling LLM translates the user's natural-language request into strict tool JSON; geometry execution tools do not accept prose unless a schema explicitly says they do. Call get_tool_help before an unfamiliar tool. On error, inspect error, warnings, guidance, and clarification; ask the user only when clarification.required is true. "
             "Start with free discovery: call read_geometry_catalog with view='capabilities' for the current global baseline and catalog-admitted country enrichment; use its focused inventory views for admin depths, shape-backed families, crosswalks, named geometries, and package availability. Then call list_reference_systems to see supported exchange systems, relationship vintages, counts, and license/source context. "
-            "For one coordinate call resolve_point; for a point array call resolve_points. Both return compact chains through Admin 3 without opening deep partitions. For Admin 4-6, group bulk results by Admin 1 loc_id, then call resolve_deep_point for one coordinate or resolve_deep_points once per admin_1_loc_id group. Do not request geometry or relationship detail in these calls. "
+            "For one coordinate call resolve_point; for a point array call resolve_points. Both return compact chains through Admin 3 without opening deep partitions. Then call resolve_deep_point or resolve_deep_points with a returned shallow_loc_id and one family. family defaults to administrative; other shape-backed families use direct point lookup. "
             "When the caller asks for details about that chain, pass its stack loc_ids to loc_id_info; use get_geometry only for shapes and compare_geographies only for overlap, topology, validity, or successor questions. Mixed-vintage point context is not strict parentage. "
             "For a user dataset with unknown or informally declared geography keys, pass bounded scalar column samples to identify_dataset_geography; the caller may filter transport noise but must not choose the geography itself. Then pass its unambiguous geography_binding to the conversion-job tools. Use identify_reference_system only when one identifier column is already selected. For one known outside geography code or name, call resolve_reference. For bulk geometry, call resolve_loc_id_scope only for one strict hierarchy, then estimate_geometry_package before create_geometry_export. "
             "Geometry export and conversion creates are synchronous operations with operational safety limits (currently 250 selected geometries and 7,500 conversion rows by default) sized around a 10-20 second response budget. Local and hosted tools use the same item ceilings for now; local access does not require hosted settlement. Call the estimate tool or get_tool_help for the effective access lane. This facade does not promise a durable queue that is not deployed."
@@ -2182,7 +2182,7 @@ async def _execute_resolve_point_tool(request: Request, arguments: dict[str, Any
             code="shallow_point_contract_violation",
             message=(
                 "resolve_point is shallow and accepts coordinates only. Use "
-                "resolve_deep_point with admin_1_loc_id for Admin 4-6 lookup."
+                "resolve_deep_point with shallow_loc_id for Admin 4-6 or one explicit family lookup."
             ),
         )
     target_admin_level = _point_lookup_target_admin_level(payload)
@@ -2220,7 +2220,7 @@ async def _execute_resolve_points_tool(request: Request, arguments: dict[str, An
             request_id,
             rpc_request_id,
             code="shallow_point_contract_violation",
-            message="resolve_points is shallow. Use resolve_deep_points with admin_1_loc_id for Admin 4-6.",
+            message="resolve_points is shallow. Use resolve_deep_points with shallow_loc_id for Admin 4-6 or one explicit family lookup.",
         )
     target_admin_level = _point_lookup_target_admin_level(payload)
     if target_admin_level is not None and target_admin_level > 3:
@@ -2248,13 +2248,20 @@ async def _execute_resolve_deep_point_tool(request: Request, arguments: dict[str
             code="single_point_required",
             message="resolve_deep_point accepts one lat/lon pair. Use resolve_deep_points for a point array.",
         )
-    admin_1_loc_id = str(payload.pop("admin_1_loc_id", "") or "").strip().upper()
-    if not re.fullmatch(r"[A-Z]{3}-[^-]+", admin_1_loc_id):
+    shallow_loc_id = str(payload.pop("shallow_loc_id", "") or "").strip().upper()
+    from mapmover.runtime.family_point_resolution import normalize_requested_family, shallow_scope
+
+    requested_family, family_error = normalize_requested_family(payload.pop("family", None))
+    if family_error is not None:
         return _point_tool_contract_error(
-            request_id,
-            rpc_request_id,
-            code="invalid_admin_1_loc_id",
-            message="admin_1_loc_id must be exactly one Admin 1 loc_id, such as USA-CA.",
+            request_id, rpc_request_id,
+            code=family_error["code"], message=family_error["message"],
+        )
+    country_scope, admin_1_loc_id, scope_error = shallow_scope(shallow_loc_id)
+    if scope_error is not None:
+        return _point_tool_contract_error(
+            request_id, rpc_request_id,
+            code=scope_error["code"], message=scope_error["message"],
         )
     target_admin_level = _point_lookup_target_admin_level(payload)
     if target_admin_level is not None and target_admin_level <= 3:
@@ -2264,9 +2271,17 @@ async def _execute_resolve_deep_point_tool(request: Request, arguments: dict[str
             code="deep_admin_level_required",
             message="resolve_deep_point accepts only Admin 4-6 targets. Use resolve_point for Admin 0-3.",
         )
+    if requested_family != "administrative" and target_admin_level is not None:
+        return _point_tool_contract_error(
+            request_id, rpc_request_id,
+            code="target_admin_level_not_applicable",
+            message="target_admin_level applies only when family is administrative.",
+        )
 
     payload["lookup_mode"] = "deep"
-    payload["country_scope"] = admin_1_loc_id.split("-", 1)[0]
+    payload["family"] = requested_family
+    payload["shallow_loc_id"] = shallow_loc_id
+    payload["country_scope"] = country_scope
     payload["admin_1_scope"] = admin_1_loc_id
     return await _execute_point_lookup_tool(
         request, payload, rpc_request_id, execution_tool_name="resolve_deep_point"
@@ -2285,13 +2300,20 @@ async def _execute_resolve_deep_points_tool(request: Request, arguments: dict[st
             code="point_array_required",
             message="resolve_deep_points requires a points array and does not accept top-level lat/lon.",
         )
-    admin_1_loc_id = str(payload.pop("admin_1_loc_id", "") or "").strip().upper()
-    if not re.fullmatch(r"[A-Z]{3}-[^-]+", admin_1_loc_id):
+    shallow_loc_id = str(payload.pop("shallow_loc_id", "") or "").strip().upper()
+    from mapmover.runtime.family_point_resolution import normalize_requested_family, shallow_scope
+
+    requested_family, family_error = normalize_requested_family(payload.pop("family", None))
+    if family_error is not None:
         return _point_tool_contract_error(
-            request_id,
-            rpc_request_id,
-            code="invalid_admin_1_loc_id",
-            message="admin_1_loc_id must be exactly one Admin 1 loc_id, such as USA-CA.",
+            request_id, rpc_request_id,
+            code=family_error["code"], message=family_error["message"],
+        )
+    country_scope, admin_1_loc_id, scope_error = shallow_scope(shallow_loc_id)
+    if scope_error is not None:
+        return _point_tool_contract_error(
+            request_id, rpc_request_id,
+            code=scope_error["code"], message=scope_error["message"],
         )
     target_admin_level = _point_lookup_target_admin_level(payload)
     if target_admin_level is not None and target_admin_level <= 3:
@@ -2301,8 +2323,16 @@ async def _execute_resolve_deep_points_tool(request: Request, arguments: dict[st
             code="deep_admin_level_required",
             message="resolve_deep_points accepts only Admin 4-6 targets. Use resolve_points for Admin 0-3.",
         )
+    if requested_family != "administrative" and target_admin_level is not None:
+        return _point_tool_contract_error(
+            request_id, rpc_request_id,
+            code="target_admin_level_not_applicable",
+            message="target_admin_level applies only when family is administrative.",
+        )
     payload["lookup_mode"] = "deep"
-    payload["country_scope"] = admin_1_loc_id.split("-", 1)[0]
+    payload["family"] = requested_family
+    payload["shallow_loc_id"] = shallow_loc_id
+    payload["country_scope"] = country_scope
     payload["admin_1_scope"] = admin_1_loc_id
     return await _execute_point_lookup_tool(
         request, payload, rpc_request_id, execution_tool_name="resolve_deep_points"
@@ -2368,6 +2398,8 @@ async def _execute_point_lookup_tool(
     started_at = time.perf_counter()
     payload = _ensure_request_id(arguments, execution_tool_name)
     deep_lookup = execution_tool_name in {"resolve_deep_point", "resolve_deep_points"}
+    requested_family = str(payload.pop("family", "administrative") or "administrative") if deep_lookup else "administrative"
+    shallow_loc_id = str(payload.pop("shallow_loc_id", "") or "").strip() if deep_lookup else ""
     capability_id = "deep_point_lookup" if deep_lookup else "point_lookup"
     request_id = str(payload.get("request_id") or "")
     if "points" in payload:
@@ -2685,31 +2717,65 @@ async def _execute_point_lookup_tool(
                 continue
             valid_points.append({"index": index, "row_index": row_index, "id": caller_point_id, "lat": lat, "lon": lon})
         resolver_stages: dict[str, int] = {}
-        include_marine_context = payload.get("include_marine_context") is not False
-        try:
-            raw_results = await run_mcp_blocking(
-                execution_tool_name,
-                resolve_points_to_locations,
-                valid_points,
-                include_geometry=include_geometry,
-                timing_ms=resolver_stages,
-                target_admin_level=target_admin_level,
-                max_admin_level=max_admin_level,
-                country_scope=country_scope,
-                admin_1_scope=admin_1_scope,
-                include_marine_context=include_marine_context,
-                shallow_banks_only=lookup_mode == "standard",
-            )
-        except (MCPExecutionCapacityError, MCPExecutionTimeoutError):
-            raise
-        except Exception as exc:
-            raw_results = [{"error": str(exc), "point": {"lat": point.get("lat"), "lon": point.get("lon")}} for point in valid_points]
+        raw_results: list[dict[str, Any]] = []
+        family_results: list[dict[str, Any]] = []
+        if requested_family == "administrative":
+            try:
+                raw_results = await run_mcp_blocking(
+                    execution_tool_name,
+                    resolve_points_to_locations,
+                    valid_points,
+                    include_geometry=include_geometry,
+                    timing_ms=resolver_stages,
+                    target_admin_level=target_admin_level,
+                    max_admin_level=max_admin_level,
+                    country_scope=country_scope,
+                    admin_1_scope=admin_1_scope,
+                    include_marine_context=False if deep_lookup else payload.get("include_marine_context") is not False,
+                    shallow_banks_only=lookup_mode == "standard",
+                )
+            except (MCPExecutionCapacityError, MCPExecutionTimeoutError):
+                raise
+            except Exception as exc:
+                raw_results = [{"error": str(exc), "point": {"lat": point.get("lat"), "lon": point.get("lon")}} for point in valid_points]
+        elif valid_points:
+            family_started = time.perf_counter()
+            from mapmover.runtime.family_point_resolution import resolve_family_points, resolve_marine_points
+
+            if requested_family == "marine":
+                family_results = await run_mcp_blocking(
+                    execution_tool_name, resolve_marine_points, valid_points,
+                )
+            else:
+                family_results = await run_mcp_blocking(
+                    execution_tool_name,
+                    resolve_family_points,
+                    country_scope or "",
+                    [requested_family],
+                    valid_points,
+                )
+            resolver_stages["family_resolver_ms"] = _elapsed_ms(family_started)
 
         shaped_by_index: dict[int, dict[str, Any]] = dict(invalid_by_index)
-        for point, raw in zip(valid_points, raw_results):
+        for position, point in enumerate(valid_points):
             try:
-                shaped = _shape_resolve_point_payload(raw, request_id)
-                shaped.pop("request_id", None)
+                if requested_family == "administrative":
+                    raw = raw_results[position] if position < len(raw_results) else {
+                        "error": "point did not produce a result",
+                        "point": {"lat": point["lat"], "lon": point["lon"]},
+                    }
+                    shaped = _shape_resolve_point_payload(raw, request_id)
+                    shaped.pop("request_id", None)
+                else:
+                    family_result = (family_results[position] or {}).get(requested_family) or {}
+                    shaped = {
+                        "point": {"lat": point["lat"], "lon": point["lon"]},
+                        "shallow_loc_id": shallow_loc_id,
+                        "family": requested_family,
+                        "family_result": family_result,
+                    }
+                    if family_result.get("status") == "family_lookup_error":
+                        shaped["error"] = family_result.get("error")
             except Exception as exc:
                 shaped = {"point": {"lat": point["lat"], "lon": point["lon"]}, "error": {"code": "resolve_failed", "message": str(exc)}}
             item = {"index": point["index"], "row_index": point["row_index"], **shaped}
@@ -2743,14 +2809,16 @@ async def _execute_point_lookup_tool(
             "point_count": len(points),
             "resolved_count": resolved_count,
             "unresolved_count": unresolved_count,
-            "target_admin_level": (
-                f"admin_{target_admin_level}" if target_admin_level is not None
-                else (f"up_to_admin_{max_admin_level}" if max_admin_level is not None else "deepest")
-            ),
             "results": results,
         }
+        if requested_family == "administrative":
+            result_payload["target_admin_level"] = (
+                f"admin_{target_admin_level}" if target_admin_level is not None
+                else (f"up_to_admin_{max_admin_level}" if max_admin_level is not None else "deepest")
+            )
         if deep_lookup:
-            result_payload["admin_1_loc_id"] = admin_1_scope
+            result_payload["shallow_loc_id"] = shallow_loc_id
+            result_payload["family"] = requested_family
         settlement_payload = None
         if settlement_id:
             import asyncio
@@ -2814,7 +2882,9 @@ async def _execute_point_lookup_tool(
                 "access_tier": caller_identity.access_tier,
                 "access_lane": _request_access_lane(request, trusted_token),
                 "artifact_token_id": trusted_token_id,
-                "target_admin_level": f"admin_{target_admin_level}" if target_admin_level is not None else "deepest",
+                "target_admin_level": (
+                    f"admin_{target_admin_level}" if target_admin_level is not None else "deepest"
+                ) if requested_family == "administrative" else "not_applicable",
                 "country_scope": country_scope,
                 "settlement_id": settlement_id,
                 **_compute_metadata(
@@ -2902,20 +2972,45 @@ async def _execute_point_lookup_tool(
             )
         runtime_started = time.perf_counter()
         resolver_stages: dict[str, int] = {}
-        raw_results = await run_mcp_blocking(
-            execution_tool_name,
-            resolve_points_to_locations,
-            [{"lon": lon, "lat": lat}],
-            include_geometry=False,
-            timing_ms=resolver_stages,
-            target_admin_level=target_admin_level,
-            max_admin_level=max_admin_level,
-            country_scope=country_scope,
-            admin_1_scope=admin_1_scope,
-            include_marine_context=payload.get("include_marine_context") is not False,
-            shallow_banks_only=lookup_mode == "standard",
-        )
-        raw = raw_results[0] if raw_results else {"error": "point did not resolve", "point": {"lon": lon, "lat": lat}}
+        family_result: dict[str, Any] = {}
+        if requested_family == "administrative":
+            raw_results = await run_mcp_blocking(
+                execution_tool_name,
+                resolve_points_to_locations,
+                [{"lon": lon, "lat": lat}],
+                include_geometry=False,
+                timing_ms=resolver_stages,
+                target_admin_level=target_admin_level,
+                max_admin_level=max_admin_level,
+                country_scope=country_scope,
+                admin_1_scope=admin_1_scope,
+                include_marine_context=False if deep_lookup else payload.get("include_marine_context") is not False,
+                shallow_banks_only=lookup_mode == "standard",
+            )
+            raw = raw_results[0] if raw_results else {"error": "point did not resolve", "point": {"lon": lon, "lat": lat}}
+        else:
+            family_started = time.perf_counter()
+            from mapmover.runtime.family_point_resolution import resolve_family_points, resolve_marine_points
+
+            if requested_family == "marine":
+                resolved_families = await run_mcp_blocking(
+                    execution_tool_name,
+                    resolve_marine_points,
+                    [{"lon": lon, "lat": lat}],
+                )
+            else:
+                resolved_families = await run_mcp_blocking(
+                    execution_tool_name,
+                    resolve_family_points,
+                    country_scope or "",
+                    [requested_family],
+                    [{"lon": lon, "lat": lat}],
+                )
+            family_result = (
+                (resolved_families[0] or {}).get(requested_family) or {}
+                if resolved_families else {}
+            )
+            resolver_stages["family_resolver_ms"] = _elapsed_ms(family_started)
         stages = {"point_resolver_ms": _elapsed_ms(runtime_started), **resolver_stages}
     except (MCPExecutionCapacityError, MCPExecutionTimeoutError):
         raise
@@ -2938,9 +3033,21 @@ async def _execute_point_lookup_tool(
             _tool_result(error_payload, is_error=True),
             rpc_request_id,
         )
-    result = _shape_resolve_point_payload(raw, request_id)
-    if deep_lookup:
-        result["admin_1_loc_id"] = admin_1_scope
+    if requested_family == "administrative":
+        result = _shape_resolve_point_payload(raw, request_id)
+        if deep_lookup:
+            result["shallow_loc_id"] = shallow_loc_id
+            result["family"] = requested_family
+    else:
+        result = {
+            "request_id": request_id,
+            "point": {"lat": lat, "lon": lon},
+            "shallow_loc_id": shallow_loc_id,
+            "family": requested_family,
+            "family_result": family_result,
+        }
+        if family_result.get("status") == "family_lookup_error":
+            result["error"] = family_result.get("error")
     resolved = not bool(result.get("error"))
     _log_mcp_tool_usage_event(
         request,
@@ -2960,7 +3067,9 @@ async def _execute_point_lookup_tool(
             "point_count": 1,
             "resolved_count": 1 if resolved else 0,
             "unresolved_count": 0 if resolved else 1,
-            "target_admin_level": f"admin_{target_admin_level}" if target_admin_level is not None else "deepest",
+            "target_admin_level": (
+                f"admin_{target_admin_level}" if target_admin_level is not None else "deepest"
+            ) if requested_family == "administrative" else "not_applicable",
             "country_scope": country_scope,
             **_compute_metadata(response_payload=result, stages=stages, input_count=1, output_count=1 if resolved else 0),
         },

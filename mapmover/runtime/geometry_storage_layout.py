@@ -46,6 +46,27 @@ def country_reference_root(data_root: Path, country: str, profile: dict[str, Any
     return data_root / "geometry" / "countries" / code / "reference" / country_release_id(profile)
 
 
+def country_crosswalk_artifact_path(
+    data_root: Path, relative: str, *, cloud_mode: bool,
+) -> Path | None:
+    """Resolve a release-owned crosswalk with its local authoring-tree fallback."""
+    clean = catalog_artifact_path(data_root, {"path": relative})
+    if clean is None or cloud_mode or clean.is_file():
+        return clean
+    parts = PurePosixPath(str(relative).replace("\\", "/")).parts
+    if (
+        len(parts) >= 7
+        and parts[:2] == ("geometry", "countries")
+        and re.fullmatch(r"[A-Z]{3}", parts[2])
+        and parts[3] == "crosswalks"
+        and re.fullmatch(r"[a-z0-9_]+", parts[4])
+    ):
+        authoring = data_root.joinpath(*parts[:4], *parts[5:])
+        if authoring.is_file():
+            return authoring
+    return clean
+
+
 def country_catalog_relative(country: str) -> str:
     return f"geometry/countries/{_country(country)}/reference/catalog.json"
 
@@ -101,6 +122,57 @@ def released_artifact_path(
 
 def global_admin0_point_relative() -> str:
     return "geometry/global/runtime/admin_0_point.parquet"
+
+
+def global_admin0_exact_relative() -> str:
+    return "geometry/global/exact/admin_0.parquet"
+
+
+def global_admin0_display_relative() -> str:
+    return "geometry/global/display/admin_0.parquet"
+
+
+def _global_admin0_path(
+    geometry_root: Path, relative: str, legacy_local: str, *, cloud_mode: bool,
+) -> Path:
+    """Resolve a clean Published path with an explicit local-authoring fallback."""
+    clean = geometry_root.joinpath(*PurePosixPath(relative).parts[1:])
+    if cloud_mode or clean.is_file():
+        return clean
+    legacy = geometry_root.joinpath(*PurePosixPath(legacy_local).parts[1:])
+    return legacy if legacy.is_file() else clean
+
+
+def global_admin0_exact_path(data_root: Path, *, cloud_mode: bool) -> Path:
+    return _global_admin0_path(
+        data_root / "geometry", global_admin0_exact_relative(), "geometry/admin0/full.parquet",
+        cloud_mode=cloud_mode,
+    )
+
+
+def global_admin0_display_path(data_root: Path, *, cloud_mode: bool) -> Path:
+    return _global_admin0_path(
+        data_root / "geometry", global_admin0_display_relative(), "geometry/admin0/display.parquet",
+        cloud_mode=cloud_mode,
+    )
+
+
+def global_admin0_exact_path_from_geometry_root(
+    geometry_root: Path, *, cloud_mode: bool,
+) -> Path:
+    return _global_admin0_path(
+        geometry_root, global_admin0_exact_relative(), "geometry/admin0/full.parquet",
+        cloud_mode=cloud_mode,
+    )
+
+
+def global_admin0_display_path_from_geometry_root(
+    geometry_root: Path, *, cloud_mode: bool,
+) -> Path:
+    return _global_admin0_path(
+        geometry_root, global_admin0_display_relative(), "geometry/admin0/display.parquet",
+        cloud_mode=cloud_mode,
+    )
 
 
 def global_admin0_point_path(data_root: Path, record: Any, *, cloud_mode: bool) -> Path | None:

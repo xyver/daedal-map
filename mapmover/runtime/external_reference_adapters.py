@@ -102,7 +102,7 @@ _ADAPTERS = {
             "overture_gers_county", "overture_gers_region",
         ),
         identifier_pattern=r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}",
-        pointer_path="geometry/external_references/overture_gers/current.json",
+        pointer_path="geometry/bridges/GERS/index.json",
         external_id_column="gers_division_id",
         internal_id_column="loc_id",
         source_release_column="overture_release",
@@ -139,7 +139,7 @@ def _adapter_from_catalog_record(record: dict[str, Any]) -> ExternalReferenceAda
         return None
     if len(pattern) > 512 or any(not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", str(value)) for value in columns.values()):
         return None
-    pointer_path = f"geometry/external_references/{system}/current.json"
+    pointer_path = "geometry/bridges/GERS/index.json" if system == GERS_SYSTEM else f"geometry/bridges/{system}/index.json"
     if spec.get("pointer_path", pointer_path) != pointer_path:
         return None
     aliases = spec.get("aliases") or []

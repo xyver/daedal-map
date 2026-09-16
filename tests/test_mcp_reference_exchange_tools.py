@@ -233,7 +233,7 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
             workflow for workflow in payload["workflows"]
             if workflow["name"] == "partitioned_deep_points_across_multiple_regions"
         )
-        self.assertIn("resolve_deep_points is the only bulk Admin 4-6 entry point", deep_workflow["important"])
+        self.assertIn("one shallow scope and one family per call", deep_workflow["important"])
         self.assertIn("identify_reference_system", payload["available_tools"])
         self.assertNotIn("query_dataset", payload["available_tools"])
         self.assertEqual(analytics_mock.call_args.kwargs["capability_id"], "geometry_family_help")
@@ -447,7 +447,7 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         )
         self.assertEqual(payload["error"]["code"], "shallow_point_contract_violation")
 
-    def test_deep_point_requires_one_admin_1_loc_id(self) -> None:
+    def test_deep_point_requires_one_shallow_loc_id(self) -> None:
         payload = _tool_call(
             self.client,
             "resolve_deep_points",
@@ -456,7 +456,7 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
                 "points": [{"lon": -118.2, "lat": 34.0}],
             },
         )
-        self.assertEqual(payload["error"]["code"], "invalid_admin_1_loc_id")
+        self.assertEqual(payload["error"]["code"], "invalid_shallow_loc_id")
 
     def test_point_tools_enforce_disjoint_admin_ranges(self) -> None:
         shallow = _tool_call(
@@ -470,7 +470,7 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
             {
                 "lat": 34.0,
                 "lon": -118.2,
-                "admin_1_loc_id": "USA-CA",
+                "shallow_loc_id": "USA-CA",
                 "target_admin_level": "admin_3",
             },
         )
@@ -507,7 +507,7 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         self.assertIsNone(resolver.call_args.kwargs["country_scope"])
         self.assertTrue(resolver.call_args.kwargs["shallow_banks_only"])
 
-    def test_deep_points_use_admin_1_loc_id_as_the_partition_scope(self) -> None:
+    def test_deep_points_derive_admin_1_partition_from_shallow_loc_id(self) -> None:
         def fake_resolve(points, include_geometry=False, **_kwargs):
             return [{"matched": {"loc_id": "USA-CA-037-1-001", "admin_level": 5}, "stack": []} for _ in points]
 
@@ -519,18 +519,49 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
                 self.client,
                 "resolve_deep_points",
                 {
-                    "admin_1_loc_id": "USA-CA",
+                    "shallow_loc_id": "USA-CA-037",
                     "target_admin_level": "admin_5",
                     "points": [{"lon": -118.2, "lat": 34.0}],
                 },
             )
 
-        self.assertEqual(payload["admin_1_loc_id"], "USA-CA")
+        self.assertEqual(payload["shallow_loc_id"], "USA-CA-037")
+        self.assertEqual(payload["family"], "administrative")
         self.assertEqual(resolver.call_args.kwargs["target_admin_level"], 5)
         self.assertIsNone(resolver.call_args.kwargs["max_admin_level"])
         self.assertEqual(resolver.call_args.kwargs["country_scope"], "USA")
         self.assertEqual(resolver.call_args.kwargs["admin_1_scope"], "USA-CA")
+        self.assertFalse(resolver.call_args.kwargs["include_marine_context"])
         self.assertFalse(resolver.call_args.kwargs["shallow_banks_only"])
+
+    def test_deep_family_lookup_skips_administrative_resolver(self) -> None:
+        family_payload = [{
+            "postal_area": {
+                "family": "postal_area",
+                "status": "matched",
+                "matches": [{"loc_id": "USA-CA-037-POSTAL-90001"}],
+            }
+        }]
+        with (
+            mock.patch("mapmover.runtime.family_point_resolution.resolve_family_points", return_value=family_payload) as family_resolver,
+            mock.patch("mapmover.geometry_handlers.resolve_points_to_locations") as admin_resolver,
+            mock.patch("mapmover.routes.mcp.log_api_query_event"),
+        ):
+            payload = _tool_call(
+                self.client,
+                "resolve_deep_point",
+                {
+                    "lat": 34.0,
+                    "lon": -118.2,
+                    "shallow_loc_id": "USA-CA-037",
+                    "family": "postal_area",
+                },
+            )
+
+        self.assertEqual(payload["family"], "postal_area")
+        self.assertEqual(payload["family_result"]["status"], "matched")
+        family_resolver.assert_called_once()
+        admin_resolver.assert_not_called()
 
     def test_singular_point_tools_route_to_shallow_and_deep_banks(self) -> None:
         def fake_resolve(points, include_geometry=False, **_kwargs):
@@ -538,7 +569,7 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
 
         for tool, arguments, shallow in (
             ("resolve_point", {"lat": 34.0, "lon": -118.2}, True),
-            ("resolve_deep_point", {"lat": 34.0, "lon": -118.2, "admin_1_loc_id": "USA-CA"}, False),
+            ("resolve_deep_point", {"lat": 34.0, "lon": -118.2, "shallow_loc_id": "USA-CA"}, False),
         ):
             with self.subTest(tool=tool):
                 with (
@@ -969,9 +1000,12 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         self.assertNotIn("lat", tools["resolve_points"]["inputSchema"]["properties"])
         self.assertNotIn("lookup_mode", tools["resolve_point"]["inputSchema"]["properties"])
         self.assertNotIn("country_scope", tools["resolve_point"]["inputSchema"]["properties"])
-        self.assertIn("admin_1_loc_id", tools["resolve_deep_point"]["inputSchema"]["properties"])
+        self.assertIn("shallow_loc_id", tools["resolve_deep_point"]["inputSchema"]["properties"])
+        self.assertIn("family", tools["resolve_deep_point"]["inputSchema"]["properties"])
+        self.assertNotIn("include_marine_context", tools["resolve_deep_point"]["inputSchema"]["properties"])
         self.assertNotIn("points", tools["resolve_deep_point"]["inputSchema"]["properties"])
         self.assertIn("points", tools["resolve_deep_points"]["inputSchema"]["properties"])
+        self.assertNotIn("include_marine_context", tools["resolve_deep_points"]["inputSchema"]["properties"])
         self.assertNotIn("lookup_mode", tools["resolve_deep_point"]["inputSchema"]["properties"])
         self.assertNotIn("include_info", tools["get_geometry"]["inputSchema"]["properties"])
         self.assertIn("For multiple coordinates use resolve_points", tools["resolve_point"]["description"])

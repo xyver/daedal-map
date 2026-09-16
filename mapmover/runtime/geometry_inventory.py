@@ -8,7 +8,7 @@ fields.
 
 Two inputs, with a strict division of labour:
 
-- ``geometry/admin0/display.parquet`` supplies **shapes only**. It is the
+- ``geometry/global/display/admin_0.parquet`` supplies **shapes only**. It is the
   bounded 2.3 MB simplified Admin0 bootstrap the map already loads, so the
   browser never receives exact world geometry for a status view.
 - ``geometry/geometry_catalog.json`` supplies **every fact**. The route then
@@ -280,17 +280,29 @@ def country_capability_record(catalog: dict[str, Any], country_scope: str) -> di
         and str(item.get("release_status") or "") in {"approved_for_publication", "published"}
     ), {})
     program = resolved.get("program") or {}
+    # Shape eligibility is derived from the already-published representation
+    # manifest. It is a property on the existing family cards, not a second
+    # registry or another caller-facing allowlist.
+    from .family_point_resolution import family_artifacts
+
+    shape_artifacts = family_artifacts(country_code)
     available_families = [
         {
-            key: family.get(key)
-            for key in (
-                "family_id", "label", "short_label", "description",
-                "coverage_status", "coverage_complete", "coverage_basis",
-                "coverage_denominator", "hierarchy_coverage_status",
-                "hierarchy_coverage_complete", "hierarchy_node_count",
-                "covered_jurisdictions", "unresolved_jurisdictions",
-            )
-            if family.get(key) not in (None, "")
+            **{
+                key: family.get(key)
+                for key in (
+                    "family_id", "label", "short_label", "description",
+                    "coverage_status", "coverage_complete", "coverage_basis",
+                    "coverage_denominator", "hierarchy_coverage_status",
+                    "hierarchy_coverage_complete", "hierarchy_node_count",
+                    "covered_jurisdictions", "unresolved_jurisdictions",
+                )
+                if family.get(key) not in (None, "")
+            },
+            "has_shapes": (
+                family.get("family_id") == "administrative"
+                or bool((shape_artifacts.get(str(family.get("family_id") or "")) or {}).get("predicate_paths"))
+            ),
         }
         for family in program.get("families") or []
         if isinstance(family, dict) and family.get("available") is True
@@ -575,7 +587,7 @@ def _build_geometry_inventory_payload_cached(_epoch: int) -> dict[str, Any]:
         "view": "internal",
         "features": features,
         "count": len(features),
-        "shape_source": "geometry/admin0/display.parquet",
+        "shape_source": "geometry/global/display/admin_0.parquet",
         "data_source": "geometry/geometry_catalog.json",
         "catalog": {
             "schema_version": catalog.get("schema_version") or catalog.get("_schema_version"),
