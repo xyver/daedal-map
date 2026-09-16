@@ -7,12 +7,13 @@ legacy-file fallback or second source of activation truth.
 from __future__ import annotations
 
 import threading
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import Any, Iterable, Optional
 
 import pandas as pd
 
 from ..duckdb_helpers import (
+    is_cloud_mode,
     parquet_available,
     select_columns_from_parquet,
 )
@@ -23,6 +24,7 @@ from .geography_reference import (
     is_water_body_loc_id,
 )
 from .geometry_catalog import load_geometry_catalog
+from .geometry_storage_layout import catalog_artifact_path
 from .geometry_predicate_query import (
     read_bbox_candidates,
     read_bbox_candidates_for_points,
@@ -43,18 +45,6 @@ _ACTIVE_DOMAIN_CACHE_VALUE: Optional[dict[str, Any]] = None
 def is_marine_loc_id(loc_id: str | None) -> bool:
     """True for either marine overlay family or canonical named water."""
     return is_marine_jurisdiction_loc_id(loc_id) or is_water_body_loc_id(loc_id) or is_named_water_loc_id(loc_id)
-
-
-def _catalog_artifact_path(record: Any) -> Optional[Path]:
-    relative = str(record.get("path") or "").strip() if isinstance(record, dict) else ""
-    if not relative:
-        return None
-    normalized = PurePosixPath(relative.replace("\\", "/"))
-    if normalized.is_absolute() or any(part in {"", ".", ".."} for part in normalized.parts):
-        return None
-    if not normalized.parts or normalized.parts[0] != "geometry":
-        return None
-    return GEOMETRY_DIR.parent.joinpath(*normalized.parts)
 
 
 def clear_marine_geometry_cache() -> None:
@@ -89,7 +79,7 @@ def _active_domain_paths() -> Optional[dict[str, Any]]:
         if signature == _ACTIVE_DOMAIN_CACHE_SIGNATURE:
             return _ACTIVE_DOMAIN_CACHE_VALUE
     paths = {
-        key: _catalog_artifact_path(artifacts.get(key))
+        key: catalog_artifact_path(GEOMETRY_DIR.parent, artifacts.get(key))
         for key in (
             "jurisdictions", "water_bodies", "named_water_areas", "bbox_index", "point_bank",
         )
@@ -99,7 +89,7 @@ def _active_domain_paths() -> Optional[dict[str, Any]]:
     country_components = {
         str(country).upper(): path
         for country, record in (artifacts.get("country_components") or {}).items()
-        if (path := _catalog_artifact_path(record)) is not None
+        if (path := catalog_artifact_path(GEOMETRY_DIR.parent, record)) is not None
     }
     if any(paths.get(key) is None for key in paths):
         return None
@@ -130,7 +120,13 @@ def marine_bank_for_loc_id(loc_id: str | None) -> Optional[Path]:
 
 def has_marine_geometry() -> bool:
     """True when the canonical catalog admits a complete Marine layout."""
-    return _active_domain_paths() is not None
+    domain = _active_domain_paths()
+    if domain is None:
+        return False
+    if is_cloud_mode():
+        return True
+    required = ("jurisdictions", "water_bodies", "named_water_areas", "bbox_index", "point_bank")
+    return all(Path(domain[key]).is_file() for key in required)
 
 
 def resolve_marine_geometry_source(loc_id: str | None) -> dict:

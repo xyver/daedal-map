@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 import threading
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import Any, Iterable
 
 import pandas as pd
@@ -11,7 +11,9 @@ from shapely.geometry import Point
 from shapely.wkb import loads as load_wkb
 
 from ..paths import GEOMETRY_DIR
+from ..duckdb_helpers import is_cloud_mode
 from .geometry_catalog import load_geometry_catalog
+from .geometry_storage_layout import catalog_artifact_path, global_admin0_point_path
 from .geometry_predicate_query import (
     read_bbox_candidates_for_points,
     read_hash_sharded_rows,
@@ -22,20 +24,6 @@ logger = logging.getLogger(__name__)
 _CACHE_LOCK = threading.Lock()
 _CACHE_SIGNATURE: tuple[str, str] | None = None
 _CACHE_LAYOUT: dict[str, Any] | None = None
-
-
-def _artifact_path(record: Any) -> Path | None:
-    relative = str(record.get("path") or "").strip() if isinstance(record, dict) else ""
-    normalized = PurePosixPath(relative.replace("\\", "/"))
-    if (
-        not relative
-        or normalized.is_absolute()
-        or any(part in {"", ".", ".."} for part in normalized.parts)
-        or not normalized.parts
-        or normalized.parts[0] != "geometry"
-    ):
-        return None
-    return GEOMETRY_DIR.parent.joinpath(*normalized.parts)
 
 
 def clear_global_admin0_query_cache() -> None:
@@ -63,13 +51,15 @@ def _active_layout() -> dict[str, Any] | None:
         or layout.get("authoritative_for_containment") is not True
     ):
         return None
-    point_bank = _artifact_path(layout.get("point_bank"))
+    point_bank = global_admin0_point_path(
+        GEOMETRY_DIR.parent, layout.get("point_bank"), cloud_mode=is_cloud_mode(),
+    )
     shard_count = int(layout.get("shard_count") or 0)
-    bbox_index = _artifact_path(layout.get("bbox_index"))
+    bbox_index = catalog_artifact_path(GEOMETRY_DIR.parent, layout.get("bbox_index"))
     point_shards = {
         str(shard): path
         for shard, record in (layout.get("point_shards") or {}).items()
-        if (path := _artifact_path(record)) is not None
+        if (path := catalog_artifact_path(GEOMETRY_DIR.parent, record)) is not None
     }
     value = None
     if point_bank is not None:

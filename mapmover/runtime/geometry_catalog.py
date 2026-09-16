@@ -24,6 +24,7 @@ from geometry_catalog_shared import (
     public_geometry_catalog_records,
 )
 from material_policy_shared import combine_material_access
+from .geometry_storage_layout import country_catalog_relative
 
 
 CATALOG_PATH = GEOMETRY_DIR / "geometry_catalog.json"
@@ -122,7 +123,7 @@ def _load_country_geometry_catalog_cached(country: str, _epoch: int) -> dict[str
     """Load the additive detailed catalog for one maintained country."""
     if not re.fullmatch(r"[A-Z]{3}", country):
         return _empty_country_catalog(country)
-    relative = f"geometry/countries/{country}/{country}_catalog.json"
+    relative = country_catalog_relative(country)
     if _is_cloud_mode():
         try:
             payload = read_artifact_json(relative, lane="active")
@@ -131,13 +132,16 @@ def _load_country_geometry_catalog_cached(country: str, _epoch: int) -> dict[str
         except Exception:
             pass
     if not force_remote_data_reads():
-        path = GEOMETRY_DIR / "countries" / country / f"{country}_catalog.json"
-        try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-            if isinstance(payload, dict) and str(payload.get("country_code") or "").upper() == country:
-                return payload
-        except (OSError, json.JSONDecodeError):
-            pass
+        for path in (
+            GEOMETRY_DIR.parent / relative,
+            GEOMETRY_DIR / "countries" / country / f"{country}_catalog.json",
+        ):
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+                if isinstance(payload, dict) and str(payload.get("country_code") or "").upper() == country:
+                    return payload
+            except (OSError, json.JSONDecodeError):
+                continue
     return _empty_country_catalog(country)
 
 

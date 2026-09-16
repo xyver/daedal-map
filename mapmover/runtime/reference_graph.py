@@ -22,6 +22,12 @@ from ..paths import DATA_ROOT
 from ..runtime_config import get_runtime_config
 from .published_artifacts import read_artifact_json, relative_data_path
 from .geometry_catalog import load_geometry_catalog
+from .geometry_storage_layout import (
+    country_reference_root,
+    country_release_manifest_relative,
+    released_artifact_path,
+    released_artifact_paths_by_hash,
+)
 
 
 ENV_NAME = "GEOGRAPHY_REFERENCE_GRAPH_ROOT"
@@ -153,16 +159,15 @@ def _discover_roots(data_root_text: str, override: str, cloud_mode: bool) -> tup
             continue
         country = str(profile.get("country_code") or "").strip().upper()
         status = str(profile.get("release_status") or "")
-        relative = str(profile.get("reference_graph_manifest") or "").replace("\\", "/")
-        expected_prefix = f"geometry/countries/{country}/releases/geometry/"
-        if (
-            len(country) != 3
-            or status not in {"approved_for_publication", "published"}
-            or not relative.startswith(expected_prefix)
-            or not relative.endswith("/runtime/reference_graph/manifest.json")
-        ):
+        if len(country) != 3 or status not in {"approved_for_publication", "published"}:
             continue
-        candidate = (data_root / relative).parent.resolve()
+        try:
+            clean_candidate = country_reference_root(data_root, country, profile).resolve()
+        except ValueError:
+            continue
+        relative = str(profile.get("reference_graph_manifest") or "").replace("\\", "/")
+        legacy_candidate = (data_root / relative).parent.resolve() if relative.endswith("/manifest.json") else None
+        candidate = clean_candidate if cloud_mode or not legacy_candidate else legacy_candidate
         if not _missing_graph_files(str(candidate), cloud_mode):
             found.append((country, str(candidate)))
     if cloud_mode:
@@ -207,6 +212,39 @@ def clear_reference_graph_cache() -> None:
     _missing_graph_files.cache_clear()
     _discover_roots.cache_clear()
     _global_discovery_index_current.cache_clear()
+    _country_release_paths.cache_clear()
+    _partition_source_map.cache_clear()
+
+
+@lru_cache(maxsize=32)
+def _country_release_paths(country: str) -> dict[str, tuple[str, ...]]:
+    """Load the one hash-to-clean-path authority for a contained country."""
+    profile = next(
+        (
+            item for item in load_geometry_catalog().get("country_profiles") or []
+            if isinstance(item, dict)
+            and str(item.get("country_code") or "").upper() == country
+            and str(item.get("release_status") or "") in {"approved_for_publication", "published"}
+        ),
+        None,
+    )
+    if profile is None:
+        return {}
+    try:
+        relative = country_release_manifest_relative(country, profile)
+        manifest = read_artifact_json(relative, lane="active") if is_cloud_mode() else _graph_json(DATA_ROOT / relative)
+    except (OSError, ValueError):
+        return {}
+    return released_artifact_paths_by_hash(manifest or {})
+
+
+def _published_partition_path(root: Path, source: Any, sha256: Any) -> Path:
+    original = str(source or "")
+    if not is_cloud_mode():
+        return DATA_ROOT / original
+    country = _country_for_root(root)
+    relative = released_artifact_path(original, str(sha256 or ""), _country_release_paths(country))
+    return DATA_ROOT / relative
 
 
 @lru_cache(maxsize=2)
@@ -286,23 +324,41 @@ def active_reference_graph_root() -> Path | None:
     return next(iter(roots.values()), global_reference_graph_root())
 
 
-def _partition_paths(root: Path, table: str) -> list[Path]:
-    """Resolve one logical table to the partition files backing it."""
+def _partition_records(root: Path, table: str) -> list[dict[str, Any]]:
     index_name = PARTITION_INDEXES.get(table)
     if not index_name:
         return []
     index_path = root / index_name
     try:
         if index_path.is_file():
-            rows = pq.read_table(index_path, columns=["path"]).to_pydict().get("path", [])
+            rows = pq.read_table(index_path, columns=["path", "sha256"]).to_pylist()
         elif is_cloud_mode():
-            frame = select_rows(index_path, columns=["path"])
-            rows = frame["path"].tolist() if "path" in frame.columns else []
+            frame = select_rows(index_path, columns=["path", "sha256"])
+            rows = frame.to_dict(orient="records") if "path" in frame.columns else []
         else:
             return []
     except Exception:
         return []
-    return list(dict.fromkeys(DATA_ROOT / str(value) for value in rows if value))
+    return rows
+
+
+@lru_cache(maxsize=128)
+def _partition_source_map(root_text: str, table: str) -> dict[str, Path]:
+    root = Path(root_text)
+    return {
+        str(row.get("path")): _published_partition_path(root, row.get("path"), row.get("sha256"))
+        for row in _partition_records(root, table)
+        if row.get("path")
+    }
+
+
+def _partition_paths(root: Path, table: str) -> list[Path]:
+    """Resolve one logical table to the partition files backing it."""
+    rows = _partition_records(root, table)
+    return list(dict.fromkeys(
+        _published_partition_path(root, row.get("path"), row.get("sha256"))
+        for row in rows if row.get("path")
+    ))
 
 
 def _route_paths(
@@ -324,7 +380,9 @@ def _route_paths(
             return []
     except Exception:
         return []
-    return list(dict.fromkeys(DATA_ROOT / str(value) for value in rows if value))
+    table = next((name for name, filename in PARTITION_INDEXES.items() if filename == index_name), "")
+    path_map = _partition_source_map(str(root), table)
+    return list(dict.fromkeys(path_map.get(str(value), DATA_ROOT / str(value)) for value in rows if value))
 
 
 def _relationship_route_paths(
@@ -347,7 +405,8 @@ def _relationship_route_paths(
             return []
     except Exception:
         return []
-    return list(dict.fromkeys(DATA_ROOT / str(value) for value in rows if value))
+    path_map = _partition_source_map(str(root), "relationships")
+    return list(dict.fromkeys(path_map.get(str(value), DATA_ROOT / str(value)) for value in rows if value))
 
 
 def _table_source(table: str, *, loc_id: str | None = None) -> str:

@@ -16,6 +16,7 @@ import pandas as pd
 from ..duckdb_helpers import is_cloud_mode, lease_query_connection, path_to_uri
 from ..paths import COUNTRY_GEOMETRY_DIR, DATA_ROOT
 from .geometry_catalog import load_geometry_catalog
+from .geometry_storage_layout import country_admin_spine_root
 from .published_artifacts import read_artifact_json
 from .geometry_spine import geometry_spine_index_for_frame
 
@@ -48,9 +49,14 @@ def layout_root(iso3: str) -> Path:
         and str(profile.get("release_status") or "") in {"approved_for_publication", "published"}
     ]
     if len(profiles) == 1:
+        try:
+            clean_root = country_admin_spine_root(Path(DATA_ROOT), country, profiles[0])
+            if is_cloud_mode() or (clean_root / "manifest.json").is_file():
+                return clean_root
+        except ValueError:
+            pass
         relative = str(profiles[0].get("query_layout_manifest") or "").replace("\\", "/")
-        expected_prefix = f"geometry/countries/{country}/releases/geometry/"
-        if relative.startswith(expected_prefix) and relative.endswith("/runtime/admin_spine/manifest.json"):
+        if relative.endswith("/runtime/admin_spine/manifest.json"):
             return Path(DATA_ROOT) / Path(relative).parent
     # Cloud activation is catalog-owned and fails closed. The fixed legacy root
     # remains only for local development against pre-release holdings.
@@ -67,7 +73,7 @@ def layout_available(iso3: str) -> bool:
         relative_root = root.relative_to(Path(DATA_ROOT)).as_posix()
     except ValueError:
         return False
-    if not relative_root.startswith(f"geometry/countries/{str(iso3).upper()}/releases/geometry/"):
+    if not relative_root.startswith(f"geometry/countries/{str(iso3).upper()}/admin_spine/exact/"):
         return False
     expected = relative_root + "/manifest.json"
     return _published_layout_manifest_available(str(iso3).upper(), expected)

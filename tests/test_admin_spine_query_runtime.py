@@ -28,6 +28,8 @@ def test_cloud_layout_availability_comes_from_published_catalog() -> None:
     catalog = {
         "country_profiles": [{
             "country_code": "NZL", "release_status": "published",
+            "release_id": "nzl_geometry_1_0_0",
+            "release_version": "1.0.0",
             "query_layout_manifest": "geometry/countries/NZL/releases/geometry/nzl_geometry_1/runtime/admin_spine/manifest.json",
         }],
     }

@@ -1355,7 +1355,7 @@ def read_geometry_catalog(
         "runtime_data_source": data_source,
         "runtime_reference_families": graph_families,
         "country_catalog": ({
-            "path": f"geometry/countries/{selected_country}/{selected_country}_catalog.json",
+            "path": f"geometry/countries/{selected_country}/reference/catalog.json",
             "catalog_fingerprint": country_catalog.get("catalog_fingerprint"),
             "summary": country_catalog.get("summary") or {},
         } if has_country_catalog else None),
