@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 from mapmover.caller_identity import CONFIDENCE_VERIFIED, KIND_ACCOUNT, CallerIdentity
 from mapmover.mcp_execution import MCPExecutionCapacityError, MCPExecutionTimeoutError
 from mapmover.runtime.reference_exchange import get_geometry_availability, get_geometry_references
+from mapmover.runtime.geometry_tool_jobs import estimate_conversion_job
 from mapmover.routes.mcp import (
     _jsonrpc_response,
     _tool_rate_limit_for_tier,
@@ -2187,6 +2188,113 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         self.assertEqual(created["next_call"]["arguments"]["job_id"], created["job_id"])
         self.assertEqual(created["result"]["row_count"], 1)
         self.assertEqual(created["result"]["converted_count"], 1)
+
+    def test_conversion_estimate_preserves_declared_row_count_with_sample_items(self) -> None:
+        """A bounded sample must not replace the dataset's declared row count."""
+        estimate = estimate_conversion_job(
+            {
+                "from_system": "zip",
+                "target_admin_level": "admin_2",
+                "row_count": 85154,
+                "items": [{"value": "00601"}] * 12,
+            }
+        )
+
+        self.assertEqual(estimate["row_count"], 85154)
+        self.assertEqual(estimate["sampled_rows"], 12)
+        self.assertIsNotNone(estimate["identifier_check"])
+        self.assertEqual(estimate["recommended_delivery_mode"], "not_available_in_v0")
+        self.assertFalse(estimate["within_execution_limit"])
+
+    def test_conversion_estimate_uses_at_most_default_32_sample_rows(self) -> None:
+        estimate = estimate_conversion_job(
+            {"from_system": "zip", "items": [{"value": "00601"}] * 40}
+        )
+
+        self.assertEqual(estimate["sampled_rows"], 32)
+
+    def test_conversion_estimate_extrapolates_actual_sample_resolution(self) -> None:
+        resolved = {"ok": True, "resolved_loc_id": "USA-PR-001"}
+        unresolved = {"ok": False, "error": {"code": "not_found"}}
+        with mock.patch(
+            "mapmover.runtime.geometry_tool_jobs.resolve_references_batch",
+            return_value=[resolved, resolved, unresolved],
+        ):
+            estimate = estimate_conversion_job(
+                {
+                    "from_system": "zip",
+                    "row_count": 300,
+                    "items": [{"value": "00601"}, {"value": "00602"}, {"value": "never-match"}],
+                }
+            )
+
+        self.assertEqual(estimate["sampled_rows"], 3)
+        self.assertEqual(estimate["estimated_resolvable_rows"], 200)
+        self.assertEqual(estimate["estimated_error_rows"], 100)
+        self.assertEqual(estimate["identifier_check"]["status"], "partial")
+        self.assertEqual(estimate["identifier_check"]["resolvable_rows"], 2)
+
+    def test_conversion_estimate_create_call_is_valid_create_payload(self) -> None:
+        """The estimate's suggested call must not carry estimate-only row_count."""
+        estimate = estimate_conversion_job(
+            {
+                "from_system": "zip",
+                "row_count": 2,
+                "items": [{"value": "00601"}, {"value": "00602"}],
+            }
+        )
+
+        self.assertIsNotNone(estimate["create_call"])
+        create_arguments = estimate["create_call"]["arguments"]
+        self.assertNotIn("row_count", create_arguments)
+        # This validates the same payload shape consumed by the execution contract.
+        created = _tool_call(self.client, "create_conversion_job", create_arguments)
+        self.assertTrue(created["ok"])
+
+    def test_identify_reference_system_local_loopback_keeps_identification_cap(self) -> None:
+        identifiers = [f"{index:011d}" for index in range(101)]
+        with (
+            mock.patch("mapmover.routes.mcp.is_local_loopback_request", return_value=True),
+            mock.patch("mapmover.routes.mcp.log_api_query_event"),
+        ):
+            payload = _tool_call(self.client, "identify_reference_system", {"identifiers": identifiers})
+
+        self.assertEqual(payload["error"]["code"], "too_many_items")
+        self.assertEqual(payload["limit"], 100)
+
+    def test_create_conversion_job_local_loopback_bypasses_hosted_cap(self) -> None:
+        items = [{"value": "00601"} for _ in range(7501)]
+        completed = {"ok": True, "status": "completed", "result": {"row_count": len(items)}}
+        with (
+            mock.patch("mapmover.routes.mcp.is_local_loopback_request", return_value=True),
+            mock.patch("mapmover.runtime.geometry_tool_jobs.create_conversion_job", return_value=completed) as create_mock,
+            mock.patch("mapmover.routes.mcp.log_api_query_event"),
+        ):
+            payload = _tool_call(self.client, "create_conversion_job", {"from_system": "zip", "items": items})
+
+        self.assertTrue(payload["ok"])
+        self.assertIsNone(create_mock.call_args.kwargs["inline_limit"])
+
+    def test_local_loopback_removes_geometry_job_and_scope_limits(self) -> None:
+        successful = {"ok": True, "status": "completed"}
+        cases = (
+            ("resolve_loc_id_scope", {"parent_loc_id": "USA", "admin_level": "admin_1"}, "resolve_loc_id_scope", "default_limit"),
+            ("estimate_geometry_package", {"loc_ids": ["USA-CA"]}, "estimate_geometry_package", "execution_limit"),
+            ("create_geometry_export", {"loc_ids": ["USA-CA"]}, "create_geometry_export", "inline_limit"),
+            ("estimate_conversion_job", {"from_system": "zip", "items": [{"value": "00601"}]}, "estimate_conversion_job", "execution_limit"),
+        )
+        for tool_name, arguments, runtime_name, limit_argument in cases:
+            with self.subTest(tool_name=tool_name):
+                with (
+                    mock.patch("mapmover.routes.mcp.is_local_loopback_request", return_value=True),
+                    mock.patch(f"mapmover.runtime.geometry_tool_jobs.{runtime_name}", return_value=successful) as runtime_mock,
+                    mock.patch("mapmover.routes.mcp.log_api_query_event"),
+                ):
+                    payload = _tool_call(self.client, tool_name, arguments)
+
+                self.assertTrue(payload["ok"])
+                self.assertIsNone(runtime_mock.call_args.kwargs[limit_argument])
+
 
     def test_large_conversion_returns_explicit_v0_limit(self) -> None:
         with mock.patch("mapmover.routes.mcp.log_api_query_event"):

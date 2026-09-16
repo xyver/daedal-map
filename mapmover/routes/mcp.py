@@ -1414,7 +1414,7 @@ def get_server_description(pack_id: str | None = None) -> str:
             "For one coordinate call resolve_point; for a point array call resolve_points. Both return compact chains through Admin 3 without opening deep partitions. Then call resolve_deep_point or resolve_deep_points with a returned shallow_loc_id and one family. family defaults to administrative; other shape-backed families use direct point lookup. "
             "When the caller asks for details about that chain, pass its stack loc_ids to loc_id_info; use get_geometry only for shapes and compare_geographies only for overlap, topology, validity, or successor questions. Mixed-vintage point context is not strict parentage. "
             "For a user dataset with unknown or informally declared geography keys, pass bounded scalar column samples to identify_dataset_geography; the caller may filter transport noise but must not choose the geography itself. Then pass its unambiguous geography_binding to the conversion-job tools. Use identify_reference_system only when one identifier column is already selected. For one known outside geography code or name, call resolve_reference. For bulk geometry, call resolve_loc_id_scope only for one strict hierarchy, then estimate_geometry_package before create_geometry_export. "
-            "Geometry export and conversion creates are synchronous operations with operational safety limits (currently 250 selected geometries and 7,500 conversion rows by default) sized around a 10-20 second response budget. Local and hosted tools use the same item ceilings for now; local access does not require hosted settlement. Call the estimate tool or get_tool_help for the effective access lane. This facade does not promise a durable queue that is not deployed."
+            "Geometry export and conversion creates are synchronous operations with hosted safety limits (currently 250 selected geometries and 7,500 conversion rows by default) sized around a 10-20 second response budget. Direct local-runtime loopback scope, export, and conversion jobs have no service item cap; local machine resources are the boundary. Bounded lookup and identifier-recognition tools keep their focused per-call caps. Call the estimate tool or get_tool_help for the effective access lane. This facade does not promise a durable queue that is not deployed."
         )
     if not normalized:
         return (
@@ -4837,7 +4837,9 @@ async def _execute_geometry_job_runtime_tool(request: Request, arguments: dict[s
         runtime_started = time.perf_counter()
         if tool_name == "resolve_loc_id_scope":
             limit = _tool_batch_item_limit("resolve_loc_id_scope")
-            if trusted_token is not None:
+            if local_request:
+                limit = None
+            elif trusted_token is not None:
                 limit = (
                     _parse_env_int_optional("MCP_TOOL_TRUSTED_BATCH_LIMIT_RESOLVE_LOC_ID_SCOPE")
                     or int(tool_profile("resolve_loc_id_scope").get("trusted_item_limit") or 100000)
@@ -4848,13 +4850,14 @@ async def _execute_geometry_job_runtime_tool(request: Request, arguments: dict[s
             )
             capability_id = "loc_id_scope"
         elif tool_name == "estimate_geometry_package":
+            execution_limit = None if local_request else _tool_batch_item_limit("create_geometry_export")
             result = await run_mcp_blocking(
                 tool_name, geometry_tool_jobs.estimate_geometry_package,
-                payload, execution_limit=_tool_batch_item_limit("create_geometry_export"),
+                payload, execution_limit=execution_limit,
             )
             capability_id = "geometry_package_estimate"
         elif tool_name == "create_geometry_export":
-            inline_limit = _tool_batch_item_limit("create_geometry_export")
+            inline_limit = None if local_request else _tool_batch_item_limit("create_geometry_export")
             capability_id = "geometry_export"
             hosted_commercial = (
                 commercial_access_enabled()
@@ -4883,13 +4886,14 @@ async def _execute_geometry_job_runtime_tool(request: Request, arguments: dict[s
                     payload, inline_limit=inline_limit,
                 )
         elif tool_name == "estimate_conversion_job":
+            execution_limit = None if local_request else _tool_batch_item_limit("create_conversion_job")
             result = await run_mcp_blocking(
                 tool_name, geometry_tool_jobs.estimate_conversion_job,
-                payload, execution_limit=_tool_batch_item_limit("create_conversion_job"),
+                payload, execution_limit=execution_limit,
             )
             capability_id = "conversion_job_estimate"
         elif tool_name == "create_conversion_job":
-            inline_limit = _tool_batch_item_limit("create_conversion_job")
+            inline_limit = None if local_request else _tool_batch_item_limit("create_conversion_job")
             capability_id = "conversion_job"
             hosted_commercial = (
                 commercial_access_enabled()

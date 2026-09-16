@@ -424,7 +424,20 @@ class ReferenceExchangeRuntimeTests(unittest.TestCase):
             ["06073000100", "not-a-census-geoid"],
             country_scope="USA",
             reference_system="us_census_geoid",
+            expected_level="admin_3",
         )
+
+    def test_sample_identification_points_dataset_validation_to_conversion(self) -> None:
+        payload = identify_reference_system(
+            ["06073000100"],
+            expected={"system": "census_geoid", "geo_level": "tract", "vintage": "2020"},
+            country_scope="USA",
+        )
+
+        warning = next(item for item in payload["warnings"] if item["code"] == "sample_validation_only")
+        self.assertIn("create_conversion_job", warning["message"])
+        self.assertIn("validates every row", warning["message"])
+        self.assertNotIn("all_distinct_identifiers", warning["message"])
 
     def test_identify_five_digit_codes_reports_census_zcta_ambiguity(self) -> None:
         payload = identify_reference_system(["06037"], country_scope="USA")
@@ -706,7 +719,7 @@ class ReferenceExchangeRuntimeTests(unittest.TestCase):
             "status": "complete",
             "source_family": "overlay_zcta",
             "target_admin_level": "admin_2",
-            "artifact_path": "published/geometry/countries/USA/crosswalks/measured/overlay_zcta_to_admin_2_USA.parquet",
+            "artifact_path": "geometry/countries/USA/crosswalks/measured/overlay_zcta_to_admin_2_USA.parquet",
             "row_count": 10,
             "relationship_vintage": "usa_geometry_current",
         }
@@ -728,7 +741,7 @@ class ReferenceExchangeRuntimeTests(unittest.TestCase):
             "source_family": "overlay_zcta",
             "source_family_aliases": ["postal_area"],
             "target_admin_level": "admin_2",
-            "artifact_path": "published/geometry/countries/USA/crosswalks/measured/overlay_zcta_to_admin_2_USA.parquet",
+            "artifact_path": "geometry/countries/USA/crosswalks/measured/overlay_zcta_to_admin_2_USA.parquet",
         }
         with (
             mock.patch("mapmover.runtime.reference_exchange.load_geometry_catalog", return_value={"crosswalk_artifacts": [artifact]}),

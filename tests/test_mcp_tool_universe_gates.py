@@ -587,13 +587,16 @@ class TrustedArtifactBypassTests(unittest.TestCase):
         self.assertEqual(analytics_mock.call_args.kwargs["payment_rail"], ACCESS_LANE_TRUSTED_ARTIFACT)
         self.assertTrue(analytics_mock.call_args.kwargs["metadata"]["rate_limit_bypassed"])
 
-    def test_local_runtime_bypasses_rate_but_keeps_item_caps(self) -> None:
+    def test_local_runtime_bypasses_rate_and_conversion_job_cap(self) -> None:
         with (
             mock.patch("mapmover.routes.mcp.is_local_loopback_request", return_value=True),
             mock.patch("mapmover.routes.mcp.rate_limiter.check", return_value=(False, 60)) as limiter_mock,
             mock.patch(
-                "mapmover.runtime.geometry_tool_jobs._run_conversion_row",
-                return_value={"ok": True, "resolved_loc_id": "USA-CA-001"},
+                "mapmover.runtime.geometry_tool_jobs.resolve_references_batch",
+                return_value=[
+                    {"ok": True, "resolved_loc_id": f"USA-CA-00{index}"}
+                    for index in range(1, 4)
+                ],
             ),
             mock.patch.dict(
                 "os.environ",
@@ -617,14 +620,14 @@ class TrustedArtifactBypassTests(unittest.TestCase):
 
         access = help_envelope["result"]["structuredContent"]["access"]
         self.assertEqual(access["access_lane"], "local_installed")
-        self.assertEqual(access["limits"]["free_item_limit"], 2)
+        self.assertEqual(access["limits"], {})
+        self.assertEqual(access["hosted_limits"]["free_item_limit"], 2)
         self.assertFalse(access["rate_limited_independently"])
-        self.assertTrue(access["service_item_caps_enforced"])
+        self.assertFalse(access["service_item_caps_enforced"])
         self.assertFalse(access["payment_required"])
-        self.assertEqual(
-            create_envelope["result"]["structuredContent"]["error"]["code"],
-            "bounded_inline_limit_exceeded",
-        )
+        created = create_envelope["result"]["structuredContent"]
+        self.assertTrue(created["ok"])
+        self.assertEqual(created["result"]["row_count"], 3)
         limiter_mock.assert_not_called()
 
 

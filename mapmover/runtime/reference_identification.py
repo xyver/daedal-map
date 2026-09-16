@@ -941,7 +941,12 @@ def identify_reference_system(
     if str(validation_scope or "sample") == "sample" and status in {"matched", "ambiguous", "partial_match"}:
         warnings.append({
             "code": "sample_validation_only",
-            "message": "Only the supplied sample was checked. Use validation_scope='all_distinct_identifiers' with every distinct key before treating the binding as dataset-wide.",
+            "message": (
+                "Only the supplied sample was checked to identify the reference system. "
+                "Use estimate_conversion_job with a representative row sample, then "
+                "create_conversion_job with the complete dataset; conversion validates "
+                "every row and reports structured failures for unmatched keys."
+            ),
         })
     if status == "mixed_geography":
         warnings.append({

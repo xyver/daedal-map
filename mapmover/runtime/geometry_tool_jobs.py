@@ -61,6 +61,7 @@ _RESERVED_OUTPUT_PREFIX = "daedalmap_"
 # be tuned by the route's authored/env operational limit.
 GEOMETRY_EXPORT_INLINE_LIMIT = 250
 CONVERSION_INLINE_LIMIT = 7_500
+CONVERSION_ESTIMATE_SAMPLE_LIMIT = 32
 
 
 def _clean_json(value: Any) -> Any:
@@ -716,6 +717,65 @@ def _conversion_reference_request(row: dict[str, Any], *, default_limit: int) ->
     return request
 
 
+def _resolve_conversion_items(
+    payload: dict[str, Any],
+    items: list[Any],
+    *,
+    default_limit: int = 10,
+) -> tuple[dict[str, dict[str, Any]], list[dict[str, Any]]]:
+    """Resolve conversion rows in one deduplicated batch for estimates and jobs."""
+    resolution_cache: dict[str, dict[str, Any]] = {}
+    unique_rows: dict[str, dict[str, Any]] = {}
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        row = _conversion_row(payload, item)
+        unique_rows.setdefault(_conversion_cache_key(row), row)
+    if unique_rows:
+        keys = list(unique_rows)
+        requests = [
+            _conversion_reference_request(unique_rows[key], default_limit=default_limit)
+            for key in keys
+        ]
+        batch_results: list[dict[str, Any] | None] = [None] * len(requests)
+        resolution_indexes = [index for index, request in enumerate(requests) if not request.get("to_system")]
+        conversion_indexes = [index for index, request in enumerate(requests) if request.get("to_system")]
+        if resolution_indexes:
+            resolved = resolve_references_batch([requests[index] for index in resolution_indexes])
+            for index, result in zip(resolution_indexes, resolved):
+                batch_results[index] = result
+        if conversion_indexes:
+            converted = convert_references_batch([requests[index] for index in conversion_indexes])
+            for index, result in zip(conversion_indexes, converted):
+                batch_results[index] = result
+        resolution_cache.update(
+            (key, result if isinstance(result, dict) else {
+                "ok": False,
+                "error": {"code": "missing_batch_result", "message": "No conversion result was returned"},
+            })
+            for key, result in zip(keys, batch_results)
+        )
+
+    results: list[dict[str, Any]] = []
+    for index, item in enumerate(items):
+        if not isinstance(item, dict):
+            results.append({
+                "row_index": index,
+                "ok": False,
+                "error": {"code": "invalid_item", "message": "each item must be an object"},
+            })
+            continue
+        row = _conversion_row(payload, item)
+        cache_key = _conversion_cache_key(row)
+        if cache_key not in resolution_cache:
+            resolution_cache[cache_key] = _run_conversion_row(row, default_limit=default_limit)
+        result = deepcopy(resolution_cache[cache_key])
+        if item.get("row_index") is not None:
+            result["row_index"] = item.get("row_index")
+        results.append(result)
+    return resolution_cache, results
+
+
 def _conversion_output_row(item: dict[str, Any], result: dict[str, Any], *, fallback_index: int) -> dict[str, Any]:
     row = dict(item.get("data") or {})
     row["row_index"] = item.get("row_index", fallback_index)
@@ -783,7 +843,7 @@ def _tabular_artifact(rows: list[dict[str, Any]], *, output_format: str, output_
 def estimate_conversion_job(
     payload: dict[str, Any],
     *,
-    sample_limit: int = 25,
+    sample_limit: int = CONVERSION_ESTIMATE_SAMPLE_LIMIT,
     execution_limit: int | None = CONVERSION_INLINE_LIMIT,
 ) -> dict[str, Any]:
     contract_error = _conversion_contract_error(payload, allow_row_count=True)
@@ -793,7 +853,39 @@ def estimate_conversion_job(
     if binding_error:
         return binding_error
     items = payload.get("items") if isinstance(payload.get("items"), list) else []
-    row_count = len(items) if items else max(0, int(payload.get("row_count") or 0))
+    try:
+        declared_row_count = max(0, int(payload.get("row_count") or 0)) if "row_count" in payload else None
+    except (TypeError, ValueError):
+        return {"ok": False, "error": {"code": "invalid_request", "message": "row_count must be a non-negative integer"}}
+    if declared_row_count is not None and declared_row_count < len(items):
+        return {
+            "ok": False,
+            "error": {
+                "code": "invalid_request",
+                "message": "row_count cannot be smaller than the supplied item sample",
+            },
+        }
+    row_count = declared_row_count if declared_row_count is not None else len(items)
+    bounded_sample_limit = min(CONVERSION_ESTIMATE_SAMPLE_LIMIT, max(0, int(sample_limit)))
+    sample_items = items[:bounded_sample_limit]
+    _sample_cache, sample_results = _resolve_conversion_items(payload, sample_items)
+    sampled_rows = len(sample_results)
+    resolvable_sample_rows = sum(1 for result in sample_results if result.get("ok"))
+    sample_error_rows = max(0, sampled_rows - resolvable_sample_rows)
+    if sampled_rows:
+        estimated_resolvable_rows = round(row_count * resolvable_sample_rows / sampled_rows)
+        estimated_error_rows = max(0, row_count - estimated_resolvable_rows)
+        identifier_check = {
+            "status": "passed" if sample_error_rows == 0 else ("failed" if resolvable_sample_rows == 0 else "partial"),
+            "sampled_rows": sampled_rows,
+            "resolvable_rows": resolvable_sample_rows,
+            "error_rows": sample_error_rows,
+            "resolvable_share": resolvable_sample_rows / sampled_rows,
+        }
+    else:
+        estimated_resolvable_rows = None
+        estimated_error_rows = None
+        identifier_check = None
     output_format = str(payload.get("output_format") or "json_rows").strip().lower()
     binding = payload.get("geography_binding") if isinstance(payload.get("geography_binding"), dict) else None
     execution_limit = max(1, int(execution_limit)) if execution_limit is not None else None
@@ -816,9 +908,9 @@ def estimate_conversion_job(
             "quote_id": quote_id,
             "request_kind": "conversion_job",
             "row_count": row_count,
-            "sampled_rows": 0,
-            "estimated_resolvable_rows": row_count if binding else None,
-            "estimated_error_rows": None,
+            "sampled_rows": sampled_rows,
+            "estimated_resolvable_rows": estimated_resolvable_rows,
+            "estimated_error_rows": estimated_error_rows,
             "estimated_output_bytes": max(1000, row_count * (500 if output_format == "parquet" else 900)),
             "output_format": output_format,
             "preserves_input_columns": True,
@@ -834,13 +926,25 @@ def estimate_conversion_job(
                 "deduplicate_by_identifier": True,
                 "spatial_lookup_required": False,
             },
-            "identifier_check": None,
-            "create_call": {"tool": "create_conversion_job", "arguments": {**payload, "quote_id": quote_id}} if within_limit and items else None,
-            "guidance": None if within_limit else _bounded_inline_error(
-                request_kind="conversion",
-                requested=row_count,
-                limit=execution_limit,
-            )["guidance"],
+            "identifier_check": identifier_check,
+            "create_call": {
+                "tool": "create_conversion_job",
+                "arguments": {**{key: value for key, value in payload.items() if key != "row_count"}, "quote_id": quote_id},
+            } if within_limit and items and row_count == len(items) else None,
+            "guidance": (
+                None
+                if within_limit and items and row_count == len(items)
+                else {
+                    "action": "submit_complete_dataset",
+                    "message": "Pass every dataset row in items to create_conversion_job; it validates each row and returns structured failures for unmatched identifiers.",
+                }
+                if within_limit
+                else _bounded_inline_error(
+                    request_kind="conversion",
+                    requested=row_count,
+                    limit=execution_limit,
+                )["guidance"]
+            ),
         }
     )
 
@@ -868,46 +972,12 @@ def create_conversion_job(
     # directly here; execution validates individual values while performing the
     # bulk transform/join and never re-runs identification or geometry checks.
     identifier_check = None
-    results = []
     output_rows = []
-    resolution_cache: dict[str, dict[str, Any]] = {}
-    unique_rows: dict[str, dict[str, Any]] = {}
-    for item in items:
-        if not isinstance(item, dict):
-            continue
-        row = _conversion_row(payload, item)
-        unique_rows.setdefault(_conversion_cache_key(row), row)
-    if unique_rows:
-        keys = list(unique_rows)
-        requests = [
-            _conversion_reference_request(unique_rows[key], default_limit=10)
-            for key in keys
-        ]
-        batch_results: list[dict[str, Any] | None] = [None] * len(requests)
-        resolution_indexes = [index for index, request in enumerate(requests) if not request.get("to_system")]
-        conversion_indexes = [index for index, request in enumerate(requests) if request.get("to_system")]
-        if resolution_indexes:
-            resolved = resolve_references_batch([requests[index] for index in resolution_indexes])
-            for index, result in zip(resolution_indexes, resolved):
-                batch_results[index] = result
-        if conversion_indexes:
-            converted = convert_references_batch([requests[index] for index in conversion_indexes])
-            for index, result in zip(conversion_indexes, converted):
-                batch_results[index] = result
-        resolution_cache.update(zip(keys, batch_results))
+    resolution_cache, results = _resolve_conversion_items(payload, items)
     for index, item in enumerate(items):
         if not isinstance(item, dict):
-            invalid = {"row_index": index, "ok": False, "error": {"code": "invalid_item", "message": "each item must be an object"}}
-            results.append(invalid)
             continue
-        row = _conversion_row(payload, item)
-        cache_key = _conversion_cache_key(row)
-        if cache_key not in resolution_cache:
-            resolution_cache[cache_key] = _run_conversion_row(row, default_limit=10)
-        result = deepcopy(resolution_cache[cache_key])
-        if item.get("row_index") is not None:
-            result["row_index"] = item.get("row_index")
-        results.append(result)
+        result = results[index]
         output_rows.append(_conversion_output_row(item, result, fallback_index=index))
     artifact = _tabular_artifact(
         output_rows,

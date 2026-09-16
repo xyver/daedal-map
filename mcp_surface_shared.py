@@ -408,7 +408,7 @@ def build_tool_definitions() -> list[dict]:
                         },
                         "additionalProperties": False,
                     },
-                    "validation_scope": {"type": "string", "enum": ["sample", "all_distinct_identifiers"], "description": "Describes whether the supplied identifiers are a sample or the complete distinct-key set. The tool validates every supplied identifier."},
+                    "validation_scope": {"type": "string", "enum": ["sample", "all_distinct_identifiers"], "description": "Describes whether the bounded input is a sample or, only when it fits the identification cap, the complete distinct-key set. This tool validates every supplied identifier; create_conversion_job validates every row in the full dataset."},
                     "request_id": {"type": "string", "description": "Optional caller-supplied request id for tracing."},
                 },
                 "anyOf": [
@@ -708,7 +708,7 @@ def build_tool_definitions() -> list[dict]:
         {
             "name": "estimate_conversion_job",
             "title": "Estimate loc_id Conversion Job",
-            "description": "Free dry-run quote for uploaded or pasted user data conversion. Estimates rows, sample resolvability, output bytes, errors, and charge units before execution.",
+            "description": "Free dry-run quote for uploaded or pasted user data conversion. Checks a fixed representative sample of up to 32 supplied rows through the real conversion resolver, then estimates total resolvable rows, output bytes, errors, and charge units. row_count is the full dataset size and is not replaced by the sample size. Conversion execution validates every submitted row and reports structured failures for unmatched keys.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -737,7 +737,7 @@ def build_tool_definitions() -> list[dict]:
                         "target_admin_level": {"anyOf": [{"type": "string"}, {"type": "integer"}]},
                         "relationship_vintage": {"type": "string"}, "min_share": {"type": "number", "minimum": 0, "maximum": 1},
                         "limit": {"type": "integer", "minimum": 1, "maximum": 100},
-                    }, "required": ["value"], "additionalProperties": False}, "description": "Sample or full rows; row-level fields may override top-level defaults."},
+                    }, "required": ["value"], "additionalProperties": False}, "description": "Representative sample or full rows; the estimate resolves at most the first 32. Row-level fields may override top-level defaults."},
                     "row_count": {"type": "integer", "minimum": 0, "description": "Expected total row count when only a sample or artifact pointer is provided."},
                     "target_admin_level": {"anyOf": [{"type": "string"}, {"type": "integer"}]},
                     "iso3": {"type": "string"},

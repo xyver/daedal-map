@@ -19,6 +19,15 @@ from tool_access_shared import (
 )
 
 
+LOCAL_UNCAPPED_GEOMETRY_JOB_TOOLS = {
+    "resolve_loc_id_scope",
+    "estimate_geometry_package",
+    "create_geometry_export",
+    "estimate_conversion_job",
+    "create_conversion_job",
+}
+
+
 def _g(use_when, do_not_use_for, example, outputs, next_calls=(), provenance=()):
     return {
         "use_when": list(use_when),
@@ -381,7 +390,7 @@ def geometry_family_help_payload(
             },
             {
                 "name": "known_or_suspected_dataset_identifiers",
-                "steps": ["identify_reference_system on representative or all distinct string keys", "use the unambiguous geography_binding", "estimate_conversion_job", "create_conversion_job within the advertised hosted limit (7,500 rows by default)", "get_job_status to retrieve the completed result"],
+                "steps": ["identify_reference_system on at most 100 representative string keys", "use the unambiguous geography_binding", "estimate_conversion_job (which resolves up to 32 sample rows)", "create_conversion_job to validate every submitted row; hosted calls use the advertised limit (7,500 rows by default), while direct local loopback jobs have no service item cap", "get_job_status to retrieve the completed result"],
             },
             {
                 "name": "one_external_reference",
@@ -445,13 +454,18 @@ def tool_help_payload(
         ],
     }
     if local_installed:
+        uncapped_local_job = name in LOCAL_UNCAPPED_GEOMETRY_JOB_TOOLS
         access.update({
             "access_lane": "local_installed",
             "rate_limited_independently": False,
-            "service_item_caps_enforced": True,
+            "service_item_caps_enforced": not uncapped_local_job,
             "payment_required": False,
             "resource_boundary": "local machine memory, disk, and process availability",
         })
+        if uncapped_local_job:
+            access["hosted_limits"] = access["limits"]
+            access["limits"] = {}
+            access["above_free_limit"] = "local_machine_resources"
     if name == "resolve_points" and not local_installed:
         access["caller_tiers"] = {
             "anonymous": {"included_items": limits.get("free_item_limit"), "above_limit": "payment_required"},
