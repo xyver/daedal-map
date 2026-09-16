@@ -1,436 +1,193 @@
 # DaedalMap
 
-## Use it as a hosted MCP server (no setup)
+**Bring your data. Connect its geography.**
 
-Most callers do not need to run anything. DaedalMap is a live remote MCP server
-and HTTP API for making geographic references interoperable:
+DaedalMap is geographic interoperability infrastructure: a `loc_id` identity
+model, versioned boundary geometry, published crosswalks between geography
+systems, and maintained data packs. Resolve coordinates and reference codes to
+administrative matches, pull compatible shapes and data, and follow crosswalks
+into other systems such as census tracts, postal areas, watersheds, and
+electoral districts.
 
-- MCP endpoint: `https://app.daedalmap.com/mcp` (streamable HTTP)
-- Start with `help` for guided onboarding, then use the free geography tools to
-  identify reference systems, transform coordinates or boundaries, build
-  crosswalks, and assign stable `loc_id` values
-- Bring your own data, make its geography `loc_id` compatible, and join it to
-  other prepared data or DaedalMap's maintained data packs
-- Download geometry and work locally, call the hosted MCP, or self-host this
-  open runtime
-- Discover current data packs with `get_catalog` and current geometry coverage
-  with `read_geometry_catalog`; coverage can grow without changing the MCP entry
-  point or workflow
-- Some execution lanes are free and licensed commercial lanes challenge through
-  x402 before any charge
-- Agent docs: `https://daedalmap.com/docs/for-agents`
+Use it through a remote MCP server, an HTTP API, a map app, downloadable files,
+or this repository, which is the open runtime behind all of them.
 
-The rest of this README is the self-host / local-runtime path.
+[Website](https://www.daedalmap.com) |
+[App](https://app.daedalmap.com) |
+[Agent docs](https://www.daedalmap.com/docs/for-agents) |
+[Geometry](https://www.daedalmap.com/geometry) |
+[Data packs](https://www.daedalmap.com/packs) |
+[Downloads](https://www.daedalmap.com/downloadable/) |
+[Convert a file](https://www.daedalmap.com/convert) |
+[llms.txt](https://www.daedalmap.com/llms.txt)
 
----
+## Connect an agent
 
-DaedalMap is a map-first geographic query engine. This repository is the open app/runtime for developers who want to run it locally, self-host it, point it at their own data, or extend it with compatible geographic datasets.
+The hosted MCP server needs no install or account for discovery:
 
-Public surfaces:
-- App: `https://app.daedalmap.com`
-- Website/docs: `https://daedalmap.com`
+```text
+https://app.daedalmap.com/mcp
+```
 
-There are now two valid ways to approach DaedalMap locally:
+Claude Code:
 
-- `GitHub/self-host path`
-  - use this repo directly
-  - best for developers, custom data work, and users who want to control setup
-- `Downloadable launcher path`
-  - curated wrapper + engine artifact + pack install flow
-  - best for users who want the same runtime with less setup friction
+```bash
+claude mcp add --transport http daedalmap https://app.daedalmap.com/mcp
+```
 
-These should stay the same product at the runtime/contract level, but they do
-not need identical UI on every surface.
+Codex:
 
-If you are using this public GitHub repo as a self-host/local runtime, the practical setup contract right now is:
-- a local data location (`DATA_ROOT`, unless you use the default app-data path)
-- optionally, an LLM API key for the built-in local chat UI
+```bash
+codex mcp add daedalmap --url https://app.daedalmap.com/mcp
+```
 
-Hosted account wiring and private verifier endpoints are optional
-for self-host use. Hosted collector scheduling and scheduled-jobs hosts such as
-the private DigitalOcean nightly box are not part of this public repo.
+Any client that supports streamable HTTP MCP can use the same URL. Start with
+`how_geometry_works` for geography jobs, or `get_catalog`, then `get_pack`,
+then `query_dataset` for data. Setup for other clients is in the
+[agent docs](https://www.daedalmap.com/docs/for-agents).
 
-## What This Repo Is For
+Discovery and small geography lookups are free. Larger batches, exports, and
+some data packs are metered, and paid calls return an x402 payment challenge
+before any charge. `get_catalog` reports the access lane for each pack.
 
-Use this repo if you want to:
-- run the DaedalMap runtime on your own machine or server
-- point the runtime at local data or a cloud-backed data plane you control
-- inspect or extend the open runtime behavior
-- build compatible geographic datasets and pack-style workflows around the engine
+## Tools
 
-Typical use cases:
-- show earthquakes, floods, wildfires, storms, volcanoes, or tsunamis for a place and time window
-- compare population, economic, and disaster context in the same workflow
-- move between local development, self-hosted runtime operation, and hosted-style runtime behavior without changing the basic mental model
+| Job | Tools |
+|---|---|
+| Learn the model | `how_geometry_works`, `get_tool_help` |
+| Find what exists | `read_geometry_catalog`, `list_reference_systems`, `get_catalog`, `get_pack` |
+| Coordinates to places | `resolve_point`, `resolve_points`, `resolve_deep_point`, `resolve_deep_points` |
+| Identify a column of codes | `identify_dataset_geography`, `identify_reference_system` |
+| Translate codes between systems | `resolve_reference`, `convert_reference` |
+| Inspect and relate places | `loc_id_info`, `compare_geographies`, `resolve_loc_id_scope` |
+| Shapes and exports | `check_geometry`, `get_geometry`, `estimate_geometry_package`, `create_geometry_export` |
+| Convert your own rows | `estimate_conversion_job`, `create_conversion_job`, `get_job_status` |
+| Query maintained data | `query_dataset`, `get_earthquake_events`, `get_tsunami_events`, `get_volcanic_activity`, `get_fx_rates` |
+| Live feeds | `get_live_earthquake_events`, `get_live_volcano_events` |
+| Cross-hazard links | `get_disaster_links_for_event`, `get_disaster_link_chain`, `search_disaster_links` |
 
-DaedalMap itself is built around three ideas:
-- ask in plain language instead of assembling GIS workflows first
-- keep the map as the primary interface, not an afterthought
-- separate runtime delivery from maintained data-pack delivery
+Each tool takes strict JSON arguments. The calling model turns a user's
+question into those arguments, and the server returns typed errors with
+recovery guidance when a call is malformed.
 
-This repo is therefore best read as:
+## The loc_id model
 
-- the open runtime engine
-- the self-host/developer entry point
-- the source of truth for the downloadable engine snapshot users install through
-  the launcher
+`loc_id` is DaedalMap's geographic identity model. The administrative spine is
+the main hierarchy and default join path:
 
-It is not the hosted account, billing, or admin surface. Those product surfaces
-are separate from the public runtime and may evolve faster than the
-downloadable runtime UI.
+```text
+USA                      country
+USA-CA                   state
+USA-CA-037               county
+USA-CA-037-221710        census tract
+```
 
-## Choosing A Local Path
+Other geography families, such as postal areas, watersheds, tribal areas, and
+marine regions, keep their own `loc_id` identities. Published crosswalks connect
+them to the spine and to each other, and each crosswalk row carries its
+relationship type, overlap weight, source, and vintage. A direct join works when
+both datasets declare the same identity; otherwise the connection runs through a
+crosswalk.
 
-If you are deciding between this repo and the downloadable launcher, use this
-rule of thumb:
+Schema details are in [docs/DATA_SCHEMAS.md](docs/DATA_SCHEMAS.md).
 
-- use the GitHub repo when you want:
-  - code access
-  - self-host setup
-  - custom data or custom pack work
-  - runtime-level experimentation
-- use the downloadable launcher when you want:
-  - a curated install/update path
-  - a local Research-oriented runtime with less setup work
-  - pack installs and local runtime management without treating Git as the main UX
+## Coverage
 
-The goal is that both paths converge on the same core runtime behavior even if
-their setup UX differs.
+**Geometry: global baseline plus 8+ deeper countries.** The same geography
+tools work worldwide down to Admin 2. Country releases add deeper
+administrative tiers and reference families for Australia, Brazil, Canada,
+France, Germany, Mexico, the United Kingdom, the United States, and more as
+releases publish.
 
-## GitHub Vs Downloadable
+**Data: 20+ maintained data packs** covering natural hazards (earthquakes,
+tsunamis, volcanoes, hurricanes, tornadoes, wildfires, floods, weather alerts),
+hazard risk and environmental burden, economic and business indicators,
+currency rates, population, and climate.
 
-If you are browsing this repository, treat it as the developer and self-host
-entry point.
+The catalogs are the authority for what is available now:
 
-If you want a more guided local install path, use the downloadable launcher
-when it is available through release/distribution channels.
+- Geometry: [app.daedalmap.com/api/v1/geometry/catalog](https://app.daedalmap.com/api/v1/geometry/catalog)
+- Data packs: [app.daedalmap.com/api/v1/catalog](https://app.daedalmap.com/api/v1/catalog)
 
-In other words:
+## Downloads
 
-- GitHub checkout = source, self-host, customization, local development
-- downloadable launcher = curated local install and runtime management
+The [Downloads page](https://www.daedalmap.com/downloadable/) has three kinds
+of file:
 
-Both paths are intended to lead to the same DaedalMap runtime family.
+- **Program** - the map app or local MCP runtime, to run DaedalMap on your machine.
+- **Data pack** - maintained records for a subject, with source and release evidence.
+- **Geometry package** - boundaries and reference geography for a country or family.
 
-## Data Coverage
+## Run it yourself
 
-The hosted runtime ships with 40+ curated sources across disasters, demographics, economics, and climate. Coverage below reflects the current maintained pack inventory.
-
-### Global Disasters
-
-| Source | Scale | Time Range |
-|--------|-------|------------|
-| USGS Earthquakes | 1M+ events | 2150 BC - present |
-| IBTrACS Hurricanes/Cyclones | 13K storms | 1842 - present |
-| NOAA Tsunamis | 2.6K events | 2000 BC - present |
-| Smithsonian Volcanoes | 11K eruptions | Holocene |
-| Global Wildfires | 940K events/year | 2002 - 2024 |
-| USA/CAN Tornadoes | 81K events | 1950 - present |
-| Global Floods | 4.8K events | 1985 - 2019 |
-| Global Landslides | 45K events | 1760 - present |
-
-Disaster events include 22M+ geographic location relationships and 566K cross-disaster links (aftershocks, triggered events).
-
-### Global Indicators
-
-| Source | Countries | Years | Category |
-|--------|-----------|-------|----------|
-| Our World in Data CO2 | 217 | 1750 - 2024 | Environment |
-| WHO Health Statistics | 198 | 2015 - 2024 | Health |
-| IMF Balance of Payments | 195 | 2005 - 2022 | Economy |
-| UN Sustainable Development Goals | 200+ | 2000 - 2023 | SDGs 1-17 |
-| Eurostat Demographics | 37 European countries | 2000 - 2024 | Demographics |
-
-### Country-Specific Sources
-
-| Country | Source Count | Examples |
-|---------|-------------|---------|
-| USA | 15+ | Census, FEMA National Risk Index, NOAA storms |
-| Canada | 3 | Statistics Canada, NRCan earthquakes, drought |
-| Australia | 2 | ABS population, BOM cyclones |
-
-### Disaster Display
-
-Disasters are displayed with animated, type-specific rendering:
-- Point + radius: earthquakes, volcanoes, tornadoes
-- Track/trail: hurricanes and cyclones
-- Radial wave: tsunamis
-- Polygon fill: wildfires, floods
-
-## Current Runtime Shape
-
-DaedalMap now treats runtime behavior as a 2-axis matrix:
-
-- `INSTALL_MODE`
-  - `local` = local app/runtime install
-  - `cloud` = hosted/server deployment
-- `RUNTIME_MODE`
-  - `local` = query local data
-  - `cloud` = query managed cloud-backed data via local cache + DuckDB httpfs
-
-Supported combinations:
-- `local install + local data`
-- `local install + cloud data`
-- `cloud install + cloud data`
-
-Not supported as a first-class runtime shape:
-- `cloud install + local data`
-
-The current hosted/runtime direction is:
-- a hosted app runtime
-- object storage for runtime data
-- optional auth and account services
-
-In `RUNTIME_MODE=cloud`, the runtime:
-- eagerly syncs only small metadata files to local cache
-- queries parquet directly from object storage via DuckDB `httpfs`
-- does not sync the full parquet tree at startup
-
-Hosted deployment topology, release lanes, and operator control-plane details
-belong in private deployment notes.
-
-That means the same codebase can be used in:
-- full local-data mode
-- hosted-style cloud-data mode
-
-## Guest And Logged-In Behavior
-
-Guest users can open the app and try the public workflow without logging in.
-
-Logged-in users currently get:
-- authenticated session identity
-- user-scoped frontend persistence
-- user-scoped backend session cache
-- account-owned settings and login on `daedalmap.com`
-
-The public app no longer owns the account/settings UI.
-`app.daedalmap.com` stays focused on the runtime and map engine, while `.com`
-owns login, account, billing, and admin/runtime control-plane views.
-
-## Quick Start
-
-### 1. Install dependencies
+This repository is the open runtime: the FastAPI server, MCP and HTTP API, and
+map frontend. Use it to self-host, run against your own data, or extend the
+engine.
 
 ```powershell
 cd county-map
 pip install -r requirements.txt
-```
-
-### 2. Add environment variables
-
-For the smallest GitHub/local setup:
-
-```powershell
 Copy-Item .env.example .env
 ```
 
-Then edit `DATA_ROOT`. The minimum local configuration is:
+Set a data folder in `.env`:
 
 ```env
-DEPLOYMENT=local
 INSTALL_MODE=local
 RUNTIME_MODE=local
-DATA_ROOT=C:/path/to/your/local/data
+DATA_ROOT=C:/path/to/your/data
 ```
 
-If you leave `DATA_ROOT` blank, DaedalMap uses the default local app-data path and expects your data to live there.
-No S3, R2, AWS, database, account, or hosted-control-plane configuration is
-needed for this path.
-
-No model API key is required for local data operations. Set
-`OPENAI_API_KEY` or `ANTHROPIC_API_KEY` only for the built-in local chat UI.
-For research using the model from an MCP-capable subscription client, see
-[docs/RESEARCH_MCP.md](docs/RESEARCH_MCP.md).
-
-Hosted-style object-storage configuration is intentionally deployment-specific.
-For public self-hosting, start with local data. Operators who run a cloud-backed
-deployment should provide their own object-storage bucket, endpoint, and
-credentials through environment variables.
-
-Most local users should leave these blank unless they intentionally want overrides:
-
-```env
-DATA_ROOT=
-APP_URL=
-SITE_URL=
-```
-
-What they mean:
-- `DATA_ROOT`
-  only used in `RUNTIME_MODE=local`; leave blank to use the default local app-data folder
-- `APP_URL`
-  optional advertised app URL; leave blank for normal local runs
-- `SITE_URL`
-  optional website/docs/account URL override; leave blank for normal local runs
-
-If you are configuring your own hosted deployment, set:
-
-```env
-INSTALL_MODE=cloud
-RUNTIME_MODE=cloud
-PORT=7000
-```
-
-If you want hosted account behavior, connect this runtime to your own auth,
-database, and analytics stack or to a separate private control plane you
-operate. Those business-side services are intentionally not bundled here.
-
-### 3. Run the app
+Leave `DATA_ROOT` blank to use the default app-data folder. No cloud storage,
+database, or account is needed. The repository does not ship a data folder;
+[docs/DATA_INSTALLATION.md](docs/DATA_INSTALLATION.md) covers installing packs.
 
 ```powershell
 python app.py
 ```
 
-Open:
-- `http://localhost:7000`
-
-## API Discovery
-
-The runtime exposes discovery and query endpoints on your local instance.
-
-Discovery (no auth, no payment):
+The app opens at `http://localhost:7000`, and the same MCP server is at
+`http://localhost:7000/mcp`. Discovery routes:
 
 - `GET /api/v1/guide`
 - `GET /api/v1/catalog`
 - `GET /api/v1/packs/{pack_id}`
-
-Execution:
-
 - `POST /api/v1/query/dataset`
 
-Self-host instances return `commercial_access_unavailable` for the paid execution lane unless a commercial verifier is configured. Discovery endpoints work without additional setup.
+Model API keys are optional. `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` powers the
+built-in chat panel only; MCP clients bring their own model. A self-hosted
+instance returns `commercial_access_unavailable` on paid lanes unless you
+configure a commercial verifier.
 
-For managed data access via the hosted API or MCP, see [daedalmap.com/docs/for-agents](https://daedalmap.com/docs/for-agents).
+### Runtime modes
 
-## Data Resolution
+| `INSTALL_MODE` | `RUNTIME_MODE` | Use |
+|---|---|---|
+| `local` | `local` | Your machine, your data folder |
+| `local` | `cloud` | Your machine, Parquet read from object storage you configure |
+| `cloud` | `cloud` | A server deployment reading object storage |
 
-The runtime resolves behavior from two explicit modes:
+In `cloud` data mode the runtime caches small metadata files locally and queries
+Parquet in object storage through DuckDB `httpfs`. Details are in
+[docs/LOCAL_AND_HOSTED.md](docs/LOCAL_AND_HOSTED.md).
 
-1. `INSTALL_MODE`
-   controls deployment defaults like writable directories and default URLs
-2. `RUNTIME_MODE`
-   controls the data plane
+## Documentation
 
-Data mode behavior:
-
-1. `RUNTIME_MODE=local`
-   uses `DATA_ROOT`
-2. `RUNTIME_MODE=cloud`
-   uses the hydrated local cloud cache as `DATA_ROOT`
-
-Default local writable folders on Windows:
-- `CONFIG_DIR=%LOCALAPPDATA%\DaedalMap\config`
-- `STATE_DIR=%LOCALAPPDATA%\DaedalMap\state`
-- `CACHE_DIR=%LOCALAPPDATA%\DaedalMap\cache`
-- `LOG_DIR=%LOCALAPPDATA%\DaedalMap\logs`
-- `PACKS_ROOT=%LOCALAPPDATA%\DaedalMap\packs`
-- `DATA_ROOT=%LOCALAPPDATA%\DaedalMap\data`
-
-In hosted/cloud mode:
-- metadata is cached locally
-- parquet is queried remotely from object storage
-
-That makes local cloud-mode testing useful for reproducing hosted-runtime behavior before deploy.
-
-Important note:
-- the current public repo does not include a bundled `data/` demo tree
-- a source checkout therefore needs either `DATA_ROOT` in `local` mode, or `RUNTIME_MODE=cloud` with cloud storage configured
-- built-in local chat needs `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`; the hosted
-  Research MCP instead uses the model in the researcher's MCP-capable client
-
-## Data And Pack Direction
-
-The old “demo data folder plus converters” framing is no longer the whole story.
-
-The current direction is:
-- the engine stays open
-- maintained data is packaged as packs
-- packs are validated and promoted with explicit release gates
-- runtime catalogs eventually depend on pack availability, installation, and entitlement state
-
-Key concepts:
-- `available packs`
-- `installed packs`
-- `entitled packs`
-- `active runtime catalog`
-
-These are intentionally distinct.
-
-## Explore And Research Contract
-
-Explore chat and Research chat use different discovery paths:
-- Explore starts from the runtime catalog, then selects sources.
-- Research starts from the active corpus manifest or loaded artifacts, then selects sources.
-
-After a specific source is selected, they should follow the same source contract:
-- source-level `temporal_coverage` is discovery guidance
-- metric-level `metrics.{metric_id}.years` is the execution truth
-- default year windows, slider bounds, and metric year ranges should clamp to the selected metric when available
-
-That shared source-specific logic now lives in [mapmover/source_time_contract.py](mapmover/source_time_contract.py).
-Use that helper module for metric-aware year bounds instead of re-implementing time-range logic separately in Explore or Research code paths.
-
-## Settings Page
-
-`/settings` now behaves differently depending on mode:
-
-- hosted/account-aware mode: redirects to the paired account surface
-- self-host/local mode: shows local runtime setup guidance
-
-For self-host users, `/settings` is the in-app reminder page for:
-- required LLM key setup
-- current runtime/data/config paths
-- the current state of local data vs future pack install flow
-
-## Useful Paths In This Repo
-
-Important files and folders:
-- `app.py` - FastAPI app entrypoint
-- `mapmover/` - runtime logic, routes, path helpers, DuckDB helpers
-- `static/` - frontend app modules and styles
-- `templates/` - app HTML shell
-- `docs/` - local documentation for schemas, runtime notes, and reference material
-
-## Documentation In This Repo
-
-Public runtime docs live in [docs/README.md](docs/README.md).
-
-Recommended starting points:
-- [docs/CONTEXT.md](docs/CONTEXT.md) - technical router for contributors and researchers
-- [docs/LOCAL_AND_HOSTED.md](docs/LOCAL_AND_HOSTED.md) - runtime mode selection and self-host basics
-- [docs/RUNTIME_MODES.md](docs/RUNTIME_MODES.md) - Explore, Research, Ops, and Tutorial
-- [docs/RUNTIME_UNIFICATION.md](docs/RUNTIME_UNIFICATION.md) - shared architecture and mode extension contract
-- [docs/DATA_SCHEMAS.md](docs/DATA_SCHEMAS.md) - schema and `loc_id` conventions
+- [docs/CONTEXT.md](docs/CONTEXT.md) - technical router for the codebase
+- [docs/API_AND_MCP.md](docs/API_AND_MCP.md) - HTTP routes and MCP surfaces
+- [docs/DATA_SCHEMAS.md](docs/DATA_SCHEMAS.md) - schemas and `loc_id` conventions
 - [docs/DATA_PREPARATION.md](docs/DATA_PREPARATION.md) - convert and validate your own data
+- [docs/DATA_INSTALLATION.md](docs/DATA_INSTALLATION.md) - install data locally
 - [docs/PACK_AUTHORING.md](docs/PACK_AUTHORING.md) - build research packs and corpora
-
-## Local Development Modes
-
-Useful local modes:
-
-1. Full local-data mode
-- points at your local `DATA_ROOT`
-- best current self-host mode for GitHub users
-
-2. Hosted-style S3 mode
-- local server, but object-storage-backed data path
-- best for reproducing hosted runtime behavior before deploy
-
-3. Installed/runtime-pack mode
-- planned product direction beyond raw source checkout
-- engine/runtime installed separately from data packs
-- pack selection and updates handled outside the repo clone flow
+- [docs/RESEARCH_MCP.md](docs/RESEARCH_MCP.md) - research with the hosted MCP
+- [docs/RUNTIME_MODES.md](docs/RUNTIME_MODES.md) - Explore, Research, Ops, and Tutorial
+- [docs/SECURITY_AND_SELF_HOSTING.md](docs/SECURITY_AND_SELF_HOSTING.md) - self-hosting securely
 
 ## Contact
 
-Questions, feedback, or self-host issues: support@daedalmap.com
+Questions, feedback, and self-hosting issues: support@daedalmap.com
 
 ## License
 
-MIT
-
----
-
-If an agent or tool was pointed at this README for programmable access, use:
-- Agent docs: https://daedalmap.com/docs/for-agents
-- Machine-readable entry: https://daedalmap.com/llms.txt
+MIT. Data packs and geometry carry their own source licenses, listed in each
+catalog entry.
