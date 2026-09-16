@@ -167,7 +167,8 @@ def _discover_roots(data_root_text: str, override: str, cloud_mode: bool) -> tup
             continue
         relative = str(profile.get("reference_graph_manifest") or "").replace("\\", "/")
         legacy_candidate = (data_root / relative).parent.resolve() if relative.endswith("/manifest.json") else None
-        candidate = clean_candidate if cloud_mode or not legacy_candidate else legacy_candidate
+        use_clean = cloud_mode and bool(_country_release_paths(country))
+        candidate = clean_candidate if use_clean or not legacy_candidate else legacy_candidate
         if not _missing_graph_files(str(candidate), cloud_mode):
             found.append((country, str(candidate)))
     if cloud_mode:
@@ -233,7 +234,10 @@ def _country_release_paths(country: str) -> dict[str, tuple[str, ...]]:
     try:
         relative = country_release_manifest_relative(country, profile)
         manifest = read_artifact_json(relative, lane="active") if is_cloud_mode() else _graph_json(DATA_ROOT / relative)
-    except (OSError, ValueError):
+    except Exception:
+        return {}
+    expected_reference = f"geometry/countries/{country}/reference/"
+    if str(((manifest or {}).get("runtime") or {}).get("reference") or "") != expected_reference:
         return {}
     return released_artifact_paths_by_hash(manifest or {})
 

@@ -17,6 +17,7 @@ from ..duckdb_helpers import is_cloud_mode, lease_query_connection, path_to_uri
 from ..paths import COUNTRY_GEOMETRY_DIR, DATA_ROOT
 from .geometry_catalog import load_geometry_catalog
 from .geometry_storage_layout import country_admin_spine_root
+from .geometry_storage_layout import country_release_manifest_relative
 from .published_artifacts import read_artifact_json
 from .geometry_spine import geometry_spine_index_for_frame
 
@@ -51,7 +52,14 @@ def layout_root(iso3: str) -> Path:
     if len(profiles) == 1:
         try:
             clean_root = country_admin_spine_root(Path(DATA_ROOT), country, profiles[0])
-            if is_cloud_mode() or (clean_root / "manifest.json").is_file():
+            if (
+                _contained_release_uses_clean_admin(
+                    country,
+                    str(profiles[0].get("release_id") or ""),
+                    str(profiles[0].get("release_version") or ""),
+                )
+                if is_cloud_mode() else (clean_root / "manifest.json").is_file()
+            ):
                 return clean_root
         except ValueError:
             pass
@@ -73,7 +81,11 @@ def layout_available(iso3: str) -> bool:
         relative_root = root.relative_to(Path(DATA_ROOT)).as_posix()
     except ValueError:
         return False
-    if not relative_root.startswith(f"geometry/countries/{str(iso3).upper()}/admin_spine/exact/"):
+    country = str(iso3).upper()
+    if not (
+        relative_root.startswith(f"geometry/countries/{country}/admin_spine/exact/")
+        or relative_root.startswith(f"geometry/countries/{country}/releases/geometry/")
+    ):
         return False
     expected = relative_root + "/manifest.json"
     return _published_layout_manifest_available(str(iso3).upper(), expected)
@@ -82,8 +94,21 @@ def layout_available(iso3: str) -> bool:
 def clear_admin_spine_query_cache() -> None:
     _published_layout_manifest_available.cache_clear()
     _layout_manifest_at_root.cache_clear()
+    _contained_release_uses_clean_admin.cache_clear()
     with _SHALLOW_IDENTITY_CACHE_LOCK:
         _SHALLOW_IDENTITY_CACHE.clear()
+
+
+@lru_cache(maxsize=32)
+def _contained_release_uses_clean_admin(country: str, release_id: str, release_version: str) -> bool:
+    profile = {"release_id": release_id, "release_version": release_version}
+    try:
+        relative = country_release_manifest_relative(country, profile)
+        manifest = read_artifact_json(relative, lane="active")
+        expected = country_admin_spine_root(Path(DATA_ROOT), country, profile).relative_to(Path(DATA_ROOT)).as_posix() + "/"
+        return str((manifest.get("runtime") or {}).get("exact") or "") == expected
+    except Exception:
+        return False
 
 
 def prewarm_shallow_identity_index(iso3: str, maximum_level: int = 2) -> int:
