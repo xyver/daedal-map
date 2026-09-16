@@ -76,25 +76,27 @@ def released_artifact_paths_by_hash(manifest: dict[str, Any]) -> dict[str, tuple
 
 
 def released_artifact_path(
-    legacy_path: str,
+    source_path: str,
     sha256: str,
     paths_by_hash: dict[str, tuple[str, ...]],
 ) -> str:
-    """Resolve an embedded pre-move path through the release's hash authority.
+    """Resolve an embedded source path through the release's hash authority.
 
     Reference-graph indexes deliberately pin payload hashes.  The contained
     namespace release manifest maps those same hashes to their current object
     paths, so readers do not need hard-coded migration rules or path aliases.
     """
-    original = str(legacy_path or "").replace("\\", "/")
+    original = str(source_path or "").replace("\\", "/")
     candidates = paths_by_hash.get(str(sha256 or "").strip().lower()) or ()
     if not candidates:
-        return original
+        raise ValueError(f"Released artifact hash is absent from the active manifest: {sha256}")
     if len(candidates) == 1:
         return candidates[0]
     basename = original.rsplit("/", 1)[-1]
     same_name = [path for path in candidates if path.rsplit("/", 1)[-1] == basename]
-    return same_name[0] if len(same_name) == 1 else original
+    if len(same_name) == 1:
+        return same_name[0]
+    raise ValueError(f"Released artifact hash has ambiguous active paths: {sha256}")
 
 
 def global_admin0_point_relative() -> str:

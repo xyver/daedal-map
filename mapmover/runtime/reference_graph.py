@@ -165,10 +165,13 @@ def _discover_roots(data_root_text: str, override: str, cloud_mode: bool) -> tup
             clean_candidate = country_reference_root(data_root, country, profile).resolve()
         except ValueError:
             continue
-        relative = str(profile.get("reference_graph_manifest") or "").replace("\\", "/")
-        legacy_candidate = (data_root / relative).parent.resolve() if relative.endswith("/manifest.json") else None
-        use_clean = cloud_mode and bool(_country_release_paths(country))
-        candidate = clean_candidate if use_clean or not legacy_candidate else legacy_candidate
+        if cloud_mode:
+            candidate = clean_candidate
+        else:
+            # Local authoring uses the admitted builder output. Published cloud
+            # has exactly one supported path: the contained reference root.
+            relative = str(profile.get("reference_graph_manifest") or "").replace("\\", "/")
+            candidate = (data_root / relative).parent.resolve() if relative.endswith("/manifest.json") else clean_candidate
         if not _missing_graph_files(str(candidate), cloud_mode):
             found.append((country, str(candidate)))
     if cloud_mode:

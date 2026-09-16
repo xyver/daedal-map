@@ -16,10 +16,10 @@ def test_cloud_manifest_check_follows_the_selected_active_lane() -> None:
     with patch.object(admin_spine_query, "read_artifact_json", return_value=payload) as reader:
         admin_spine_query._published_layout_manifest_available.cache_clear()
         assert admin_spine_query._published_layout_manifest_available(
-            "GBR", "geometry/countries/GBR/releases/geometry/r/runtime/admin_spine/manifest.json"
+            "GBR", "geometry/countries/GBR/admin_spine/exact/r/manifest.json"
         ) is True
     reader.assert_called_once_with(
-        "geometry/countries/GBR/releases/geometry/r/runtime/admin_spine/manifest.json",
+        "geometry/countries/GBR/admin_spine/exact/r/manifest.json",
         lane="active",
     )
 

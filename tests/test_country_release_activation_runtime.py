@@ -16,6 +16,7 @@ def test_cloud_reference_graph_discovery_is_catalog_owned(tmp_path: Path) -> Non
     catalog = {"country_profiles": [{
         "country_code": "GBR",
         "release_status": "published",
+        "release_id": "gbr_geometry_1_0_0",
         "reference_graph_manifest": (
             "geometry/countries/GBR/releases/geometry/gbr_geometry_1_0_0/"
             "runtime/reference_graph/manifest.json"
@@ -28,7 +29,7 @@ def test_cloud_reference_graph_discovery_is_catalog_owned(tmp_path: Path) -> Non
         roots = reference_graph._discover_roots(str(tmp_path), "", True)
     assert roots == ((
         "GBR",
-        str((tmp_path / catalog["country_profiles"][0]["reference_graph_manifest"]).parent.resolve()),
+        str((tmp_path / "geometry/countries/GBR/reference/gbr_geometry_1_0_0").resolve()),
     ),)
 
 
@@ -49,17 +50,21 @@ def test_explicit_operator_graph_override_wins_in_cloud_mode(tmp_path: Path) -> 
 
 
 def test_cloud_partition_index_is_read_through_shared_artifact_seam(tmp_path: Path) -> None:
-    root = tmp_path / "geometry/countries/GBR/releases/geometry/r/runtime/reference_graph"
-    partition = tmp_path / "geometry/countries/GBR/relationships/f/identities.parquet"
-    frame = pd.DataFrame({"path": [str(partition.relative_to(tmp_path)).replace("\\", "/")]})
+    root = tmp_path / "geometry/countries/GBR/reference/r"
+    source = "geometry/countries/GBR/relationships/f/identities.parquet"
+    current = "geometry/countries/GBR/reference/f/1.0.0/identities.parquet"
+    partition = tmp_path / current
+    digest = "a" * 64
+    frame = pd.DataFrame({"path": [source], "sha256": [digest]})
     with (
         patch.object(reference_graph, "DATA_ROOT", tmp_path),
         patch.object(reference_graph, "is_cloud_mode", return_value=True),
         patch.object(reference_graph, "select_rows", return_value=frame) as reader,
+        patch.object(reference_graph, "_country_release_paths", return_value={digest: (current,)}),
     ):
         paths = reference_graph._partition_paths(root, "identities")
     assert paths == [partition]
-    reader.assert_called_once_with(root / "identity_partitions.parquet", columns=["path"])
+    reader.assert_called_once_with(root / "identity_partitions.parquet", columns=["path", "sha256"])
 
 
 def test_cloud_exact_identity_route_avoids_partition_index_fanout(tmp_path: Path) -> None:

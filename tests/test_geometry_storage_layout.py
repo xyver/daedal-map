@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from mapmover.runtime.geometry_storage_layout import (
     catalog_artifact_path,
     country_admin_spine_root,
@@ -42,9 +44,10 @@ def test_embedded_legacy_path_resolves_by_release_hash() -> None:
     ) == "geometry/countries/USA/reference/example/1.3.2/aliases.parquet"
 
 
-def test_unknown_hash_fails_closed_to_original_path() -> None:
+def test_unknown_hash_fails_closed_without_source_path_fallback() -> None:
     original = "geometry/countries/USA/relationships/old/aliases.parquet"
-    assert released_artifact_path(original, "b" * 64, {}) == original
+    with pytest.raises(ValueError, match="absent from the active manifest"):
+        released_artifact_path(original, "b" * 64, {})
 
 
 def test_global_point_path_uses_clean_contract_in_cloud(tmp_path: Path) -> None:
