@@ -29,6 +29,7 @@ from mapmover.catalog_surface import is_mcp_distribution_source
 from mapmover.hosted_runtime_account import load_account_context
 from mapmover.hosted_runtime_events import submit_runtime_feedback
 from mapmover.order_queue import order_queue
+from mapmover.pack_downloader import _geometry_edition_projection, _load_json_from_ref
 from mapmover.prewarm_status import begin_prewarm, prewarm_readiness, run_prewarm_task
 from mapmover.catalog_cache_policy import CONTROL_CATALOG_CACHE_TTL_SECONDS
 from mapmover.runtime_config import get_runtime_config
@@ -381,11 +382,18 @@ def _downloadable_pack_store_entry(entry: dict, public_base: str) -> dict:
     normalized = dict(entry)
     current_url = str(entry.get("current_manifest_url") or f"{public_base}/downloadable/packs/{pack_id}/stable/current.json").strip()
     version_url = ""
+    release_url = ""
+    edition = ""
     try:
         current = _read_public_json(current_url)
         version_url = str(current.get("version_manifest_url") or "").strip()
         if version_url:
             version = _read_public_json(version_url)
+        elif current.get("package_profile") == "geometry":
+            release_url = str(current.get("release_manifest_url") or "").strip()
+            edition = str(current.get("edition") or "").strip()
+            release = _load_json_from_ref(release_url, current.get("release_manifest_sha256"))
+            version = _geometry_edition_projection(release, current)
         else:
             version = {}
     except Exception:
@@ -410,6 +418,8 @@ def _downloadable_pack_store_entry(entry: dict, public_base: str) -> dict:
         {
             "current_manifest_url": current_url,
             "version_manifest_url": version_url or str(entry.get("version_manifest_url") or "").strip(),
+            "release_manifest_url": release_url or str(entry.get("release_manifest_url") or "").strip(),
+            "edition": edition or str(entry.get("edition") or "").strip(),
             "current_version": str(version.get("version") or current.get("current_version") or entry.get("current_version") or "").strip(),
             "source_name": str(version.get("source_name") or current.get("source_name") or entry.get("source_name") or pack_id).strip(),
             "description": str(version.get("description") or current.get("description") or entry.get("description") or "").strip(),

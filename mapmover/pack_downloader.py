@@ -6,7 +6,9 @@ runtime can verify it and then install it through the manifest-driven path.
 
 Supported remote formats:
 - legacy manifest + per-file data/ staging
-- stable downloadable contract:
+- unified geometry contract:
+  - current.json -> country releases/<version>/manifest.json -> selected edition -> ZIP
+- legacy stable downloadable contract (non-geometry packs only):
   - current.json -> version.json -> pack.zip
 """
 
@@ -20,6 +22,7 @@ from pathlib import Path
 from urllib.parse import urljoin, urlparse
 
 import requests
+from geometry_download_shared import geometry_edition_projection as _geometry_edition_projection
 
 from .artifact_utils import safe_extract_zip, sha256_file
 from .paths import CACHE_DIR, ensure_dir
@@ -59,20 +62,30 @@ def _download_to_path(source: str, dest: Path) -> None:
     shutil.copy2(_resolve_local_source(source), dest)
 
 
-def _load_json_from_ref(ref: str) -> dict:
+def _load_json_from_ref(ref: str, expected_sha256: str | None = None) -> dict:
     if _looks_like_url(ref) and urlparse(ref).scheme in {"http", "https"}:
         response = requests.get(ref, timeout=60)
         response.raise_for_status()
-        data = response.json()
-        return data if isinstance(data, dict) else {}
-    source_path = _resolve_local_source(ref)
-    with source_path.open("r", encoding="utf-8") as fh:
-        data = json.load(fh)
+        payload = response.content
+    else:
+        payload = _resolve_local_source(ref).read_bytes()
+    if expected_sha256 and hashlib.sha256(payload).hexdigest() != expected_sha256.lower():
+        raise RuntimeError(f"Release manifest hash mismatch: {ref}")
+    data = json.loads(payload.decode("utf-8"))
     return data if isinstance(data, dict) else {}
 
 
 def _looks_like_stable_current_manifest(manifest: dict) -> bool:
     return bool(manifest.get("current_version")) and bool(manifest.get("version_manifest_url"))
+
+
+def _looks_like_geometry_current_manifest(manifest: dict) -> bool:
+    return (
+        manifest.get("package_profile") == "geometry"
+        and bool(manifest.get("current_version"))
+        and bool(manifest.get("release_manifest_url"))
+        and bool(manifest.get("edition"))
+    )
 
 
 def _looks_like_stable_version_manifest(manifest: dict) -> bool:
@@ -165,7 +178,12 @@ def _default_artifact_base(manifest_ref: str) -> str:
 
 def stage_pack_artifact(manifest_ref: str, artifact_base_ref: str | None = None) -> dict:
     manifest = _load_json_from_ref(manifest_ref)
-    if _looks_like_stable_current_manifest(manifest):
+    if _looks_like_geometry_current_manifest(manifest):
+        release_ref = str(manifest.get("release_manifest_url") or "").strip()
+        release = _load_json_from_ref(release_ref, manifest.get("release_manifest_sha256"))
+        manifest = _geometry_edition_projection(release, manifest)
+        manifest_ref = release_ref
+    elif _looks_like_stable_current_manifest(manifest):
         version_ref = str(manifest.get("version_manifest_url") or "").strip()
         if not version_ref:
             raise RuntimeError(f"Current manifest missing version_manifest_url: {manifest_ref}")
