@@ -51,66 +51,60 @@ def _read_active_json(relative_path: str) -> dict[str, Any] | None:
 
 @lru_cache(maxsize=256)
 def resolve_country_display_release(iso3: str) -> dict[str, Any] | None:
-    """Resolve and validate the active simplified country Display release.
-
-    The pointer and manifest are controls, not hints: every returned parquet is
-    declared by the admitted manifest and remains under the selected immutable
-    release root. Display and Full are deliberately separate lanes, and this
-    resolver never falls back to the authority/query spine.
-    """
+    """Resolve Display banks from the one contained country release."""
     country = str(iso3 or "").strip().upper()
     if not re.fullmatch(r"[A-Z]{3}", country):
         return None
-    relative_pointer = f"geometry/countries/{country}/releases/display/current.json"
-    pointer = _read_active_json(relative_pointer)
-    release_id = str((pointer or {}).get("release_id") or "").strip()
-    if not re.fullmatch(r"[a-z0-9_]+", release_id):
+    index_path = f"geometry/countries/{country}/index.json"
+    index = _read_active_json(index_path)
+    index_unit = (index.get("release_unit") or {}) if isinstance(index, dict) else {}
+    if not isinstance(index, dict) or str(index_unit.get("id") or "").upper() != country:
         return None
-    if str(pointer.get("country") or "").strip().upper() != country:
-        return None
-    if str(pointer.get("publication_status") or "").strip().lower() != "approved_for_publication":
-        return None
-
-    release_prefix = f"geometry/countries/{country}/releases/display/{release_id}"
-    expected_manifest = f"{release_prefix}/manifest.json"
-    manifest_path = str(pointer.get("manifest_path") or expected_manifest).replace("\\", "/")
-    if manifest_path != expected_manifest:
+    current = index.get("current") or {}
+    manifest_pin = current.get("manifest") or {}
+    manifest_path = str(manifest_pin.get("path") or "").replace("\\", "/")
+    if not re.fullmatch(rf"geometry/countries/{country}/releases/\d+\.\d+\.\d+/manifest\.json", manifest_path):
         return None
     manifest = _read_active_json(manifest_path)
-    if not isinstance(manifest, dict):
+    manifest_unit = (manifest.get("release_unit") or {}) if isinstance(manifest, dict) else {}
+    if not isinstance(manifest, dict) or str(manifest_unit.get("id") or "").upper() != country:
         return None
-    if str(manifest.get("profile") or "") != "country_display_release":
+    display_prefix = str((manifest.get("runtime") or {}).get("display") or "").replace("\\", "/")
+    expected_prefix = f"geometry/countries/{country}/admin_spine/display/"
+    if not display_prefix.startswith(expected_prefix) or not display_prefix.endswith("/"):
         return None
-    if str(manifest.get("country") or "").strip().upper() != country:
-        return None
-    if str(manifest.get("release_id") or "").strip() != release_id:
+    release_id = display_prefix.rstrip("/").rsplit("/", 1)[-1]
+    if not re.fullmatch(r"[a-z0-9_]+", release_id):
         return None
 
     artifacts: list[dict[str, Any]] = []
-    for record in manifest.get("artifacts") or []:
-        if not isinstance(record, dict) or record.get("role") != "display_simplified_geometry":
-            continue
-        relative = str(record.get("path") or "").replace("\\", "/").strip("/")
-        if not relative.startswith(f"{release_prefix}/") or not relative.endswith(".parquet"):
-            continue
-        levels = []
-        for value in record.get("admin_levels") or []:
-            try:
-                levels.append(int(value))
-            except (TypeError, ValueError):
+    for object_record in manifest.get("objects") or []:
+        for value in object_record.get("source_paths") or []:
+            relative = str(value).replace("\\", "/").strip("/")
+            if not relative.startswith(display_prefix) or not relative.endswith(".parquet"):
                 continue
-        artifacts.append({
-            **record,
-            "path": GEOMETRY_DIR.parent / relative,
-            "relative_path": relative,
-            "admin_levels": levels,
-        })
+            suffix = relative[len(display_prefix):]
+            if suffix == "admin_0_3.parquet":
+                levels, owner = [0, 1, 2, 3], "national"
+            elif re.fullmatch(r"deep/[A-Z]{3}-.+\.parquet", suffix):
+                levels, owner = [4, 5, 6], Path(suffix).stem
+            else:
+                continue
+            artifacts.append({
+                "role": "display_simplified_geometry",
+                "sha256": object_record.get("sha256"),
+                "size_bytes": object_record.get("size_bytes"),
+                "path": GEOMETRY_DIR.parent / relative,
+                "relative_path": relative,
+                "admin_levels": levels,
+                "physical_owner": owner,
+            })
     if not artifacts:
         return None
     return {
         "country": country,
         "release_id": release_id,
-        "pointer": pointer,
+        "pointer": index,
         "manifest": manifest,
         "artifacts": artifacts,
     }

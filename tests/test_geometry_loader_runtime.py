@@ -13,55 +13,66 @@ class GeometryLoaderRuntimeTests(unittest.TestCase):
     def tearDown(self) -> None:
         resolve_country_display_release.cache_clear()
 
-    def test_display_release_follows_approved_pointer_and_manifest(self):
-        pointer = {
-            "profile": "country_display_release_pointer",
-            "country": "USA",
-            "release_id": "usa_display_1_0_0_web_v1",
-            "publication_status": "approved_for_publication",
-            "manifest_path": "geometry/countries/USA/releases/display/usa_display_1_0_0_web_v1/manifest.json",
+    def test_display_release_follows_country_index_and_semver_manifest(self):
+        index = {
+            "release_unit": {"id": "USA", "kind": "country"},
+            "current": {"manifest": {
+                "path": "geometry/countries/USA/releases/1.0.0/manifest.json",
+            }},
         }
         manifest = {
-            "profile": "country_display_release",
-            "country": "USA",
-            "release_id": "usa_display_1_0_0_web_v1",
-            "artifacts": [{
-                "role": "display_simplified_geometry",
-                "admin_levels": [0, 1, 2, 3],
-                "physical_owner": "national",
-                "path": "geometry/countries/USA/releases/display/usa_display_1_0_0_web_v1/admin_0_3.parquet",
-            }],
+            "release_unit": {"id": "USA", "kind": "country"},
+            "runtime": {"display": "geometry/countries/USA/admin_spine/display/usa_display_1_0_0_web_v1/"},
+            "objects": [{"sha256": "a" * 64, "size_bytes": 123, "source_paths": [
+                "geometry/countries/USA/admin_spine/display/usa_display_1_0_0_web_v1/admin_0_3.parquet",
+            ]}],
         }
         with patch(
             "mapmover.runtime.geometry_loader._read_active_json",
-            side_effect=[pointer, manifest],
+            side_effect=[index, manifest],
         ):
             paths = resolve_country_display_geometry_sources("usa", admin_level=2)
 
         self.assertEqual(1, len(paths))
-        self.assertTrue(str(paths[0]).endswith("releases\\display\\usa_display_1_0_0_web_v1\\admin_0_3.parquet"))
+        self.assertTrue(str(paths[0]).endswith("admin_spine\\display\\usa_display_1_0_0_web_v1\\admin_0_3.parquet"))
 
-    def test_display_release_rejects_artifact_outside_immutable_root(self):
-        pointer = {
-            "country": "USA",
-            "release_id": "usa_display_1_0_0_web_v1",
-            "publication_status": "approved_for_publication",
-            "manifest_path": "geometry/countries/USA/releases/display/usa_display_1_0_0_web_v1/manifest.json",
+    def test_display_release_uses_only_contained_release_controls(self):
+        index = {
+            "release_unit": {"id": "USA", "kind": "country"},
+            "current": {"manifest": {
+                "path": "geometry/countries/USA/releases/1.0.0/manifest.json",
+            }},
         }
         manifest = {
-            "profile": "country_display_release",
-            "country": "USA",
-            "release_id": "usa_display_1_0_0_web_v1",
-            "artifacts": [{
-                "role": "display_simplified_geometry",
-                "admin_levels": [2],
-                "physical_owner": "national",
-                "path": "geometry/countries/USA/admin_spine/admin_0_3.parquet",
-            }],
+            "release_unit": {"id": "USA", "kind": "country"},
+            "runtime": {"display": "geometry/countries/USA/admin_spine/display/usa_display_1_0_0_web_v1/"},
+            "objects": [{"source_paths": [
+                "geometry/countries/USA/admin_spine/display/usa_display_1_0_0_web_v1/admin_0_3.parquet",
+            ]}],
+        }
+        with patch("mapmover.runtime.geometry_loader._read_active_json", side_effect=[index, manifest]) as reader:
+            release = resolve_country_display_release("USA")
+        self.assertEqual("usa_display_1_0_0_web_v1", release["release_id"])
+        self.assertEqual(index, release["pointer"])
+        self.assertEqual(2, reader.call_count)
+
+    def test_display_release_rejects_artifact_outside_immutable_root(self):
+        index = {
+            "release_unit": {"id": "USA", "kind": "country"},
+            "current": {"manifest": {
+                "path": "geometry/countries/USA/releases/1.0.0/manifest.json",
+            }},
+        }
+        manifest = {
+            "release_unit": {"id": "USA", "kind": "country"},
+            "runtime": {"display": "geometry/countries/USA/admin_spine/display/usa_display_1_0_0_web_v1/"},
+            "objects": [{"source_paths": [
+                "geometry/countries/USA/admin_spine/admin_0_3.parquet",
+            ]}],
         }
         with patch(
             "mapmover.runtime.geometry_loader._read_active_json",
-            side_effect=[pointer, manifest],
+            side_effect=[index, manifest],
         ):
             self.assertIsNone(resolve_country_display_release("USA"))
 
