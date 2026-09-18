@@ -125,6 +125,48 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         self.assertEqual(selected["catalog"]["recommended_binding"]["country_scope"], "BRA")
         self.assertEqual(selected["catalog"]["recommended_binding"]["geo_level"], "admin_2")
 
+    def test_dataset_geography_ignores_disconnect_monitor_taskgroup_failure(self) -> None:
+        columns = [
+            {"name": "trail_name", "values": ["A", "B"], "nonempty_count": 2},
+            {
+                "name": "latitude",
+                "values": ["38.9", "39.1"],
+                "aligned_values": ["38.9", "39.1"],
+                "nonempty_count": 2,
+            },
+            {
+                "name": "longitude",
+                "values": ["-77.0", "-77.2"],
+                "aligned_values": ["-77.0", "-77.2"],
+                "nonempty_count": 2,
+            },
+        ]
+        taskgroup_error = ExceptionGroup(
+            "unhandled errors in a TaskGroup",
+            [RuntimeError("receive stream unavailable")],
+        )
+
+        with mock.patch(
+            "starlette.requests.Request.is_disconnected",
+            mock.AsyncMock(side_effect=taskgroup_error),
+        ):
+            payload = _tool_call(
+                self.client,
+                "identify_dataset_geography",
+                {
+                    "columns": columns,
+                    "dataset_context": {"file_name": "hiking.csv", "row_count": 2},
+                },
+            )
+
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["status"], "matched")
+        self.assertEqual(payload["candidates"][0]["kind"], "coordinates")
+        self.assertEqual(
+            payload["candidates"][0]["columns"],
+            ["latitude", "longitude"],
+        )
+
     def test_geography_facade_has_coordinated_registry_identity(self) -> None:
         envelope = _mcp_call(
             self.client,

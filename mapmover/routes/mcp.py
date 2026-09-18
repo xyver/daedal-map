@@ -3696,7 +3696,18 @@ async def _execute_identify_dataset_geography_tool(request: Request, arguments: 
 
         async def cancel_when_disconnected() -> None:
             while not cancellation_event.is_set():
-                if await request.is_disconnected():
+                try:
+                    disconnected = await request.is_disconnected()
+                except asyncio.CancelledError:
+                    raise
+                except BaseException:
+                    # Disconnect detection is advisory cancellation only. Some
+                    # hosted ASGI middleware stacks surface an AnyIO TaskGroup
+                    # exception here after the request body has already been
+                    # consumed. That monitor failure must not replace a valid
+                    # geography-identification result.
+                    return
+                if disconnected:
                     cancellation_event.set()
                     return
                 await asyncio.sleep(0.1)
