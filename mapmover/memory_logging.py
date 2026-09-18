@@ -4,17 +4,18 @@ import json
 import logging
 import os
 from pathlib import Path
+import sys
 import threading
 import time
 import uuid
 
 logger = logging.getLogger(__name__)
 # The application logger also writes an unrotated local file. Send these
-# samples directly to stderr for Railway capture, without duplicating to disk.
+# samples directly to stdout for Railway capture, without duplicating to disk.
 logger.setLevel(logging.INFO)
 logger.propagate = False
 if not logger.handlers:
-    logger.addHandler(logging.StreamHandler())
+    logger.addHandler(logging.StreamHandler(sys.stdout))
 _EPOCH = uuid.uuid4().hex
 _START = time.monotonic()
 
