@@ -116,6 +116,21 @@ def geography_workflow_section() -> str:
     )
 
 
+DATA_PACK_COUNT_LABEL = "20+"
+GEOMETRY_COVERAGE_LABEL = "global baseline plus 8+ deeper countries"
+
+
+def coverage_section(app_origin: str, site_origin: str) -> str:
+    return (
+        "## Coverage\n\n"
+        f"- Data: {DATA_PACK_COUNT_LABEL} maintained data packs across natural hazards, hazard risk, economic and business indicators, currency, population, and climate. "
+        f"Call GET {app_origin}/api/v1/catalog for the live pack index and each pack's access lane.\n"
+        f"- Geometry: {GEOMETRY_COVERAGE_LABEL}. "
+        f"Call `read_geometry_catalog` or GET {app_origin}/api/v1/geometry/catalog for current country and family coverage.\n"
+        f"- Downloads: [{site_origin}/downloadable/]({site_origin}/downloadable/) - programs, data packs, and geometry packages\n"
+    )
+
+
 def pack_sentence() -> str:
     return ", ".join(CURRENT_HOSTED_PACK_IDS)
 
@@ -192,10 +207,7 @@ def render_app_llms_txt() -> str:
         "- Data catalog: https://downloads.daedalmap.com/downloadable/catalog.json\n"
         "- Geometry discovery: https://app.daedalmap.com/api/v1/geometry/catalog\n"
         "- Use the catalog endpoints instead of crawling underlying object paths.\n\n"
-        "## Current hosted packs\n"
-        "The published packs are listed below. "
-        "Call GET https://app.daedalmap.com/api/v1/catalog for the live current pack index.\n"
-        f"{current_pack_code_bullets()}\n\n"
+        f"{coverage_section('https://app.daedalmap.com', 'https://www.daedalmap.com')}\n"
         "## Geography utility tools (free)\n"
         "Free geographic reference and geometry tools: resolve coordinates and codes, inspect loc_id identities and relationships, discover published coverage, retrieve boundaries, and follow available crosswalks without flattening distinct geography families.\n"
         f"{geography_tools_section('https://app.daedalmap.com')}\n\n"
@@ -235,6 +247,7 @@ def render_site_llms_txt(*, app_origin: str = "https://app.daedalmap.com", site_
         f"- [{site_origin}/feeds]({site_origin}/feeds) - hosted live-feed status surface under Ops\n"
         f"- [{site_origin}/docs/for-agents]({site_origin}/docs/for-agents) - Agents mode (this lane)\n"
         f"- [{site_origin}/packs]({site_origin}/packs) - public pack catalog\n"
+        f"- [{site_origin}/downloadable/]({site_origin}/downloadable/) - downloads: programs, data packs, and geometry packages\n"
         f"- [{site_origin}/about]({site_origin}/about) - founder, mission, open-engine framing\n"
         "- [https://github.com/xyver/daedal-map](https://github.com/xyver/daedal-map) - open engine source (self-host path)\n\n"
         "## Recommended hierarchy\n\n"
@@ -251,9 +264,7 @@ def render_site_llms_txt(*, app_origin: str = "https://app.daedalmap.com", site_
         f"- [GET /api/v1/catalog]({app_origin}/api/v1/catalog)\n"
         f"- [GET /api/v1/packs/{{pack_id}}]({app_origin}/api/v1/packs/earthquakes)\n"
         f"- [POST /api/v1/query/dataset]({app_origin}/api/v1/query/dataset)\n\n"
-        "## Current hosted packs\n\n"
-        f"The published packs are listed below.\nCall GET {app_origin}/api/v1/catalog for the live current pack index.\n\n"
-        f"{current_pack_code_bullets()}\n\n"
+        f"{coverage_section(app_origin, site_origin)}\n"
         "## Registry facades\n\n"
         f"{facade_link_bullets(app_origin)}\n\n"
         "## Geography utility tools (free)\n\n"
@@ -331,9 +342,7 @@ def render_site_llms_full(*, app_origin: str = "https://app.daedalmap.com", site
         "- Data: `https://downloads.daedalmap.com/downloadable/catalog.json`\n"
         f"- Geometry: `{app_origin}/api/v1/geometry/catalog`\n"
         "- Use these bounded discovery surfaces instead of crawling the downloadable object tree.\n\n"
-        "## Current hosted packs\n\n"
-        f"The published packs are listed below.\nCall GET {app_origin}/api/v1/catalog for the live current pack index.\n\n"
-        f"{current_pack_code_bullets()}\n\n"
+        f"{coverage_section(app_origin, site_origin)}\n"
         "## Geography utility tools (free)\n\n"
         "Alongside maintained data packs, DaedalMap exposes a free geographic reference and geometry family. These tools resolve coordinates and codes, inspect loc_id identities and relationships, discover published country and family coverage, retrieve boundaries and bounding boxes, and follow available crosswalks. The administrative spine is the main join surface; postal, watershed, Indigenous land, forest, and other families retain distinct identities rather than being forced onto one universal key.\n\n"
         f"{geography_tools_section(app_origin)}\n\n"
@@ -341,7 +350,7 @@ def render_site_llms_full(*, app_origin: str = "https://app.daedalmap.com", site
         f"{geography_workflow_section()}\n\n"
         "## Registry summary\n\n"
         "DaedalMap is a remote MCP server and hosted geographic reference, geometry, and data API for deterministic,\n"
-        f"geography-aware queries across curated packs: {pack_sentence()}.\n"
+        f"geography-aware queries across {DATA_PACK_COUNT_LABEL} curated data packs, with geometry covering a {GEOMETRY_COVERAGE_LABEL}.\n"
         "Free discovery lives at `GET /api/v1/guide`, `GET /api/v1/catalog`, and\n"
         "`GET /api/v1/packs/{pack_id}`. Execution lives at `POST /api/v1/query/dataset`.\n"
         f"{free_pack_display_csv()} are free lanes. {paid_pack_display_csv()} challenge via HTTP `402`.\n"
