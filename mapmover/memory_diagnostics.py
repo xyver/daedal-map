@@ -1,6 +1,7 @@
 """Bounded accounting of already-loaded owners; no cache loads or profiler resets."""
 import sys
 import time
+import hashlib
 
 OWNERS = (
     ('ops_state', 'mapmover.ops_orchestrator_runtime', '_LIVE_STATE_CACHE'),
@@ -70,4 +71,16 @@ def loaded_owner_memory():
         result[label] = {'loaded': True, **bounded_size(value)}
         if isinstance(value, (dict, list, tuple, set)):
             result[label]['entries'] = len(value)
+        if isinstance(value, dict):
+            details = []
+            try:
+                for key, child in value.items():
+                    if len(details) >= 32:
+                        break
+                    key_text = str(key) if label == 'ops_state' else hashlib.sha256(str(key).encode()).hexdigest()[:12]
+                    details.append({'key': key_text, **bounded_size(child, max_nodes=5000, seconds=0.005)})
+            except RuntimeError:
+                result[label]['changed_during_sample'] = True
+            result[label]['entry_estimates'] = details
+            result[label]['entries_sampled'] = len(details)
     return {'owners': result, 'note': 'Bounded Python estimates only; truncated graphs are partial. Owners may share objects; do not sum as unique RAM. Native buffers are not identified by this traversal.'}
