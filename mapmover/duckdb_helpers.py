@@ -261,6 +261,63 @@ _QUERY_POOL_LOCK = threading.Lock()
 _QUERY_POOL_GENERATION = 0
 
 
+def inspect_query_pool_memory() -> dict:
+    """Snapshot memory ownership from existing idle cloud-pool connections.
+
+    This deliberately never creates a connection or inspects active leases.
+    Idle connections are removed briefly without holding the pool lock while
+    ``duckdb_memory()`` runs, then returned using the normal generation checks.
+    """
+    with _QUERY_POOL_LOCK:
+        generation = _QUERY_POOL_GENERATION
+        created = _QUERY_POOL_CREATED
+        idle: list[tuple[object, int]] = []
+        for _ in range(min(16, _QUERY_POOL.qsize())):
+            try:
+                idle.append(_QUERY_POOL.get_nowait())
+            except queue.Empty:
+                break
+    rows: list[dict] = []
+    skipped = 0
+    totals = {"memory_usage_bytes": 0, "temporary_storage_bytes": 0}
+    for con, con_generation in idle:
+        if con_generation != generation:
+            _release_query_connection(con, generation=con_generation, discard=True)
+            skipped += 1
+            continue
+        discard = False
+        try:
+            cursor = con.execute("SELECT * FROM duckdb_memory()")
+            columns = [str(item[0]) for item in (cursor.description or [])]
+            for values in cursor.fetchall():
+                detail = dict(zip(columns, values))
+                memory = int(detail.get("memory_usage_bytes") or 0)
+                temporary = int(detail.get("temporary_storage_bytes") or 0)
+                totals["memory_usage_bytes"] += memory
+                totals["temporary_storage_bytes"] += temporary
+                rows.append(detail)
+        except Exception as exc:
+            skipped += 1
+            logger.debug("duckdb_memory diagnostic failed", exc_info=True)
+            discard = _looks_like_connection_error(exc)
+        finally:
+            _release_query_connection(con, generation=con_generation, discard=discard)
+    return {
+        "mode": get_data_plane_mode(),
+        "pool_size": _QUERY_POOL_SIZE,
+        "created": created,
+        "idle": len(idle),
+        "inuse_estimate": max(0, created - len(idle)),
+        "generation": generation,
+        "sampled_idle": len(idle) - skipped,
+        "skipped": skipped,
+        "memory_usage_bytes": totals["memory_usage_bytes"],
+        "temporary_storage_bytes": totals["temporary_storage_bytes"],
+        "details": rows,
+        "active_leases": "unknown (not inspected)",
+    }
+
+
 def _acquire_query_connection():
     global _QUERY_POOL_CREATED
     try:

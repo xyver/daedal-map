@@ -5328,6 +5328,15 @@ async def debug_memory(req: Request):
     geom_entries.sort(key=lambda x: x["mem_mb"], reverse=True)
     geom_total_mb = sum(e["mem_mb"] for e in geom_entries)
 
+    runtime_owner_estimates = {"sampled": False, "note": "Use inspect_owners=1 for bounded Python owner estimates."}
+    if req.query_params.get("inspect_owners") == "1" or req.query_params.get("inspect_pool") == "1":
+        from mapmover.memory_diagnostics import loaded_owner_memory
+        runtime_owner_estimates = loaded_owner_memory()
+    query_pool_memory = {"sampled": False, "note": "Use inspect_pool=1 to inspect existing idle connections only."}
+    if req.query_params.get("inspect_pool") == "1":
+        from mapmover.duckdb_helpers import inspect_query_pool_memory
+        query_pool_memory = inspect_query_pool_memory()
+
     return {
         "disaster_cache": {
             "entry_count": len(disaster_entries),
@@ -5348,6 +5357,8 @@ async def debug_memory(req: Request):
         },
         "combined_cache_mb": round(disaster_total_mb + geom_total_mb, 2),
         "combined_cache_note": "DataFrame RAM only; excludes artifact disk, sessions, DuckDB buffers, and process overhead",
+        "runtime_owner_estimates": runtime_owner_estimates,
+        "query_pool_memory": query_pool_memory,
     }
 
 
