@@ -14,6 +14,7 @@ OWNERS = (
     ('admin_identity', 'mapmover.runtime.admin_spine_query', '_SHALLOW_IDENTITY_CACHE'),
     ('sessions', 'mapmover.session_cache', 'session_manager'),
     ('corpus', 'mapmover.corpus_registry', 'corpus_registry'),
+    ('orders', 'mapmover.order_queue', 'order_queue'),
 )
 
 
@@ -60,7 +61,7 @@ def bounded_size(value, *, max_nodes=20000, seconds=0.03):
     return {'estimated_python_bytes': total, 'visited_nodes': len(seen), 'truncated': truncated}
 
 
-def loaded_owner_memory():
+def loaded_owner_memory(*, include_entries=True):
     result = {}
     for label, module_name, attribute in OWNERS:
         module = sys.modules.get(module_name)
@@ -71,7 +72,7 @@ def loaded_owner_memory():
         result[label] = {'loaded': True, **bounded_size(value)}
         if isinstance(value, (dict, list, tuple, set)):
             result[label]['entries'] = len(value)
-        if isinstance(value, dict):
+        if isinstance(value, dict) and include_entries:
             details = []
             try:
                 for key, child in value.items():

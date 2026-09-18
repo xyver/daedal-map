@@ -280,6 +280,8 @@ async def lifespan(app: FastAPI):
     order_processor.set_executor(async_execute_order)
     await order_processor.start()
     logger.info("Startup complete - data catalog and order processor initialized")
+    from mapmover.memory_logging import start_memory_logging
+    stop_memory_logging = start_memory_logging()
 
     # Fire pre-warmers in background threads so startup is not blocked.
     # In cloud mode this populates DuckDB httpfs metadata cache, our in-memory
@@ -377,7 +379,10 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         logger.warning("Pre-warmer failed to start: %s", exc)
 
-    yield
+    try:
+        yield
+    finally:
+        stop_memory_logging()
 
 
 app = FastAPI(
