@@ -2,6 +2,7 @@
 from datetime import datetime, timezone
 import json
 import logging
+from logging.handlers import RotatingFileHandler
 import os
 from pathlib import Path
 import sys
@@ -18,6 +19,29 @@ if not logger.handlers:
     logger.addHandler(logging.StreamHandler(sys.stdout))
 _EPOCH = uuid.uuid4().hex
 _START = time.monotonic()
+_FILE_HANDLER = None
+
+
+def _ensure_file_log():
+    """Attach a bounded persistent-volume log in Railway; never fail startup."""
+    global _FILE_HANDLER
+    if _FILE_HANDLER is not None:
+        return str(_FILE_HANDLER.baseFilename)
+    default = '/mnt/artifact-cache/memory_samples.jsonl' if os.environ.get('DEPLOYMENT', '').lower() == 'railway' else ''
+    configured = os.environ.get('MEMORY_SAMPLE_LOG_PATH', default).strip()
+    if not configured:
+        return None
+    try:
+        path = Path(configured)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        handler = RotatingFileHandler(path, maxBytes=5 * 1024 * 1024, backupCount=2, encoding='utf-8')
+        handler.setFormatter(logging.Formatter('%(message)s'))
+        logger.addHandler(handler)
+        _FILE_HANDLER = handler
+        return str(path)
+    except OSError as exc:
+        logger.warning('Persistent memory sample log unavailable: %s', exc)
+        return None
 
 
 def _read_number(path):
@@ -89,6 +113,8 @@ def start_memory_logging():
     stop = threading.Event()
     if interval == 0:
         return lambda: None
+    file_path = _ensure_file_log()
+    logger.info('memory_logging_started interval_seconds=%s persistent_log=%s', interval, file_path or 'disabled')
     interval = max(60, interval)
 
     def run():
