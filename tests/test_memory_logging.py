@@ -1,3 +1,4 @@
+import json
 import threading
 import unittest
 from unittest.mock import patch
@@ -19,7 +20,9 @@ class MemoryHistoryTests(unittest.TestCase):
 
     def test_monitor_records_and_stops_without_waiting_for_interval(self):
         sampled = threading.Event()
+        logged = []
         def log(*args):
+            logged.append(args)
             sampled.set()
         with patch.dict(history.os.environ, {'MEMORY_SAMPLE_SECONDS': '300'}), \
                 patch.object(history, 'sample_memory', return_value={'process_epoch': history._EPOCH}), \
@@ -27,6 +30,10 @@ class MemoryHistoryTests(unittest.TestCase):
             close = history.start_memory_logging()
             try:
                 self.assertTrue(sampled.wait(2))
+                payload = json.loads(logged[0][1])
+                self.assertEqual(payload['configured_interval_seconds'], 300)
+                self.assertIn('scheduled_lag_seconds', payload)
+                self.assertEqual(payload['missed_intervals'], 0)
             finally:
                 close()
         self.assertFalse(any(t.name == 'memory-logging' for t in threading.enumerate()))

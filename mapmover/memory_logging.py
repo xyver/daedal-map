@@ -92,13 +92,22 @@ def start_memory_logging():
     interval = max(60, interval)
 
     def run():
+        next_due = time.monotonic()
         while not stop.is_set():
+            if stop.wait(max(0, next_due - time.monotonic())):
+                return
             try:
+                observed = time.monotonic()
+                lag = max(0.0, observed - next_due)
+                missed = int(lag // interval)
                 row = sample_memory()
+                row['configured_interval_seconds'] = interval
+                row['scheduled_lag_seconds'] = round(lag, 3)
+                row['missed_intervals'] = missed
                 logger.info('memory_sample %s', json.dumps(row, separators=(',', ':')))
             except Exception:
                 logger.exception('Memory sample failed')
-            stop.wait(interval)
+            next_due += interval * (missed + 1)
 
     thread = threading.Thread(target=run, name='memory-logging', daemon=True)
     thread.start()
