@@ -5288,6 +5288,7 @@ async def debug_memory(req: Request):
     import time
     from mapmover.duckdb_helpers import _CACHE, _CACHE_LOCK, DEFAULT_CACHE_TTL
     from mapmover.geometry_handlers import _country_parquet_cache, _country_parquet_cache_lock
+    from mapmover.memory_diagnostics import loaded_dataframe_cache_memory, process_memory_snapshot
     from mapmover.runtime.published_artifacts import artifact_cache_status
 
     now = time.monotonic()
@@ -5357,6 +5358,8 @@ async def debug_memory(req: Request):
         },
         "combined_cache_mb": round(disaster_total_mb + geom_total_mb, 2),
         "combined_cache_note": "DataFrame RAM only; excludes artifact disk, sessions, DuckDB buffers, and process overhead",
+        "dataframe_cache_policy": loaded_dataframe_cache_memory(),
+        "process_memory": process_memory_snapshot(),
         "runtime_owner_estimates": runtime_owner_estimates,
         "query_pool_memory": query_pool_memory,
     }

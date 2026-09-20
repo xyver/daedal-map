@@ -25,6 +25,11 @@ def setup_pool(monkeypatch, entries, *, created=None, generation=7):
     monkeypatch.setattr(d, "_QUERY_POOL", d.queue.LifoQueue(maxsize=16))
     monkeypatch.setattr(d, "_QUERY_POOL_GENERATION", generation)
     monkeypatch.setattr(d, "_QUERY_POOL_CREATED", created if created is not None else len(entries))
+    monkeypatch.setattr(d, "_QUERY_POOL_ACTIVITY", {
+        "active": 0, "active_high_water": 0, "acquisitions": 0,
+        "releases": 0, "discards": 0, "wait_count": 0,
+        "wait_seconds_total": 0.0, "wait_seconds_max": 0.0, "timeouts": 0,
+    })
     for entry in entries:
         d._QUERY_POOL.put(entry)
 
@@ -40,7 +45,7 @@ def test_inspect_samples_idle_and_sums_memory(monkeypatch):
     assert report["memory_usage_bytes"] == 300
     assert report["temporary_storage_bytes"] == 34
     assert len(report["details"]) == 2
-    assert report["active_leases"] == "unknown (not inspected)"
+    assert report["active_leases"] == 0
     assert d._QUERY_POOL.qsize() == 2
 
 
@@ -53,3 +58,22 @@ def test_stale_generation_is_discarded_and_errors_are_skipped(monkeypatch):
     assert report["sampled_idle"] == 0
     assert stale.closed
     assert d._QUERY_POOL.qsize() == 1
+
+
+def test_pool_activity_tracks_high_water_without_diagnostic_leases(monkeypatch):
+    first = FakeConnection()
+    second = FakeConnection()
+    setup_pool(monkeypatch, [(first, 7), (second, 7)])
+    con1, generation1 = d._acquire_query_connection()
+    con2, generation2 = d._acquire_query_connection()
+    active = d.query_pool_activity_status()
+    assert active["active"] == 2
+    assert active["active_high_water"] == 2
+    assert active["acquisitions"] == 2
+    d._release_query_connection(con1, generation=generation1)
+    d._release_query_connection(con2, generation=generation2)
+    released = d.query_pool_activity_status()
+    assert released["active"] == 0
+    assert released["releases"] == 2
+    d.inspect_query_pool_memory()
+    assert d.query_pool_activity_status()["releases"] == 2

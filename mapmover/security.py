@@ -222,5 +222,16 @@ class SlidingWindowRateLimiter:
             bucket.append(now)
             return True, 0
 
+    def stats(self) -> dict[str, int]:
+        """Return cardinality only; limiter identities are intentionally omitted."""
+        with self._lock:
+            sizes = [len(bucket) for bucket in self._events.values()]
+        return {
+            "bucket_count": len(sizes),
+            "nonempty_bucket_count": sum(1 for size in sizes if size),
+            "event_count": sum(sizes),
+            "largest_bucket_events": max(sizes, default=0),
+        }
+
 
 rate_limiter = SlidingWindowRateLimiter()

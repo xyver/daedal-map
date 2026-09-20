@@ -12,7 +12,7 @@ from mapmover.caller_identity import (
     CallerIdentity,
 )
 from mapmover.routes.mcp import _live_tool_rate_limit_response
-from mapmover.security import get_client_ip, is_local_loopback_request
+from mapmover.security import SlidingWindowRateLimiter, get_client_ip, is_local_loopback_request
 
 
 def _request(host: str, headers: dict[str, str] | None = None) -> Request:
@@ -96,6 +96,20 @@ class ToolLimiterIdentityTests(unittest.TestCase):
         self.assertIsNone(response)
         key = limiter_mock.call_args.args[0]
         self.assertEqual(key, "mcp-tool:resolve_points:plus:api_key:key-7")
+
+
+class RateLimiterDiagnosticsTests(unittest.TestCase):
+    def test_stats_expose_cardinality_without_identities(self) -> None:
+        limiter = SlidingWindowRateLimiter()
+        limiter.check("private-user-key", limit=5, window_seconds=60)
+        limiter.check("private-user-key", limit=5, window_seconds=60)
+        limiter.check("another-key", limit=5, window_seconds=60)
+        self.assertEqual(limiter.stats(), {
+            "bucket_count": 2,
+            "nonempty_bucket_count": 2,
+            "event_count": 3,
+            "largest_bucket_events": 2,
+        })
 
 
 if __name__ == "__main__":

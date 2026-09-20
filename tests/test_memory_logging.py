@@ -16,13 +16,17 @@ class MemoryHistoryTests(unittest.TestCase):
 
     def test_sample_preserves_unknown_memory_and_does_not_load_owners(self):
         import sys
+        from mapmover.memory_diagnostics import OWNERS
         before = set(sys.modules)
         with patch.object(history.Path, 'read_text', side_effect=OSError('unavailable')):
             row = history.sample_memory()
-        self.assertEqual(set(sys.modules), before)
+        owner_modules = {module for _label, module, _attribute in OWNERS}
+        self.assertFalse((set(sys.modules) - before) & owner_modules)
         self.assertIsNone(row['cgroup_current_bytes'])
-        self.assertIn('process_error', row)
-        self.assertNotIn('process', row)
+        self.assertIn('status_error', row)
+        self.assertEqual(row['process'], {})
+        self.assertIn('glibc_allocator', row)
+        self.assertIn('python_runtime', row)
         self.assertTrue(all('entry_estimates' not in owner for owner in row['owners'].values()))
 
     def test_monitor_records_and_stops_without_waiting_for_interval(self):
@@ -71,8 +75,8 @@ class MemoryHistoryTests(unittest.TestCase):
             text = path.read_text(encoding='utf-8')
             self.assertIn('memory_logging_started', text)
             self.assertIn('memory_sample', text)
-            self.assertEqual(history._FILE_HANDLER.maxBytes, 5 * 1024 * 1024)
-            self.assertEqual(history._FILE_HANDLER.backupCount, 2)
+            self.assertEqual(history._FILE_HANDLER.maxBytes, 10 * 1024 * 1024)
+            self.assertEqual(history._FILE_HANDLER.backupCount, 6)
             history.logger.removeHandler(history._FILE_HANDLER)
             history._FILE_HANDLER.close()
             history._FILE_HANDLER = None

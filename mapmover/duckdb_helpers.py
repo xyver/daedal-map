@@ -259,6 +259,48 @@ _QUERY_POOL: queue.LifoQueue = queue.LifoQueue(maxsize=_QUERY_POOL_SIZE)
 _QUERY_POOL_CREATED = 0
 _QUERY_POOL_LOCK = threading.Lock()
 _QUERY_POOL_GENERATION = 0
+_QUERY_POOL_ACTIVITY_LOCK = threading.Lock()
+_QUERY_POOL_ACTIVITY = {
+    "active": 0, "active_high_water": 0, "acquisitions": 0,
+    "releases": 0, "discards": 0, "wait_count": 0,
+    "wait_seconds_total": 0.0, "wait_seconds_max": 0.0, "timeouts": 0,
+}
+
+
+def _record_pool_acquire(wait_seconds: float) -> None:
+    with _QUERY_POOL_ACTIVITY_LOCK:
+        activity = _QUERY_POOL_ACTIVITY
+        activity["active"] += 1
+        activity["active_high_water"] = max(activity["active_high_water"], activity["active"])
+        activity["acquisitions"] += 1
+        if wait_seconds > 0.001:
+            activity["wait_count"] += 1
+            activity["wait_seconds_total"] += wait_seconds
+            activity["wait_seconds_max"] = max(activity["wait_seconds_max"], wait_seconds)
+
+
+def _record_pool_release(*, discard: bool) -> None:
+    with _QUERY_POOL_ACTIVITY_LOCK:
+        activity = _QUERY_POOL_ACTIVITY
+        activity["active"] = max(0, activity["active"] - 1)
+        activity["releases"] += 1
+        if discard:
+            activity["discards"] += 1
+
+
+def query_pool_activity_status() -> dict:
+    """Return cheap lifetime occupancy counters; no connection or SQL is touched."""
+    with _QUERY_POOL_ACTIVITY_LOCK:
+        activity = dict(_QUERY_POOL_ACTIVITY)
+    activity["wait_seconds_total"] = round(float(activity["wait_seconds_total"]), 6)
+    activity["wait_seconds_max"] = round(float(activity["wait_seconds_max"]), 6)
+    activity.update({
+        "capacity": _QUERY_POOL_SIZE,
+        "created": _QUERY_POOL_CREATED,
+        "idle": _QUERY_POOL.qsize(),
+        "generation": _QUERY_POOL_GENERATION,
+    })
+    return activity
 
 
 def inspect_query_pool_memory() -> dict:
@@ -282,7 +324,7 @@ def inspect_query_pool_memory() -> dict:
     totals = {"memory_usage_bytes": 0, "temporary_storage_bytes": 0}
     for con, con_generation in idle:
         if con_generation != generation:
-            _release_query_connection(con, generation=con_generation, discard=True)
+            _release_query_connection(con, generation=con_generation, discard=True, leased=False)
             skipped += 1
             continue
         discard = False
@@ -301,7 +343,8 @@ def inspect_query_pool_memory() -> dict:
             logger.debug("duckdb_memory diagnostic failed", exc_info=True)
             discard = _looks_like_connection_error(exc)
         finally:
-            _release_query_connection(con, generation=con_generation, discard=discard)
+            _release_query_connection(con, generation=con_generation, discard=discard, leased=False)
+    activity = query_pool_activity_status()
     return {
         "mode": get_data_plane_mode(),
         "pool_size": _QUERY_POOL_SIZE,
@@ -314,33 +357,50 @@ def inspect_query_pool_memory() -> dict:
         "memory_usage_bytes": totals["memory_usage_bytes"],
         "temporary_storage_bytes": totals["temporary_storage_bytes"],
         "details": rows,
-        "active_leases": "unknown (not inspected)",
+        "active_leases": activity["active"],
+        "activity": activity,
     }
 
 
 def _acquire_query_connection():
     global _QUERY_POOL_CREATED
+    started = time.monotonic()
     try:
         con, generation = _QUERY_POOL.get_nowait()
         if generation != _QUERY_POOL_GENERATION:
-            _release_query_connection(con, generation=generation, discard=True)
+            _release_query_connection(con, generation=generation, discard=True, leased=False)
             return _acquire_query_connection()
+        _record_pool_acquire(time.monotonic() - started)
         return con, generation
     except queue.Empty:
         with _QUERY_POOL_LOCK:
             if _QUERY_POOL_CREATED < _QUERY_POOL_SIZE:
                 _QUERY_POOL_CREATED += 1
                 try:
-                    return _build_thread_connection(), _QUERY_POOL_GENERATION
+                    result = (_build_thread_connection(), _QUERY_POOL_GENERATION)
+                    _record_pool_acquire(time.monotonic() - started)
+                    return result
                 except Exception:
                     _QUERY_POOL_CREATED -= 1
                     raise
-        return _QUERY_POOL.get(timeout=30)
+        try:
+            result = _QUERY_POOL.get(timeout=30)
+        except queue.Empty:
+            with _QUERY_POOL_ACTIVITY_LOCK:
+                _QUERY_POOL_ACTIVITY["timeouts"] += 1
+            raise
+        _record_pool_acquire(time.monotonic() - started)
+        return result
 
 
-def _release_query_connection(con, *, generation: int, discard: bool = False) -> None:
+def _release_query_connection(
+    con, *, generation: int, discard: bool = False, leased: bool = True,
+) -> None:
     global _QUERY_POOL_CREATED
-    if discard or generation != _QUERY_POOL_GENERATION:
+    effective_discard = discard or generation != _QUERY_POOL_GENERATION
+    if leased:
+        _record_pool_release(discard=effective_discard)
+    if effective_discard:
         try:
             con.close()
         except Exception:
