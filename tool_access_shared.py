@@ -115,6 +115,15 @@ HOSTED_TOOL_RATE_LIMIT_DEFAULTS: dict[str, dict[str, int]] = {
     "paid": {"limit": 120, "window_seconds": 60},
 }
 
+# Aggregate MCP transport allowance. These limits include protocol traffic and
+# calls across all tools, so each tier has headroom above its per-tool rate.
+# The separate server-safety fuse remains the absolute ceiling.
+HOSTED_MCP_SURFACE_RATE_LIMIT_DEFAULTS: dict[str, dict[str, int]] = {
+    "free": {"limit": 30, "window_seconds": 60},
+    "account": {"limit": 90, "window_seconds": 60},
+    "paid": {"limit": 180, "window_seconds": 60},
+}
+
 
 TOOL_ACCESS_REGISTRY: dict[str, dict] = {
     "get_tool_help": {

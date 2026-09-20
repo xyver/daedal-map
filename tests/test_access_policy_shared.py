@@ -254,6 +254,39 @@ class AccessPolicySharedTests(unittest.TestCase):
                 (7, 30),
             )
 
+    def test_surface_rate_override_can_specialize_plan_tiers(self) -> None:
+        policy = json.dumps({
+            "schema_version": "1.0.0",
+            "policy_revision": "surface-tiers-1",
+            "mode": "launch_free",
+            "rate_limits": {
+                "surfaces": {
+                    "agent_api_mcp": {
+                        "limit": 30,
+                        "window_seconds": 60,
+                        "account": {"limit": 90},
+                        "paid": {"limit": 180},
+                    },
+                },
+            },
+        })
+        with mock.patch.dict(os.environ, {"DAEDALMAP_ACCESS_POLICY_JSON": policy}, clear=True):
+            clear_access_policy_cache()
+            self.assertEqual(
+                surface_rate_limit(
+                    "agent_api_mcp", tier="account", default_limit=30,
+                    default_window_seconds=60,
+                ),
+                (90, 60),
+            )
+            self.assertEqual(
+                surface_rate_limit(
+                    "agent_api_mcp", tier="paid", default_limit=30,
+                    default_window_seconds=60,
+                ),
+                (180, 60),
+            )
+
     def test_launch_override_does_not_mutate_authored_pack_metadata(self) -> None:
         from mapmover.api_query_commercial import pack_requires_commercial_access
         from pack_registry_shared import pack_profile

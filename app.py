@@ -82,6 +82,7 @@ from mapmover.routes.private_mcp import router as private_mcp_router
 from mapmover.routes.research import router as research_router
 from mapmover.prewarm_status import begin_prewarm, run_prewarm_task
 from mapmover.routes.system import prewarm_public_pack_catalog, router as system_router
+from tool_access_shared import HOSTED_MCP_SURFACE_RATE_LIMIT_DEFAULTS
 from mapmover.routes.weather import router as weather_router
 from mapmover.runtime_build_info import runtime_build_info
 
@@ -144,7 +145,9 @@ def _classify_route_surface(path: str) -> str:
     return "shared_runtime"
 
 
-def _rate_limit_config_for_surface(surface: str) -> tuple[int, int] | None:
+def _rate_limit_config_for_surface(
+    surface: str, *, access_tier: str = "anonymous",
+) -> tuple[int, int] | None:
     if surface == "private_mcp":
         return None
     if surface == "agent_api_discovery":
@@ -172,10 +175,17 @@ def _rate_limit_config_for_surface(surface: str) -> tuple[int, int] | None:
             default_window_seconds=_parse_env_int("AGENT_API_PAID_RATE_WINDOW_SECONDS", 60),
         )
     if surface == "agent_api_mcp":
+        lane = "free" if access_tier == "anonymous" else access_tier
+        defaults = HOSTED_MCP_SURFACE_RATE_LIMIT_DEFAULTS.get(
+            lane, HOSTED_MCP_SURFACE_RATE_LIMIT_DEFAULTS["free"]
+        )
         return surface_rate_limit(
             surface,
-            default_limit=_parse_env_int("AGENT_API_MCP_RATE_LIMIT", 30),
-            default_window_seconds=_parse_env_int("AGENT_API_MCP_RATE_WINDOW_SECONDS", 60),
+            tier=lane,
+            default_limit=_parse_env_int("AGENT_API_MCP_RATE_LIMIT", defaults["limit"]),
+            default_window_seconds=_parse_env_int(
+                "AGENT_API_MCP_RATE_WINDOW_SECONDS", defaults["window_seconds"]
+            ),
         )
     return None
 
@@ -577,7 +587,7 @@ async def static_no_cache(request: Request, call_next):
         and not local_unrestricted
     ):
         hard_limits = (
-            ("minute", _parse_env_int("DAEDALMAP_HARD_GATED_REQUESTS_PER_MINUTE", 120), 60),
+            ("minute", _parse_env_int("DAEDALMAP_HARD_GATED_REQUESTS_PER_MINUTE", 240), 60),
             ("hour", _parse_env_int("DAEDALMAP_HARD_GATED_REQUESTS_PER_HOUR", 3000), 3600),
         )
         hard_keys = [caller_identity.binding]
@@ -598,7 +608,9 @@ async def static_no_cache(request: Request, call_next):
                     }
                     return finalize_identity(_rate_limit_response("server_safety", hard_retry))
 
-    rate_limit_config = _rate_limit_config_for_surface(surface)
+    rate_limit_config = _rate_limit_config_for_surface(
+        surface, access_tier=caller_identity.access_tier
+    )
     if rate_limit_config is None and surface == "shared_runtime":
         rate_limit_config = _shared_runtime_rate_limit_for_path(
             path, authenticated=caller_identity.is_verified

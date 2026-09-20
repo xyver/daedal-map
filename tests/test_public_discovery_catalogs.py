@@ -120,6 +120,50 @@ class PublicDiscoveryCatalogTests(unittest.TestCase):
         with mock.patch.dict(os.environ, {}, clear=True):
             self.assertEqual(_rate_limit_config_for_surface("point_lookup"), (25, 60))
 
+    def test_mcp_surface_has_headroom_above_each_per_tool_tier(self) -> None:
+        with mock.patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(
+                _rate_limit_config_for_surface("agent_api_mcp", access_tier="anonymous"),
+                (30, 60),
+            )
+            self.assertEqual(
+                _rate_limit_config_for_surface("agent_api_mcp", access_tier="account"),
+                (90, 60),
+            )
+            self.assertEqual(
+                _rate_limit_config_for_surface("agent_api_mcp", access_tier="paid"),
+                (180, 60),
+            )
+
+    def test_paid_mcp_caller_uses_paid_surface_allowance(self) -> None:
+        credential = {
+            "account_id": "paid-user",
+            "credential_id": "paid-key",
+            "permissions": ["packs:read"],
+            "plan_id": "pro",
+        }
+        with (
+            mock.patch(
+                "mapmover.hosted_runtime_account.verify_mcp_credential",
+                return_value=credential,
+            ),
+            mock.patch("app.rate_limiter.check", return_value=(True, 0)) as limiter_mock,
+        ):
+            response = self.client.post(
+                "/mcp/geography",
+                headers={"x-api-key": "paid-key-test"},
+                json={"jsonrpc": "2.0", "id": "paid-list", "method": "tools/list", "params": {}},
+            )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        surface_calls = [
+            call for call in limiter_mock.call_args_list
+            if call.args[0].startswith("surface:agent_api_mcp:")
+        ]
+        self.assertEqual(len(surface_calls), 1)
+        self.assertEqual(surface_calls[0].kwargs["limit"], 180)
+        self.assertEqual(surface_calls[0].kwargs["window_seconds"], 60)
+
     def test_shared_runtime_covers_debug_and_reference_routes(self) -> None:
         from app import _shared_runtime_rate_limit_for_path
 

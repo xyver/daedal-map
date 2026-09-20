@@ -335,14 +335,26 @@ def _positive_int(value: Any) -> int | None:
     return parsed if parsed > 0 else None
 
 
-def surface_rate_limit(surface: str, *, default_limit: int, default_window_seconds: int) -> tuple[int, int]:
+def surface_rate_limit(
+    surface: str,
+    *,
+    default_limit: int,
+    default_window_seconds: int,
+    tier: str | None = None,
+) -> tuple[int, int]:
     policy = load_access_policy()
     rate_limits = policy.get("rate_limits") if isinstance(policy.get("rate_limits"), dict) else {}
     surfaces = rate_limits.get("surfaces") if isinstance(rate_limits.get("surfaces"), dict) else {}
     override = surfaces.get(_normalized_id(surface)) if isinstance(surfaces.get(_normalized_id(surface)), dict) else {}
+    tier_override = (
+        override.get(_normalized_id(tier))
+        if tier and isinstance(override.get(_normalized_id(tier)), dict)
+        else {}
+    )
+    merged = _deep_merge(override, tier_override)
     return (
-        _positive_int(override.get("limit")) or int(default_limit),
-        _positive_int(override.get("window_seconds")) or int(default_window_seconds),
+        _positive_int(merged.get("limit")) or int(default_limit),
+        _positive_int(merged.get("window_seconds")) or int(default_window_seconds),
     )
 
 

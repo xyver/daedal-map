@@ -161,7 +161,7 @@ def controller_from_env() -> MCPAdmissionController:
     return MCPAdmissionController(
         burst_limit=_env_int("MCP_ADMISSION_BURST_REQUESTS", 30),
         burst_window_seconds=_env_int("MCP_ADMISSION_BURST_WINDOW_SECONDS", 10),
-        minute_limit=_env_int("MCP_ADMISSION_REQUESTS_PER_MINUTE", 120),
+        minute_limit=_env_int("MCP_ADMISSION_REQUESTS_PER_MINUTE", 300),
         max_concurrency=_env_int("MCP_ADMISSION_MAX_CONCURRENCY", 8),
     )
 
