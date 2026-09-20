@@ -1093,17 +1093,27 @@ def _dataset_header_tokens(value: Any) -> set[str]:
     return set(filter(None, re.sub(r"[^a-z0-9]+", "_", text.lower()).split("_")))
 
 
-def _coordinate_dataset_candidate(columns: list[dict[str, Any]]) -> dict[str, Any] | None:
-    latitude = None
-    longitude = None
-    for column in columns:
-        tokens = _dataset_header_tokens(column.get("name"))
-        if latitude is None and tokens & {"latitude", "lat"}:
-            latitude = column
-        if longitude is None and tokens & {"longitude", "lon", "lng", "long"}:
-            longitude = column
-    if latitude is None or longitude is None:
+_LATITUDE_TOKENS = {"latitude", "lat"}
+_LONGITUDE_TOKENS = {"longitude", "lon", "lng", "long"}
+
+
+def _coordinate_axis_stem(name: Any, axis_tokens: set[str], bare_axis: str) -> str | None:
+    """Return the header with its axis token removed, or None if not an axis.
+
+    ``InitialLatitude`` -> ``initial``; a bare ``y``/``x`` header -> ``""``.
+    Bare x/y count only as the whole header, so ``tax_year`` never qualifies.
+    """
+    tokens = _dataset_header_tokens(name)
+    if tokens == {bare_axis}:
+        return ""
+    if not tokens & axis_tokens:
         return None
+    text = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", str(name or ""))
+    parts = [part for part in re.sub(r"[^a-z0-9]+", "_", text.lower()).split("_") if part]
+    return "_".join(part for part in parts if part not in axis_tokens)
+
+
+def _coordinate_pairs(latitude: dict[str, Any], longitude: dict[str, Any]) -> list[str]:
     pairs = []
     lat_values = latitude.get("aligned_values") or latitude.get("values") or []
     lon_values = longitude.get("aligned_values") or longitude.get("values") or []
@@ -1115,8 +1125,43 @@ def _coordinate_dataset_candidate(columns: list[dict[str, Any]]) -> dict[str, An
             continue
         if -90 <= lat <= 90 and -180 <= lon <= 180:
             pairs.append(f"{lat},{lon}")
-    if not pairs:
+    return pairs
+
+
+def _coordinate_dataset_candidate(columns: list[dict[str, Any]]) -> dict[str, Any] | None:
+    # A file can carry several coordinate pairs (InitialLatitude/Longitude and
+    # x/y in NIFC exports). Pair columns that share a stem, then keep the pair
+    # with the most valid sampled points; header order only breaks ties.
+    latitudes = []
+    longitudes = []
+    for order, column in enumerate(columns):
+        lat_stem = _coordinate_axis_stem(column.get("name"), _LATITUDE_TOKENS, "y")
+        lon_stem = _coordinate_axis_stem(column.get("name"), _LONGITUDE_TOKENS, "x")
+        if lat_stem is not None:
+            latitudes.append((order, lat_stem, column))
+        elif lon_stem is not None:
+            longitudes.append((order, lon_stem, column))
+    if not latitudes or not longitudes:
         return None
+    combos = [(lat, lon) for lat in latitudes for lon in longitudes if lat[1] == lon[1]]
+    if not combos:
+        combos = [(lat, lon) for lat in latitudes for lon in longitudes]
+
+    def full_file_coverage(lat, lon) -> int:
+        counts = [lat[2].get("nonempty_count"), lon[2].get("nonempty_count")]
+        return min(counts) if all(isinstance(count, int) for count in counts) else 0
+
+    best = None
+    for lat, lon in combos:
+        pairs = _coordinate_pairs(lat[2], lon[2])
+        rank = (len(pairs), full_file_coverage(lat, lon), -max(lat[0], lon[0]))
+        if pairs and (best is None or rank > best[0]):
+            best = (rank, lat[2], lon[2], pairs)
+    if best is None:
+        return None
+    _, latitude, longitude, pairs = best
+    lat_values = latitude.get("aligned_values") or latitude.get("values") or []
+    lon_values = longitude.get("aligned_values") or longitude.get("values") or []
     return {
         "id": "dataset-coordinates",
         "kind": "coordinates",

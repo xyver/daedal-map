@@ -50,6 +50,7 @@ from mapmover.caller_identity import (
 )
 from mapmover.logging_analytics import hash_ip_for_analytics, log_app_error, log_route_request_event
 from mapmover.mcp_admission import MCPAdmissionMiddleware
+from mapmover.request_body_limit import RequestBodyLimitMiddleware
 from mapmover.security import (
     get_allowed_origins,
     get_client_ip,
@@ -179,13 +180,19 @@ def _rate_limit_config_for_surface(surface: str) -> tuple[int, int] | None:
     return None
 
 
-def _shared_runtime_rate_limit_for_path(path: str) -> tuple[int, int] | None:
+def _shared_runtime_rate_limit_for_path(path: str, *, authenticated: bool = False) -> tuple[int, int] | None:
     path = str(path or "").strip()
-    if path.startswith("/api/") or path.startswith("/geometry/"):
+    if path.startswith(("/api/", "/geometry/", "/debug/", "/reference/")):
         return surface_rate_limit(
-            "shared_runtime_anonymous",
-            default_limit=_parse_env_int("SHARED_RUNTIME_ANON_RATE_LIMIT", 120),
-            default_window_seconds=_parse_env_int("SHARED_RUNTIME_ANON_RATE_WINDOW_SECONDS", 60),
+            "shared_runtime_authenticated" if authenticated else "shared_runtime_anonymous",
+            default_limit=_parse_env_int(
+                "SHARED_RUNTIME_AUTH_RATE_LIMIT" if authenticated else "SHARED_RUNTIME_ANON_RATE_LIMIT",
+                240 if authenticated else 120,
+            ),
+            default_window_seconds=_parse_env_int(
+                "SHARED_RUNTIME_AUTH_RATE_WINDOW_SECONDS" if authenticated else "SHARED_RUNTIME_ANON_RATE_WINDOW_SECONDS",
+                60,
+            ),
         )
     return None
 
@@ -568,7 +575,6 @@ async def static_no_cache(request: Request, call_next):
         surface in HARD_GATED_SURFACES
         and request.method != "OPTIONS"
         and not local_unrestricted
-        and artifact_token_record is None
     ):
         hard_limits = (
             ("minute", _parse_env_int("DAEDALMAP_HARD_GATED_REQUESTS_PER_MINUTE", 120), 60),
@@ -593,9 +599,12 @@ async def static_no_cache(request: Request, call_next):
                     return finalize_identity(_rate_limit_response("server_safety", hard_retry))
 
     rate_limit_config = _rate_limit_config_for_surface(surface)
-    if rate_limit_config is None and not auth_user_id and surface == "shared_runtime":
-        rate_limit_config = _shared_runtime_rate_limit_for_path(path)
-    if rate_limit_config is not None and request.method != "OPTIONS" and artifact_token_record is None and not local_unrestricted:
+    if rate_limit_config is None and surface == "shared_runtime":
+        rate_limit_config = _shared_runtime_rate_limit_for_path(
+            path, authenticated=caller_identity.is_verified
+        )
+    artifact_surface_bypass = artifact_token_record is not None and surface in HARD_GATED_SURFACES
+    if rate_limit_config is not None and request.method != "OPTIONS" and not artifact_surface_bypass and not local_unrestricted:
         limit, window_seconds = rate_limit_config
         limiter_keys = [caller_identity.binding]
         if caller_identity.is_anonymous and ip_hash:
@@ -676,6 +685,9 @@ async def static_no_cache(request: Request, call_next):
 # ASGI guard outermost. Floods are rejected before auth/session work, response
 # compression, CORS processing, and JSON parsing.
 app.add_middleware(MCPAdmissionMiddleware)
+# Registered last so this is outermost for non-MCP dynamic requests. MCP is
+# skipped here and retains its tighter admission/body controls.
+app.add_middleware(RequestBodyLimitMiddleware)
 
 
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")

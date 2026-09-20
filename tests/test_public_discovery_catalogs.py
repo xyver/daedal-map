@@ -9,6 +9,7 @@ from unittest import mock
 from fastapi.testclient import TestClient
 
 from app import app, _classify_route_surface, _rate_limit_config_for_surface
+from tool_access_shared import tool_pricing_version
 from mapmover.runtime import geometry_catalog
 
 
@@ -119,11 +120,21 @@ class PublicDiscoveryCatalogTests(unittest.TestCase):
         with mock.patch.dict(os.environ, {}, clear=True):
             self.assertEqual(_rate_limit_config_for_surface("point_lookup"), (25, 60))
 
+    def test_shared_runtime_covers_debug_and_reference_routes(self) -> None:
+        from app import _shared_runtime_rate_limit_for_path
+
+        self.assertEqual(_shared_runtime_rate_limit_for_path("/debug/memory"), (120, 60))
+        self.assertEqual(_shared_runtime_rate_limit_for_path("/reference/admin-levels"), (120, 60))
+        self.assertEqual(
+            _shared_runtime_rate_limit_for_path("/debug/memory", authenticated=True),
+            (240, 60),
+        )
+
     def test_artifact_token_bypasses_shared_mcp_surface_rate_limit(self) -> None:
         token = "qa-surface-rate-token"
         with (
             mock.patch.dict(os.environ, {"ARTIFACT_ACCESS_TOKENS": f"qa={token}"}, clear=False),
-            mock.patch("app.rate_limiter.check", return_value=(False, 60)) as limiter_mock,
+            mock.patch("app.rate_limiter.check", return_value=(True, 0)) as limiter_mock,
         ):
             response = self.client.post(
                 "/mcp/geography",
@@ -131,7 +142,36 @@ class PublicDiscoveryCatalogTests(unittest.TestCase):
                 json={"jsonrpc": "2.0", "id": "qa-rate", "method": "tools/list", "params": {}},
             )
         self.assertEqual(response.status_code, 200)
-        limiter_mock.assert_not_called()
+        checked_keys = [call.args[0] for call in limiter_mock.call_args_list]
+        self.assertTrue(checked_keys)
+        self.assertTrue(all(key.startswith("server-safety:") for key in checked_keys), checked_keys)
+        self.assertFalse(any(key.startswith("surface:agent_api_mcp:") for key in checked_keys))
+
+    def test_authenticated_shared_runtime_api_is_still_rate_limited(self) -> None:
+        with (
+            mock.patch("app.get_authenticated_user_async", return_value={"id": "user-1"}),
+            mock.patch("app.rate_limiter.check", return_value=(False, 60)) as limiter_mock,
+        ):
+            response = self.client.get(
+                "/api/route-that-does-not-exist",
+                headers={"Authorization": "Bearer verified-session"},
+            )
+        self.assertEqual(response.status_code, 429)
+        self.assertTrue(
+            any(call.args[0].startswith("surface:shared_runtime:") for call in limiter_mock.call_args_list)
+        )
+
+    def test_artifact_token_cannot_bypass_shared_runtime_app_limit(self) -> None:
+        token = "qa-shared-runtime-token"
+        with (
+            mock.patch.dict(os.environ, {"ARTIFACT_ACCESS_TOKENS": f"qa={token}"}, clear=False),
+            mock.patch("app.rate_limiter.check", return_value=(False, 60)),
+        ):
+            response = self.client.get(
+                "/api/route-that-does-not-exist",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+        self.assertEqual(response.status_code, 429)
 
     def test_point_lookup_batch_endpoint_returns_one_bulk_payload(self) -> None:
         def fake_resolve(points, include_geometry=False, **_kwargs):
@@ -301,7 +341,7 @@ class PublicDiscoveryCatalogTests(unittest.TestCase):
         self.assertTrue(body["payment_required"])
         self.assertEqual(body["limits"]["free_batch_limit"], 100)
         self.assertEqual(body["quote"]["capability_id"], "point_lookup")
-        self.assertEqual(body["quote"]["pricing_version"], "geography-tools-2026-08-16.1+credit-q1000")
+        self.assertEqual(body["quote"]["pricing_version"], f"{tool_pricing_version('resolve_points')}+credit-q1000")
         self.assertIsInstance(body["quote"]["amount_usdc_base_units"], int)
         self.assertEqual(body["quote"]["payment_rails"], ["account_credit", "x402"])
         analytics = analytics_mock.call_args.kwargs

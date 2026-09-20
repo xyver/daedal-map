@@ -11,21 +11,15 @@ from copy import deepcopy
 from typing import Any
 
 from tool_access_shared import (
+    tool_account_item_limit,
+    tool_effective_rate_limit,
     tool_free_item_limit,
     tool_inline_item_limit,
+    tool_is_paid_bulk,
     tool_paid_item_limit,
     tool_pricing,
     tool_profile,
 )
-
-
-LOCAL_UNCAPPED_GEOMETRY_JOB_TOOLS = {
-    "resolve_loc_id_scope",
-    "estimate_geometry_package",
-    "create_geometry_export",
-    "estimate_conversion_job",
-    "create_conversion_job",
-}
 
 
 def _g(use_when, do_not_use_for, example, outputs, next_calls=(), provenance=()):
@@ -57,12 +51,12 @@ TOOL_GUIDANCE: dict[str, dict[str, Any]] = {
     "get_catalog": _g(
         ["You need to discover currently published data packs and tool families."],
         ["Querying pack rows", "Discovering detailed geography-bank coverage"],
-        {}, ["packs", "tool_families", "public_catalogs"], ["get_pack", "read_geometry_catalog"]
+        {}, ["packs", "tool_families", "public_catalogs", "full_catalog"], ["get_pack", "read_geometry_catalog"]
     ),
     "get_pack": _g(
         ["You selected a pack or tool family and need its live contract before calling it."],
         ["Executing a dataset query", "Fetching geometry"],
-        {"pack_id": "earthquakes"},
+        {"pack_id": "earthquakes", "detail": "lite"},
         ["quick_start", "routing", "pricing", "sources", "temporal_coverage"],
         ["query_dataset", "get_tool_help"], ["source metadata", "release/freshness fields"]
     ),
@@ -113,7 +107,7 @@ TOOL_GUIDANCE: dict[str, dict[str, Any]] = {
     "list_reference_systems": _g(
         ["You need the canonical published list of callable crosswalks, systems, and vintages for a country."],
         ["Converting a value", "Resolving coordinates"],
-        {"country_scope": "USA"}, ["systems", "crosswalks", "reserve_system", "bridge artifacts", "vintages"],
+        {"country_scope": "USA", "include_crosswalks": False}, ["systems", "crosswalks_included", "next_call", "reserve_system"],
         ["identify_reference_system", "resolve_reference", "convert_reference"], ["source authority", "license", "relationship vintage", "crosswalk_id"]
     ),
     "identify_reference_system": _g(
@@ -167,7 +161,7 @@ TOOL_GUIDANCE: dict[str, dict[str, Any]] = {
     "get_geometry": _g(
         ["You have exact loc_ids and need bbox, centroid, or opt-in polygons."],
         ["Explaining hierarchy", "Resolving names", "Bulk export packaging"],
-        {"loc_id": "CAN-BC", "include_polygon": False},
+        {"loc_id": "CAN-BC", "detail": "lite", "include_polygon": False},
         ["loc_id", "has_shape", "bbox", "centroid", "geometry", "supersession"],
         ["loc_id_info", "estimate_geometry_package"],
         ["bank_id", "geometry_vintage", "source", "license", "release_id"]
@@ -431,13 +425,22 @@ def tool_help_payload(
     profile = tool_profile(name)
     limits = {
         "free_item_limit": tool_free_item_limit(name),
-        "paid_item_limit": tool_paid_item_limit(name),
         "inline_item_limit": tool_inline_item_limit(name),
     }
+    if tool_is_paid_bulk(name):
+        limits.update({
+            "account_item_limit": tool_account_item_limit(name),
+            "paid_item_limit": tool_paid_item_limit(name),
+        })
     limits = {key: value for key, value in limits.items() if value is not None}
     if effective_limits:
         limits.update({key: value for key, value in effective_limits.items() if value is not None})
     pricing = tool_pricing(name)
+    rate_limits = {
+        lane: {"limit": values[0], "window_seconds": values[1]}
+        for lane in ("free", "account", "paid")
+        for values in (tool_effective_rate_limit(name, lane=lane),)
+    }
     access = {
         "pricing": pricing,
         "free_discovery": name in {"get_tool_help", "how_geometry_works", "get_catalog", "get_pack", "read_geometry_catalog", "list_reference_systems", "identify_dataset_geography", "identify_reference_system"},
@@ -446,6 +449,7 @@ def tool_help_payload(
             "bounded_inline_limit_error" if name in {"create_geometry_export", "create_conversion_job"} else "typed_cap_error"
         ),
         "rate_limited_independently": True,
+        "rate_limits": rate_limits,
         "trusted_artifact_bypass": [
             "shared_route_call_limit",
             "per_tool_call_limit",
@@ -454,22 +458,23 @@ def tool_help_payload(
         ],
     }
     if local_installed:
-        uncapped_local_job = name in LOCAL_UNCAPPED_GEOMETRY_JOB_TOOLS
         access.update({
             "access_lane": "local_installed",
             "rate_limited_independently": False,
-            "service_item_caps_enforced": not uncapped_local_job,
+            "service_item_caps_enforced": False,
             "payment_required": False,
             "resource_boundary": "local machine memory, disk, and process availability",
         })
-        if uncapped_local_job:
+        if access["limits"]:
             access["hosted_limits"] = access["limits"]
             access["limits"] = {}
-            access["above_free_limit"] = "local_machine_resources"
+        access["hosted_rate_limits"] = access.pop("rate_limits")
+        access["above_free_limit"] = "local_machine_resources"
     if name == "resolve_points" and not local_installed:
         access["caller_tiers"] = {
             "anonymous": {"included_items": limits.get("free_item_limit"), "above_limit": "payment_required"},
-            "verified_account": {"included_items": limits.get("paid_item_limit"), "above_limit": "paid_export_or_dashboard"},
+            "verified_account": {"included_items": limits.get("account_item_limit"), "above_limit": "payment_required"},
+            "paid_plan": {"included_items": limits.get("paid_item_limit"), "above_limit": "interactive_limit_exceeded"},
         }
         access["bulk_shape"] = {
             "threshold": limits.get("free_item_limit"),
@@ -477,9 +482,11 @@ def tool_help_payload(
             "deep_tool": "resolve_deep_points: point array plus one shallow_loc_id and one family; family defaults to administrative",
         }
     elif name == "resolve_deep_points" and not local_installed:
+        shared_limit = limits.get("free_item_limit")
         access["caller_tiers"] = {
-            "anonymous": {"included_items": limits.get("free_item_limit"), "above_limit": "not_available"},
-            "verified_account": {"included_items": limits.get("paid_item_limit"), "above_limit": "not_available"},
+            "anonymous": {"included_items": shared_limit, "above_limit": "not_available"},
+            "verified_account": {"included_items": shared_limit, "above_limit": "not_available"},
+            "paid_plan": {"included_items": shared_limit, "above_limit": "not_available"},
         }
         access["bulk_shape"] = {
             "partition_scope": "exactly one admin_1_loc_id per call",

@@ -283,7 +283,7 @@ class GersResolutionTests(unittest.TestCase):
 
     def test_discovery_lists_gers_without_advertising_an_admin_join(self) -> None:
         entry = next(
-            item for item in list_reference_systems()["systems"]
+            item for item in list_reference_systems(include_crosswalks=True)["systems"]
             if item["system"] == GERS_SYSTEM
         )
 
@@ -297,7 +297,7 @@ class GersResolutionTests(unittest.TestCase):
     def test_discovery_reports_independent_internal_releases(self) -> None:
         """Country partitions retain independent internal-spine clocks."""
         entry = next(
-            item for item in list_reference_systems()["systems"]
+            item for item in list_reference_systems(include_crosswalks=True)["systems"]
             if item["system"] == GERS_SYSTEM
         )
         self.assertGreater(len(entry["internal_releases"]), 1)
@@ -323,6 +323,28 @@ class GersResolutionTests(unittest.TestCase):
         selected = payload["candidates"][0]
         self.assertEqual(selected["kind"], "coordinates")
         self.assertEqual(selected["columns"], ["trailhead_lat", "trailhead_lon"])
+
+    def test_dataset_identification_prefers_the_complete_coordinate_pair(self) -> None:
+        """NIFC exports carry a sparse Initial pair ahead of complete x/y columns."""
+        payload = identify_dataset_geography([
+            {"name": "InitialLatitude", "values": ["41.6", "", "", "45.7"], "nonempty_count": 358},
+            {"name": "InitialLongitude", "values": ["-122.4", "", "", "-108.4"], "nonempty_count": 358},
+            {"name": "x", "values": ["-122.4", "-82.1", "-117.0", "-108.4"], "nonempty_count": 444},
+            {"name": "y", "values": ["41.6", "36.2", "32.5", "45.7"], "nonempty_count": 444},
+        ])
+
+        selected = payload["candidates"][0]
+        self.assertEqual(selected["kind"], "coordinates")
+        self.assertEqual(selected["columns"], ["y", "x"])
+
+    def test_dataset_identification_ignores_x_and_y_inside_other_headers(self) -> None:
+        payload = identify_dataset_geography([
+            {"name": "tax_year", "values": ["2020", "2021"]},
+            {"name": "site_lat", "values": ["49.2", "49.3"]},
+            {"name": "site_lon", "values": ["-123.1", "-123.2"]},
+        ])
+
+        self.assertEqual(payload["candidates"][0]["columns"], ["site_lat", "site_lon"])
 
     def test_dataset_identification_keeps_global_admin_binding_with_mismatches(self) -> None:
         with mock.patch("mapmover.runtime.reference_identification._reference_graph_candidates") as graph_scan:

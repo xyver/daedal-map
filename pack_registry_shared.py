@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from access_policy_shared import resolve_effective_access
 from tool_access_shared import (
+    tool_account_item_limit,
     tool_free_item_limit,
     tool_inline_item_limit,
     tool_is_paid_bulk,
@@ -514,6 +515,7 @@ def tool_family_catalog_entry(pack_id: str | None) -> dict:
         name = str(tool.get("name") or "")
         limits = {
             "free_item_limit": tool_free_item_limit(name),
+            "account_item_limit": tool_account_item_limit(name),
             "paid_item_limit": tool_paid_item_limit(name),
             "inline_item_limit": tool_inline_item_limit(name),
         }

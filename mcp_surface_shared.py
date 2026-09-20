@@ -78,17 +78,20 @@ def build_tool_definitions() -> list[dict]:
         {
             "name": "get_catalog",
             "title": "Get Catalog",
-            "description": "Free discovery. Returns the list of live agent-ready data packs available on DaedalMap.",
+            "description": "Free compact discovery. Returns a lite list of live agent-ready data packs, the next get_pack call for each pack, and direct URLs for bulk catalog reads. It intentionally omits source, citation, and license-policy detail that would make every discovery call grow with the full catalog.",
             "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
             "annotations": {"readOnlyHint": True},
         },
         {
             "name": "get_pack",
             "title": "Get Pack",
-            "description": "Free discovery. Returns detailed metadata, coverage, freshness, preferred canonical tool guidance, and first-query examples for one pack. Call this before querying a new pack so you can see time shape, coverage limits, and the paste-ready first query.",
+            "description": "Free one-pack discovery. The default lite response returns coverage, freshness, routing, and first-query guidance. Set detail='full' only when source, metric, provenance, license, or citation detail is needed; the lite response also provides a direct detail URL.",
             "inputSchema": {
                 "type": "object",
-                "properties": {"pack_id": {"type": "string", "description": _pack_id_description()}},
+                "properties": {
+                    "pack_id": {"type": "string", "description": _pack_id_description()},
+                    "detail": {"type": "string", "enum": ["lite", "full"], "default": "lite", "description": "Use lite for normal discovery. Use full only for one selected pack when its complete public metadata is required."},
+                },
                 "required": ["pack_id"],
                 "additionalProperties": False,
             },
@@ -285,14 +288,14 @@ def build_tool_definitions() -> list[dict]:
         {
             "name": "read_geometry_catalog",
             "title": "Read Geometry Catalog",
-            "description": "Free geography discovery. Reads the published DaedalMap geometry catalog projection by default, excluding staged and candidate work. Use view='capabilities' with country_scope to learn the country's available_family_ids; a requested family may validly return no point overlap because family coverage can be partial. Use focused inventory views for banks, crosswalk products, and named objects. A local loopback MCP may set read_wip=true for internal review. No payment required.",
+            "description": "Free compact geography discovery. Reads a small published projection and excludes staged or candidate work. Use view='capabilities' with country_scope to learn available families. Focused views return bounded inventory detail. Public view='full' redirects to the downloadable catalog instead of placing the raw catalog in an MCP response; local loopback may use read_wip=true for operator review. No payment required.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "view": {
                         "type": "string",
                         "enum": ["capabilities", "summary", "countries", "admin_coverage", "crosswalk_artifacts", "crosswalks", "products", "named_reference_objects", "full"],
-                        "description": "Catalog view to return. Use capabilities for the concise first-user coverage model. Default summary for compatibility.",
+                        "description": "Catalog view to return. Capabilities is the compact default and first-user coverage model. Public full returns the bulk-download location rather than embedding the raw catalog.",
                     },
                     "limit": {
                         "type": "integer",
@@ -317,12 +320,12 @@ def build_tool_definitions() -> list[dict]:
         {
             "name": "list_reference_systems",
             "title": "List Geographic Reference Systems",
-            "description": "Free geography utility. Reads the canonical crosswalk registry and lists published, callable geographic reference systems, direct crosswalk artifacts, row counts, vintages, target levels, and source license metadata. Pass country_scope whenever the country is known. Call this first to learn whether ZIP/ZCTA, postal, census, electoral, watershed, health, tribal, marine, or other identifiers can be exchanged through loc_id. Public calls never expose WIP or relationship-only records. No payment required.",
+            "description": "Free reference-system discovery. By default returns a compact list of published systems and whether each can exchange through loc_id. Pass country_scope whenever known. Set include_crosswalks=true only after selecting a country or system and needing bridge rows, vintages, counts, or license metadata. Geometry families themselves are listed by read_geometry_catalog. No payment required.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "country_scope": {"type": "string", "description": "Optional ISO3 country filter. Use this for a focused country capability answer."},
-                    "include_crosswalks": {"type": "boolean", "description": "Include actionable source-to-target crosswalk records. Default true."},
+                    "include_crosswalks": {"type": "boolean", "description": "Include actionable crosswalk and artifact records. Default false because these records are much larger than the system index."},
                     "read_wip": {"type": "boolean", "description": "Local loopback MCP only. Include staged or non-callable preprocessing records for operator review. Default false."},
                     "request_id": {"type": "string", "description": "Optional caller-supplied request id for tracing."},
                 },
@@ -590,12 +593,13 @@ def build_tool_definitions() -> list[dict]:
         {
             "name": "get_geometry",
             "title": "Get loc_id Geometry",
-            "description": "Shape retrieval for exact loc_ids, including loc_ids from any level of a resolve_point chain. Returns the requested geometry metadata, vintage, centroid, bounding box, and optional GeoJSON polygon. Historical geometry is returned first; an evidenced successor appears only as a separate question and is never substituted or fetched automatically. It does not explain hierarchy or crosswalks; use loc_id_info for those details. Prefer bbox/centroid unless exact rendering or clipping requires the polygon. No payment required.",
+            "description": "Shape retrieval for exact loc_ids. The default lite response returns shape availability, family, vintage, centroid, and bounding box. Set detail='full' for the attached identity metadata block and include_polygon=true only when exact coordinates are needed. It does not explain hierarchy or crosswalks; use loc_id_info for those details. Historical geometry is returned first and successors are never substituted automatically. No payment required.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "loc_id": {"type": "string", "description": "DaedalMap loc_id, such as USA-CA-037, USA-Z-00601, USA-NWSFZ-AKZ317, EEZ-USA, or IHO1953-240001002."},
                     "loc_ids": {"type": "array", "items": {"type": "string"}, "description": "DaedalMap loc_ids to fetch in one call. Default public cap is deployment-configurable and lower when include_polygon is true."},
+                    "detail": {"type": "string", "enum": ["lite", "full"], "default": "lite", "description": "Lite returns shape metadata, bbox, and centroid. Full also includes the attached location-info block."},
                     "include_polygon": {"type": "boolean", "description": "When true, include the full GeoJSON geometry. Default false."},
                     "batch_id": {"type": "string", "description": "Optional caller-supplied batch id for tracing."},
                     "request_id": {"type": "string", "description": "Optional caller-supplied request id for tracing."},
@@ -708,7 +712,7 @@ def build_tool_definitions() -> list[dict]:
         {
             "name": "estimate_conversion_job",
             "title": "Estimate loc_id Conversion Job",
-            "description": "Free dry-run quote for uploaded or pasted user data conversion. Checks a fixed representative sample of up to 32 supplied rows through the real conversion resolver, then estimates total resolvable rows, output bytes, errors, and charge units. row_count is the full dataset size and is not replaced by the sample size. Conversion execution validates every submitted row and reports structured failures for unmatched keys.",
+            "description": "Free dry-run quote for uploaded or pasted user data conversion. Checks a fixed representative sample of up to 32 supplied rows through the real conversion resolver, then estimates total resolvable rows, output bytes, errors, and charge units. row_count is the full dataset size and is not replaced by the sample size. Conversion execution validates every submitted row and reports structured failures for unmatched keys. For a coordinate file, set geography_binding.mode to coordinates and send point_count (valid coordinate pairs counted locally), row_count, and request_id instead of items: no point is resolved, the quote is the ceiling for exactly those points, and resolve_points called with the same request_id reuses its quote_id. Quotes are maximums; execution charges only successfully resolved rows or points.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -716,16 +720,15 @@ def build_tool_definitions() -> list[dict]:
                     "geography_binding": {
                         "type": "object",
                         "properties": {
-                            "mode": {"type": "string", "enum": ["reference", "loc_id"]},
-                            "system": {"type": "string", "description": "Declared identifier system. Used when from_system is omitted."},
+                            "mode": {"type": "string", "enum": ["reference", "loc_id", "coordinates"]},
+                            "system": {"type": "string", "description": "Declared identifier system. Used when from_system is omitted. Not used for mode coordinates."},
                             "geo_level": {"anyOf": [{"type": "string"}, {"type": "integer"}]},
                             "vintage": {"type": "string"},
                             "id_column": {"type": "string", "description": "Identifier-column name for future artifact inputs; inline items continue to use value."},
                             "country_scope": {"type": "string"},
                         },
-                        "required": ["system"],
                         "additionalProperties": False,
-                        "description": "Known dataset-geography declaration. The estimate verifies it against distinct identifiers and avoids point containment.",
+                        "description": "Known dataset-geography declaration. Identifier modes require system; the estimate verifies it against distinct identifiers and avoids point containment. Mode coordinates quotes point resolution from point_count.",
                     },
                     "to_system": {"type": "string", "description": "Optional output reference system. Omit to normalize to loc_id."},
                     "items": {"type": "array", "items": {"type": "object", "properties": {
@@ -739,6 +742,8 @@ def build_tool_definitions() -> list[dict]:
                         "limit": {"type": "integer", "minimum": 1, "maximum": 100},
                     }, "required": ["value"], "additionalProperties": False}, "description": "Representative sample or full rows; the estimate resolves at most the first 32. Row-level fields may override top-level defaults."},
                     "row_count": {"type": "integer", "minimum": 0, "description": "Expected total row count when only a sample or artifact pointer is provided."},
+                    "point_count": {"type": "integer", "minimum": 0, "description": "Coordinate mode only: rows with a valid latitude/longitude pair. The quote ceiling; blank or invalid rows are excluded and never charged."},
+                    "batch_id": {"type": "string", "description": "Coordinate mode only: batch id the resolve_points run will send."},
                     "target_admin_level": {"anyOf": [{"type": "string"}, {"type": "integer"}]},
                     "iso3": {"type": "string"},
                     "relationship_vintage": {"type": "string"},
@@ -753,6 +758,7 @@ def build_tool_definitions() -> list[dict]:
                     {"required": ["from_system", "row_count"]},
                     {"required": ["geography_binding", "items"]},
                     {"required": ["geography_binding", "row_count"]},
+                    {"required": ["geography_binding", "point_count", "request_id"]},
                 ],
                 "additionalProperties": False,
             },

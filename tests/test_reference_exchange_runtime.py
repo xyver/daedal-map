@@ -547,10 +547,13 @@ class ReferenceExchangeRuntimeTests(unittest.TestCase):
         self.assertIn("us_census_geoid", systems)
         self.assertIn("overlay_zcta", systems)
         self.assertIn("overlay_nws_fire_weather_zone", systems)
-        self.assertGreaterEqual(len(payload["crosswalk_artifacts"]), 1)
+        self.assertEqual(payload["detail"], "lite")
+        self.assertFalse(payload["crosswalks_included"])
+        self.assertEqual(payload["crosswalk_artifacts"], [])
+        self.assertTrue(payload["next_call"]["arguments"]["include_crosswalks"])
 
     def test_country_reference_listing_returns_canonical_actionable_crosswalks(self) -> None:
-        payload = list_reference_systems(country_scope="USA")
+        payload = list_reference_systems(country_scope="USA", include_crosswalks=True)
 
         self.assertEqual(payload["country_scope"], "USA")
         self.assertGreaterEqual(payload["crosswalk_count"], 38)
@@ -578,12 +581,12 @@ class ReferenceExchangeRuntimeTests(unittest.TestCase):
             mock.patch.object(reference_exchange, "load_geometry_catalog", return_value=catalog),
             mock.patch.object(reference_exchange, "is_cloud_mode", return_value=False),
         ):
-            local = list_reference_systems(country_scope="CAN")
+            local = list_reference_systems(country_scope="CAN", include_crosswalks=True)
         with (
             mock.patch.object(reference_exchange, "load_geometry_catalog", return_value=catalog),
             mock.patch.object(reference_exchange, "is_cloud_mode", return_value=True),
         ):
-            cloud = list_reference_systems(country_scope="CAN")
+            cloud = list_reference_systems(country_scope="CAN", include_crosswalks=True)
 
         self.assertEqual(local["crosswalk_count"], 1)
         self.assertEqual(local["active_data_plane_crosswalk_count"], 0)
@@ -775,7 +778,7 @@ class ReferenceExchangeRuntimeTests(unittest.TestCase):
         self.assertEqual(resolved["loc_id"], "EEZ-AUS")
 
     def test_listed_systems_declare_whether_they_are_actually_exchangeable(self) -> None:
-        listing = list_reference_systems()
+        listing = list_reference_systems(include_crosswalks=True)
         systems = {row["system"]: row for row in listing["systems"]}
         connected = {str(row.get("source_system") or "") for row in listing["crosswalk_artifacts"]}
 
@@ -806,7 +809,7 @@ class ReferenceExchangeRuntimeTests(unittest.TestCase):
         )
 
     def test_self_resolving_families_stay_exchangeable_without_a_crosswalk(self) -> None:
-        listing = list_reference_systems()
+        listing = list_reference_systems(include_crosswalks=True)
         systems = {row["system"]: row for row in listing["systems"]}
         connected = {str(row.get("source_system") or "") for row in listing["crosswalk_artifacts"]}
 

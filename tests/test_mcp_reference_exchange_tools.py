@@ -863,6 +863,56 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         self.assertEqual(payload["error"]["code"], "interactive_limit_exceeded")
         self.assertEqual(payload["delivery"]["required_mode"], "not_available_in_v0")
 
+    def test_coordinate_estimate_quotes_valid_points_without_resolving(self) -> None:
+        from mapmover.routes.mcp import _point_lookup_quote_payload
+
+        with (
+            mock.patch("mapmover.routes.mcp._execute_point_lookup_tool") as resolver_mock,
+            mock.patch("mapmover.routes.mcp.log_api_query_event"),
+        ):
+            payload = _tool_call(
+                self.client,
+                "estimate_conversion_job",
+                {
+                    "geography_binding": {"mode": "coordinates"},
+                    "request_id": "try-points-abc",
+                    "batch_id": "try-points-abc",
+                    "point_count": 358,
+                    "row_count": 444,
+                },
+            )
+        resolver_mock.assert_not_called()
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["point_count"], 358)
+        self.assertEqual(payload["skipped_rows"], 86)
+        self.assertEqual(payload["quote"]["quantity"], 358)
+        # The run's quote comes from the same helper with the same inputs, so
+        # resolve_points authorizes against this estimate unchanged.
+        expected = _point_lookup_quote_payload(
+            tool_name="resolve_points",
+            request_id="try-points-abc",
+            batch_id="try-points-abc",
+            point_count=358,
+            free_limit=100,
+            paid_limit=10_000,
+        )
+        self.assertEqual(payload["quote_id"], expected["quote_id"])
+
+    def test_coordinate_estimate_rejects_counts_above_the_row_total(self) -> None:
+        with mock.patch("mapmover.routes.mcp.log_api_query_event"):
+            payload = _tool_call(
+                self.client,
+                "estimate_conversion_job",
+                {
+                    "geography_binding": {"mode": "coordinates"},
+                    "request_id": "try-points-abc",
+                    "point_count": 500,
+                    "row_count": 444,
+                },
+            )
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["error"]["code"], "invalid_request")
+
     def test_check_geometry_tool_accepts_loc_id_batch(self) -> None:
         with (
             mock.patch(
@@ -1385,7 +1435,7 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         self.assertEqual(payload["admin_coverage"][0]["product_id"], "global_admin_spine")
         self.assertEqual(payload["app_summary_endpoint"], "https://app.daedalmap.com/api/v1/geometry/catalog")
         self.assertEqual(payload["catalog_path"], "geometry/geometry_catalog.json")
-        self.assertNotIn("download_url", payload)
+        self.assertIn("/downloadable/geometry/geometry_catalog.json", payload["download_url"])
 
     def test_read_geometry_catalog_returns_concise_capabilities(self) -> None:
         with mock.patch(
@@ -1465,7 +1515,7 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         self.assertEqual(payload["countries"][0]["families"][0]["coverage_status"], "partial")
         self.assertEqual(payload["countries"][0]["families"][0]["unresolved_jurisdictions"], ["STL"])
 
-    def test_read_geometry_catalog_full_view_does_not_expose_internal_country_candidates(self) -> None:
+    def test_read_geometry_catalog_full_view_redirects_to_bulk_download(self) -> None:
         with mock.patch(
             "mapmover.runtime.reference_exchange.load_geometry_catalog",
             return_value={
@@ -1481,8 +1531,9 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
             payload = _tool_call(self.client, "read_geometry_catalog", {"view": "full"})
 
         self.assertTrue(payload["ok"])
-        self.assertNotIn("country_family_coverage", payload["catalog"])
-        self.assertNotIn("candidate_countries", payload["catalog"]["capability_summary"])
+        self.assertEqual(payload["view"], "full_redirect")
+        self.assertIn("/downloadable/geometry/geometry_catalog.json", payload["download_url"])
+        self.assertNotIn("catalog", payload)
 
     def test_read_geometry_catalog_filters_candidate_products(self) -> None:
         with mock.patch(
@@ -2293,7 +2344,7 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         created = _tool_call(self.client, "create_conversion_job", create_arguments)
         self.assertTrue(created["ok"])
 
-    def test_identify_reference_system_local_loopback_keeps_identification_cap(self) -> None:
+    def test_identify_reference_system_local_loopback_bypasses_hosted_item_cap(self) -> None:
         identifiers = [f"{index:011d}" for index in range(101)]
         with (
             mock.patch("mapmover.routes.mcp.is_local_loopback_request", return_value=True),
@@ -2301,8 +2352,8 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         ):
             payload = _tool_call(self.client, "identify_reference_system", {"identifiers": identifiers})
 
-        self.assertEqual(payload["error"]["code"], "too_many_items")
-        self.assertEqual(payload["limit"], 100)
+        self.assertNotEqual((payload.get("error") or {}).get("code"), "too_many_items")
+        self.assertEqual(payload.get("identifier_count"), 101)
 
     def test_create_conversion_job_local_loopback_bypasses_hosted_cap(self) -> None:
         items = [{"value": "00601"} for _ in range(7501)]

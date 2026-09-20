@@ -18,6 +18,8 @@ from collections import deque
 from dataclasses import dataclass
 from typing import Callable, Deque
 
+from mapmover.runtime_config import get_runtime_config
+
 
 def _env_int(name: str, default: int) -> int:
     raw = str(os.getenv(name, "") or "").strip()
@@ -49,6 +51,16 @@ def _is_loopback_scope(scope: dict) -> bool:
     client = scope.get("client") or ("", 0)
     host = str(client[0] or "").strip().split("%", 1)[0].lower()
     return host in {"127.0.0.1", "::1", "localhost", "testclient"}
+
+
+def _local_loopback_bypass_allowed() -> bool:
+    runtime_mode = str(get_runtime_config().get("runtime_mode", "local") or "local").strip().lower()
+    deployment = str(os.getenv("DEPLOYMENT", "") or "").strip().lower()
+    hosted_marker = any(
+        str(os.getenv(name, "") or "").strip()
+        for name in ("RAILWAY_ENVIRONMENT_ID", "RAILWAY_PROJECT_ID", "RAILWAY_SERVICE_ID")
+    )
+    return runtime_mode == "local" and deployment in {"", "local"} and not hosted_marker
 
 
 @dataclass(frozen=True)
@@ -179,7 +191,11 @@ class MCPAdmissionMiddleware:
 
         path = str(scope.get("path") or "")
         method = str(scope.get("method") or "GET").upper()
-        if not _is_mcp_path(path) or method == "OPTIONS" or (self.bypass_loopback and _is_loopback_scope(scope)):
+        if (
+            not _is_mcp_path(path)
+            or method == "OPTIONS"
+            or (self.bypass_loopback and _local_loopback_bypass_allowed() and _is_loopback_scope(scope))
+        ):
             await self.app(scope, receive, send)
             return
 

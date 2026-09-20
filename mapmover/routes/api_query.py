@@ -64,8 +64,7 @@ from mapmover.runtime.source_response_semantics import (
     collect_metric_response_contract,
 )
 from mapmover.data_loading import load_catalog, load_source_metadata
-from mapmover.security import get_client_ip, rate_limiter
-from mapmover.storage_mode import get_runtime_mode
+from mapmover.security import get_client_ip, is_local_loopback_request, rate_limiter
 
 
 router = APIRouter()
@@ -380,7 +379,7 @@ async def execute_query_dataset_payload(req: Request, payload: dict[str, Any]) -
     req.state.analytics_pack_id = spec.pack_id
     if resolved_from_pack:
         req.state.analytics_pack_id = pack_id or spec.pack_id
-    local_installed_access = get_runtime_mode() == "local"
+    local_installed_access = is_local_loopback_request(req)
     metadata_source_id = spec.metadata_source_id or spec.source_id
     source_material_record = _source_material_record(metadata_source_id)
     source_permissions, publication_cleared = _source_access_facts(source_material_record)

@@ -126,6 +126,32 @@ class AccessPolicyAdminTests(unittest.TestCase):
             self.assertEqual(second.status_code, 429, second.text)
             self.assertEqual(second.json()["surface"], "server_safety")
 
+    def test_trusted_artifact_token_does_not_bypass_server_safety_fuse(self) -> None:
+        from app import app as runtime_app
+        from mapmover.security import SlidingWindowRateLimiter
+
+        token = "trusted-but-still-bounded"
+        with (
+            mock.patch.dict(
+                "os.environ",
+                {
+                    "ARTIFACT_ACCESS_TOKENS": f"qa={token}",
+                    "DAEDALMAP_HARD_GATED_REQUESTS_PER_MINUTE": "1",
+                    "DAEDALMAP_HARD_GATED_REQUESTS_PER_HOUR": "100",
+                },
+                clear=False,
+            ),
+            mock.patch("app.rate_limiter", SlidingWindowRateLimiter()),
+        ):
+            client = TestClient(runtime_app, client=("198.51.100.222", 50123))
+            body = {"jsonrpc": "2.0", "id": "fuse-token", "method": "tools/list", "params": {}}
+            headers = {"Authorization": f"Bearer {token}"}
+            first = client.post("/mcp/geography", headers=headers, json=body)
+            second = client.post("/mcp/geography", headers=headers, json=body)
+        self.assertEqual(first.status_code, 200, first.text)
+        self.assertEqual(second.status_code, 429, second.text)
+        self.assertEqual(second.json()["surface"], "server_safety")
+
 
 if __name__ == "__main__":
     unittest.main()

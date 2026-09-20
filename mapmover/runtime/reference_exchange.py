@@ -892,7 +892,7 @@ def _direct_crosswalk_matches_batch(
 
 
 def list_reference_systems(
-    *, country_scope: str | None = None, include_crosswalks: bool = True,
+    *, country_scope: str | None = None, include_crosswalks: bool = False,
     read_wip: bool = False,
 ) -> dict[str, Any]:
     """Return the currently discoverable reference systems and crosswalks."""
@@ -925,7 +925,23 @@ def list_reference_systems(
             "resolver": "exact_identifier_crosswalk",
             "bidirectional": False,
         }
-    canonical_crosswalks = _catalog_crosswalks(country_scope=country, read_wip=read_wip)
+    # The default list is a discovery index, so do not materialize more than a
+    # thousand rich crosswalk records (or probe their local artifact paths).
+    # Callers opt into that detail after selecting a country/system.
+    canonical_crosswalks = (
+        _catalog_crosswalks(country_scope=country, read_wip=read_wip)
+        if include_crosswalks else []
+    )
+    if include_crosswalks:
+        available_crosswalk_count = len(canonical_crosswalks)
+    else:
+        available_crosswalk_count = sum(
+            1
+            for item in catalog.get("crosswalks") or []
+            if isinstance(item, dict)
+            and (read_wip or (item.get("publication_status") == "published" and item.get("callable") is True))
+            and (not country or str(item.get("country_code") or "").upper() == country)
+        )
     canonical_systems = [
         item for item in catalog.get("reference_systems") or []
         if isinstance(item, dict)
@@ -974,23 +990,24 @@ def list_reference_systems(
     for adapter in admitted_external_adapters():
         if adapter_available(adapter):
             systems[adapter.system] = adapter_public_entry(adapter)
-    try:
-        from .reference_graph import public_alias_reference_systems
+    if include_crosswalks or country:
+        try:
+            from .reference_graph import public_alias_reference_systems
 
-        for entry in public_alias_reference_systems(iso3=country or None):
-            system = str(entry.get("system") or "").strip()
-            if not system:
-                continue
-            systems[system] = {
-                **entry,
-                "label": "DaedalMap preferred public loc_id",
-                "role": "preferred_public_loc_id",
-                "country_scope": country or (system.split(".")[2].upper() if len(system.split(".")) > 2 else None),
-                "bidirectional": True,
-                "resolver": "preferred_public_loc_id",
-            }
-    except Exception:
-        pass
+            for entry in public_alias_reference_systems(iso3=country or None):
+                system = str(entry.get("system") or "").strip()
+                if not system:
+                    continue
+                systems[system] = {
+                    **entry,
+                    "label": "DaedalMap preferred public loc_id",
+                    "role": "preferred_public_loc_id",
+                    "country_scope": country or (system.split(".")[2].upper() if len(system.split(".")) > 2 else None),
+                    "bidirectional": True,
+                    "resolver": "preferred_public_loc_id",
+                }
+        except Exception:
+            pass
     for family in catalog.get("geometry_families") or []:
         if not isinstance(family, dict):
             continue
@@ -1018,26 +1035,27 @@ def list_reference_systems(
             "feature_count": family.get("feature_count"),
             "resolver": family.get("resolver"),
         }
-    try:
-        from .reference_graph import reference_graph_families
+    if include_crosswalks:
+        try:
+            from .reference_graph import reference_graph_families
 
-        for family in reference_graph_families():
-            if country:
-                continue
-            system = str(family.get("family") or "").strip()
-            if not system:
-                continue
-            if get_external_adapter(system):
-                continue
-            systems.setdefault(system, {
-                "system": system,
-                "label": system.replace("_", " ").title(),
-                "role": "reference_graph_family",
-                "identity_count": family.get("identity_count"),
-                "shape_count": family.get("shape_count"),
-            })
-    except Exception:
-        pass
+            for family in reference_graph_families():
+                if country:
+                    continue
+                system = str(family.get("family") or "").strip()
+                if not system:
+                    continue
+                if get_external_adapter(system):
+                    continue
+                systems.setdefault(system, {
+                    "system": system,
+                    "label": system.replace("_", " ").title(),
+                    "role": "reference_graph_family",
+                    "identity_count": family.get("identity_count"),
+                    "shape_count": family.get("shape_count"),
+                })
+        except Exception:
+            pass
 
     crosswalks = []
     crosswalk_systems: set[str] = set()
@@ -1065,22 +1083,34 @@ def list_reference_systems(
                 "label": source.replace("_", " ").title(),
                 "role": "reference_system",
             })
-        crosswalks.append({
-            "source_system": source,
-            "target_system": LOC_ID_SYSTEM,
-            "target_family": artifact.get("target_family"),
-            "target_admin_level": level,
-            "relationship_vintage": artifact.get("relationship_vintage"),
-            "row_count": artifact.get("row_count"),
-            "source_count": artifact.get("source_count"),
-            "target_count": artifact.get("target_count"),
-            "artifact_path": artifact.get("artifact_path"),
-            "license": artifact.get("source_license"),
-        })
+        if include_crosswalks:
+            crosswalks.append({
+                "source_system": source,
+                "target_system": LOC_ID_SYSTEM,
+                "target_family": artifact.get("target_family"),
+                "target_admin_level": level,
+                "relationship_vintage": artifact.get("relationship_vintage"),
+                "row_count": artifact.get("row_count"),
+                "source_count": artifact.get("source_count"),
+                "target_count": artifact.get("target_count"),
+                "artifact_path": artifact.get("artifact_path"),
+                "license": artifact.get("source_license"),
+            })
 
     for system in systems.values():
         _mark_exchangeability(system, crosswalk_systems)
     ordered = sorted(systems.values(), key=lambda row: (not row.get("exchangeable"), str(row.get("system") or "")))
+    if not include_crosswalks:
+        lite_keys = {
+            "system", "label", "role", "country_scope", "country_scopes",
+            "family_id", "exchangeable", "exchange_via", "resolver",
+            "exchange_status", "bidirectional", "supported_geo_levels",
+            "supported_vintages",
+        }
+        ordered = [
+            {key: value for key, value in row.items() if key in lite_keys and value is not None}
+            for row in ordered
+        ]
     exchangeable_count = sum(1 for row in ordered if row.get("exchangeable"))
     return _clean_json({
         "ok": True,
@@ -1095,11 +1125,21 @@ def list_reference_systems(
             "artifact to loc_id. Systems with exchangeable=false are discoverable geometry or reference-graph "
             "families with no built crosswalk; resolve_reference and convert_reference will refuse them."
         ),
-        "crosswalk_artifacts": crosswalks,
+        "detail": "full" if include_crosswalks else "lite",
+        "crosswalks_included": include_crosswalks,
+        "next_call": ({
+            "tool": "list_reference_systems",
+            "arguments": {
+                **({"country_scope": country} if country else {}),
+                "include_crosswalks": True,
+            },
+        } if not include_crosswalks else None),
+        "crosswalk_artifacts": crosswalks if include_crosswalks else [],
         "country_scope": country or None,
         "active_data_plane": "cloud" if is_cloud_mode() else "local",
         "crosswalks": canonical_crosswalks if include_crosswalks else [],
-        "crosswalk_count": len(canonical_crosswalks),
+        "crosswalk_count": available_crosswalk_count,
+        "returned_crosswalk_count": len(canonical_crosswalks),
         "active_data_plane_crosswalk_count": sum(
             1 for item in canonical_crosswalks if item.get("available_in_active_data_plane")
         ),
@@ -1328,7 +1368,7 @@ def _geometry_catalog_named_reference_objects(
 
 
 def read_geometry_catalog(
-    *, view: str = "summary", limit: int | None = 50, country_scope: str | None = None,
+    *, view: str = "capabilities", limit: int | None = 50, country_scope: str | None = None,
     read_wip: bool = False,
 ) -> dict[str, Any]:
     """Return an agent-oriented published or explicitly authorized WIP view."""
@@ -1336,15 +1376,7 @@ def read_geometry_catalog(
     selected_country = str(country_scope or "").strip().upper()
     country_catalog = load_country_geometry_catalog(selected_country) if selected_country else {}
     has_country_catalog = bool(country_catalog.get("country_profile"))
-    try:
-        from .reference_graph import reference_graph_families, where_is_geography_data
-
-        data_source = where_is_geography_data()
-        graph_families = reference_graph_families()
-    except Exception as exc:
-        data_source = {"ok": False, "error": str(exc)}
-        graph_families = []
-    selected_view = str(view or "summary").strip().lower().replace("-", "_")
+    selected_view = str(view or "capabilities").strip().lower().replace("-", "_")
     row_limit = max(1, min(int(limit or 50), 500))
     base = {
         "ok": True,
@@ -1353,11 +1385,10 @@ def read_geometry_catalog(
         "schema_version": catalog.get("schema_version") or catalog.get("_schema_version"),
         "generated_at": catalog.get("generated_at"),
         "app_summary_endpoint": "https://app.daedalmap.com/api/v1/geometry/catalog",
+        "download_url": "https://downloads.daedalmap.com/downloadable/geometry/geometry_catalog.json",
         "catalog_path": "geometry/geometry_catalog.json",
         "counts": _geometry_catalog_counts(catalog, read_wip=read_wip),
         "capabilities": geometry_capability_summary(catalog),
-        "runtime_data_source": data_source,
-        "runtime_reference_families": graph_families,
         "country_catalog": ({
             "path": f"geometry/countries/{selected_country}/reference/catalog.json",
             "catalog_fingerprint": country_catalog.get("catalog_fingerprint"),
@@ -1403,9 +1434,19 @@ def read_geometry_catalog(
             })
         return _clean_json({
             **base,
-            "collections": _geometry_catalog_records(catalog, "geometry_collections", read_wip=read_wip),
-            "families": _geometry_catalog_records(catalog, "geometry_families", read_wip=read_wip),
+            "collections": [
+                {key: item.get(key) for key in ("collection_id", "label", "family_count", "feature_count") if item.get(key) is not None}
+                for item in _geometry_catalog_records(catalog, "geometry_collections", read_wip=read_wip)
+            ],
+            "families": [
+                {key: item.get(key) for key in ("family", "family_id", "label", "feature_count", "resolver") if item.get(key) is not None}
+                for item in _geometry_catalog_records(catalog, "geometry_families", read_wip=read_wip)
+            ],
             "admin_coverage": _geometry_catalog_admin_coverage(catalog, read_wip=read_wip),
+            "next_calls": {
+                "reference_systems": {"tool": "list_reference_systems", "arguments": {"include_crosswalks": False}},
+                "shape": {"tool": "get_geometry", "arguments": {"loc_id": "<selected loc_id>", "detail": "lite"}},
+            },
         })
     if selected_view == "admin_coverage":
         return _clean_json({**base, "admin_coverage": _geometry_catalog_admin_coverage(catalog, read_wip=read_wip)})
@@ -1439,44 +1480,15 @@ def read_geometry_catalog(
     if selected_view == "named_reference_objects":
         return _clean_json({**base, "named_reference_objects": _geometry_catalog_named_reference_objects(catalog, limit=row_limit, read_wip=read_wip)})
     if selected_view == "full":
-        if has_country_catalog:
-            if read_wip:
-                return _clean_json({**base, "country_scope": selected_country, "catalog": country_catalog})
+        if not read_wip:
             return _clean_json({
                 **base,
-                "country_scope": selected_country,
-                "catalog": {
-                    "schema_version": country_catalog.get("schema_version"),
-                    "country_code": selected_country,
-                    "catalog_fingerprint": country_catalog.get("catalog_fingerprint"),
-                    "country_profile": country_catalog.get("country_profile"),
-                    "family_coverage": country_catalog.get("family_coverage"),
-                    "geometry_banks": _public_catalog_records(country_catalog, "geometry_banks"),
-                    "geometry_products": _public_catalog_records(country_catalog, "geometry_products"),
-                    "release_packages": _public_catalog_records(country_catalog, "release_packages"),
-                    "reference_systems": _public_catalog_records(country_catalog, "reference_systems"),
-                    "crosswalks": _public_catalog_records(country_catalog, "crosswalks"),
-                    "summary": country_catalog.get("summary"),
-                },
+                "view": "full_redirect",
+                "guidance": "Download the full catalog directly. Use summary, capabilities, or a focused view for MCP discovery.",
             })
-        if read_wip:
-            return _clean_json({**base, "catalog": catalog})
-        return _clean_json({
-            **base,
-            "catalog": {
-                "schema_version": catalog.get("schema_version") or catalog.get("_schema_version"),
-                "generated_at": catalog.get("generated_at"),
-                "capability_summary": geometry_capability_summary(catalog),
-                "geometry_collections": _public_catalog_records(catalog, "geometry_collections"),
-                "geometry_families": _public_catalog_records(catalog, "geometry_families"),
-                "geometry_banks": _public_catalog_records(catalog, "geometry_banks"),
-                "crosswalk_artifacts": _public_catalog_records(catalog, "crosswalk_artifacts"),
-                "reference_systems": _public_catalog_records(catalog, "reference_systems"),
-                "crosswalks": _public_catalog_records(catalog, "crosswalks"),
-                "resolver_groups": _public_catalog_records(catalog, "resolver_groups"),
-                "named_reference_objects": _public_catalog_records(catalog, "named_reference_objects"),
-            },
-        })
+        if has_country_catalog:
+            return _clean_json({**base, "country_scope": selected_country, "catalog": country_catalog})
+        return _clean_json({**base, "catalog": catalog})
     return _clean_json({
         **base,
         "ok": False,
@@ -2947,9 +2959,13 @@ def get_geometry_availability(loc_ids: list[str]) -> dict[str, Any]:
     )
 
 
-def get_geometry_reference(loc_id: str, *, include_polygon: bool = False) -> dict[str, Any]:
+def get_geometry_reference(
+    loc_id: str, *, include_polygon: bool = False, include_info: bool = False,
+) -> dict[str, Any]:
     """Return geometry metadata, and optionally polygon, for an exchange loc_id."""
-    payload = get_geometry_references([loc_id], include_polygon=include_polygon, include_info=True)
+    payload = get_geometry_references(
+        [loc_id], include_polygon=include_polygon, include_info=include_info,
+    )
     results = payload.get("results") or []
     if not results:
         return {"ok": False, "loc_id": canonicalize_loc_id(loc_id), "has_shape": False, "error": "no geometry found"}

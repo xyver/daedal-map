@@ -61,7 +61,7 @@ class MCPAdmissionControllerTests(unittest.TestCase):
 
 
 class MCPAdmissionMiddlewareTests(unittest.IsolatedAsyncioTestCase):
-    async def _request(self, middleware, *, path="/mcp", method="POST", headers=None):
+    async def _request(self, middleware, *, path="/mcp", method="POST", headers=None, client_host="203.0.113.10"):
         sent = []
 
         async def receive():
@@ -79,7 +79,7 @@ class MCPAdmissionMiddlewareTests(unittest.IsolatedAsyncioTestCase):
             "raw_path": path.encode(),
             "query_string": b"",
             "headers": headers or [],
-            "client": ("203.0.113.10", 1234),
+            "client": (client_host, 1234),
             "server": ("testserver", 443),
         }
         await middleware(scope, receive, send)
@@ -214,6 +214,28 @@ class MCPAdmissionMiddlewareTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(post_sent[0]["status"], 503)
         self.assertEqual(json.loads(post_sent[1]["body"])["error_code"], "mcp_execution_paused")
         self.assertEqual(calls, ["GET"])
+
+    async def test_hosted_deployment_cannot_use_loopback_admission_bypass(self):
+        async def inner(scope, receive, send):
+            await send({"type": "http.response.start", "status": 200, "headers": []})
+            await send({"type": "http.response.body", "body": b"ok"})
+
+        middleware = MCPAdmissionMiddleware(
+            inner,
+            controller=MCPAdmissionController(
+                burst_limit=1,
+                burst_window_seconds=10,
+                minute_limit=10,
+                max_concurrency=2,
+            ),
+            log_rejections=False,
+        )
+        middleware.bypass_loopback = True
+        with mock.patch.dict(os.environ, {"DEPLOYMENT": "production"}, clear=False):
+            first = await self._request(middleware, client_host="127.0.0.1")
+            second = await self._request(middleware, client_host="127.0.0.1")
+        self.assertEqual(first[0]["status"], 200)
+        self.assertEqual(second[0]["status"], 429)
 
 
 if __name__ == "__main__":

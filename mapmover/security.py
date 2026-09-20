@@ -21,7 +21,12 @@ def is_local_loopback_request(request: Request) -> bool:
     able to claim the unrestricted local execution lane by spoofing X-Forwarded-For.
     """
     runtime_mode = str(get_runtime_config().get("runtime_mode", "local") or "local").strip().lower()
-    if runtime_mode != "local":
+    deployment = str(os.getenv("DEPLOYMENT", "") or "").strip().lower()
+    hosted_marker = any(
+        str(os.getenv(name, "") or "").strip()
+        for name in ("RAILWAY_ENVIRONMENT_ID", "RAILWAY_PROJECT_ID", "RAILWAY_SERVICE_ID")
+    )
+    if runtime_mode != "local" or deployment not in {"", "local"} or hosted_marker:
         return False
     client = getattr(request, "client", None)
     host = str(getattr(client, "host", "") or "").strip().split("%", 1)[0]
@@ -137,7 +142,9 @@ def _request_from_trusted_proxy(request: Request) -> bool:
         return False
     networks = _trusted_proxy_cidrs()
     if not networks:
-        return True
+        # Fail closed. Enabling header trust without naming the immediate
+        # proxies must never let arbitrary peers choose their limiter identity.
+        return False
     peer = request.client.host if request.client else ""
     try:
         peer_ip = ipaddress.ip_address(peer)
@@ -168,7 +175,11 @@ def get_client_ip(request: Request) -> str:
         for header in _trusted_proxy_ip_headers():
             raw = (request.headers.get(header) or "").strip()
             if raw:
-                return raw.split(",", 1)[0].strip()
+                candidate = raw.split(",", 1)[0].strip().split("%", 1)[0]
+                try:
+                    return str(ipaddress.ip_address(candidate))
+                except ValueError:
+                    continue
     return request.client.host if request.client else "unknown"
 
 
@@ -177,7 +188,7 @@ def log_startup_security_warnings(logger) -> None:
     if _env_truthy("TRUST_PROXY_HEADERS") and not _trusted_proxy_cidrs():
         logger.warning(
             "Security warning: TRUST_PROXY_HEADERS=true but TRUSTED_PROXY_CIDRS is empty. "
-            "Any immediate peer will be trusted for client-IP headers."
+            "Proxy identity headers will be ignored until trusted proxy CIDRs are configured."
         )
 
     forced_qa_user_id = str(os.getenv("LLM_USAGE_FORCE_QA_USER_ID", "")).strip()

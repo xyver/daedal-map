@@ -402,6 +402,8 @@ class EventQueryRuntimeTests(unittest.TestCase):
         ), patch(
             "mapmover.routes.api_query.pack_requires_commercial_access", return_value=False
         ), patch(
+            "mapmover.routes.api_query.is_local_loopback_request", return_value=True
+        ), patch(
             "mapmover.routes.api_query.log_api_query_event"
         ):
             response = asyncio.run(

@@ -7,17 +7,27 @@ from pathlib import Path
 from unittest import mock
 
 from tool_access_shared import (
+    HOSTED_TOOL_RATE_LIMIT_DEFAULTS,
+    IDENTIFIER_RATE_USD_PER_100,
+    PAID_CALL_BASE_USD,
+    POINT_RATE_USD_PER_100,
     paid_bulk_tool_ids,
+    quantize_credit_price,
+    tool_price_micro_usd,
     resize_charge_quote,
     tool_account_item_limit,
+    tool_authored_rate_limit,
     tool_charge_quote,
     tool_charge_units,
     tool_effective_item_limit,
+    tool_effective_rate_limit,
     tool_meter,
     tool_payment_required_payload,
     tool_pricing_version,
     tool_quote,
 )
+from mcp_tool_help_shared import tool_help_payload
+from mcp_surface_shared import build_tool_definitions
 from access_policy_shared import clear_access_policy_cache
 
 
@@ -64,13 +74,50 @@ class ToolAccessContractTests(unittest.TestCase):
             self.assertEqual(quote["price_credits"], 1.3)
             self.assertEqual(tool_effective_item_limit("create_conversion_job"), 4321)
 
+    def test_hosted_tool_rate_defaults_have_one_authored_home(self) -> None:
+        self.assertEqual(HOSTED_TOOL_RATE_LIMIT_DEFAULTS["free"], {"limit": 10, "window_seconds": 60})
+        self.assertEqual(tool_authored_rate_limit("resolve_points", lane="account"), (60, 60))
+        self.assertEqual(tool_authored_rate_limit("resolve_points", lane="paid"), (120, 60))
+
+    def test_rate_limit_env_and_operator_policy_override_the_registry(self) -> None:
+        policy = (
+            '{"schema_version":"1.0.0","policy_revision":"limit-test-1",'
+            '"mode":"enforce","rate_limits":{"tools":{"resolve_points":'
+            '{"plus":{"limit":333,"window_seconds":45}}}}}'
+        )
+        env = {
+            "MCP_TOOL_RATE_LIMIT_RESOLVE_POINTS_PLUS": "222",
+            "DAEDALMAP_ACCESS_POLICY_JSON": policy,
+        }
+        with mock.patch.dict(os.environ, env, clear=False):
+            clear_access_policy_cache()
+            self.assertEqual(tool_effective_rate_limit("resolve_points", lane="paid"), (333, 45))
+
     def test_shared_challenge_preserves_the_canonical_quote(self) -> None:
         payload = tool_payment_required_payload(
             "resolve_points", 101, free_limit=100, paid_limit=10_000, request_id="req-1"
         )
         self.assertEqual(payload["quote"]["capability_id"], "point_lookup")
-        self.assertEqual(payload["quote"]["amount_usdc_base_units"], 10_000)
+        # One billable point: the base charge plus one point at the point rate.
+        expected = quantize_credit_price(round((PAID_CALL_BASE_USD + POINT_RATE_USD_PER_100 / 100) * 1_000_000))
+        self.assertEqual(payload["quote"]["amount_usdc_base_units"], expected)
         self.assertEqual(payload["limits"], {"free_batch_limit": 100, "paid_batch_limit": 10_000})
+
+    def test_conversion_lanes_read_the_two_named_rates(self) -> None:
+        """Every identifier tool shares one rate; points have their own."""
+        identifier_per_item = round(IDENTIFIER_RATE_USD_PER_100 / 100 * 1_000_000)
+        for tool in ("resolve_reference", "convert_reference"):
+            with self.subTest(tool=tool):
+                self.assertEqual(tool_price_micro_usd(tool)["per_unit_micro_usd"], identifier_per_item)
+        # create_conversion_job meters one unit per 100 references.
+        self.assertEqual(
+            tool_price_micro_usd("create_conversion_job")["per_unit_micro_usd"],
+            identifier_per_item * 100,
+        )
+        self.assertEqual(
+            tool_price_micro_usd("resolve_points")["per_unit_micro_usd"],
+            round(POINT_RATE_USD_PER_100 / 100 * 1_000_000),
+        )
 
     def test_conversion_job_uses_one_authored_meter_and_quote(self) -> None:
         units = tool_charge_units("create_conversion_job", 3144, minimum=True)
@@ -126,6 +173,28 @@ class AccountLaneTests(unittest.TestCase):
         with mock.patch.dict(os.environ, {"MCP_TOOL_ACCOUNT_BATCH_LIMIT_RESOLVE_POINTS": "777"}, clear=False):
             self.assertEqual(tool_effective_item_limit("resolve_points", lane="account"), 777)
             self.assertEqual(tool_effective_item_limit("resolve_points", lane="free"), 100)
+
+    def test_point_help_keeps_account_and_paid_plan_limits_separate(self) -> None:
+        definition = next(tool for tool in build_tool_definitions() if tool["name"] == "resolve_points")
+        payload = tool_help_payload(
+            "resolve_points", tool_definition=definition, available_on_facades=["/mcp/geography"]
+        )
+        tiers = payload["access"]["caller_tiers"]
+        self.assertEqual(tiers["anonymous"]["included_items"], 100)
+        self.assertEqual(tiers["verified_account"]["included_items"], 1000)
+        self.assertEqual(tiers["paid_plan"]["included_items"], 10000)
+        self.assertEqual(payload["access"]["rate_limits"]["free"]["limit"], 10)
+        self.assertEqual(payload["access"]["rate_limits"]["account"]["limit"], 60)
+        self.assertEqual(payload["access"]["rate_limits"]["paid"]["limit"], 120)
+
+    def test_free_bounded_tool_does_not_advertise_unenforced_item_tiers(self) -> None:
+        definition = next(tool for tool in build_tool_definitions() if tool["name"] == "loc_id_info")
+        payload = tool_help_payload(
+            "loc_id_info", tool_definition=definition, available_on_facades=["/mcp/geography"]
+        )
+        self.assertEqual(payload["access"]["limits"]["free_item_limit"], 100)
+        self.assertNotIn("account_item_limit", payload["access"]["limits"])
+        self.assertNotIn("paid_item_limit", payload["access"]["limits"])
 
 
 if __name__ == "__main__":

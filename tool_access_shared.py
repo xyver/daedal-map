@@ -8,9 +8,10 @@ Three product rules this file encodes:
 
 1. **Downloads and samples stay free.** Nothing here gates static downloads or
    sample data. These limits only apply to hosted MCP/API execution.
-2. **Paying buys throughput, not data.** A ``paid_bulk`` tool returns the same
-   answer to everyone; a paid caller may simply ask for more per call. There is
-   no paid-only field, row, or region.
+2. **Paying buys hosted execution, not ownership.** A dual-lane ``paid_bulk``
+   tool returns the same answer to everyone; payment permits more hosted work.
+   Create-job tools may bill from their first charge unit after a free estimate.
+   There is no paid-only field, row, identifier, or region.
 3. **License permission is the ceiling.** A tool may only be ``paid_bulk`` when
    the geometry banks or packs behind it carry ``permission: "paid"``. If the
    upstream license forbids paid hosted service, the tool stays free no matter
@@ -19,12 +20,22 @@ Three product rules this file encodes:
 These are entitlement limits, not safety ceilings. Safety ceilings live in the
 runtime read/admission path; see ``docs/caps_and_limits.md``.
 
+These are also product-lane defaults, not customer-specific contracts. A future
+trusted user/org/API-key limit profile may specialize them, but the runtime must
+clamp every such override to its non-bypassable safety ceiling. Credit balance
+authorizes a quoted call; it does not change the caller's plan tier.
+
 Lanes are ``free``, ``account``, and ``paid``, matching
 ``CallerIdentity.access_tier``.
 
-To change a limit: edit ``free_item_limit`` / ``account_item_limit`` /
-``paid_item_limit`` here.
-To change a price: edit the authored ``price`` here, set the canonical micro-USD
+To change a per-call item limit: edit ``free_item_limit`` /
+``account_item_limit`` / ``paid_item_limit`` here.
+To change the default hosted tool-call rates: edit
+``HOSTED_TOOL_RATE_LIMIT_DEFAULTS`` here. A tool may override those defaults
+with its own ``rate_limits`` entry in ``TOOL_ACCESS_REGISTRY``.
+To change a conversion lane's price: edit ``IDENTIFIER_RATE_USD_PER_100`` or
+``POINT_RATE_USD_PER_100`` below and bump the affected ``pricing_version``s.
+To change any other price: edit the authored ``price`` here, set the canonical micro-USD
 environment override, or activate a revisioned dashboard pricing override.
 To swap a tool between free and paid: change ``pricing`` here, and nothing else.
 
@@ -69,6 +80,42 @@ FAMILY_DISCOVERY = "discovery"
 FAMILY_DATASET = "dataset"
 
 
+# Named conversion rates, in USD per 100 successfully resolved items. These
+# are the two levers for the loc_id conversion lanes; every tool below reads
+# one of them, so changing a rate here reprices every tool in that lane.
+#
+# Documented rate card and decision history:
+# county-map-private/docs/future/API/agent_api_monetization_plan.md, "Tool
+# rates". Keep that table in step with these values. Runtime overrides
+# (MCP_TOOL_PRICE_*_<TOOL>, legacy_price_env names, and the Access & Payment
+# dashboard) win over these values without a code change.
+#
+# Identifier lane: external code to loc_id (resolve_reference,
+# convert_reference, create_conversion_job). This is an index join, not a
+# spatial computation.
+IDENTIFIER_RATE_USD_PER_100 = 0.05
+# Point lane: coordinate to loc_id chain (resolve_points). Point-in-polygon
+# work reads geometry, so it is priced above the identifier join.
+POINT_RATE_USD_PER_100 = 0.10
+# Fixed charge added to every paid call once it exceeds its free allowance.
+PAID_CALL_BASE_USD = 0.01
+
+
+# Authored hosted product defaults. This is the rate-limit equivalent of the
+# named price levers above: edit these three records to retune every hosted MCP
+# tool. Per-tool ``rate_limits`` entries may specialize them. Environment and
+# revisioned operator-policy overrides remain available for operations without
+# creating another authored default.
+#
+# ``paid`` is the product name. The external policy and legacy environment
+# contract still call this tier ``plus``; the resolver below translates it.
+HOSTED_TOOL_RATE_LIMIT_DEFAULTS: dict[str, dict[str, int]] = {
+    "free": {"limit": 10, "window_seconds": 60},
+    "account": {"limit": 60, "window_seconds": 60},
+    "paid": {"limit": 120, "window_seconds": 60},
+}
+
+
 TOOL_ACCESS_REGISTRY: dict[str, dict] = {
     "get_tool_help": {
         "family": FAMILY_DISCOVERY,
@@ -95,14 +142,12 @@ TOOL_ACCESS_REGISTRY: dict[str, dict] = {
         "pricing": PRICING_PAID_BULK,
         "item_field": "points",
         "free_item_limit": 100,
+        "account_item_limit": 1000,
         "paid_item_limit": 10000,
         "legacy_limit_env": ("POINT_LOOKUP_BATCH_LIMIT",),
         "legacy_paid_limit_env": ("POINT_LOOKUP_PAID_BATCH_LIMIT",),
-        # Commodity lane: coordinate to admin chain has real free substitutes
-        # (Geocodio at $1/1k, a no-API-key Census MCP for the US), so it is
-        # priced at the bottom of the geocoding band and earns on volume.
-        "price": {"base_usd": 0.01, "per_unit_usd": 0.0002},
-        "pricing_version": "geography-tools-2026-08-16.1",
+        "price": {"base_usd": PAID_CALL_BASE_USD, "per_unit_usd": POINT_RATE_USD_PER_100 / 100},
+        "pricing_version": "geography-tools-2026-09-18.1",
         "meter": {"unit": "resolved_point", "items_per_charge_unit": 1},
         "legacy_price_env": {
             "base_usd": ("POINT_LOOKUP_PAID_BASE_USD",),
@@ -168,12 +213,11 @@ TOOL_ACCESS_REGISTRY: dict[str, dict] = {
         "pricing": PRICING_PAID_BULK,
         "item_field": "items",
         "free_item_limit": 100,
+        "account_item_limit": 1000,
         "paid_item_limit": 2500,
         "legacy_limit_env": ("REFERENCE_RESOLVE_BATCH_LIMIT",),
-        # Enrichment lane: external code to canonical loc_id. Weak substitutes,
-        # so priced above the commodity point lane.
-        "price": {"base_usd": 0.01, "per_unit_usd": 0.001},
-        "pricing_version": "geography-tools-2026-08-16.1",
+        "price": {"base_usd": PAID_CALL_BASE_USD, "per_unit_usd": IDENTIFIER_RATE_USD_PER_100 / 100},
+        "pricing_version": "geography-tools-2026-09-18.1",
         "meter": {"unit": "resolved_reference", "items_per_charge_unit": 1},
     },
     "identify_reference_system": {
@@ -196,15 +240,13 @@ TOOL_ACCESS_REGISTRY: dict[str, dict] = {
     "convert_reference": {
         "family": FAMILY_GEOGRAPHY,
         "capability_id": "reference_conversion",
-        # Highest-value lane: family and vintage translation through loc_id has
-        # no global substitute in the competitive set, so it carries the top
-        # per-item price rather than riding the commodity rate.
-        "price": {"base_usd": 0.01, "per_unit_usd": 0.002},
-        "pricing_version": "geography-tools-2026-08-16.1",
+        "price": {"base_usd": PAID_CALL_BASE_USD, "per_unit_usd": IDENTIFIER_RATE_USD_PER_100 / 100},
+        "pricing_version": "geography-tools-2026-09-18.1",
         "meter": {"unit": "converted_reference", "items_per_charge_unit": 1},
         "pricing": PRICING_PAID_BULK,
         "item_field": "items",
         "free_item_limit": 100,
+        "account_item_limit": 1000,
         "paid_item_limit": 2500,
         "legacy_limit_env": ("REFERENCE_CONVERT_BATCH_LIMIT",),
     },
@@ -260,12 +302,11 @@ TOOL_ACCESS_REGISTRY: dict[str, dict] = {
         "notes": "Quotes must stay free.",
     },
     "create_conversion_job": {
-        # Five cents per 100 successfully resolved distinct references. This is
-        # the website's default identifier -> loc_id conversion lane: below the
-        # $1/1k geocoder anchor, but no longer a near-free unit mismatch.
-        "price": {"base_usd": 0.01, "per_unit_usd": 0.05},
+        # One charge unit is 100 successfully resolved references, so the unit
+        # price is the identifier rate itself.
+        "price": {"base_usd": PAID_CALL_BASE_USD, "per_unit_usd": IDENTIFIER_RATE_USD_PER_100},
         "charge_unit": "charge_units",
-        "pricing_version": "geography-tools-2026-09-09.1",
+        "pricing_version": "geography-tools-2026-09-18.1",
         "meter": {"unit": "conversion_charge_unit", "items_per_charge_unit": 100},
         "family": FAMILY_GEOGRAPHY,
         "capability_id": "conversion_job",
@@ -396,6 +437,79 @@ def tool_account_item_limit(tool_name: str) -> int | None:
     scaled = int(free) * ACCOUNT_ITEM_LIMIT_MULTIPLIER
     paid = tool_paid_item_limit(tool_name)
     return min(scaled, int(paid)) if paid is not None else scaled
+
+
+def tool_authored_rate_limit(tool_name: str, *, lane: str = "free") -> tuple[int, int]:
+    """Return the central authored call rate for one hosted product lane."""
+    normalized = str(lane or "free").strip().lower()
+    if normalized == "plus":
+        normalized = "paid"
+    if normalized not in HOSTED_TOOL_RATE_LIMIT_DEFAULTS:
+        normalized = "free"
+    defaults = HOSTED_TOOL_RATE_LIMIT_DEFAULTS[normalized]
+    profile_rates = tool_profile(tool_name).get("rate_limits")
+    profile_rates = profile_rates if isinstance(profile_rates, dict) else {}
+    override = profile_rates.get(normalized)
+    override = override if isinstance(override, dict) else {}
+    return (
+        max(1, int(override.get("limit") or defaults["limit"])),
+        max(1, int(override.get("window_seconds") or defaults["window_seconds"])),
+    )
+
+
+def tool_effective_rate_limit(tool_name: str, *, lane: str = "free") -> tuple[int, int]:
+    """Resolve one hosted tool-call rate through the standard override stack.
+
+    Precedence is revisioned operator policy, environment, per-tool registry,
+    then ``HOSTED_TOOL_RATE_LIMIT_DEFAULTS``. Local-installed and trusted QA
+    bypasses are decided by the caller before this resolver is used.
+    """
+    normalized = str(lane or "free").strip().lower()
+    if normalized == "plus":
+        normalized = "paid"
+    if normalized not in HOSTED_TOOL_RATE_LIMIT_DEFAULTS:
+        normalized = "free"
+    suffix = "".join(ch if ch.isalnum() else "_" for ch in str(tool_name or "").upper()).strip("_")
+    authored_limit, authored_window = tool_authored_rate_limit(tool_name, lane=normalized)
+    window_seconds = (
+        _env_int_optional(f"MCP_TOOL_RATE_WINDOW_SECONDS_{suffix}")
+        or _env_int_optional("MCP_LIVE_TOOL_RATE_WINDOW_SECONDS")
+        or authored_window
+    )
+    free_authored, _ = tool_authored_rate_limit(tool_name, lane="free")
+    free_limit = (
+        _env_int_optional(f"MCP_TOOL_RATE_LIMIT_{suffix}")
+        or _env_int_optional("MCP_LIVE_TOOL_RATE_LIMIT")
+        or free_authored
+    )
+    if normalized == "account":
+        resolved_limit = (
+            _env_int_optional(f"MCP_TOOL_RATE_LIMIT_{suffix}_ACCOUNT")
+            or _env_int_optional("MCP_TOOL_RATE_LIMIT_ACCOUNT")
+            or max(free_limit, authored_limit)
+        )
+        policy_tier = "account"
+    elif normalized == "paid":
+        resolved_limit = (
+            _env_int_optional(f"MCP_TOOL_RATE_LIMIT_{suffix}_PLUS")
+            or _env_int_optional("MCP_TOOL_RATE_LIMIT_PLUS")
+            or max(free_limit, authored_limit)
+        )
+        policy_tier = "plus"
+    else:
+        resolved_limit = free_limit
+        policy_tier = "free"
+    try:
+        from access_policy_shared import tool_rate_limit as operator_tool_rate_limit
+
+        return operator_tool_rate_limit(
+            tool_name,
+            policy_tier,
+            default_limit=max(1, int(resolved_limit)),
+            default_window_seconds=max(1, int(window_seconds)),
+        )
+    except Exception:
+        return max(1, int(resolved_limit)), max(1, int(window_seconds))
 
 
 def _price_env_names(tool_name: str, field: str) -> tuple[str, ...]:

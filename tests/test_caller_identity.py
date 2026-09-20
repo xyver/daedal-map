@@ -79,6 +79,15 @@ class IdentityResolutionTests(unittest.TestCase):
         self.assertEqual(identity.plan_id, "plus")
         self.assertTrue(identity.is_verified)
 
+    def test_user_editable_metadata_cannot_claim_a_paid_plan(self) -> None:
+        identity = resolve_caller_identity(
+            _request(),
+            auth_user={"id": "user-1", "user_metadata": {"plan_id": "enterprise"}},
+            ip_hash="iphash",
+        )
+        self.assertIsNone(identity.plan_id)
+        self.assertEqual(identity.access_tier, TIER_ACCOUNT)
+
     def test_api_key_resolves_to_its_owning_account(self) -> None:
         identity = resolve_caller_identity(
             _request(state={

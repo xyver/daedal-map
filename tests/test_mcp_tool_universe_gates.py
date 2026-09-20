@@ -465,6 +465,7 @@ class BlindCallerHelpTests(unittest.TestCase):
         self.assertTrue(payload["ok"])
         self.assertEqual(payload["access"]["pricing"], "paid_bulk_x402_base_usdc")
         self.assertEqual(payload["access"]["limits"]["free_item_limit"], 100)
+        self.assertEqual(payload["access"]["limits"]["account_item_limit"], 1000)
         self.assertEqual(payload["access"]["limits"]["paid_item_limit"], 10000)
         self.assertTrue(payload["examples"])
         self.assertEqual(payload["interaction_contract"]["natural_language_owner"], "calling_client_llm")
@@ -586,6 +587,16 @@ class TrustedArtifactBypassTests(unittest.TestCase):
         limiter_mock.assert_not_called()
         self.assertEqual(analytics_mock.call_args.kwargs["payment_rail"], ACCESS_LANE_TRUSTED_ARTIFACT)
         self.assertTrue(analytics_mock.call_args.kwargs["metadata"]["rate_limit_bypassed"])
+
+    def test_dispatch_applies_the_tool_rate_gate_once(self) -> None:
+        with (
+            mock.patch("mapmover.routes.mcp.is_local_loopback_request", return_value=False),
+            mock.patch("mapmover.routes.mcp._trusted_artifact_access", return_value=(None, None)),
+            mock.patch("mapmover.routes.mcp.rate_limiter.check", return_value=(True, 0)) as limiter_mock,
+        ):
+            envelope = _tool_call_envelope(self.client, "get_catalog", {})
+        self.assertIn("result", envelope)
+        limiter_mock.assert_called_once()
 
     def test_local_runtime_bypasses_rate_and_conversion_job_cap(self) -> None:
         with (

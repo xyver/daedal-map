@@ -230,10 +230,11 @@ def resolve_caller_identity(
         raw_id = auth_user.get("id")
         if raw_id:
             user_id = str(raw_id).strip() or None
-        for source in (auth_user.get("app_metadata"), auth_user.get("user_metadata"), auth_user):
-            if isinstance(source, dict) and source.get("plan_id"):
-                plan_id = str(source["plan_id"]).strip().lower()
-                break
+        # Supabase user_metadata is editable by the user and therefore cannot
+        # grant throughput. Only server-owned app_metadata may select a plan.
+        app_metadata = auth_user.get("app_metadata")
+        if isinstance(app_metadata, dict) and app_metadata.get("plan_id"):
+            plan_id = str(app_metadata["plan_id"]).strip().lower()
 
     if user_id:
         return CallerIdentity(

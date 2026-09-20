@@ -42,15 +42,18 @@ human, script, and agent reads:
 
 - `https://downloads.daedalmap.com/downloadable/catalog.json`
 
-Geometry discovery is served through `https://app.daedalmap.com/api/v1/geometry/catalog`.
-The authoritative geometry and country catalogs remain in the private published
-runtime lane; the download bucket contains artifacts and package manifests only.
+Compact geometry discovery is served through
+`https://app.daedalmap.com/api/v1/geometry/catalog`. Bulk consumers can read the
+full published catalog directly at
+`https://downloads.daedalmap.com/downloadable/geometry/geometry_catalog.json`;
+country runtime catalogs and unpublished lifecycle records remain in the
+private published lane.
 
-Use the data catalog when the published pack inventory is wanted in one request.
-Use the geometry endpoint to discover countries, global domains, families, and
-downloads. MCP `get_catalog` and `read_geometry_catalog` provide the same
-focused lookup. Candidate, WIP, and audit/provenance records remain on private
-runtime surfaces and are never mirrored to the downloadable lane.
+Use the direct catalog URLs for complete inventory reads. MCP `get_catalog` and
+`read_geometry_catalog` return compact selection views and point to those URLs
+when a caller asks for the whole catalog. Candidate, WIP, and audit/provenance
+records remain on private runtime surfaces and are never mirrored to the
+downloadable lane.
 
 ## API/MCP Versus Downloads
 
