@@ -188,8 +188,14 @@ TOOL_ACCESS_REGISTRY: dict[str, dict] = {
         "item_field": "loc_ids",
         "free_item_limit": 1000,
         "paid_item_limit": 25000,
-        # Polygons are payload-heavy, so they carry their own tighter cap.
-        "polygon_item_limit_env": "MCP_TOOL_POLYGON_BATCH_LIMIT_GET_GEOMETRY",
+        # Polygons are payload-heavy, so they carry their own centrally
+        # authored cap instead of an inline route default.
+        "sub_limits": {
+            "polygons": {
+                "free_item_limit": 100,
+                "limit_env": "MCP_TOOL_POLYGON_BATCH_LIMIT_GET_GEOMETRY",
+            },
+        },
         "legacy_limit_env": ("GEOMETRY_GET_BATCH_LIMIT",),
     },
     "loc_id_info": {

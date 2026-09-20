@@ -1177,6 +1177,14 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         self.assertEqual(payload["guidance"]["next_tool"], "estimate_geometry_package")
         geometry_mock.assert_not_called()
 
+    def test_get_geometry_polygon_limit_is_authored_in_the_access_registry(self) -> None:
+        from tool_access_shared import tool_sub_limit
+
+        policy = tool_sub_limit("get_geometry", "polygons")
+
+        self.assertEqual(policy["free_item_limit"], 100)
+        self.assertEqual(policy["limit_env"], "MCP_TOOL_POLYGON_BATCH_LIMIT_GET_GEOMETRY")
+
     def test_get_geometry_tool_trusted_token_bypasses_batch_limit(self) -> None:
         with mock.patch.dict("os.environ", {"ARTIFACT_ACCESS_TOKENS": "tok_test_bypass", "MCP_TOOL_BATCH_LIMIT_GET_GEOMETRY": "2"}):
             with (

@@ -4493,8 +4493,13 @@ async def _execute_get_geometry_tool(request: Request, arguments: dict[str, Any]
     batch_id = str(payload.get("batch_id") or "").strip() or None
     include_polygon = bool(payload.get("include_polygon", False))
     base_limit = _tool_batch_item_limit("get_geometry")
-    polygon_override = _parse_env_int_optional("MCP_TOOL_POLYGON_BATCH_LIMIT_GET_GEOMETRY")
-    limit = (polygon_override or min(base_limit, 100)) if include_polygon else base_limit
+    polygon_policy = tool_sub_limit("get_geometry", "polygons")
+    polygon_limit_env = str(polygon_policy.get("limit_env") or "").strip()
+    polygon_limit = (
+        (_parse_env_int_optional(polygon_limit_env) if polygon_limit_env else None)
+        or int(polygon_policy.get("free_item_limit") or base_limit)
+    )
+    limit = polygon_limit if include_polygon else base_limit
     trusted_token, trusted_token_id = _trusted_artifact_access(request)
     unrestricted = trusted_token is not None or is_local_loopback_request(request)
     selector_count = sum(
