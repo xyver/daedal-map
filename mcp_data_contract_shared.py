@@ -43,7 +43,7 @@ DATA_TOOL_IDS = frozenset().union(
 DATA_TOOL_DESCRIPTIONS = {
     "get_catalog": "Discover data packs or geometry families progressively: lite selection, full metric/query inventory, or a raw catalog download URL. Choose one result and call get_pack next.",
     "get_pack": "Inspect one selected data pack or geometry family progressively: lite starter contract, full MCP query metadata, or a raw metadata download URL. Use its next_step to retrieve data or call the preferred geometry tool.",
-    "get_data": "Retrieve rows from one selected published data pack using exact metrics, structured filters, sorting, and a row limit. Call get_pack first; geometry families use their focused next-step tools.",
+    "get_data": "Retrieve rows from one selected published data pack using exact metrics, loc_id-based region filters, time/metric filters, sorting, and a row limit. A parent administrative loc_id selects matching descendant rows at the pack's published grain. Call get_pack first; geometry families use their focused next-step tools.",
     "get_live_earthquake_events": "Fetch recent preliminary USGS earthquake events in the shared data-result shape. Use get_data with pack_id='earthquakes' for canonical enriched history.",
     "get_live_volcano_events": "Fetch recent preliminary Smithsonian/GVP eruption updates in the shared data-result shape. Use get_data with pack_id='volcanoes' for canonical history.",
     "get_disaster_links_for_event": "Return published cross-hazard links for one exact event ID. Use a canonical event row to obtain the ID first.",

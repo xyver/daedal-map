@@ -153,10 +153,10 @@ TOOL_GUIDANCE: dict[str, dict[str, Any]] = {
         ["bank_id", "geometry_vintage", "source", "license"]
     ),
     "get_geometry": _g(
-        ["You have exact loc_ids and need bbox, centroid, or opt-in polygons."],
-        ["Explaining hierarchy", "Resolving names", "Bulk export packaging"],
-        {"loc_id": "CAN-BC", "detail": "lite", "include_polygon": False},
-        ["loc_id", "has_shape", "bbox", "centroid", "geometry", "supersession"],
+        ["You have exact loc_ids, or one administrative parent and target level, and need bbox, centroid, or opt-in polygons."],
+        ["Identifying unknown geography", "Resolving names", "Inferring independent families from admin ancestry", "Bulk export packaging"],
+        {"scope": {"parent_loc_id": "USA-TX", "admin_level": "admin_2"}, "include_polygon": False},
+        ["selection", "scope", "requested", "available", "missing", "items"],
         ["loc_id_info", "estimate_geometry_package"],
         ["bank_id", "geometry_vintage", "source", "license", "release_id"]
     ),
@@ -381,8 +381,6 @@ def geometry_topic_help_payload(
         ],
         "input_question": str(question or "").strip() or None,
     }
-
-
 TOPIC_TOOLS: dict[str, tuple[str, ...]] = {
     "overview": ("get_catalog", "get_pack", "get_data", "resolve_reference", "resolve_point", "get_geometry"),
     "data": ("get_catalog", "get_pack", "get_data"),
@@ -400,8 +398,8 @@ TOPIC_TOOLS: dict[str, tuple[str, ...]] = {
 
 
 TOPIC_SUMMARIES = {
-    "overview": "Discover a catalog, inspect one selected pack, then use the narrowest execution tool for the request.",
-    "data": "Use get_catalog to select a data pack, get_pack to learn its fields and routing, then query its published rows.",
+    "overview": "Enter the loc_id universe through a resolution or onboarding tool, then use loc_id-based discovery, data, geometry, and relationship tools.",
+    "data": "Use get_catalog to select a data pack, get_pack to learn its fields and routing, then query rows with loc_id-based region filters.",
     "disasters": "Use normal catalog and pack discovery first; use disaster-specific tools only for event links or live upstream observations.",
     "custom_data": "Identify geography from bounded samples before estimating or creating a conversion or geometry export job.",
 }
@@ -445,7 +443,7 @@ def topic_help_payload(
         ]
         workflow = {"goal": TOPIC_SUMMARIES[selected], "steps": start_here}
         next_step = start_here[0]
-    return {
+    payload = {
         "ok": True,
         "tool_name": "get_tool_help",
         "help_topic": selected,
@@ -456,6 +454,17 @@ def topic_help_payload(
         "next_step": next_step,
         "input_question": str(question or "").strip() or None,
     }
+    if selected == "overview":
+        payload["loc_id_boundary"] = {
+            "rule": "Data, geometry, relationship, and scope tools consume canonical loc_ids; onboarding and resolution tools bring outside geography into that universe.",
+            "entry_paths": [
+                {"input": "known loc_ids", "next": "get_catalog or the exact loc_id-based tool"},
+                {"input": "coordinates", "tool": "resolve_point"},
+                {"input": "outside code or place name", "tool": "resolve_reference"},
+                {"input": "unknown user dataset column", "tool": "identify_dataset_geography"},
+            ],
+        }
+    return payload
 
 
 def tool_help_payload(

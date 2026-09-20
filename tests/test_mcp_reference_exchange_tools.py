@@ -1025,8 +1025,14 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
     def test_get_geometry_single_normalizes_legacy_string_error(self) -> None:
         with (
             mock.patch(
-                "mapmover.runtime.reference_exchange.get_geometry_reference",
-                return_value={"ok": False, "loc_id": "USA-NOPE", "has_shape": False, "error": "no geometry found"},
+                "mapmover.runtime.reference_exchange.get_geometry_references",
+                return_value={
+                    "ok": True,
+                    "requested": 1,
+                    "available": 0,
+                    "missing": 1,
+                    "results": [{"ok": False, "loc_id": "USA-NOPE", "has_shape": False, "error": "no geometry found"}],
+                },
             ),
             mock.patch("mapmover.routes.mcp.log_api_query_event") as analytics_mock,
         ):
@@ -1034,7 +1040,7 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
 
         self.assertFalse(payload["ok"])
         self.assertEqual(payload["error"]["code"], "not_found")
-        self.assertEqual(payload["error"]["message"], "no geometry found")
+        self.assertEqual(payload["items"][0]["error"]["message"], "no geometry found")
         self.assertEqual(analytics_mock.call_args.kwargs["error_code"], "not_found")
 
     def test_check_geometry_tool_uses_per_tool_batch_limit_override(self) -> None:
@@ -1104,11 +1110,72 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         self.assertNotIn("include_marine_context", tools["resolve_deep_points"]["inputSchema"]["properties"])
         self.assertNotIn("lookup_mode", tools["resolve_deep_point"]["inputSchema"]["properties"])
         self.assertNotIn("include_info", tools["get_geometry"]["inputSchema"]["properties"])
+        self.assertNotIn("detail", tools["get_geometry"]["inputSchema"]["properties"])
+        self.assertIn("scope", tools["get_geometry"]["inputSchema"]["properties"])
         self.assertIn("For multiple coordinates use resolve_points", tools["resolve_point"]["description"])
         self.assertIn("drill-down tool", tools["loc_id_info"]["description"])
-        self.assertIn("does not explain hierarchy", tools["get_geometry"]["description"])
+        self.assertIn("Use loc_id_info for hierarchy", tools["get_geometry"]["description"])
         self.assertIn("never substituted", tools["get_geometry"]["description"])
         self.assertIn("explicit follow-up choice", tools["check_geometry"]["description"])
+
+    def test_get_geometry_tool_resolves_an_admin_scope_before_shape_read(self) -> None:
+        scope_result = {
+            "ok": True,
+            "parent_loc_id": "USA-TX",
+            "admin_level": 2,
+            "total_count": 2,
+            "loc_ids": ["USA-TX-201", "USA-TX-453"],
+        }
+        with (
+            mock.patch(
+                "mapmover.runtime.geometry_tool_jobs.resolve_geometry_selection",
+                return_value=(["USA-TX-201", "USA-TX-453"], scope_result),
+            ) as selection_mock,
+            mock.patch(
+                "mapmover.runtime.reference_exchange.get_geometry_references",
+                return_value={
+                    "ok": True,
+                    "requested": 2,
+                    "available": 2,
+                    "missing": 0,
+                    "results": [
+                        {"ok": True, "loc_id": "USA-TX-201", "has_shape": True},
+                        {"ok": True, "loc_id": "USA-TX-453", "has_shape": True},
+                    ],
+                },
+            ) as geometry_mock,
+            mock.patch("mapmover.routes.mcp.log_api_query_event"),
+        ):
+            payload = _tool_call(
+                self.client,
+                "get_geometry",
+                {"scope": {"parent_loc_id": "USA-TX", "admin_level": "admin_2"}},
+            )
+
+        selection_mock.assert_called_once()
+        geometry_mock.assert_called_once_with(
+            ["USA-TX-201", "USA-TX-453"], include_polygon=False, include_info=False,
+        )
+        self.assertEqual(payload["selection"], "admin_scope")
+        self.assertEqual(payload["scope"]["parent_loc_id"], "USA-TX")
+        self.assertEqual(payload["requested"], 2)
+
+    def test_get_geometry_polygons_use_a_tighter_default_limit(self) -> None:
+        loc_ids = [f"USA-TEST-{index:03d}" for index in range(101)]
+        with (
+            mock.patch("mapmover.runtime.reference_exchange.get_geometry_references") as geometry_mock,
+            mock.patch("mapmover.routes.mcp.log_api_query_event"),
+        ):
+            payload = _tool_call(
+                self.client,
+                "get_geometry",
+                {"loc_ids": loc_ids, "include_polygon": True},
+            )
+
+        self.assertEqual(payload["limit"], 100)
+        self.assertEqual(payload["error"]["code"], "too_many_loc_ids")
+        self.assertEqual(payload["guidance"]["next_tool"], "estimate_geometry_package")
+        geometry_mock.assert_not_called()
 
     def test_get_geometry_tool_trusted_token_bypasses_batch_limit(self) -> None:
         with mock.patch.dict("os.environ", {"ARTIFACT_ACCESS_TOKENS": "tok_test_bypass", "MCP_TOOL_BATCH_LIMIT_GET_GEOMETRY": "2"}):

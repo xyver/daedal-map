@@ -364,9 +364,21 @@ def resolve_loc_id_scope(payload: dict[str, Any], *, default_limit: int | None =
     return _clean_json(result)
 
 
-def _loc_ids_from_request(payload: dict[str, Any], *, scope_limit: int | None = 10000) -> tuple[list[str], dict[str, Any] | None]:
+def resolve_geometry_selection(
+    payload: dict[str, Any], *, scope_limit: int | None = 10000,
+) -> tuple[list[str], dict[str, Any] | None]:
+    """Resolve one exact or administrative-scope geometry selection.
+
+    Explicit IDs retain caller order while duplicates are collapsed before any
+    Parquet work. Administrative scopes use the query-layout router, which
+    keeps Admin 0-3 reads on the national bank and deep reads on one Admin 1
+    partition. Independent geometry families are deliberately not inferred
+    from administrative ancestry.
+    """
     if isinstance(payload.get("loc_ids"), list):
-        return [str(item).strip() for item in payload.get("loc_ids") or [] if str(item).strip()], None
+        return list(dict.fromkeys(
+            str(item).strip() for item in payload.get("loc_ids") or [] if str(item).strip()
+        )), None
     loc_id = str(payload.get("loc_id") or "").strip()
     if loc_id:
         return [loc_id], None
@@ -480,7 +492,7 @@ def estimate_geometry_package(
     if output_format not in GEOMETRY_EXPORT_FORMATS:
         return _format_error(output_format, GEOMETRY_EXPORT_FORMATS)
     include_polygon = bool(payload.get("include_polygon", True))
-    loc_ids, scope_result = _loc_ids_from_request(payload, scope_limit=scope_limit)
+    loc_ids, scope_result = resolve_geometry_selection(payload, scope_limit=scope_limit)
     if not loc_ids:
         return scope_result or {"ok": False, "error": {"code": "empty_request", "message": "No loc_ids found"}}
     availability = get_geometry_availability(loc_ids)
@@ -617,7 +629,9 @@ def create_geometry_export(
     if output_format not in GEOMETRY_EXPORT_FORMATS:
         return _format_error(output_format, GEOMETRY_EXPORT_FORMATS)
     include_polygon = bool(payload.get("include_polygon", True))
-    loc_ids, scope_result = _loc_ids_from_request(payload, scope_limit=None if inline_limit is None else 10000)
+    loc_ids, scope_result = resolve_geometry_selection(
+        payload, scope_limit=None if inline_limit is None else 10000,
+    )
     if not loc_ids:
         return scope_result or {"ok": False, "error": {"code": "empty_request", "message": "No loc_ids found"}}
     if inline_limit is not None and len(loc_ids) > inline_limit:

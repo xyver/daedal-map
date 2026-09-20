@@ -599,20 +599,30 @@ def build_tool_definitions() -> list[dict]:
         {
             "name": "get_geometry",
             "title": "Get loc_id Geometry",
-            "description": "Shape retrieval for exact loc_ids. The default lite response returns shape availability, family, vintage, centroid, and bounding box. Set detail='full' for the attached identity metadata block and include_polygon=true only when exact coordinates are needed. It does not explain hierarchy or crosswalks; use loc_id_info for those details. Historical geometry is returned first and successors are never substituted automatically. No payment required.",
+            "description": "Bounded shape retrieval for exact loc_ids or one administrative scope. Exact selection accepts loc_id or loc_ids. Scope selection accepts parent_loc_id plus admin_level and uses the optimized Admin Spine layout: Admin 0-3 stays on one national bank, while deeper levels require an Admin 1 parent and stay on one deep partition. The default response projects shape metadata, centroid, and bounding box without materializing polygon coordinates; set include_polygon=true only when exact coordinates are needed. Independent geometry families are selected by exact loc_ids, not inferred as administrative descendants. Use loc_id_info for hierarchy or crosswalk details. Historical geometry is returned first and successors are never substituted automatically. No payment required.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "loc_id": {"type": "string", "description": "DaedalMap loc_id, such as USA-CA-037, USA-Z-00601, USA-NWSFZ-AKZ317, EEZ-USA, or IHO1953-240001002."},
-                    "loc_ids": {"type": "array", "items": {"type": "string"}, "description": "DaedalMap loc_ids to fetch in one call. Default public cap is deployment-configurable and lower when include_polygon is true."},
-                    "detail": {"type": "string", "enum": ["lite", "full"], "default": "lite", "description": "Lite returns shape metadata, bbox, and centroid. Full also includes the attached location-info block."},
+                    "loc_ids": {"type": "array", "minItems": 1, "uniqueItems": True, "items": {"type": "string"}, "description": "Exact DaedalMap loc_ids to fetch in one call. Default public cap is deployment-configurable and lower when include_polygon is true."},
+                    "scope": {
+                        "type": "object",
+                        "properties": {
+                            "parent_loc_id": {"type": "string", "description": "Administrative parent loc_id, such as USA-TX or CAN-BC."},
+                            "admin_level": {"anyOf": [{"type": "string"}, {"type": "integer"}], "description": "Descendant level to retrieve, such as admin_2, 2, or county."},
+                            "bbox": {"anyOf": [{"type": "array", "items": {"type": "number"}, "minItems": 4, "maxItems": 4}, {"type": "string"}], "description": "Optional minLon,minLat,maxLon,maxLat intersection filter."},
+                        },
+                        "required": ["parent_loc_id", "admin_level"],
+                        "additionalProperties": False,
+                    },
                     "include_polygon": {"type": "boolean", "description": "When true, include the full GeoJSON geometry. Default false."},
                     "batch_id": {"type": "string", "description": "Optional caller-supplied batch id for tracing."},
                     "request_id": {"type": "string", "description": "Optional caller-supplied request id for tracing."},
                 },
-                "anyOf": [
+                "oneOf": [
                     {"required": ["loc_id"]},
                     {"required": ["loc_ids"]},
+                    {"required": ["scope"]},
                 ],
                 "additionalProperties": False,
             },
@@ -882,7 +892,7 @@ def build_tool_definitions() -> list[dict]:
         {
             "name": "get_data",
             "title": "Get Data",
-            "description": "The single workhorse for published data packs. After get_pack, pass its pack_id, exact metric ids, structured filters, sort, and row limit. Pack metadata owns source routing, time grain, geography, access, and pack-specific rules; callers do not choose internal source_id values. Geometry tool families use their focused next_step tools instead of this row-query contract.",
+            "description": "The single workhorse for published data packs inside the loc_id universe. After get_pack, pass its pack_id, exact metric ids, structured filters, sort, and row limit. filters.region_ids accepts canonical loc_ids; an administrative parent such as USA-TX matches descendant rows at the pack's published geography grain. Use resolution/onboarding tools before get_data when the input is coordinates, outside codes, names, or an unidentified user column. Pack metadata owns source routing, time grain, geography, access, and pack-specific rules; callers do not choose internal source_id values. Geometry tool families use their focused next_step tools instead of this row-query contract.",
             "inputSchema": {
                 "type": "object",
                 "properties": {

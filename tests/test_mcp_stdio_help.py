@@ -60,6 +60,11 @@ class StdioToolHelpTests(unittest.TestCase):
             ["get_catalog", "get_pack", "get_data"],
         )
         self.assertEqual(payload["next_step"]["tool"], "get_catalog")
+        self.assertIn("loc_ids", payload["loc_id_boundary"]["rule"])
+        self.assertEqual(
+            {entry.get("tool") for entry in payload["loc_id_boundary"]["entry_paths"] if entry.get("tool")},
+            {"resolve_point", "resolve_reference", "identify_dataset_geography"},
+        )
 
     def test_unknown_static_help_is_typed(self) -> None:
         envelope = self._call("not_a_tool")

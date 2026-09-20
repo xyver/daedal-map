@@ -4490,225 +4490,204 @@ async def _execute_get_geometry_tool(request: Request, arguments: dict[str, Any]
     started_at = time.perf_counter()
     payload = _ensure_request_id(arguments, "get_geometry")
     request_id = str(payload.get("request_id") or "")
+    batch_id = str(payload.get("batch_id") or "").strip() or None
     include_polygon = bool(payload.get("include_polygon", False))
-    detail = str(payload.get("detail") or "lite").strip().lower()
-    if detail not in {"lite", "full"}:
-        return _jsonrpc_error(rpc_request_id, -32602, "detail must be 'lite' or 'full'")
-    # Lite is the normal shape response. Full adds the identity metadata block;
-    # hierarchy and crosswalk enrichment still belongs to loc_id_info.
-    include_info = detail == "full"
-    if "loc_ids" in payload:
-        batch_id = str(payload.get("batch_id") or "").strip() or None
-        loc_ids = payload.get("loc_ids")
-        if not isinstance(loc_ids, list):
-            error_payload = _batch_error_payload(request_id=request_id, batch_id=batch_id, code="invalid_loc_ids", message="loc_ids must be a list", loc_id_count=0)
-            _log_mcp_tool_usage_event(
-                request,
-                request_id=request_id or batch_id or "",
-                tool_name="get_geometry",
-                capability_id="geometry_lookup",
-                decision="deny",
-                started_at=started_at,
-                row_count=0,
-                query_granularity="bulk_0",
-                response_payload=error_payload,
-                error_code="invalid_loc_ids",
-                metadata={"event": "geometry_lookup", "tool_mode": "bulk", "quantity": 0, "loc_id_count": 0, "batch_id": batch_id, "include_polygon": include_polygon},
-            )
-            return _jsonrpc_response(_tool_result(error_payload, is_error=True), rpc_request_id)
-        loc_ids = [str(value or "").strip() for value in loc_ids if str(value or "").strip()]
-        limit = (
-            _parse_env_int_optional("MCP_TOOL_POLYGON_BATCH_LIMIT_GET_GEOMETRY")
-            if include_polygon
-            else None
-        ) or _tool_batch_item_limit("get_geometry")
-        trusted_token, trusted_token_id = _trusted_artifact_access(request)
-        if len(loc_ids) > limit and trusted_token is None and not is_local_loopback_request(request):
-            error_payload = _batch_error_payload(
-                request_id=request_id,
-                batch_id=batch_id,
-                code="too_many_loc_ids",
-                message=f"get_geometry accepts at most {limit} loc_ids per call",
-                limit=limit,
-                loc_id_count=len(loc_ids),
-            )
-            _log_mcp_tool_usage_event(
-                request,
-                request_id=request_id or batch_id or "",
-                tool_name="get_geometry",
-                capability_id="geometry_lookup",
-                decision="deny",
-                started_at=started_at,
-                row_count=len(loc_ids),
-                query_granularity=f"bulk_{len(loc_ids)}",
-                response_payload=error_payload,
-                error_code="too_many_loc_ids",
-                metadata={"event": "geometry_lookup", "tool_mode": "bulk", "quantity": len(loc_ids), "loc_id_count": len(loc_ids), "batch_id": batch_id, "include_polygon": include_polygon, "batch_limit": limit},
-            )
-            return _jsonrpc_response(_tool_result(error_payload, is_error=True), rpc_request_id)
-        try:
-            from mapmover.runtime.reference_exchange import get_geometry_references
+    base_limit = _tool_batch_item_limit("get_geometry")
+    polygon_override = _parse_env_int_optional("MCP_TOOL_POLYGON_BATCH_LIMIT_GET_GEOMETRY")
+    limit = (polygon_override or min(base_limit, 100)) if include_polygon else base_limit
+    trusted_token, trusted_token_id = _trusted_artifact_access(request)
+    unrestricted = trusted_token is not None or is_local_loopback_request(request)
+    selector_count = sum(
+        1 for present in (
+            bool(str(payload.get("loc_id") or "").strip()),
+            isinstance(payload.get("loc_ids"), list),
+            isinstance(payload.get("scope"), dict),
+        ) if present
+    )
+    if selector_count != 1:
+        return _jsonrpc_error(
+            rpc_request_id, -32602,
+            "get_geometry requires exactly one selector: loc_id, loc_ids, or scope",
+        )
+    try:
+        from mapmover.runtime.geometry_tool_jobs import resolve_geometry_selection
+        from mapmover.runtime.reference_exchange import get_geometry_references
 
-            runtime_started = time.perf_counter()
-            result = await run_mcp_blocking(
-                "get_geometry",
-                get_geometry_references,
-                loc_ids,
-                include_polygon=include_polygon,
-                include_info=include_info,
-            )
-            stages = {"geometry_fetch_ms": _elapsed_ms(runtime_started)}
-        except (MCPExecutionCapacityError, MCPExecutionTimeoutError):
-            raise
-        except Exception as exc:
-            error_payload = _batch_error_payload(request_id=request_id, batch_id=batch_id, code="get_geometry_failed", message=str(exc), loc_id_count=len(loc_ids))
-            _log_mcp_tool_usage_event(
-                request,
-                request_id=request_id or batch_id or "",
-                tool_name="get_geometry",
-                capability_id="geometry_lookup",
-                decision="deny",
-                started_at=started_at,
-                row_count=len(loc_ids),
-                query_granularity=f"bulk_{len(loc_ids)}",
-                response_payload=error_payload,
-                error_code="get_geometry_failed",
-                metadata={"event": "geometry_lookup", "tool_mode": "bulk", "quantity": len(loc_ids), "loc_id_count": len(loc_ids), "batch_id": batch_id, "include_polygon": include_polygon},
-            )
-            return _jsonrpc_response(_tool_result(error_payload, is_error=True), rpc_request_id)
-        result_payload = {"request_id": request_id, "batch_id": batch_id, "limit": limit, **result}
-        result_payload["detail"] = detail
-        items = result_payload.get("items") or result_payload.get("results") or []
-        available_count = sum(1 for item in items if item.get("has_shape") or item.get("ok"))
+        selection_started = time.perf_counter()
+        loc_ids, scope_result = await run_mcp_blocking(
+            "get_geometry_selection",
+            resolve_geometry_selection,
+            payload,
+            scope_limit=None if unrestricted else limit,
+        )
+        stages = {"selection_ms": _elapsed_ms(selection_started)}
+    except (MCPExecutionCapacityError, MCPExecutionTimeoutError):
+        raise
+    except Exception as exc:
+        error_payload = _batch_error_payload(
+            request_id=request_id, batch_id=batch_id,
+            code="geometry_selection_failed", message=str(exc), loc_id_count=0,
+        )
         _log_mcp_tool_usage_event(
             request,
             request_id=request_id or batch_id or "",
             tool_name="get_geometry",
             capability_id="geometry_lookup",
-            decision="allow",
-            started_at=started_at,
-            row_count=len(loc_ids),
-            query_granularity=f"bulk_{len(loc_ids)}",
-            response_payload=result_payload,
-            payment_rail=_request_access_lane(request, trusted_token),
-            artifact_token_id=trusted_token_id,
-            metadata={
-                "event": "geometry_lookup",
-                "tool_mode": "bulk",
-                "quantity": len(loc_ids),
-                "loc_id_count": len(loc_ids),
-                "available_count": available_count,
-                "missing_count": max(0, len(loc_ids) - available_count),
-                "batch_id": batch_id,
-                "include_polygon": include_polygon,
-                "include_info": include_info,
-                "batch_limit": limit,
-                "access_lane": _request_access_lane(request, trusted_token),
-                "artifact_token_id": trusted_token_id,
-                **_compute_metadata(
-                    response_payload=result_payload,
-                    stages=stages,
-                    input_count=len(loc_ids),
-                    output_count=available_count,
-                    include_polygon=include_polygon,
-                    batch_limit=limit,
-                ),
-            },
-        )
-        return _jsonrpc_response(_tool_result(result_payload), rpc_request_id)
-    loc_id = str(payload.get("loc_id") or "").strip()
-    if not loc_id:
-        error_payload = {"request_id": request_id, "error": {"code": "invalid_loc_id", "message": "loc_id is required"}}
-        _log_mcp_tool_usage_event(
-            request,
-            request_id=request_id,
-            tool_name="get_geometry",
-            capability_id="geometry_lookup",
             decision="deny",
             started_at=started_at,
             row_count=0,
-            query_granularity="single",
+            query_granularity="scope" if isinstance(payload.get("scope"), dict) else "exact",
             response_payload=error_payload,
-            error_code="invalid_loc_id",
-            metadata={"event": "geometry_lookup", "tool_mode": "single", "quantity": 0, "loc_id_count": 0},
+            error_code="geometry_selection_failed",
+            metadata={"event": "geometry_lookup", "tool_mode": "selection", "quantity": 0, "include_polygon": include_polygon},
         )
-        return _jsonrpc_response(
-            _tool_result(error_payload, is_error=True),
-            rpc_request_id,
-        )
-    try:
-        from mapmover.runtime.reference_exchange import get_geometry_reference
+        return _jsonrpc_response(_tool_result(error_payload, is_error=True), rpc_request_id)
 
+    if scope_result and not scope_result.get("ok"):
+        error_payload = {"request_id": request_id, "batch_id": batch_id, **scope_result}
+        return _jsonrpc_response(_tool_result(error_payload, is_error=True), rpc_request_id)
+
+    requested_count = int((scope_result or {}).get("total_count") or len(loc_ids))
+    if requested_count > limit and not unrestricted:
+        error_payload = _batch_error_payload(
+            request_id=request_id,
+            batch_id=batch_id,
+            code="too_many_loc_ids",
+            message=f"get_geometry selection contains {requested_count} loc_ids; this response mode accepts at most {limit}",
+            limit=limit,
+            loc_id_count=requested_count,
+        )
+        error_payload["guidance"] = {
+            "action": "narrow_or_export",
+            "message": "Choose a narrower parent, omit polygon coordinates, split exact loc_ids, or use estimate_geometry_package for a bulk artifact.",
+            "next_tool": "estimate_geometry_package",
+        }
+        _log_mcp_tool_usage_event(
+            request,
+            request_id=request_id or batch_id or "",
+            tool_name="get_geometry",
+            capability_id="geometry_lookup",
+            decision="deny",
+            started_at=started_at,
+            row_count=requested_count,
+            query_granularity="scope" if scope_result else f"bulk_{requested_count}",
+            response_payload=error_payload,
+            error_code="too_many_loc_ids",
+            metadata={"event": "geometry_lookup", "tool_mode": "scope" if scope_result else "bulk", "quantity": requested_count, "include_polygon": include_polygon, "batch_limit": limit},
+        )
+        return _jsonrpc_response(_tool_result(error_payload, is_error=True), rpc_request_id)
+    if not loc_ids:
+        error_payload = _batch_error_payload(
+            request_id=request_id, batch_id=batch_id,
+            code="empty_selection", message="The loc_id selection is empty", loc_id_count=0,
+        )
+        return _jsonrpc_response(_tool_result(error_payload, is_error=True), rpc_request_id)
+
+    try:
         runtime_started = time.perf_counter()
         result = await run_mcp_blocking(
-            "get_geometry", get_geometry_reference, loc_id,
-            include_polygon=include_polygon, include_info=include_info,
+            "get_geometry",
+            get_geometry_references,
+            loc_ids,
+            include_polygon=include_polygon,
+            include_info=False,
         )
-        stages = {"geometry_fetch_ms": _elapsed_ms(runtime_started)}
+        stages["geometry_fetch_ms"] = _elapsed_ms(runtime_started)
     except (MCPExecutionCapacityError, MCPExecutionTimeoutError):
         raise
     except Exception as exc:
-        error_payload = {"request_id": request_id, "error": {"code": "get_geometry_failed", "message": str(exc)}}
+        error_payload = _batch_error_payload(
+            request_id=request_id, batch_id=batch_id,
+            code="get_geometry_failed", message=str(exc), loc_id_count=len(loc_ids),
+        )
         _log_mcp_tool_usage_event(
             request,
-            request_id=request_id,
+            request_id=request_id or batch_id or "",
             tool_name="get_geometry",
             capability_id="geometry_lookup",
             decision="deny",
             started_at=started_at,
-            row_count=1,
-            query_granularity="single",
+            row_count=len(loc_ids),
+            query_granularity="scope" if scope_result else ("single" if len(loc_ids) == 1 else f"bulk_{len(loc_ids)}"),
             response_payload=error_payload,
             error_code="get_geometry_failed",
-            metadata={"event": "geometry_lookup", "tool_mode": "single", "quantity": 1, "loc_id": loc_id, "loc_id_count": 1, "include_polygon": include_polygon},
+            metadata={"event": "geometry_lookup", "tool_mode": "scope" if scope_result else ("single" if len(loc_ids) == 1 else "bulk"), "quantity": len(loc_ids), "include_polygon": include_polygon},
         )
-        return _jsonrpc_response(
-            _tool_result(error_payload, is_error=True),
-            rpc_request_id,
-        )
-    result = {"request_id": request_id, "detail": detail, **result}
-    if not result.get("ok"):
-        result["error"] = _normalize_tool_error(
-            result.get("error"),
-            default_code="not_found",
-            default_message=f"no geometry found for loc_id '{loc_id}'",
-        )
-        _log_mcp_tool_usage_event(
-            request,
-            request_id=request_id,
-            tool_name="get_geometry",
-            capability_id="geometry_lookup",
-            decision="deny",
-            started_at=started_at,
-            row_count=1,
-            query_granularity="single",
-            response_payload=result,
-            error_code=str((result.get("error") or {}).get("code") or "not_found"),
-            metadata={"event": "geometry_lookup", "tool_mode": "single", "quantity": 1, "loc_id": loc_id, "loc_id_count": 1, "has_shape": False, "include_polygon": include_polygon},
-        )
-        return _jsonrpc_response(_tool_result(result, is_error=True), rpc_request_id)
+        return _jsonrpc_response(_tool_result(error_payload, is_error=True), rpc_request_id)
+
+    items = result.get("results") or result.get("items") or []
+    for item in items:
+        if isinstance(item, dict) and not item.get("ok"):
+            item["error"] = _normalize_tool_error(
+                item.get("error"),
+                default_code="not_found",
+                default_message=f"no geometry found for loc_id '{item.get('loc_id') or ''}'",
+            )
+    available_count = sum(1 for item in items if item.get("has_shape") or item.get("ok"))
+    scope_summary = None
+    if scope_result:
+        scope_summary = {
+            key: scope_result.get(key)
+            for key in ("parent_loc_id", "requested_parent_loc_id", "admin_level", "bbox", "total_count")
+            if scope_result.get(key) is not None
+        }
+    result_payload = {
+        "ok": available_count > 0,
+        "request_id": request_id,
+        "batch_id": batch_id,
+        "selection": "admin_scope" if scope_result else "exact_loc_ids",
+        "scope": scope_summary,
+        "include_polygon": include_polygon,
+        "limit": limit,
+        "requested": requested_count,
+        "available": available_count,
+        "missing": max(0, requested_count - available_count),
+        "items": items,
+    }
+    is_error = available_count == 0
+    if is_error:
+        result_payload["error"] = {
+            "code": "not_found",
+            "message": "No geometry was found for the selected loc_ids",
+        }
+    tool_mode = "scope" if scope_result else ("single" if len(loc_ids) == 1 else "bulk")
+    granularity = "scope" if scope_result else ("single" if len(loc_ids) == 1 else f"bulk_{len(loc_ids)}")
     _log_mcp_tool_usage_event(
         request,
-        request_id=request_id,
+        request_id=request_id or batch_id or "",
         tool_name="get_geometry",
         capability_id="geometry_lookup",
-        decision="allow",
+        decision="deny" if is_error else "allow",
         started_at=started_at,
-        row_count=1,
-        query_granularity="single",
-        response_payload=result,
+        row_count=requested_count,
+        query_granularity=granularity,
+        response_payload=result_payload,
+        error_code="not_found" if is_error else None,
+        payment_rail=_request_access_lane(request, trusted_token),
+        artifact_token_id=trusted_token_id,
         metadata={
             "event": "geometry_lookup",
-            "tool_mode": "single",
-            "quantity": 1,
-            "loc_id": loc_id,
-            "loc_id_count": 1,
-            "has_shape": True,
+            "tool_mode": tool_mode,
+            "quantity": requested_count,
+            "loc_id_count": requested_count,
+            "available_count": available_count,
+            "missing_count": max(0, requested_count - available_count),
+            "batch_id": batch_id,
             "include_polygon": include_polygon,
-            **_compute_metadata(response_payload=result, stages=stages, input_count=1, output_count=1, include_polygon=include_polygon),
+            "batch_limit": limit,
+            "access_lane": _request_access_lane(request, trusted_token),
+            "artifact_token_id": trusted_token_id,
+            **_compute_metadata(
+                response_payload=result_payload,
+                stages=stages,
+                input_count=requested_count,
+                output_count=available_count,
+                include_polygon=include_polygon,
+                batch_limit=limit,
+            ),
         },
     )
-    return _jsonrpc_response(_tool_result(result), rpc_request_id)
+    return _jsonrpc_response(_tool_result(result_payload, is_error=is_error), rpc_request_id)
 
 
 def _result_row_count(tool_name: str, payload: dict[str, Any], result: dict[str, Any]) -> int:
