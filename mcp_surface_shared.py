@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from mcp_data_contract_shared import decorate_data_tool_definition, decorate_shared_help_definition
+from mcp_discovery_shared import data_access_workflow
 
 def _pack_id_description() -> str:
     return "Pack identifier from get_catalog. Newly catalog-admitted packs require no MCP schema change."
@@ -33,8 +34,10 @@ def _query_tool(name: str, title: str, description: str, required: list[str]) ->
 
 
 def build_mcp_instructions(*, safety_notice: str | None = None) -> str:
+    flow = " -> ".join(step["tool"] for step in data_access_workflow()["steps"])
     base = (
-        "Geospatial data MCP server. get_catalog is the current authority for "
+        f"Geospatial data MCP server. Autonomous data workflow: {flow}. "
+        "get_catalog is the current authority for "
         "available packs and each pack's free or paid access lane. The calling "
         "LLM translates the user's natural-language request into strict tool "
         "JSON; execution tools do not parse prose. Start with get_catalog, then "
@@ -53,24 +56,18 @@ def build_tool_definitions() -> list[dict]:
         {
             "name": "get_tool_help",
             "title": "Get Tool Help",
-            "description": "Free blind-caller guidance for one tool visible on this MCP facade. Returns when to use it, what it refuses, a working example, effective access limits, important outputs, provenance fields, recommended next calls, and the shared natural-language-to-strict-JSON interaction contract. Use tools/list to discover names, then call this before an unfamiliar tool.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {"tool_name": {"type": "string", "description": "Exact tool name from tools/list."}},
-                "required": ["tool_name"],
-                "additionalProperties": False,
-            },
-            "annotations": {"readOnlyHint": True},
-        },
-        {
-            "name": "how_geometry_works",
-            "title": "How Geometry MCP Works",
-            "description": "Free starting guide for the DaedalMap geography/geometry MCP. Call this first to learn the durable loc_id, administrative-spine, reference-family, discovery, point-lookup, and bounded-shape concepts. Then read the live geometry catalog for country-specific depths, families, and query guidance, and use get_tool_help for one exact tool.",
+            "description": "Free unified guidance. Pass tool_name for the exact contract of one visible tool, or topic for an overview and workflow guidance. topic='geometry' contains the loc_id and geometry-family orientation formerly published as a separate helper.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "question": {"type": "string", "description": "Optional natural-language question about how to use the geometry tool family."},
+                    "tool_name": {"type": "string", "description": "Exact tool name from tools/list. Do not combine with topic."},
+                    "topic": {"type": "string", "enum": ["overview", "data", "disasters", "custom_data", "geometry"], "description": "Workflow overview. Do not combine with tool_name."},
+                    "question": {"type": "string", "description": "Optional question used only with a topic overview."},
                 },
+                "oneOf": [
+                    {"required": ["tool_name"], "not": {"required": ["topic"]}},
+                    {"required": ["topic"], "not": {"required": ["tool_name"]}},
+                ],
                 "additionalProperties": False,
             },
             "annotations": {"readOnlyHint": True},
@@ -78,19 +75,28 @@ def build_tool_definitions() -> list[dict]:
         {
             "name": "get_catalog",
             "title": "Get Catalog",
-            "description": "Free compact discovery. Returns a lite list of live agent-ready data packs, the next get_pack call for each pack, and direct URLs for bulk catalog reads. It intentionally omits source, citation, and license-policy detail that would make every discovery call grow with the full catalog.",
-            "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
+            "description": "Free progressive discovery for the data or geometry catalog. detail='lite' lists concise pack coverage and topics, detail='full' adds metric/query inventories, and detail='download' returns the complete raw catalog URL. Select one pack, then call get_pack.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "catalog": {"type": "string", "enum": ["data", "geometry"], "default": "data", "description": "Catalog family. The geography facade defaults to geometry; other facades default to data."},
+                    "detail": {"type": "string", "enum": ["lite", "full", "download"], "default": "lite", "description": "Use lite to select a pack, full for expanded metric/query inventories, or download for the complete raw catalog URL."},
+                    "country_scope": {"type": "string", "description": "Optional ISO3 focus for catalog='geometry' with detail='lite'."},
+                },
+                "additionalProperties": False,
+            },
             "annotations": {"readOnlyHint": True},
         },
         {
             "name": "get_pack",
             "title": "Get Pack",
-            "description": "Free one-pack discovery. The default lite response returns coverage, freshness, routing, and first-query guidance. Set detail='full' only when source, metric, provenance, license, or citation detail is needed; the lite response also provides a direct detail URL.",
+            "description": "Free progressive metadata for one selected data pack or geometry tool family. detail='lite' returns bounded selection and starter-query fields, detail='full' returns detailed MCP query metadata, and detail='download' returns the complete raw metadata URL. Use its next_step to retrieve data.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
+                    "catalog": {"type": "string", "enum": ["data", "geometry"], "description": "Metadata family. When omitted, geometry facades default to geometry and known geometry-family ids are inferred; all other calls default to data."},
                     "pack_id": {"type": "string", "description": _pack_id_description()},
-                    "detail": {"type": "string", "enum": ["lite", "full"], "default": "lite", "description": "Use lite for normal discovery. Use full only for one selected pack when its complete public metadata is required."},
+                    "detail": {"type": "string", "enum": ["lite", "full", "download"], "default": "lite", "description": "Use lite to decide and start, full for detailed MCP query metadata, or download for the complete raw metadata file."},
                 },
                 "required": ["pack_id"],
                 "additionalProperties": False,
@@ -831,25 +837,6 @@ def build_tool_definitions() -> list[dict]:
             "annotations": {"readOnlyHint": True},
         },
         {
-            "name": "get_earthquake_events",
-            "title": "Get Earthquake Events",
-            "description": "Paid x402 canonical tool. Queries the published earthquakes_events lane. Use this first for earthquake questions because it is the enriched DaedalMap history lane with stable loc_id geography, not the preliminary upstream wrapper. Call without payment first - the server returns HTTP 402 with the exact USDC price before any charge. Small queries stay cheap; broad scans cost more or need narrower filters.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "request_id": {"type": "string", "description": "Optional caller-supplied request id for tracing and idempotency."},
-                    "metrics": {"type": "array", "items": {"type": "string"}, "description": "Metric ids to return, such as 'event_count' or event attributes like 'magnitude'."},
-                    "filters": {"type": "object", "description": "Structured filters including time ranges, region_ids, and compare clauses."},
-                    "sort": {"anyOf": [{"type": "array"}, {"type": "object"}], "description": "Optional sort instructions for row-returning queries."},
-                    "limit": {"type": "integer", "minimum": 1, "maximum": 500, "description": "Maximum number of rows to return. For top-N requests, include a narrow time range or region_ids before sorting."},
-                    "output": {"type": "object", "description": "Optional output controls such as response format hints."},
-                },
-                "required": ["metrics", "filters"],
-                "additionalProperties": False,
-            },
-            "annotations": {"readOnlyHint": True},
-        },
-        {
             "name": "get_live_earthquake_events",
             "title": "Get Live Earthquake Events",
             "description": "Free live wrapper. Calls the USGS FDSN API for recent preliminary earthquake events normalized to DaedalMap event fields. Use this only when the caller explicitly wants live/preliminary upstream results or needs a very recent window not yet present in the published canonical earthquake lane. This is not the enriched canonical history lane.",
@@ -868,25 +855,6 @@ def build_tool_definitions() -> list[dict]:
                     "min_longitude": {"type": "number", "description": "Optional bounding box minimum longitude."},
                     "max_longitude": {"type": "number", "description": "Optional bounding box maximum longitude."},
                 },
-                "additionalProperties": False,
-            },
-            "annotations": {"readOnlyHint": True},
-        },
-        {
-            "name": "get_volcanic_activity",
-            "title": "Get Volcanic Activity",
-            "description": "Free canonical tool. Queries volcanoes_events for historical eruption records and volcanic activity metrics. Best for eruption counts, VEI thresholds, and top-event lookups. Volcano queries normally use year-style time filters rather than ISO date strings.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "request_id": {"type": "string", "description": "Optional caller-supplied request id for tracing and idempotency."},
-                    "metrics": {"type": "array", "items": {"type": "string"}, "description": "Metric ids to return, such as 'event_count', 'VEI', or eruption attributes."},
-                    "filters": {"type": "object", "description": "Structured filters including year-based time ranges, region_ids, and compare clauses. For most volcano queries, pass numeric years or time.value."},
-                    "sort": {"anyOf": [{"type": "array"}, {"type": "object"}], "description": "Optional sort instructions for row-returning queries."},
-                    "limit": {"type": "integer", "minimum": 1, "maximum": 500, "description": "Maximum number of rows to return. For top-N VEI or latest-eruption requests, include a narrow year range or region_ids before sorting."},
-                    "output": {"type": "object", "description": "Optional output controls such as response format hints."},
-                },
-                "required": ["metrics", "filters"],
                 "additionalProperties": False,
             },
             "annotations": {"readOnlyHint": True},
@@ -912,52 +880,13 @@ def build_tool_definitions() -> list[dict]:
             "annotations": {"readOnlyHint": True},
         },
         {
-            "name": "get_tsunami_events",
-            "title": "Get Tsunami Events",
-            "description": "Paid x402 canonical tool. Queries tsunamis_events for historical tsunami records and water-height/runup metrics. Best for event counts, max water height thresholds, and top-event lookups. Region filters may use ISO3 country ids or reviewed named-water loc_ids such as IHO1953-240001002 for the Mediterranean Sea; XOO is deprecated. Call without payment first - the server returns HTTP 402 with the exact USDC price before any charge.",
+            "name": "get_data",
+            "title": "Get Data",
+            "description": "The single workhorse for published data packs. After get_pack, pass its pack_id, exact metric ids, structured filters, sort, and row limit. Pack metadata owns source routing, time grain, geography, access, and pack-specific rules; callers do not choose internal source_id values. Geometry tool families use their focused next_step tools instead of this row-query contract.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "request_id": {"type": "string", "description": "Optional caller-supplied request id for tracing and idempotency."},
-                    "metrics": {"type": "array", "items": {"type": "string"}, "description": "Metric ids to return, such as 'event_count', 'max_water_height_m', or event attributes."},
-                    "filters": {"type": "object", "description": "Structured filters including time ranges, region_ids, and compare clauses. Tsunami queries commonly use year-style windows and may use geometry-backed ocean/sea ids such as XSM."},
-                    "sort": {"anyOf": [{"type": "array"}, {"type": "object"}], "description": "Optional sort instructions for row-returning queries."},
-                    "limit": {"type": "integer", "minimum": 1, "maximum": 500, "description": "Maximum number of rows to return. For largest-wave or latest-event requests, include a narrow time range or region_ids before sorting."},
-                    "output": {"type": "object", "description": "Optional output controls such as response format hints."},
-                },
-                "required": ["metrics", "filters"],
-                "additionalProperties": False,
-            },
-            "annotations": {"readOnlyHint": True},
-        },
-        {
-            "name": "get_fx_rates",
-            "title": "Get FX Rates",
-            "description": "Free tool. Queries the currency pack using filters.region_ids plus filters.time.granularity to return daily, weekly, or monthly FX data.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "request_id": {"type": "string", "description": "Optional caller-supplied request id for tracing and idempotency."},
-                    "metrics": {"type": "array", "items": {"type": "string"}, "description": "Optional metric ids. Defaults to 'local_per_usd' for FX rate queries."},
-                    "filters": {"type": "object", "description": "Structured filters including region_ids with loc_id country codes, time range, and granularity."},
-                    "sort": {"anyOf": [{"type": "array"}, {"type": "object"}], "description": "Optional sort instructions for row-returning queries."},
-                    "limit": {"type": "integer", "minimum": 1, "maximum": 1000, "description": "Maximum number of rows to return for the requested granularity and time span."},
-                    "output": {"type": "object", "description": "Optional output controls such as response format hints."},
-                },
-                "required": ["filters"],
-                "additionalProperties": False,
-            },
-            "annotations": {"readOnlyHint": True},
-        },
-        {
-            "name": "query_dataset",
-            "title": "Query Dataset",
-            "description": "Generic structured query for direct source_id or pack_id access using the same contract as POST /api/v1/query/dataset. Call get_catalog for the current pack list and each pack's effective access lane.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "request_id": {"type": "string", "description": "Optional caller-supplied request id for tracing and idempotency."},
-                    "source_id": {"type": "string", "description": "Concrete source id such as 'earthquakes_events', 'volcanoes_events', 'hurricanes_events', or 'un_sdg/01'."},
                     "pack_id": {"type": "string", "description": _pack_id_description()},
                     "metrics": {"type": "array", "items": {"type": "string"}, "description": "Metric ids to return. Use event_count for aggregate counts when supported."},
                     "filters": {"type": "object", "description": "Structured filters including time, region_ids, and compare clauses."},
@@ -965,6 +894,7 @@ def build_tool_definitions() -> list[dict]:
                     "limit": {"type": "integer", "minimum": 1, "maximum": 500, "description": "Maximum number of rows to return for the requested source or pack."},
                     "output": {"type": "object", "description": "Optional output controls such as response format hints."},
                 },
+                "required": ["pack_id", "metrics", "filters"],
                 "additionalProperties": False,
             },
             "annotations": {"readOnlyHint": True},

@@ -132,12 +132,6 @@ TOOL_ACCESS_REGISTRY: dict[str, dict] = {
         "pricing": PRICING_FREE,
         "notes": "Blind-caller help must stay free on every facade.",
     },
-    "how_geometry_works": {
-        "family": FAMILY_GEOGRAPHY,
-        "capability_id": "geometry_family_help",
-        "pricing": PRICING_FREE,
-        "notes": "Family-level geometry orientation must stay free on the full geography facade.",
-    },
     "resolve_point": {
         "family": FAMILY_GEOGRAPHY,
         "capability_id": "point_lookup",
@@ -379,11 +373,7 @@ TOOL_ACCESS_REGISTRY: dict[str, dict] = {
     },
     # ---- dataset tools: priced by pack, not here. Listed so the universe is
     # complete and nothing is silently ungoverned. ----
-    "query_dataset": {"family": FAMILY_DATASET, "capability_id": "dataset_query", "pricing": "by_pack"},
-    "get_earthquake_events": {"family": FAMILY_DATASET, "capability_id": "dataset_query", "pricing": "by_pack"},
-    "get_volcanic_activity": {"family": FAMILY_DATASET, "capability_id": "dataset_query", "pricing": "by_pack"},
-    "get_tsunami_events": {"family": FAMILY_DATASET, "capability_id": "dataset_query", "pricing": "by_pack"},
-    "get_fx_rates": {"family": FAMILY_DATASET, "capability_id": "dataset_query", "pricing": "by_pack"},
+    "get_data": {"family": FAMILY_DATASET, "capability_id": "dataset_query", "pricing": "by_pack"},
 }
 
 

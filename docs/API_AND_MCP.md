@@ -40,12 +40,12 @@ The four public catalog families are:
 The published data catalog also has a stable anonymous JSON URL for direct
 human, script, and agent reads:
 
-- `https://downloads.daedalmap.com/downloadable/catalog.json`
+- `https://app.daedalmap.com/api/v1/catalog/download`
 
 Compact geometry discovery is served through
 `https://app.daedalmap.com/api/v1/geometry/catalog`. Bulk consumers can read the
 full published catalog directly at
-`https://downloads.daedalmap.com/downloadable/geometry/geometry_catalog.json`;
+`https://app.daedalmap.com/api/v1/geometry/catalog/download`;
 country runtime catalogs and unpublished lifecycle records remain in the
 private published lane.
 

@@ -25,7 +25,7 @@ PACK_REGISTRY: dict[str, dict] = {
     "currency": {
         "display_name": "currency",
         "pricing": "free",
-        "mcp_tool_allowlist": ("get_catalog", "get_pack", "get_fx_rates"),
+        "mcp_tool_allowlist": ("get_catalog", "get_pack", "get_data"),
         "mcp_prompt_allowlist": ("fx_history_for_country",),
         "mcp_name": "com.daedalmap/currency",
         "mcp_title": "DaedalMap Historical FX Rates",
@@ -39,13 +39,13 @@ PACK_REGISTRY: dict[str, dict] = {
             ],
         },
         "routing": {
-            "preferred_tool": "get_fx_rates",
+            "preferred_tool": "get_data",
         },
     },
     "earthquakes": {
         "display_name": "earthquakes",
         "pricing": "paid_x402_base_usdc",
-        "mcp_tool_allowlist": ("get_catalog", "get_pack", "get_disaster_links_for_event", "get_disaster_link_chain", "search_disaster_links", "get_earthquake_events", "get_live_earthquake_events"),
+        "mcp_tool_allowlist": ("get_catalog", "get_pack", "get_disaster_links_for_event", "get_disaster_link_chain", "search_disaster_links", "get_data", "get_live_earthquake_events"),
         "mcp_prompt_allowlist": ("largest_earthquake_in_range", "count_disaster_events"),
         "mcp_name": "com.daedalmap/earthquakes",
         "mcp_title": "DaedalMap Earthquake Data",
@@ -59,7 +59,7 @@ PACK_REGISTRY: dict[str, dict] = {
             ],
         },
         "routing": {
-            "preferred_tool": "get_earthquake_events",
+            "preferred_tool": "get_data",
             "live_fallback_tool": "get_live_earthquake_events",
             "live_fallback_when": "Only when the caller explicitly asks for live/preliminary upstream data or needs time beyond canonical_available_through.",
         },
@@ -67,7 +67,7 @@ PACK_REGISTRY: dict[str, dict] = {
     "floods": {
         "display_name": "floods",
         "pricing": "free",
-        "mcp_tool_allowlist": ("get_catalog", "get_pack", "search_disaster_links", "query_dataset"),
+        "mcp_tool_allowlist": ("get_catalog", "get_pack", "search_disaster_links", "get_data"),
         "mcp_prompt_allowlist": ("count_disaster_events",),
         "mcp_name": "com.daedalmap/floods",
         "mcp_title": "DaedalMap Flood Events",
@@ -81,13 +81,13 @@ PACK_REGISTRY: dict[str, dict] = {
             ],
         },
         "routing": {
-            "preferred_tool": "query_dataset",
+            "preferred_tool": "get_data",
         },
     },
     "hurricanes": {
         "display_name": "hurricanes",
         "pricing": "paid_x402_base_usdc",
-        "mcp_tool_allowlist": ("get_catalog", "get_pack", "search_disaster_links", "query_dataset"),
+        "mcp_tool_allowlist": ("get_catalog", "get_pack", "search_disaster_links", "get_data"),
         "mcp_prompt_allowlist": ("count_disaster_events",),
         "mcp_name": "com.daedalmap/hurricanes",
         "mcp_title": "DaedalMap Hurricane and Tropical Cyclone Data",
@@ -101,13 +101,13 @@ PACK_REGISTRY: dict[str, dict] = {
             ],
         },
         "routing": {
-            "preferred_tool": "query_dataset",
+            "preferred_tool": "get_data",
         },
     },
     "tornadoes": {
         "display_name": "tornadoes",
         "pricing": "paid_x402_base_usdc",
-        "mcp_tool_allowlist": ("get_catalog", "get_pack", "search_disaster_links", "query_dataset"),
+        "mcp_tool_allowlist": ("get_catalog", "get_pack", "search_disaster_links", "get_data"),
         "mcp_prompt_allowlist": ("count_disaster_events",),
         "mcp_name": "com.daedalmap/tornadoes",
         "mcp_title": "DaedalMap Tornado Events",
@@ -121,13 +121,13 @@ PACK_REGISTRY: dict[str, dict] = {
             ],
         },
         "routing": {
-            "preferred_tool": "query_dataset",
+            "preferred_tool": "get_data",
         },
     },
     "tsunamis": {
         "display_name": "tsunamis",
         "pricing": "paid_x402_base_usdc",
-        "mcp_tool_allowlist": ("get_catalog", "get_pack", "get_disaster_links_for_event", "get_disaster_link_chain", "search_disaster_links", "get_tsunami_events"),
+        "mcp_tool_allowlist": ("get_catalog", "get_pack", "get_disaster_links_for_event", "get_disaster_link_chain", "search_disaster_links", "get_data"),
         "mcp_prompt_allowlist": ("count_disaster_events",),
         "mcp_name": "com.daedalmap/tsunamis",
         "mcp_title": "DaedalMap Tsunami Data",
@@ -141,13 +141,13 @@ PACK_REGISTRY: dict[str, dict] = {
             ],
         },
         "routing": {
-            "preferred_tool": "get_tsunami_events",
+            "preferred_tool": "get_data",
         },
     },
     "wildfires": {
         "display_name": "wildfires",
         "pricing": "paid_x402_base_usdc",
-        "mcp_tool_allowlist": ("get_catalog", "get_pack", "get_disaster_links_for_event", "get_disaster_link_chain", "search_disaster_links", "query_dataset"),
+        "mcp_tool_allowlist": ("get_catalog", "get_pack", "get_disaster_links_for_event", "get_disaster_link_chain", "search_disaster_links", "get_data"),
         "mcp_prompt_allowlist": ("count_disaster_events",),
         "mcp_name": "com.daedalmap/wildfires",
         "mcp_title": "DaedalMap Wildfire Events",
@@ -161,13 +161,13 @@ PACK_REGISTRY: dict[str, dict] = {
             ],
         },
         "routing": {
-            "preferred_tool": "query_dataset",
+            "preferred_tool": "get_data",
         },
     },
     "un_sdg": {
         "display_name": "UN SDG",
         "pricing": "free",
-        "mcp_tool_allowlist": ("get_catalog", "get_pack", "query_dataset"),
+        "mcp_tool_allowlist": ("get_catalog", "get_pack", "get_data"),
         "mcp_name": "com.daedalmap/un_sdg",
         "mcp_title": "DaedalMap UN Sustainable Development Goals",
         "mcp_description": "UN Sustainable Development Goal indicators across all 17 goals - poverty, health, education, gender, energy, climate, and institutions - as curated country-year panels normalized to the DaedalMap loc_id spine. Free.",
@@ -180,13 +180,13 @@ PACK_REGISTRY: dict[str, dict] = {
             ],
         },
         "routing": {
-            "preferred_tool": "query_dataset",
+            "preferred_tool": "get_data",
         },
     },
     "world_bank_wdi": {
         "display_name": "World Bank WDI",
         "pricing": "free",
-        "mcp_tool_allowlist": ("get_catalog", "get_pack", "query_dataset"),
+        "mcp_tool_allowlist": ("get_catalog", "get_pack", "get_data"),
         "mcp_name": "com.daedalmap/world-development-indicators",
         "mcp_title": "DaedalMap World Development Indicators",
         "mcp_description": "World Bank World Development Indicators as curated country-year panels: economy, health, education, environment, debt, infrastructure, and social - normalized to the DaedalMap loc_id spine with tiered metrics. Free.",
@@ -200,13 +200,13 @@ PACK_REGISTRY: dict[str, dict] = {
             ],
         },
         "routing": {
-            "preferred_tool": "query_dataset",
+            "preferred_tool": "get_data",
         },
     },
     "distributed_manufacturing": {
         "display_name": "Distributed Manufacturing",
         "pricing": "free",
-        "mcp_tool_allowlist": ("get_catalog", "get_pack", "query_dataset"),
+        "mcp_tool_allowlist": ("get_catalog", "get_pack", "get_data"),
         "mcp_name": "com.daedalmap/distributed-manufacturing",
         "mcp_title": "DaedalMap Distributed Manufacturing Locations",
         "mcp_description": "Global fab lab, makerspace, hackerspace, Precious Plastic, and Prusa World location data normalized to the DaedalMap loc_id spine. Free.",
@@ -220,13 +220,13 @@ PACK_REGISTRY: dict[str, dict] = {
             ],
         },
         "routing": {
-            "preferred_tool": "query_dataset",
+            "preferred_tool": "get_data",
         },
     },
     "owid": {
         "display_name": "Our World in Data",
         "pricing": "free",
-        "mcp_tool_allowlist": ("get_catalog", "get_pack", "query_dataset"),
+        "mcp_tool_allowlist": ("get_catalog", "get_pack", "get_data"),
         "mcp_name": "com.daedalmap/our-world-in-data",
         "mcp_title": "DaedalMap Our World in Data",
         "mcp_description": "Our World in Data as curated country-year panels across twelve topic sources: CO2 and greenhouse gases, emissions by sector, energy, health and mortality, population, food and agriculture, education, poverty and inequality, water and sanitation, labor and gender, land and biodiversity, and governance - normalized to the DaedalMap loc_id spine with tiered metrics. Free.",
@@ -240,13 +240,13 @@ PACK_REGISTRY: dict[str, dict] = {
             ],
         },
         "routing": {
-            "preferred_tool": "query_dataset",
+            "preferred_tool": "get_data",
         },
     },
     "un_wpp": {
         "display_name": "UN World Population Prospects",
         "pricing": "free",
-        "mcp_tool_allowlist": ("get_catalog", "get_pack", "query_dataset"),
+        "mcp_tool_allowlist": ("get_catalog", "get_pack", "get_data"),
         "mcp_name": "com.daedalmap/world-population-prospects",
         "mcp_title": "DaedalMap UN World Population Prospects",
         "mcp_description": "UN World Population Prospects country-year population, births, deaths, migration, and life expectancy metrics from 1950 through projections to 2100. Free.",
@@ -260,13 +260,13 @@ PACK_REGISTRY: dict[str, dict] = {
             ],
         },
         "routing": {
-            "preferred_tool": "query_dataset",
+            "preferred_tool": "get_data",
         },
     },
     "nri": {
         "display_name": "FEMA NRI",
         "pricing": "free",
-        "mcp_tool_allowlist": ("get_catalog", "get_pack", "query_dataset"),
+        "mcp_tool_allowlist": ("get_catalog", "get_pack", "get_data"),
         "mcp_name": "com.daedalmap/fema-nri",
         "mcp_title": "DaedalMap FEMA National Risk Index",
         "mcp_description": "FEMA National Risk Index county hazard-risk layers, including baseline risk, expected annual loss, social vulnerability, resilience, and selected future scenario fields. Free.",
@@ -280,13 +280,13 @@ PACK_REGISTRY: dict[str, dict] = {
             ],
         },
         "routing": {
-            "preferred_tool": "query_dataset",
+            "preferred_tool": "get_data",
         },
     },
     "volcanoes": {
         "display_name": "volcanoes",
         "pricing": "free",
-        "mcp_tool_allowlist": ("get_catalog", "get_pack", "get_disaster_links_for_event", "get_disaster_link_chain", "search_disaster_links", "get_volcanic_activity", "get_live_volcano_events"),
+        "mcp_tool_allowlist": ("get_catalog", "get_pack", "get_disaster_links_for_event", "get_disaster_link_chain", "search_disaster_links", "get_data", "get_live_volcano_events"),
         "mcp_prompt_allowlist": ("count_disaster_events",),
         "mcp_name": "com.daedalmap/volcanoes",
         "mcp_title": "DaedalMap Volcanic Activity",
@@ -300,7 +300,7 @@ PACK_REGISTRY: dict[str, dict] = {
             ],
         },
         "routing": {
-            "preferred_tool": "get_volcanic_activity",
+            "preferred_tool": "get_data",
             "live_fallback_tool": "get_live_volcano_events",
             "live_fallback_when": "Only when the caller explicitly asks for live/preliminary upstream data or needs time beyond canonical_available_through.",
         },
@@ -308,7 +308,7 @@ PACK_REGISTRY: dict[str, dict] = {
     "world_factbook": {
         "display_name": "World Factbook",
         "pricing": "paid_x402_base_usdc",
-        "mcp_tool_allowlist": ("get_catalog", "get_pack", "query_dataset"),
+        "mcp_tool_allowlist": ("get_catalog", "get_pack", "get_data"),
         "mcp_name": "com.daedalmap/world_factbook",
         "mcp_title": "DaedalMap CIA World Factbook",
         "mcp_description": "CIA World Factbook country indicators for infrastructure, energy, demographics, and economy. Paid via x402 on Base mainnet USDC. Small queries stay cheap; very broad scans cost more or need narrower filters. Call unpaid first to see the exact price before committing.",
@@ -321,13 +321,13 @@ PACK_REGISTRY: dict[str, dict] = {
             ],
         },
         "routing": {
-            "preferred_tool": "query_dataset",
+            "preferred_tool": "get_data",
         },
     },
     "worldpop": {
         "display_name": "WorldPop",
         "pricing": "paid_x402_base_usdc",
-        "mcp_tool_allowlist": ("get_catalog", "get_pack", "query_dataset"),
+        "mcp_tool_allowlist": ("get_catalog", "get_pack", "get_data"),
         "mcp_name": "com.daedalmap/population",
         "mcp_title": "DaedalMap Population Estimates",
         "mcp_description": "Global population estimates from WorldPop, 2000-2030, at country and sub-national admin levels. Source: WorldPop (CC-BY 4.0). Paid via x402 on Base mainnet USDC. Small queries stay cheap; very broad scans cost more or need narrower filters. Call unpaid first to see the exact price before committing.",
@@ -341,7 +341,7 @@ PACK_REGISTRY: dict[str, dict] = {
         },
         "registry_search_alias": "population",
         "routing": {
-            "preferred_tool": "query_dataset",
+            "preferred_tool": "get_data",
         },
     },
     "geography": {
@@ -351,7 +351,6 @@ PACK_REGISTRY: dict[str, dict] = {
         "mcp_tool_allowlist": (
             "get_catalog",
             "get_pack",
-            "how_geometry_works",
             "read_geometry_catalog",
             "list_reference_systems",
             "identify_dataset_geography",
@@ -391,7 +390,7 @@ PACK_REGISTRY: dict[str, dict] = {
             "preferred_tool": "read_geometry_catalog",
         },
         "tool_summaries": (
-            {"name": "how_geometry_works", "summary": "family workflow, loc_id mental model, strict-call boundary, and clarification rules"},
+            {"name": "get_tool_help", "summary": "per-tool contracts plus topic-level workflows and the loc_id mental model"},
             {"name": "read_geometry_catalog", "summary": "discover geometry coverage, families, bridges, named geometries, and packages"},
             {"name": "list_reference_systems", "summary": "discover exchangeable geography systems, bridge vintages, counts, and licenses"},
             {"name": "identify_dataset_geography", "summary": "bounded table-column samples -> ranked geography column, country, level, and reference binding"},
@@ -580,7 +579,7 @@ def tool_family_pack_detail(pack_id: str | None) -> dict:
             "Use convert_reference when the caller wants one external geography system expressed in another.",
         ]
         important_rules = [
-            "These are direct utility tools, not a query_dataset pack; discovery and small calls are free, while hosted resolve_points bulk throughput follows the applicable access policy.",
+            "These are direct utility tools, not a get_data pack; discovery and small calls are free, while hosted resolve_points bulk throughput follows the applicable access policy.",
             "loc_id is the reserve identifier: generic conversions should flow X -> loc_id -> Y.",
             "Use read_geometry_catalog for live catalog-backed coverage and package discovery instead of assuming a fixed list of countries or admin depths.",
             "Use list_reference_systems for live catalog-backed availability instead of assuming a fixed list of systems.",
@@ -599,7 +598,7 @@ def tool_family_pack_detail(pack_id: str | None) -> dict:
             "Only when more detail is requested, pass all stack loc_ids to loc_id_info; call get_geometry separately for shapes.",
         ]
         important_rules = [
-            "These are direct utility tools, not a query_dataset pack; bulk throughput belongs to resolve_points and resolve_deep_points.",
+            "These are direct utility tools, not a get_data pack; bulk throughput belongs to resolve_points and resolve_deep_points.",
             "Coordinates must be WGS84 decimal degrees.",
             "Use resolve_point/resolve_deep_point for one coordinate. Use resolve_points/resolve_deep_points for arrays; split deep arrays by Admin 1 and pass one admin_1_loc_id per call.",
             "A mixed-vintage point chain is context. loc_id_info hierarchy and resolve_loc_id_scope follow strict stored parentage within a coherent release.",
@@ -615,7 +614,7 @@ def tool_family_pack_detail(pack_id: str | None) -> dict:
             "Request include_polygon only when you need the exact perimeter.",
         ]
         important_rules = [
-            "These are free utility tools, not a query_dataset pack.",
+            "These are free utility tools, not a get_data pack.",
             "Use canonical loc_ids such as USA, CAN-BC, or USA-CA-037.",
             "BBox/centroid is the default response shape because full polygons can be large.",
             "Use check_geometry first for larger shape lists, then get_geometry for the available loc_ids.",
@@ -627,7 +626,7 @@ def tool_family_pack_detail(pack_id: str | None) -> dict:
             "Call the preferred tool first, then expand to the other geography helpers as needed.",
         ]
         important_rules = [
-            "These are free utility tools, not a query_dataset pack.",
+            "These are free utility tools, not a get_data pack.",
         ]
     entry["mcp"] = {"name": profile.get("mcp_name"), "facade_url": f"/mcp/{normalized}"}
     entry["registry_meta"] = dict(profile.get("registry_meta") or {})
@@ -697,7 +696,7 @@ def tool_family_pack_detail(pack_id: str | None) -> dict:
     }
     entry["notes"] = (
         "Utility tool family on the DaedalMap loc_id spine. Free, and not a queryable "
-        "dataset pack - call the listed tools directly rather than query_dataset."
+        "dataset pack - call the listed tools directly rather than get_data."
     )
     return entry
 

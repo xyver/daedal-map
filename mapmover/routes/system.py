@@ -1409,13 +1409,20 @@ def _catalog_public_response(payload: dict) -> JSONResponse:
     return response
 
 
+def _catalog_download_response(payload: dict, filename: str) -> JSONResponse:
+    response = JSONResponse(payload)
+    response.headers["Cache-Control"] = "public, max-age=300, stale-while-revalidate=60"
+    response.headers["Content-Disposition"] = f'attachment; filename="{filename}"'
+    return response
+
+
 def _build_historical_catalog_payload() -> dict:
     packs = _build_public_pack_list()
     return {
         "catalog_family": "historical_packs",
         "catalog_path": "catalog.json",
         "endpoint": "/api/v1/historical/catalog",
-        "download_url": "https://downloads.daedalmap.com/downloadable/catalog.json",
+        "download_url": "https://app.daedalmap.com/api/v1/catalog/download",
         "pack_count": len(packs),
         "packs": packs,
     }
@@ -1842,14 +1849,13 @@ def _mcp_server_card_tools(pack_id: str | None) -> list[dict]:
     from tool_access_shared import tool_is_paid_bulk
 
     normalized = _normalize_mcp_facade_pack_id(pack_id)
-    paid_named_helpers = {"get_earthquake_events", "get_tsunami_events"}
     tools = []
     for definition in _facade_tools(normalized):
         name = str(definition.get("name") or "").strip()
         if not name:
             continue
-        paid = tool_is_paid_bulk(name) or name in paid_named_helpers
-        if name == "query_dataset":
+        paid = tool_is_paid_bulk(name)
+        if name == "get_data":
             paid = bool(normalized and _pack_is_paid(normalized))
         tools.append(
             {
@@ -2495,6 +2501,17 @@ async def get_v1_geometry_catalog():
     return _catalog_public_response(_build_geometry_catalog_payload())
 
 
+@router.get("/api/v1/geometry/catalog/download")
+async def download_v1_geometry_catalog():
+    """Download the complete published geometry catalog from warmed memory."""
+    from mapmover.runtime.geometry_catalog import load_geometry_catalog
+
+    return _catalog_download_response(
+        load_geometry_catalog() or {},
+        "geometry_catalog.json",
+    )
+
+
 @router.get("/api/v1/feeds/catalog")
 async def get_v1_feeds_catalog():
     """Return the public live-feed/Ops discovery catalog."""
@@ -2514,6 +2531,14 @@ async def get_v1_guide():
 async def get_v1_catalog():
     """Return the public MCP/API catalog for sources carrying the mcp surface."""
     return await get_v1_agent_catalog()
+
+
+@router.get("/api/v1/catalog/download")
+async def download_v1_catalog():
+    """Download the complete published data catalog from warmed memory."""
+    from mapmover.data_loading import load_catalog
+
+    return _catalog_download_response(load_catalog() or {}, "catalog.json")
 
 
 @router.get("/api/v1/agent/catalog")
@@ -2627,6 +2652,26 @@ async def get_v1_pack(pack_id: str):
     if not payload:
         return JSONResponse({"error": "Pack not found"}, status_code=404)
     return JSONResponse(payload)
+
+
+@router.get("/api/v1/packs/{pack_id}/download")
+async def download_v1_pack(pack_id: str):
+    """Download one complete public data-pack or geometry-family metadata file."""
+    from mapmover.data_loading import load_api_pack_detail
+    from pack_registry_shared import (
+        tool_family_alias_ids,
+        tool_family_ids,
+        tool_family_pack_detail,
+    )
+
+    normalized = str(pack_id or "").strip().lower()
+    if normalized in set(tool_family_ids()) | set(tool_family_alias_ids()):
+        payload = tool_family_pack_detail(normalized)
+    else:
+        payload = load_api_pack_detail(normalized)
+    if not payload:
+        return JSONResponse({"error": "Pack not found"}, status_code=404)
+    return _catalog_download_response(payload, f"{normalized}.json")
 
 
 @router.get("/api/catalog/overlays")

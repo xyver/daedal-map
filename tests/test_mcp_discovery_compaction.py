@@ -4,7 +4,15 @@ import json
 import unittest
 from unittest import mock
 
-from mcp_discovery_shared import compact_catalog_payload, compact_pack_detail
+from mcp_discovery_shared import (
+    catalog_download_payload,
+    compact_catalog_payload,
+    compact_pack_detail,
+    data_access_workflow,
+    full_catalog_payload,
+    mcp_full_pack_detail,
+    pack_download_payload,
+)
 from mapmover.runtime import reference_exchange
 from mapmover.runtime.reference_exchange import (
     get_geometry_reference,
@@ -40,18 +48,93 @@ class MCPDiscoveryCompactionTests(unittest.TestCase):
         source = {
             "pack_id": "demo",
             "title": "Demo",
-            "quick_start": {"first_query_template": {"tool": "query_dataset"}},
+            "quick_start": {"first_query_template": {"pack_id": "demo", "metrics": ["population"], "filters": {}}},
             "sources": [{"metadata": "large" * 1000}],
             "material_policy": {"citation": {"text": "large" * 1000}},
         }
 
         result = compact_pack_detail(source)
 
-        self.assertEqual(result["view"], "lite")
+        self.assertEqual(result["detail"], "lite")
         self.assertEqual(result["quick_start"], source["quick_start"])
-        self.assertEqual(result["detail"]["tool_call"]["arguments"]["detail"], "full")
+        self.assertEqual(result["full_call"]["arguments"]["detail"], "full")
+        self.assertEqual(result["download_call"]["arguments"]["detail"], "download")
+        self.assertEqual(result["next_step"]["tool"], "get_data")
         self.assertNotIn("sources", result)
         self.assertNotIn("material_policy", result)
+
+    def test_overview_workflow_has_one_executable_discovery_path(self) -> None:
+        workflow = data_access_workflow()
+
+        self.assertEqual(
+            [step["tool"] for step in workflow["steps"]],
+            ["get_catalog", "get_pack", "get_data"],
+        )
+        self.assertEqual(workflow["help"]["overview"]["arguments"]["topic"], "overview")
+
+    def test_catalog_full_adds_metric_ids_but_not_raw_policy(self) -> None:
+        result = full_catalog_payload(
+            {"packs": [{"pack_id": "demo", "title": "Demo"}]},
+            {"demo": {"metrics": {"population": "People"}, "query_dimensions": {"filterable_fields": ["loc_id"]}}},
+        )
+
+        self.assertEqual(result["detail"], "full")
+        self.assertEqual(result["packs"][0]["metrics"], ["population"])
+        self.assertEqual(result["next_step"]["tool"], "get_pack")
+
+    def test_pack_full_and_download_are_distinct(self) -> None:
+        source = {
+            "pack_id": "demo",
+            "metrics": {"population": "People"},
+            "material_policy": {"large": "raw-only"},
+            "quick_start": {"first_query_template": {"pack_id": "demo", "metrics": ["population"]}},
+        }
+
+        full = mcp_full_pack_detail(source, catalog="data")
+        download = pack_download_payload("demo", catalog="data", payload=source)
+
+        self.assertEqual(full["detail"], "full")
+        self.assertNotIn("material_policy", full)
+        self.assertEqual(full["next_step"]["tool"], "get_data")
+        self.assertEqual(download["detail"], "download")
+        self.assertEqual(download["download_url"], "https://app.daedalmap.com/api/v1/packs/demo/download")
+        self.assertNotIn("metrics", download)
+
+    def test_pack_next_step_uses_its_published_specialist_tool(self) -> None:
+        result = compact_pack_detail({
+            "pack_id": "earthquakes",
+            "preferred_tool": "get_earthquake_events",
+            "quick_start": {"first_query_template": {"metrics": ["magnitude"], "limit": 10}},
+        })
+
+        self.assertEqual(result["next_step"]["tool"], "get_data")
+        self.assertEqual(result["next_step"]["arguments"]["pack_id"], "earthquakes")
+        self.assertNotIn("source_id", result["next_step"]["arguments"])
+
+    def test_current_get_data_metadata_is_normalized_to_the_public_schema(self) -> None:
+        result = compact_pack_detail({
+            "pack_id": "currency",
+            "preferred_tool": "get_data",
+            "quick_start": {"first_query_template": {"source_id": "currency", "metrics": ["rate"]}},
+        })
+
+        self.assertEqual(result["next_step"], {
+            "tool": "get_data",
+            "arguments": {
+                "pack_id": "currency",
+                "metrics": ["rate"],
+                "filters": {},
+            },
+        })
+
+    def test_download_view_is_a_small_railway_handoff(self) -> None:
+        data = catalog_download_payload("data")
+        geometry = catalog_download_payload("geometry")
+
+        self.assertEqual(data["download_url"], "https://app.daedalmap.com/api/v1/catalog/download")
+        self.assertEqual(geometry["download_url"], "https://app.daedalmap.com/api/v1/geometry/catalog/download")
+        self.assertNotIn("packs", data)
+        self.assertNotIn("geometry_banks", geometry)
 
     def test_public_full_geometry_view_redirects_to_download(self) -> None:
         with mock.patch(
@@ -62,7 +145,7 @@ class MCPDiscoveryCompactionTests(unittest.TestCase):
 
         self.assertTrue(result["ok"])
         self.assertEqual(result["view"], "full_redirect")
-        self.assertIn("/downloadable/geometry/geometry_catalog.json", result["download_url"])
+        self.assertIn("/api/v1/geometry/catalog/download", result["download_url"])
         self.assertNotIn("catalog", result)
 
     def test_reference_system_lite_view_does_not_materialize_crosswalk_records(self) -> None:

@@ -25,11 +25,7 @@ from tool_access_shared import (
 
 DATA_DISCOVERY_TOOL_IDS = frozenset({"get_catalog", "get_pack"})
 DATA_QUERY_TOOL_IDS = frozenset({
-    "query_dataset",
-    "get_earthquake_events",
-    "get_volcanic_activity",
-    "get_tsunami_events",
-    "get_fx_rates",
+    "get_data",
 })
 DATA_LIVE_TOOL_IDS = frozenset({"get_live_earthquake_events", "get_live_volcano_events"})
 DATA_RELATIONSHIP_TOOL_IDS = frozenset({
@@ -45,15 +41,11 @@ DATA_TOOL_IDS = frozenset().union(
 )
 
 DATA_TOOL_DESCRIPTIONS = {
-    "get_catalog": "List the current catalog-published data packs and their access lanes. Start here, then call get_pack for one selected pack.",
-    "get_pack": "Describe one catalog-published pack, including sources, metrics, coverage, freshness, access, and a first query. Call this before querying an unfamiliar pack.",
-    "query_dataset": "Query one catalog-published source or pack with structured metrics, filters, sorting, and a row limit. Call get_catalog and get_pack before an unfamiliar dataset.",
-    "get_earthquake_events": "Query canonical earthquake history with structured metrics, filters, sorting, and a row limit. Use get_live_earthquake_events only for preliminary upstream data.",
-    "get_volcanic_activity": "Query canonical eruption history with structured metrics, year filters, sorting, and a row limit. Use get_live_volcano_events only for preliminary upstream data.",
-    "get_tsunami_events": "Query canonical tsunami history with structured metrics, filters, sorting, and a row limit. Region filters accept published land or named-water loc_ids.",
-    "get_fx_rates": "Query canonical currency rates with loc_id country filters and daily, weekly, or monthly time granularity.",
-    "get_live_earthquake_events": "Fetch recent preliminary USGS earthquake events in the shared data-result shape. Use get_earthquake_events for canonical enriched history.",
-    "get_live_volcano_events": "Fetch recent preliminary Smithsonian/GVP eruption updates in the shared data-result shape. Use get_volcanic_activity for canonical history.",
+    "get_catalog": "Discover data packs or geometry families progressively: lite selection, full metric/query inventory, or a raw catalog download URL. Choose one result and call get_pack next.",
+    "get_pack": "Inspect one selected data pack or geometry family progressively: lite starter contract, full MCP query metadata, or a raw metadata download URL. Use its next_step to retrieve data or call the preferred geometry tool.",
+    "get_data": "Retrieve rows from one selected published data pack using exact metrics, structured filters, sorting, and a row limit. Call get_pack first; geometry families use their focused next-step tools.",
+    "get_live_earthquake_events": "Fetch recent preliminary USGS earthquake events in the shared data-result shape. Use get_data with pack_id='earthquakes' for canonical enriched history.",
+    "get_live_volcano_events": "Fetch recent preliminary Smithsonian/GVP eruption updates in the shared data-result shape. Use get_data with pack_id='volcanoes' for canonical history.",
     "get_disaster_links_for_event": "Return published cross-hazard links for one exact event ID. Use a canonical event row to obtain the ID first.",
     "get_disaster_link_chain": "Expand one exact event ID into a bounded published cross-hazard chain. Use a canonical event row to obtain the ID first.",
     "search_disaster_links": "Find published cross-hazard relationship families by event type and optional year range before choosing an exact event.",
@@ -79,7 +71,7 @@ _NEXT_STEP_PROPERTY = {
         "tool": {"type": "string"},
         "arguments": {"type": "object"},
     },
-    "required": ["action"],
+    "anyOf": [{"required": ["action"]}, {"required": ["tool"]}],
     "additionalProperties": True,
 }
 
@@ -128,22 +120,30 @@ def data_tool_output_schema(tool_name: str) -> dict[str, Any] | None:
         )
     if name == "get_catalog":
         return _result_schema(
-            success_required=["packs"],
+            success_required=["catalog", "detail"],
             properties={
+                "catalog": {"type": "string", "enum": ["data", "geometry"]},
+                "detail": {"type": "string", "enum": ["lite", "full", "download"]},
                 "catalog_version": {"type": "string"},
                 "generated_at": {"type": ["string", "null"]},
                 "pack_count": {"type": "integer", "minimum": 0},
                 "packs": {"type": "array", "items": {"type": "object"}},
                 "tool_families": {"type": "array", "items": {"type": "object"}},
+                "download_url": {"type": "string"},
             },
         )
     if name == "get_pack":
         return _result_schema(
-            success_required=["pack_id"],
+            success_required=["catalog", "pack_id", "detail"],
             properties={
+                "catalog": {"type": "string", "enum": ["data", "geometry"]},
                 "pack_id": {"type": "string"},
+                "detail": {"type": "string", "enum": ["lite", "full", "download"]},
                 "sources": {"type": "array", "items": {"type": "object"}},
                 "material_policy": {"type": "object"},
+                "download_url": {"type": "string"},
+                "full_call": {"type": "object"},
+                "download_call": {"type": "object"},
             },
         )
     if name in DATA_RELATIONSHIP_TOOL_IDS:
@@ -241,8 +241,8 @@ def decorate_shared_help_definition(definition: dict[str, Any]) -> dict[str, Any
         return definition
     decorated = deepcopy(definition)
     decorated["description"] = (
-        "Describe one tool visible on this facade, including its input contract, "
-        "access limits, refusals, example, outputs, and recommended next calls."
+        "Describe one tool visible on this facade, including its exact contract, "
+        "or return a bounded workflow overview for one supported topic."
     )
     decorated["outputSchema"] = _result_schema(
         success_required=["ok", "tool_name"],

@@ -20,7 +20,7 @@ import json
 import sys
 
 from mcp_surface_shared import build_mcp_instructions, build_tool_definitions
-from mcp_tool_help_shared import tool_help_payload
+from mcp_tool_help_shared import topic_help_payload, tool_help_payload
 from pack_registry_shared import pack_tool_allowlists
 
 PROTOCOL_VERSION = "2025-06-18"
@@ -139,7 +139,7 @@ def _handle(message):
             "description": f"DaedalMap starter prompt: {name}",
             "messages": [{
                 "role": "user",
-                "content": {"type": "text", "text": f"Use the DaedalMap MCP tools to satisfy the '{name}' prompt. Start with get_catalog, then the relevant pack tool. Hosted server: {HOSTED_URL}."},
+                "content": {"type": "text", "text": f"Use the DaedalMap MCP tools to satisfy the '{name}' prompt. Follow get_catalog -> get_pack -> the executable next_step returned by that pack. Hosted server: {HOSTED_URL}."},
             }],
         })
     elif method == "resources/read":
@@ -154,6 +154,28 @@ def _handle(message):
         arguments = (message.get("params") or {}).get("arguments") or {}
         if name == "get_tool_help":
             target_name = str(arguments.get("tool_name") or "").strip()
+            topic = str(arguments.get("topic") or "").strip().lower()
+            if topic and not target_name:
+                try:
+                    payload = topic_help_payload(
+                        topic,
+                        question=str(arguments.get("question") or ""),
+                        available_tool_names=tuple(TOOL_BY_NAME),
+                    )
+                except ValueError as exc:
+                    payload = {"ok": False, "error": {"code": "invalid_topic", "message": str(exc)}}
+                    _result(request_id, {
+                        "content": [{"type": "text", "text": json.dumps(payload)}],
+                        "structuredContent": payload,
+                        "isError": True,
+                    })
+                    return
+                _result(request_id, {
+                    "content": [{"type": "text", "text": json.dumps(payload)}],
+                    "structuredContent": payload,
+                    "isError": False,
+                })
+                return
             definition = TOOL_BY_NAME.get(target_name)
             if not definition:
                 payload = {

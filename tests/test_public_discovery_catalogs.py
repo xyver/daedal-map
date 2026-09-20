@@ -45,7 +45,7 @@ class PublicDiscoveryCatalogTests(unittest.TestCase):
         self.assertEqual(historical.json()["pack_count"], 1)
         self.assertEqual(
             historical.json()["download_url"],
-            "https://downloads.daedalmap.com/downloadable/catalog.json",
+            "https://app.daedalmap.com/api/v1/catalog/download",
         )
 
         self.assertEqual(geometry.status_code, 200)
@@ -58,10 +58,42 @@ class PublicDiscoveryCatalogTests(unittest.TestCase):
         self.assertEqual(agent.json()["packs"][0]["pack_id"], "demo")
         self.assertEqual(legacy_agent.json(), agent.json())
 
+    def test_full_catalog_downloads_serve_warmed_published_objects(self) -> None:
+        data_catalog = {"sources": [{"source_id": "demo"}], "marker": "raw-data"}
+        geometry_catalog = {"geometry_banks": [{"bank_id": "demo"}], "marker": "raw-geometry"}
+        with mock.patch(
+            "mapmover.data_loading.load_catalog",
+            return_value=data_catalog,
+        ) as load_data, mock.patch(
+            "mapmover.runtime.geometry_catalog.load_geometry_catalog",
+            return_value=geometry_catalog,
+        ) as load_geometry:
+            data = self.client.get("/api/v1/catalog/download")
+            geometry = self.client.get("/api/v1/geometry/catalog/download")
+
+        self.assertEqual(data.json(), data_catalog)
+        self.assertEqual(geometry.json(), geometry_catalog)
+        self.assertIn("public, max-age=300", data.headers["cache-control"])
+        self.assertIn("public, max-age=300", geometry.headers["cache-control"])
+        self.assertEqual(data.headers["content-disposition"], 'attachment; filename="catalog.json"')
+        self.assertEqual(geometry.headers["content-disposition"], 'attachment; filename="geometry_catalog.json"')
+        load_data.assert_called_once_with()
+        load_geometry.assert_called_once_with()
+
+    def test_pack_download_serves_complete_metadata_as_attachment(self) -> None:
+        payload = {"pack_id": "demo", "material_policy": {"raw": True}}
+        with mock.patch("mapmover.data_loading.load_api_pack_detail", return_value=payload):
+            response = self.client.get("/api/v1/packs/demo/download")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), payload)
+        self.assertEqual(response.headers["content-disposition"], 'attachment; filename="demo.json"')
+        self.assertIn("public, max-age=300", response.headers["cache-control"])
+
     def test_geometry_server_cards_match_each_facade_tool_menu(self) -> None:
         expected_tools = {
             "geography": {
-                "get_tool_help", "how_geometry_works", "get_catalog", "get_pack",
+                "get_tool_help", "get_catalog", "get_pack",
                 "resolve_point", "resolve_points", "resolve_deep_point", "resolve_deep_points",
                 "loc_id_info", "read_geometry_catalog",
                 "list_reference_systems", "identify_dataset_geography", "identify_reference_system",

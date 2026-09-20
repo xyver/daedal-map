@@ -1385,7 +1385,7 @@ def read_geometry_catalog(
         "schema_version": catalog.get("schema_version") or catalog.get("_schema_version"),
         "generated_at": catalog.get("generated_at"),
         "app_summary_endpoint": "https://app.daedalmap.com/api/v1/geometry/catalog",
-        "download_url": "https://downloads.daedalmap.com/downloadable/geometry/geometry_catalog.json",
+        "download_url": "https://app.daedalmap.com/api/v1/geometry/catalog/download",
         "catalog_path": "geometry/geometry_catalog.json",
         "counts": _geometry_catalog_counts(catalog, read_wip=read_wip),
         "capabilities": geometry_capability_summary(catalog),

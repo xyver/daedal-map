@@ -70,7 +70,8 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         envelope = _mcp_call(self.client, "tools/list")
         tool_names = {tool["name"] for tool in envelope["result"]["tools"]}
 
-        self.assertIn("how_geometry_works", tool_names)
+        self.assertNotIn("how_geometry_works", tool_names)
+        self.assertIn("get_tool_help", tool_names)
         self.assertIn("list_reference_systems", tool_names)
         self.assertIn("identify_dataset_geography", tool_names)
         self.assertIn("identify_reference_system", tool_names)
@@ -183,8 +184,8 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
                 self.client,
                 "tools/call",
                 {
-                    "name": "how_geometry_works",
-                    "arguments": {},
+                    "name": "get_tool_help",
+                    "arguments": {"topic": "geometry"},
                     "_meta": {
                         "com.daedalmap/analytics": {
                             "surface": "try_dataset",
@@ -252,23 +253,25 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
 
         self.assertEqual(decoded["result"]["structuredContent"]["bbox"], [None])
 
-    def test_geometry_family_help_explains_workflows_and_per_tool_help(self) -> None:
+    def test_geometry_topic_help_explains_workflows_and_per_tool_help(self) -> None:
         with mock.patch("mapmover.routes.mcp.log_api_query_event") as analytics_mock:
             payload = _tool_call(
                 self.client,
-                "how_geometry_works",
-                {"question": "How do I match an uploaded Census dataset?"},
+                "get_tool_help",
+                {"topic": "geometry", "question": "How do I match an uploaded Census dataset?"},
             )
 
         self.assertTrue(payload["ok"])
+        self.assertEqual(payload["help_topic"], "geometry")
         self.assertEqual(payload["interaction_contract"]["per_tool_help"]["tool"], "get_tool_help")
         workflow_names = {workflow["name"] for workflow in payload["workflows"]}
         self.assertIn("known_or_suspected_dataset_identifiers", workflow_names)
         self.assertIn("partitioned_deep_points_across_multiple_regions", workflow_names)
         self.assertIn("known_loc_ids_to_shapes", workflow_names)
         self.assertNotIn("shapes_and_exports", workflow_names)
-        self.assertEqual(payload["start_here"][0]["tool"], "read_geometry_catalog")
-        self.assertEqual(payload["start_here"][0]["arguments"]["view"], "capabilities")
+        self.assertEqual(payload["start_here"][0]["tool"], "get_catalog")
+        self.assertEqual(payload["start_here"][0]["arguments"]["catalog"], "geometry")
+        self.assertEqual(payload["start_here"][0]["arguments"]["detail"], "lite")
         self.assertEqual(payload["start_here"][0]["arguments"]["country_scope"], "<ISO3 when known>")
         self.assertIn("administrative_spine", payload["concepts"])
         self.assertIn("reference_families", payload["concepts"])
@@ -279,7 +282,7 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         self.assertIn("one shallow scope and one family per call", deep_workflow["important"])
         self.assertIn("identify_reference_system", payload["available_tools"])
         self.assertNotIn("query_dataset", payload["available_tools"])
-        self.assertEqual(analytics_mock.call_args.kwargs["capability_id"], "geometry_family_help")
+        self.assertEqual(analytics_mock.call_args.kwargs["capability_id"], "tool_help_discovery")
 
     def test_reverse_geocoding_facade_lists_multipurpose_point_tool(self) -> None:
         envelope = _mcp_call(self.client, "tools/list", path="/mcp/reverse-geocoding")
@@ -1435,7 +1438,7 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         self.assertEqual(payload["admin_coverage"][0]["product_id"], "global_admin_spine")
         self.assertEqual(payload["app_summary_endpoint"], "https://app.daedalmap.com/api/v1/geometry/catalog")
         self.assertEqual(payload["catalog_path"], "geometry/geometry_catalog.json")
-        self.assertIn("/downloadable/geometry/geometry_catalog.json", payload["download_url"])
+        self.assertIn("/api/v1/geometry/catalog/download", payload["download_url"])
 
     def test_read_geometry_catalog_returns_concise_capabilities(self) -> None:
         with mock.patch(
@@ -1532,7 +1535,7 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
 
         self.assertTrue(payload["ok"])
         self.assertEqual(payload["view"], "full_redirect")
-        self.assertIn("/downloadable/geometry/geometry_catalog.json", payload["download_url"])
+        self.assertIn("/api/v1/geometry/catalog/download", payload["download_url"])
         self.assertNotIn("catalog", payload)
 
     def test_read_geometry_catalog_filters_candidate_products(self) -> None:

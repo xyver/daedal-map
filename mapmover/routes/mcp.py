@@ -20,8 +20,16 @@ from fastapi.responses import JSONResponse, Response
 from access_policy_shared import resolve_effective_access
 from mcp_surface_shared import build_mcp_instructions, build_tool_definitions
 from mcp_data_contract_shared import normalize_data_tool_error
-from mcp_tool_help_shared import geometry_family_help_payload, tool_help_payload
-from mcp_discovery_shared import compact_catalog_payload, compact_pack_detail
+from mcp_tool_help_shared import topic_help_payload, tool_help_payload
+from mcp_discovery_shared import (
+    CATALOG_DOWNLOADS,
+    catalog_download_payload,
+    compact_catalog_payload,
+    compact_pack_detail,
+    full_catalog_payload,
+    mcp_full_pack_detail,
+    pack_download_payload,
+)
 from mcp_runtime_shared import jsonrpc_error_envelope, jsonrpc_result_envelope, mcp_tool_error_payload
 from pack_registry_shared import (
     pack_mcp_server_profile,
@@ -86,7 +94,7 @@ router = APIRouter()
 
 MCP_PACK_READ_TOOLS = {"get_tool_help", "get_catalog", "get_pack"}
 MCP_GEOMETRY_READ_TOOLS = {
-    "how_geometry_works", "resolve_point", "resolve_points", "resolve_deep_point", "resolve_deep_points",
+    "resolve_point", "resolve_points", "resolve_deep_point", "resolve_deep_points",
     "loc_id_info", "read_geometry_catalog",
     "list_reference_systems", "identify_dataset_geography", "identify_reference_system", "resolve_reference",
     "convert_reference", "compare_geographies", "check_geometry", "get_geometry",
@@ -349,7 +357,6 @@ ANALYTICS_PACK_DISCOVERY = "agent_api_discovery"
 # so it produces an api_usage_events row like every other tool in the universe.
 DATA_HELPER_CAPABILITIES: dict[str, str] = {
     "get_tool_help": "tool_help_discovery",
-    "how_geometry_works": "geometry_family_help",
     "get_catalog": "catalog_discovery",
     "get_pack": "pack_detail_discovery",
     "get_live_earthquake_events": "live_earthquake_lookup",
@@ -457,7 +464,7 @@ def _facade_tool_names(pack_id: str | None) -> set[str] | None:
     if not normalized:
         return None
     return set(PACK_TOOL_ALLOWLIST.get(normalized) or {
-        "get_tool_help", "get_catalog", "get_pack", "query_dataset",
+        "get_tool_help", "get_catalog", "get_pack", "get_data",
     })
 
 
@@ -572,19 +579,16 @@ def _augment_catalog_with_tool_families(payload: Any, pack_id: str | None) -> An
     augmented["tool_families"] = entries
     augmented["tool_family_count"] = len(entries)
     augmented["public_catalogs"] = {
-        "data": {
-            "download_url": "https://downloads.daedalmap.com/downloadable/catalog.json",
-            "summary_endpoint": "https://app.daedalmap.com/api/v1/historical/catalog",
-        },
+        "data": dict(CATALOG_DOWNLOADS["data"]),
         "geometry": {
-            "summary_endpoint": "https://app.daedalmap.com/api/v1/geometry/catalog",
+            **CATALOG_DOWNLOADS["geometry"],
             "catalog_path": "geometry/geometry_catalog.json",
         },
     }
     return augmented
 
 
-def _query_dataset_targets_facade(arguments: dict[str, Any], pack_id: str | None) -> bool:
+def _get_data_targets_facade(arguments: dict[str, Any], pack_id: str | None) -> bool:
     normalized = _normalize_pack_id(pack_id)
     if not normalized:
         return True
@@ -1707,7 +1711,7 @@ def _tool_definitions_cached(_epoch: int) -> list[dict[str, Any]]:
     if not claim:
         return definitions
     for definition in definitions:
-        if definition.get("name") in {"how_geometry_works", "read_geometry_catalog", "resolve_point", "resolve_points", "resolve_deep_point", "resolve_deep_points"}:
+        if definition.get("name") in {"read_geometry_catalog", "resolve_point", "resolve_points", "resolve_deep_point", "resolve_deep_points"}:
             definition["description"] = f"{definition.get('description', '').rstrip()} Current catalog: {claim}"
     return definitions
 
@@ -1774,12 +1778,13 @@ def _render_prompt(name: str, arguments: dict[str, Any]) -> dict[str, Any] | Non
         region_line = f'      "region_ids": [{_json_prompt_string(region_id)}],\n' if region_id else ""
         text = (
             f"Safety: {AGENT_SAFETY_NOTICE}\n\n"
-            "Use `get_earthquake_events` to return the largest earthquake in the requested range.\n\n"
+            "Use `get_data` with the earthquakes pack to return the largest earthquake in the requested range.\n\n"
             "Suggested tool call:\n"
             "```json\n"
             "{\n"
-            '  "name": "get_earthquake_events",\n'
+            '  "name": "get_data",\n'
             '  "arguments": {\n'
+            '    "pack_id": "earthquakes",\n'
             '    "metrics": ["magnitude", "timestamp", "place", "depth_km"],\n'
             '    "filters": {\n'
             f'      "time": {{"start": {_json_prompt_string(start_date)}, "end": {_json_prompt_string(end_date)}}}'
@@ -1801,11 +1806,7 @@ def _render_prompt(name: str, arguments: dict[str, Any]) -> dict[str, Any] | Non
         region_id = str(arguments.get("region_id") or "").strip()
         threshold_field = str(arguments.get("threshold_field") or "").strip()
         threshold_value = str(arguments.get("threshold_value") or "").strip()
-        tool_name = {
-            "earthquakes": "get_earthquake_events",
-            "volcanoes": "get_volcanic_activity",
-            "tsunamis": "get_tsunami_events",
-        }.get(pack_id, "query_dataset")
+        tool_name = "get_data"
         metric_compare = ""
         if threshold_field and threshold_value:
             metric_compare = (
@@ -1814,7 +1815,7 @@ def _render_prompt(name: str, arguments: dict[str, Any]) -> dict[str, Any] | Non
                 "      ]"
             )
         region_line = f',\n      "region_ids": [{_json_prompt_string(region_id)}]' if region_id else ""
-        pack_line = f'    "pack_id": {_json_prompt_string(pack_id)},\n' if tool_name == "query_dataset" else ""
+        pack_line = f'    "pack_id": {_json_prompt_string(pack_id)},\n'
         text = (
             f"Safety: {AGENT_SAFETY_NOTICE}\n\n"
             f"Use `{tool_name}` to count {pack_id} events in the requested range.\n\n"
@@ -1843,12 +1844,13 @@ def _render_prompt(name: str, arguments: dict[str, Any]) -> dict[str, Any] | Non
         ids_json = ", ".join(_json_prompt_string(item) for item in ids) or '"JPN"'
         text = (
             f"Safety: {AGENT_SAFETY_NOTICE}\n\n"
-            "Use `get_fx_rates` to fetch USD-normalized FX history for the requested countries.\n\n"
+            "Use `get_data` with the currency pack to fetch USD-normalized FX history for the requested countries.\n\n"
             "Suggested tool call:\n"
             "```json\n"
             "{\n"
-            '  "name": "get_fx_rates",\n'
+            '  "name": "get_data",\n'
             '  "arguments": {\n'
+            '    "pack_id": "currency",\n'
             '    "filters": {\n'
             f'      "region_ids": [{ids_json}],\n'
             f'      "time": {{"start": {_json_prompt_string(start)}, "end": {_json_prompt_string(end)}, "granularity": {_json_prompt_string(granularity)}}}\n'
@@ -1977,22 +1979,20 @@ def _read_resource(uri: str, pack_id: str | None = None) -> dict[str, Any] | Non
                 "## Step 1: Discover what is available (free)\n\n"
                 "Call get_catalog to see all live packs and their free/paid status.\n"
                 "Call get_pack with a pack_id to get coverage dates, canonical freshness metadata, available metrics, preferred canonical tool guidance, and a first-query example.\n\n"
-                "## Step 2: Get free data immediately\n\n"
-                "Both of these return real data with no payment or setup:\n\n"
-                "get_volcanic_activity - eruption records from Holocene to present\n"
-                'Minimal call: {"metrics": ["event_count"], "filters": {"time": {"start": "2000-01-01", "end": "2024-12-31"}}}\n\n'
-                "get_fx_rates - daily FX rates from 1940 to present\n"
-                'Minimal call: {"filters": {"region_ids": ["JPN"], "time": {"start": "2024-01-01", "end": "2024-12-31", "granularity": "monthly"}}}\n\n'
-                "## Step 3: Understand the paid tools\n\n"
-                "get_earthquake_events and get_tsunami_events are paid tools.\n"
+                "## Step 2: Retrieve data\n\n"
+                "Call get_data with the selected pack_id and the exact metrics and filters returned by get_pack.\n"
+                'Volcano example: {"pack_id": "volcanoes", "metrics": ["event_count"], "filters": {"time": {"start": "2000-01-01", "end": "2024-12-31"}}}\n'
+                'FX example: {"pack_id": "currency", "metrics": ["local_per_usd"], "filters": {"region_ids": ["JPN"], "time": {"start": "2024-01-01", "end": "2024-12-31", "granularity": "monthly"}}}\n\n'
+                "## Step 3: Understand pack-priced data\n\n"
+                "get_data applies the selected pack's free or paid access policy.\n"
                 "Use /mcp/account with an X-API-Key to spend account credit, or /mcp/x402 for direct x402 payment on Base.\n"
                 "If you call the smart /mcp endpoint without either credential, the tool returns the exact quote and both choices before any charge.\n"
                 "Small queries stay cheap; very broad scans cost more or need narrower filters.\n"
                 "Requests too broad for live API access return narrowing suggestions instead of a payment challenge.\n\n"
                 "## Canonical first, live second\n\n"
-                "Prefer canonical DaedalMap pack tools first.\n"
+                "Prefer canonical DaedalMap get_data pack reads first.\n"
                 "Use the get_pack response as the source of truth for canonical_available_through, preferred_tool, and any live_fallback_tool guidance.\n"
-                "For earthquakes, use get_earthquake_events for normal historical or recent questions because it is the processed canonical lane.\n"
+                "For earthquakes, use get_data with pack_id=earthquakes for normal historical or recent questions because it is the processed canonical lane.\n"
                 "Only use get_live_earthquake_events when the caller explicitly asks for live/preliminary upstream results or needs a very recent window not yet present in the published canonical lane.\n\n"
                 "## Step 4: Use prompts for ready-to-use examples\n\n"
                 "Call prompts/list to get complete example tool calls for every supported query shape.\n\n"
@@ -2009,17 +2009,17 @@ def _read_resource(uri: str, pack_id: str | None = None) -> dict[str, Any] | Non
             (
                 "# Agent Examples\n\n"
                 "## Free: count volcanic eruptions in Japan since 2000\n\n"
-                "Tool: get_volcanic_activity\n"
-                '{"metrics": ["event_count"], "filters": {"time": {"start": "2000-01-01", "end": "2024-12-31"}, "region_ids": ["JPN"]}}\n\n'
+                "Tool: get_data\n"
+                '{"pack_id": "volcanoes", "metrics": ["event_count"], "filters": {"time": {"start": "2000-01-01", "end": "2024-12-31"}, "region_ids": ["JPN"]}}\n\n'
                 "## Free: monthly USD/JPY rate for 2024\n\n"
-                "Tool: get_fx_rates\n"
-                '{"filters": {"region_ids": ["JPN"], "time": {"start": "2024-01-01", "end": "2024-12-31", "granularity": "monthly"}}, "metrics": ["local_per_usd"]}\n\n'
+                "Tool: get_data\n"
+                '{"pack_id": "currency", "filters": {"region_ids": ["JPN"], "time": {"start": "2024-01-01", "end": "2024-12-31", "granularity": "monthly"}}, "metrics": ["local_per_usd"]}\n\n'
                 "## Paid: largest earthquake in Turkey in 2023 (account credit or x402)\n\n"
-                "Tool: get_earthquake_events\n"
-                '{"metrics": ["magnitude", "timestamp", "place", "depth_km"], "filters": {"time": {"start": "2023-01-01", "end": "2023-12-31"}, "region_ids": ["TUR"]}, "sort": [{"field": "magnitude", "direction": "desc"}], "limit": 1}\n\n'
+                "Tool: get_data\n"
+                '{"pack_id": "earthquakes", "metrics": ["magnitude", "timestamp", "place", "depth_km"], "filters": {"time": {"start": "2023-01-01", "end": "2023-12-31"}, "region_ids": ["TUR"]}, "sort": [{"field": "magnitude", "direction": "desc"}], "limit": 1}\n\n'
                 "## Paid: count tsunamis above 5m wave height since 1950 (account credit or x402)\n\n"
-                "Tool: get_tsunami_events\n"
-                '{"metrics": ["event_count"], "filters": {"time": {"start": 2000, "end": 2024}, "region_ids": ["JPN", "IDN", "IHO1953-240001002"], "compare": [{"field": "max_water_height_m", "op": ">=", "value": 5}]}}\n\n'
+                "Tool: get_data\n"
+                '{"pack_id": "tsunamis", "metrics": ["event_count"], "filters": {"time": {"start": 2000, "end": 2024}, "region_ids": ["JPN", "IDN", "IHO1953-240001002"], "compare": [{"field": "max_water_height_m", "op": ">=", "value": 5}]}}\n\n'
                 "## Filter reference\n\n"
                 "time: {start, end} required for event packs. Add granularity for FX (daily/weekly/monthly).\n"
                 "region_ids: list of canonical codes - country level (JPN, USA, TUR) or a reviewed named-water loc_id (IHO1953-240001002 for Mediterranean Sea). XOO is deprecated.\n"
@@ -2072,29 +2072,8 @@ def _read_resource(uri: str, pack_id: str | None = None) -> dict[str, Any] | Non
     return None
 
 
-def _build_named_dataset_payload(tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
-    payload = _ensure_request_id(arguments, tool_name)
-    if tool_name == "get_fx_rates":
-        payload.setdefault("metrics", ["local_per_usd"])
-        payload["pack_id"] = "currency"
-        payload.pop("source_id", None)
-        return payload
-
-    source_ids = {
-        "get_earthquake_events": "earthquakes_events",
-        "get_volcanic_activity": "volcanoes_events",
-        "get_tsunami_events": "tsunamis_events",
-    }
-    payload["source_id"] = source_ids[tool_name]
-    payload.pop("pack_id", None)
-    return payload
-
-
 async def _execute_paid_tool(request: Request, tool_name: str, arguments: dict[str, Any], rpc_request_id: Any) -> Response:
-    if tool_name == "query_dataset":
-        payload = _ensure_request_id(arguments, tool_name)
-    else:
-        payload = _build_named_dataset_payload(tool_name, arguments)
+    payload = _ensure_request_id(arguments, tool_name)
 
     response = await execute_query_dataset_payload(request, payload)
 
@@ -5486,7 +5465,7 @@ async def mcp_endpoint_info(pack_id: str | None = None):
         return JSONResponse({"error": "Pack MCP facade not found"}, status_code=404)
     if normalized_pack_id in {"geography", "reverse-geocoding", "boundaries"}:
         how_to_start = [
-            "Call how_geometry_works for the family workflow.",
+            "Call get_tool_help with topic='geometry' for the family workflow.",
             "Call read_geometry_catalog with view='capabilities' and a country_scope when known.",
             "Call get_tool_help with an exact name from tools/list before an unfamiliar tool.",
             "Use resolve_point for coordinates or identify_reference_system and resolve_reference for outside identifiers.",
@@ -5680,8 +5659,26 @@ async def mcp_endpoint(request: Request, pack_id: str | None = None):
         if rate_limit_response:
             return rate_limit_response
         target_name = str(arguments.get("tool_name") or "").strip()
-        if not target_name:
-            return _jsonrpc_error(request_id, -32602, "tool_name is required")
+        topic = str(arguments.get("topic") or "").strip().lower()
+        if bool(target_name) == bool(topic):
+            return _jsonrpc_error(request_id, -32602, "Provide exactly one of tool_name or topic")
+        if topic:
+            try:
+                payload = topic_help_payload(
+                    topic,
+                    question=str(arguments.get("question") or ""),
+                    available_tool_names=[item["name"] for item in _facade_tools(normalized_pack_id)],
+                    catalog_capabilities=(geometry_capability_summary() if topic == "geometry" else None),
+                )
+            except ValueError as exc:
+                return _jsonrpc_error(request_id, -32602, str(exc))
+            return _finish_data_helper(
+                request,
+                tool_name=tool_name,
+                started_at=helper_started_at,
+                payload=payload,
+                rpc_request_id=request_id,
+            )
         target_definition = _tool_definition(target_name)
         if target_definition is None or not _tool_allowed_for_facade(target_name, normalized_pack_id):
             return _finish_data_helper(
@@ -5725,30 +5722,52 @@ async def mcp_endpoint(request: Request, pack_id: str | None = None):
             rpc_request_id=request_id,
         )
 
-    if tool_name == "how_geometry_works":
-        rate_limit_response = _live_tool_rate_limit_response(request, tool_name, request_id)
-        if rate_limit_response:
-            return rate_limit_response
-        payload = geometry_family_help_payload(
-            str(arguments.get("question") or ""),
-            catalog_capabilities=geometry_capability_summary(),
-        )
-        return _finish_data_helper(
-            request,
-            tool_name=tool_name,
-            started_at=helper_started_at,
-            payload=payload,
-            rpc_request_id=request_id,
-        )
-
     if tool_name == "get_catalog":
         rate_limit_response = _live_tool_rate_limit_response(request, tool_name, request_id)
         if rate_limit_response:
             return rate_limit_response
-        payload = load_api_catalog() or {"packs": []}
-        payload = _filter_catalog_payload_for_facade(payload, normalized_pack_id)
-        payload = compact_catalog_payload(payload)
-        payload = _augment_catalog_with_tool_families(payload, normalized_pack_id)
+        geometry_facades = set(tool_family_ids()) | set(tool_family_alias_ids())
+        default_catalog = "geometry" if normalized_pack_id in geometry_facades else "data"
+        catalog = str(arguments.get("catalog") or default_catalog).strip().lower()
+        detail = str(arguments.get("detail") or "lite").strip().lower()
+        country_scope = str(arguments.get("country_scope") or "").strip().upper()
+        if catalog not in {"data", "geometry"}:
+            return _jsonrpc_error(request_id, -32602, "catalog must be 'data' or 'geometry'")
+        if detail not in {"lite", "full", "download"}:
+            return _jsonrpc_error(request_id, -32602, "detail must be 'lite', 'full', or 'download'")
+        if country_scope and (catalog != "geometry" or detail == "download"):
+            return _jsonrpc_error(request_id, -32602, "country_scope is only valid for catalog='geometry' with detail='lite' or 'full'")
+        if detail == "download":
+            payload = catalog_download_payload(catalog)
+        elif catalog == "geometry":
+            from mapmover.runtime.reference_exchange import read_geometry_catalog
+
+            payload = read_geometry_catalog(
+                view="summary" if detail == "full" else "capabilities",
+                country_scope=country_scope or None,
+            )
+            payload["catalog"] = "geometry"
+            payload["detail"] = detail
+            payload["next_step"] = {
+                "stage": "inspect",
+                "tool": "get_pack",
+                "arguments": {"catalog": "geometry", "pack_id": normalized_pack_id or "geography", "detail": "lite"},
+            }
+        else:
+            payload = load_api_catalog() or {"packs": []}
+            payload = _filter_catalog_payload_for_facade(payload, normalized_pack_id)
+            if detail == "full":
+                pack_details = {
+                    str(item.get("pack_id") or ""): load_api_pack_detail(str(item.get("pack_id") or ""))
+                    for item in payload.get("packs") or []
+                    if isinstance(item, dict) and item.get("pack_id")
+                }
+                payload = full_catalog_payload(payload, pack_details)
+            else:
+                payload = compact_catalog_payload(payload)
+            payload = _augment_catalog_with_tool_families(payload, normalized_pack_id)
+            payload["catalog"] = "data"
+            payload["detail"] = detail
         return _finish_data_helper(
             request,
             tool_name=tool_name,
@@ -5764,19 +5783,37 @@ async def mcp_endpoint(request: Request, pack_id: str | None = None):
             return rate_limit_response
         pack_id = str(arguments.get("pack_id") or normalized_pack_id or "").strip()
         detail = str(arguments.get("detail") or "lite").strip().lower()
-        if detail not in {"lite", "full"}:
-            return _jsonrpc_error(request_id, -32602, "detail must be 'lite' or 'full'")
+        requested_catalog = str(arguments.get("catalog") or "").strip().lower()
+        if detail not in {"lite", "full", "download"}:
+            return _jsonrpc_error(request_id, -32602, "detail must be 'lite', 'full', or 'download'")
+        if requested_catalog and requested_catalog not in {"data", "geometry"}:
+            return _jsonrpc_error(request_id, -32602, "catalog must be 'data' or 'geometry'")
         if not pack_id:
             return _jsonrpc_error(request_id, -32602, "pack_id is required")
         if normalized_pack_id and pack_id.lower() != normalized_pack_id:
             return _jsonrpc_error(request_id, -32602, f"Pack '{pack_id}' is not available on this MCP facade")
-        if pack_id.lower() in set(tool_family_ids()) | set(tool_family_alias_ids()):
+        geometry_ids = set(tool_family_ids()) | set(tool_family_alias_ids())
+        inferred_catalog = "geometry" if pack_id.lower() in geometry_ids else "data"
+        selected_catalog = requested_catalog or inferred_catalog
+        if selected_catalog != inferred_catalog:
+            return _jsonrpc_error(
+                request_id,
+                -32602,
+                f"Pack '{pack_id}' belongs to catalog='{inferred_catalog}', not catalog='{selected_catalog}'",
+            )
+        if selected_catalog == "geometry":
             family_payload = tool_family_pack_detail(pack_id.lower())
             return _finish_data_helper(
                 request,
                 tool_name=tool_name,
                 started_at=helper_started_at,
-                payload=(family_payload if detail == "full" else compact_pack_detail(family_payload)),
+                payload=(
+                    pack_download_payload(pack_id, catalog="geometry", payload=family_payload)
+                    if detail == "download"
+                    else mcp_full_pack_detail(family_payload, catalog="geometry")
+                    if detail == "full"
+                    else compact_pack_detail(family_payload, catalog="geometry")
+                ),
                 rpc_request_id=request_id,
             )
         payload = load_api_pack_detail(pack_id)
@@ -5790,8 +5827,13 @@ async def mcp_endpoint(request: Request, pack_id: str | None = None):
                 is_error=True,
                 error_code="pack_not_found",
             )
-        if detail != "full":
-            payload = compact_pack_detail(payload)
+        payload = (
+            pack_download_payload(pack_id, catalog="data", payload=payload)
+            if detail == "download"
+            else mcp_full_pack_detail(payload, catalog="data")
+            if detail == "full"
+            else compact_pack_detail(payload, catalog="data")
+        )
         return _finish_data_helper(
             request,
             tool_name=tool_name,
@@ -5937,24 +5979,31 @@ async def mcp_endpoint(request: Request, pack_id: str | None = None):
         )
 
     if tool_name not in {
-        "get_earthquake_events",
         "get_live_earthquake_events",
         "get_disaster_link_chain",
         "get_disaster_links_for_event",
-        "get_volcanic_activity",
         "get_live_volcano_events",
-        "get_tsunami_events",
-        "get_fx_rates",
         "search_disaster_links",
-        "query_dataset",
+        "get_data",
     }:
         return _jsonrpc_error(request_id, -32601, f"Tool '{tool_name}' not found")
 
-    if tool_name == "query_dataset" and not _query_dataset_targets_facade(arguments, normalized_pack_id):
+    if tool_name == "get_data" and not _get_data_targets_facade(arguments, normalized_pack_id):
         return _jsonrpc_error(
             request_id,
             -32602,
-            f"query_dataset calls on this MCP facade must target pack_id '{normalized_pack_id}'",
+            f"get_data calls on this MCP facade must target pack_id '{normalized_pack_id}'",
         )
+    if tool_name == "get_data":
+        requested_pack_id = str(arguments.get("pack_id") or "").strip().lower()
+        if not requested_pack_id:
+            return _jsonrpc_error(request_id, -32602, "get_data requires pack_id from get_catalog/get_pack")
+        geometry_ids = set(tool_family_ids()) | set(tool_family_alias_ids())
+        if requested_pack_id in geometry_ids:
+            return _jsonrpc_error(
+                request_id,
+                -32602,
+                "Geometry families are not row-query packs. Call get_pack(catalog='geometry') and use its focused next_step tool.",
+            )
 
     return await _execute_paid_tool(request, tool_name, arguments, request_id)

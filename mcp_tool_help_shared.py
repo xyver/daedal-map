@@ -10,6 +10,8 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any
 
+from mcp_discovery_shared import data_access_workflow
+
 from tool_access_shared import (
     tool_account_item_limit,
     tool_effective_rate_limit,
@@ -40,25 +42,17 @@ TOOL_GUIDANCE: dict[str, dict[str, Any]] = {
         {"tool_name": "resolve_point"},
         ["purpose", "input_schema", "interaction_contract", "examples", "access", "recommended_next_calls", "available_on_facades"],
     ),
-    "how_geometry_works": _g(
-        ["You are new to the geometry MCP or need to choose the correct workflow before inspecting one tool."],
-        ["Executing a geometry operation", "Replacing get_tool_help for one exact tool"],
-        {"question": "How do I match an uploaded Census dataset to geometry?"},
-        ["core_rule", "interaction_contract", "workflows", "available_tools", "notes"],
-        ["get_tool_help", "read_geometry_catalog", "identify_reference_system"],
-        ["geometry catalog", "reference systems", "bank vintages", "loc_id doctrine"],
-    ),
     "get_catalog": _g(
         ["You need to discover currently published data packs and tool families."],
         ["Querying pack rows", "Discovering detailed geography-bank coverage"],
         {}, ["packs", "tool_families", "public_catalogs", "full_catalog"], ["get_pack", "read_geometry_catalog"]
     ),
     "get_pack": _g(
-        ["You selected a pack or tool family and need its live contract before calling it."],
+        ["You selected one data pack or geometry tool family and need its metadata and live contract before calling it."],
         ["Executing a dataset query", "Fetching geometry"],
-        {"pack_id": "earthquakes", "detail": "lite"},
-        ["quick_start", "routing", "pricing", "sources", "temporal_coverage"],
-        ["query_dataset", "get_tool_help"], ["source metadata", "release/freshness fields"]
+        {"catalog": "data", "pack_id": "earthquakes", "detail": "lite"},
+        ["catalog", "pack_id", "detail", "quick_start", "routing", "pricing", "next_step", "download_url"],
+        ["get_data", "get_tool_help"], ["source metadata", "release/freshness fields"]
     ),
     "resolve_point": _g(
         ["You have one WGS84 latitude/longitude pair and need a first-pass administrative loc_id chain through Admin 3."],
@@ -225,52 +219,28 @@ TOOL_GUIDANCE: dict[str, dict[str, Any]] = {
         {"start_event_type": "earthquake", "end_event_type": "tsunami"},
         ["links", "families", "count"], ["get_disaster_links_for_event"], ["published link family", "method"]
     ),
-    "get_earthquake_events": _g(
-        ["You need canonical enriched earthquake history with stable loc_id geography."],
-        ["Preliminary live-only events", "Unbounded global scans"],
-        {"metrics": ["event_count"], "filters": {"time": {"start": "2020-01-01", "end": "2020-12-31"}, "region_ids": ["USA"]}},
-        ["rows", "row_count", "source_id", "provenance"], ["get_live_earthquake_events", "get_pack"], ["source", "canonical window", "last_updated"]
-    ),
     "get_live_earthquake_events": _g(
         ["You explicitly need recent preliminary USGS earthquake events beyond the canonical window."],
         ["Canonical historical analysis"],
         {"hours": 24, "min_magnitude": 4, "limit": 20},
-        ["events", "row_count", "fetched_at"], ["get_earthquake_events"], ["upstream URL", "fetch time"]
-    ),
-    "get_volcanic_activity": _g(
-        ["You need canonical historical eruption records or VEI metrics."],
-        ["Recent preliminary upstream updates"],
-        {"metrics": ["event_count"], "filters": {"time": {"start": 2000, "end": 2020}}},
-        ["rows", "row_count", "source_id", "provenance"], ["get_live_volcano_events", "get_pack"], ["source", "canonical window"]
+        ["events", "row_count", "fetched_at"], ["get_data"], ["upstream URL", "fetch time"]
     ),
     "get_live_volcano_events": _g(
         ["You explicitly need recent preliminary Smithsonian/GVP eruption updates."],
         ["Canonical historical eruption analysis"],
         {"days": 30, "limit": 20}, ["events", "row_count", "fetched_at"],
-        ["get_volcanic_activity"], ["upstream URL", "fetch time"]
+        ["get_data"], ["upstream URL", "fetch time"]
     ),
-    "get_tsunami_events": _g(
-        ["You need canonical historical tsunami records, counts, or runup metrics."],
-        ["Unbounded scans", "Live warning data"],
-        {"metrics": ["event_count"], "filters": {"time": {"start": 2000, "end": 2020}, "region_ids": ["JPN"]}},
-        ["rows", "row_count", "source_id", "provenance"], ["get_pack"], ["source", "canonical window"]
-    ),
-    "get_fx_rates": _g(
-        ["You need USD-normalized daily, weekly, or monthly FX history."],
-        ["Current trading quotes", "Non-country geography"],
-        {"filters": {"region_ids": ["CAN"], "time": {"start": "2024-01-01", "end": "2024-12-31", "granularity": "monthly"}}},
-        ["rows", "row_count", "granularity", "provenance"], ["get_pack"], ["upstream sources", "last_updated"]
-    ),
-    "query_dataset": _g(
-        ["You need a structured query against a published data pack or source."],
-        ["Calling geography tool families", "Guessing metrics without get_pack", "Unbounded event scans"],
+    "get_data": _g(
+        ["You selected a published data pack and need its canonical rows or supported aggregate metrics."],
+        ["Calling geometry tool families", "Passing internal source_id values", "Guessing metrics without get_pack", "Unbounded event scans"],
         {"pack_id": "currency", "metrics": ["local_per_usd"], "filters": {"region_ids": ["CAN"], "time": {"start": "2024-01-01", "end": "2024-01-31"}}},
-        ["rows", "row_count", "source_id", "pack_id", "provenance"], ["get_pack"], ["source metadata", "release/freshness", "license"]
+        ["rows", "row_count", "source_id", "pack_id", "filters_applied", "provenance"], ["get_pack"], ["source metadata", "release/freshness", "license"]
     ),
 }
 
 
-def geometry_family_help_payload(
+def geometry_topic_help_payload(
     question: str | None = None,
     *,
     catalog_capabilities: dict[str, Any] | None = None,
@@ -278,15 +248,16 @@ def geometry_family_help_payload(
     capabilities = dict(catalog_capabilities or {})
     return {
         "ok": True,
-        "tool_name": "how_geometry_works",
+        "tool_name": "get_tool_help",
+        "help_topic": "geometry",
         "summary": "Start here before using DaedalMap geometry tools. The tools resolve coordinates and identifiers onto loc_id, inspect geography, and return bounded shape results.",
         "core_rule": "Learn the durable geometry model here, then read the live catalog for the selected country's current depths, families, and query guidance before constructing a large call.",
         "coverage": capabilities,
         "start_here": [
             {
                 "step": 1,
-                "tool": "read_geometry_catalog",
-                "arguments": {"view": "capabilities", "country_scope": "<ISO3 when known>"},
+                "tool": "get_catalog",
+                "arguments": {"catalog": "geometry", "detail": "lite", "country_scope": "<ISO3 when known>"},
                 "purpose": "Read the selected country's current admin depth, available_family_ids, family coverage, and query guidance. Omit country_scope for the concise global coverage model.",
             },
             {
@@ -304,7 +275,7 @@ def geometry_family_help_payload(
             "loc_id": "The stable DaedalMap geography identifier shared by geometry and data tools.",
             "administrative_spine": {
                 "rule": "Each country selects one complete, nested administrative hierarchy. Countries have different depths and native tier names.",
-                "discovery": "Use read_geometry_catalog(view='capabilities', country_scope='<ISO3>') for the active depth and current query guidance.",
+                "discovery": "Use get_catalog(catalog='geometry', detail='lite', country_scope='<ISO3>') for the active depth and current query guidance.",
             },
             "reference_families": {
                 "rule": "Postal areas, places, watersheds, electoral districts, Indigenous regions, weather zones, water bodies, and other families are independent reference systems unless the catalog says they belong to the selected spine.",
@@ -412,6 +383,81 @@ def geometry_family_help_payload(
     }
 
 
+TOPIC_TOOLS: dict[str, tuple[str, ...]] = {
+    "overview": ("get_catalog", "get_pack", "get_data", "resolve_reference", "resolve_point", "get_geometry"),
+    "data": ("get_catalog", "get_pack", "get_data"),
+    "disasters": (
+        "get_catalog", "get_pack", "get_data", "get_disaster_links_for_event",
+        "get_disaster_link_chain", "search_disaster_links", "get_live_earthquake_events",
+        "get_live_volcano_events",
+    ),
+    "custom_data": (
+        "identify_dataset_geography", "identify_reference_system", "resolve_loc_id_scope",
+        "estimate_conversion_job", "create_conversion_job", "get_job_status",
+        "estimate_geometry_package", "create_geometry_export",
+    ),
+}
+
+
+TOPIC_SUMMARIES = {
+    "overview": "Discover a catalog, inspect one selected pack, then use the narrowest execution tool for the request.",
+    "data": "Use get_catalog to select a data pack, get_pack to learn its fields and routing, then query its published rows.",
+    "disasters": "Use normal catalog and pack discovery first; use disaster-specific tools only for event links or live upstream observations.",
+    "custom_data": "Identify geography from bounded samples before estimating or creating a conversion or geometry export job.",
+}
+
+
+def topic_help_payload(
+    topic: str,
+    *,
+    question: str | None = None,
+    available_tool_names: list[str] | tuple[str, ...] = (),
+    catalog_capabilities: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Return one bounded workflow overview through the shared help tool."""
+    selected = str(topic or "").strip().lower()
+    available = set(available_tool_names)
+    if selected == "geometry":
+        payload = geometry_topic_help_payload(
+            question,
+            catalog_capabilities=catalog_capabilities,
+        )
+        payload["available_tools"] = [
+            name for name in payload.get("available_tools") or []
+            if not available or name in available
+        ]
+        return payload
+    if selected not in TOPIC_TOOLS:
+        raise ValueError("topic must be overview, data, disasters, custom_data, or geometry")
+    tools = [name for name in TOPIC_TOOLS[selected] if not available or name in available]
+    if selected in {"overview", "data", "disasters"}:
+        workflow = data_access_workflow()
+        start_here = workflow["steps"]
+        next_step = start_here[0]
+    else:
+        start_here = [
+            {
+                "stage": "identify",
+                "tool": "identify_dataset_geography",
+                "arguments": {"columns": [{"name": "<column name>", "values": ["<bounded string sample>"]}]},
+            },
+            {"stage": "inspect", "tool": "get_tool_help", "arguments": {"tool_name": "<selected builder tool>"}},
+        ]
+        workflow = {"goal": TOPIC_SUMMARIES[selected], "steps": start_here}
+        next_step = start_here[0]
+    return {
+        "ok": True,
+        "tool_name": "get_tool_help",
+        "help_topic": selected,
+        "summary": TOPIC_SUMMARIES[selected],
+        "available_tools": tools,
+        "workflow": workflow,
+        "start_here": start_here,
+        "next_step": next_step,
+        "input_question": str(question or "").strip() or None,
+    }
+
+
 def tool_help_payload(
     tool_name: str,
     *,
@@ -443,7 +489,7 @@ def tool_help_payload(
     }
     access = {
         "pricing": pricing,
-        "free_discovery": name in {"get_tool_help", "how_geometry_works", "get_catalog", "get_pack", "read_geometry_catalog", "list_reference_systems", "identify_dataset_geography", "identify_reference_system"},
+        "free_discovery": name in {"get_tool_help", "get_catalog", "get_pack", "read_geometry_catalog", "list_reference_systems", "identify_dataset_geography", "identify_reference_system"},
         "limits": limits,
         "above_free_limit": "payment_required" if pricing.startswith("paid") else (
             "bounded_inline_limit_error" if name in {"create_geometry_export", "create_conversion_job"} else "typed_cap_error"

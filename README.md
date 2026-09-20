@@ -42,8 +42,8 @@ codex mcp add daedalmap --url https://app.daedalmap.com/mcp
 ```
 
 Any client that supports streamable HTTP MCP can use the same URL. Start with
-`how_geometry_works` for geography jobs, or `get_catalog`, then `get_pack`,
-then `query_dataset` for data. Setup for other clients is in the
+`get_tool_help` with `topic='geometry'` for geography jobs, or `get_catalog`, then `get_pack`,
+then `get_data` for data. Setup for other clients is in the
 [agent docs](https://www.daedalmap.com/docs/for-agents).
 
 Discovery and small geography lookups are free. Larger batches, exports, and
@@ -54,7 +54,7 @@ before any charge. `get_catalog` reports the access lane for each pack.
 
 | Job | Tools |
 |---|---|
-| Learn the model | `how_geometry_works`, `get_tool_help` |
+| Learn the model | `get_tool_help` with a topic or exact tool name |
 | Find what exists | `read_geometry_catalog`, `list_reference_systems`, `get_catalog`, `get_pack` |
 | Coordinates to places | `resolve_point`, `resolve_points`, `resolve_deep_point`, `resolve_deep_points` |
 | Identify a column of codes | `identify_dataset_geography`, `identify_reference_system` |
@@ -62,7 +62,7 @@ before any charge. `get_catalog` reports the access lane for each pack.
 | Inspect and relate places | `loc_id_info`, `compare_geographies`, `resolve_loc_id_scope` |
 | Shapes and exports | `check_geometry`, `get_geometry`, `estimate_geometry_package`, `create_geometry_export` |
 | Convert your own rows | `estimate_conversion_job`, `create_conversion_job`, `get_job_status` |
-| Query maintained data | `query_dataset`, `get_earthquake_events`, `get_tsunami_events`, `get_volcanic_activity`, `get_fx_rates` |
+| Query maintained data | `get_data` with a `pack_id`, exact metrics, and structured filters |
 | Live feeds | `get_live_earthquake_events`, `get_live_volcano_events` |
 | Cross-hazard links | `get_disaster_links_for_event`, `get_disaster_link_chain`, `search_disaster_links` |
 
