@@ -97,7 +97,7 @@ class PublicDiscoveryCatalogTests(unittest.TestCase):
                 "resolve_point", "resolve_points", "resolve_deep_point", "resolve_deep_points",
                 "loc_id_info", "read_geometry_catalog",
                 "list_reference_systems", "identify_dataset_geography", "identify_reference_system",
-                "resolve_reference", "convert_reference", "check_geometry",
+                "resolve_reference", "convert_reference",
                 "compare_geographies", "get_geometry", "resolve_loc_id_scope",
                 "estimate_geometry_package", "create_geometry_export",
                 "estimate_conversion_job", "create_conversion_job", "get_job_status",
@@ -108,7 +108,7 @@ class PublicDiscoveryCatalogTests(unittest.TestCase):
             },
             "boundaries": {
                 "get_tool_help", "get_catalog", "get_pack", "loc_id_info",
-                "check_geometry", "compare_geographies", "get_geometry",
+                "compare_geographies", "get_geometry",
                 "resolve_loc_id_scope", "estimate_geometry_package",
                 "create_geometry_export", "get_job_status",
             },

@@ -59,35 +59,35 @@ TOOL_GUIDANCE: dict[str, dict[str, Any]] = {
         ["Point arrays", "Resolving names or outside codes", "Returning polygons", "Resolving Admin 4-6"],
         {"lat": 49.2827, "lon": -123.1207},
         ["deepest_resolved_loc_id", "stack", "resolution_mode", "available_deeper_admin_levels"],
-        ["resolve_deep_point", "loc_id_info", "check_geometry", "get_geometry"]
+        ["resolve_deep_point", "loc_id_info", "get_geometry"]
     ),
     "resolve_points": _g(
         ["You have a WGS84 point array and need Admin 0-3 loc_id chains in one call."],
         ["One coordinate", "Admin 4-6", "Returning polygons"],
         {"points": [{"id": "row-1", "lat": 49.2827, "lon": -123.1207}]},
         ["results", "resolved_count", "unresolved_count", "batch_id"],
-        ["resolve_deep_points", "loc_id_info", "check_geometry"]
+        ["resolve_deep_points", "loc_id_info", "get_geometry"]
     ),
     "resolve_deep_point": _g(
         ["A shallow lookup returned an Admin 1-3 loc_id and you need either deeper administrative detail or one shape-backed family."],
         ["First-pass country discovery", "Multiple families", "Returning polygons"],
         {"lat": 34.0522, "lon": -118.2437, "shallow_loc_id": "USA-CA-037", "family": "postal_area"},
         ["shallow_loc_id", "family", "family_result"],
-        ["loc_id_info", "check_geometry", "get_geometry"]
+        ["loc_id_info", "get_geometry"]
     ),
     "resolve_deep_points": _g(
         ["A shallow bulk lookup returned loc_ids and one scoped point array needs deeper administrative detail or one shape-backed family."],
         ["One coordinate", "First-pass country discovery", "Multiple families", "Returning polygons"],
         {"shallow_loc_id": "USA-CA-037", "family": "postal_area", "points": [{"id": "row-1", "lat": 34.0522, "lon": -118.2437}]},
         ["results", "resolved_count", "unresolved_count", "shallow_loc_id", "family", "batch_id"],
-        ["loc_id_info", "check_geometry", "get_geometry"]
+        ["loc_id_info", "get_geometry"]
     ),
     "loc_id_info": _g(
         ["You already have loc_id values and need identity, hierarchy, lifecycle, or attached references."],
         ["Returning full polygons", "Calculating pairwise overlap"],
         {"loc_id": "CAN-BC", "include_hierarchy": True},
         ["loc_id", "parent_id", "hierarchy", "valid_from", "valid_to", "supersession", "references"],
-        ["check_geometry", "get_geometry", "compare_geographies"],
+        ["get_geometry", "compare_geographies"],
         ["source_system", "source_vintage", "release_id", "bank_id"]
     ),
     "read_geometry_catalog": _g(
@@ -95,7 +95,7 @@ TOOL_GUIDANCE: dict[str, dict[str, Any]] = {
         ["Resolving a place", "Returning shapes"],
         {"view": "capabilities"},
         ["capabilities", "counts", "download_url"],
-        ["list_reference_systems", "resolve_reference", "check_geometry"],
+        ["list_reference_systems", "resolve_reference", "get_geometry"],
         ["catalog fingerprint", "bank releases", "source licenses"]
     ),
     "list_reference_systems": _g(
@@ -109,7 +109,7 @@ TOOL_GUIDANCE: dict[str, dict[str, Any]] = {
         ["Passing the user's prose question as arguments", "Converting every dataset row", "Returning polygons", "Claiming full-dataset validation from a sample"],
         {"identifiers": ["06073000100", "06073000201"], "expected": {"system": "us_census_geoid", "geo_level": "tract", "vintage": "2020"}, "country_scope": "USA"},
         ["status", "candidates", "match_rate", "geometry_available_count", "geometry_bank_ids", "recommended_binding"],
-        ["estimate_conversion_job", "resolve_reference", "check_geometry"],
+        ["estimate_conversion_job", "resolve_reference", "get_geometry"],
         ["reference system", "source vintage", "geometry bank ids", "validation scope"],
     ),
     "identify_dataset_geography": _g(
@@ -125,7 +125,7 @@ TOOL_GUIDANCE: dict[str, dict[str, Any]] = {
         ["Converting coordinates", "Pretending overlap is strict parentage"],
         {"from_system": "zip", "value": "00601", "target_admin_level": "county"},
         ["resolved_loc_id", "matches", "relationship_type", "confidence"],
-        ["loc_id_info", "convert_reference", "check_geometry"],
+        ["loc_id_info", "convert_reference", "get_geometry"],
         ["source_system", "source_vintage", "bridge_artifact", "relationship_method"]
     ),
     "convert_reference": _g(
@@ -133,7 +133,7 @@ TOOL_GUIDANCE: dict[str, dict[str, Any]] = {
         ["Resolving coordinates", "Discarding one-to-many weights"],
         {"from_system": "zip", "value": "00601", "to_system": "nws_fire"},
         ["from", "to_system", "results", "relationship_type", "weight"],
-        ["loc_id_info", "check_geometry"],
+        ["loc_id_info", "get_geometry"],
         ["source and target systems", "bridge vintage", "relationship method", "artifact id"]
     ),
     "compare_geographies": _g(
@@ -144,16 +144,8 @@ TOOL_GUIDANCE: dict[str, dict[str, Any]] = {
         ["loc_id_info", "get_geometry"],
         ["left.bank_id", "right.bank_id", "geometry vintages", "calculation method"]
     ),
-    "check_geometry": _g(
-        ["You have loc_ids and want a cheap exact-shape availability preflight."],
-        ["Returning polygons", "Resolving identities or coordinates"],
-        {"loc_ids": ["CAN-BC", "CAN-NOPE"]},
-        ["requested", "available", "missing", "items", "supersession"],
-        ["get_geometry", "estimate_geometry_package"],
-        ["bank_id", "geometry_vintage", "source", "license"]
-    ),
     "get_geometry": _g(
-        ["You have exact loc_ids, or one administrative parent and target level, and need bbox, centroid, or opt-in polygons."],
+        ["You have exact loc_ids, or one administrative parent and target level, and need a fast shape-availability check, bbox, centroid, or opt-in polygons."],
         ["Identifying unknown geography", "Resolving names", "Inferring independent families from admin ancestry", "Bulk export packaging"],
         {"scope": {"parent_loc_id": "USA-TX", "admin_level": "admin_2"}, "include_polygon": False},
         ["selection", "scope", "requested", "available", "missing", "items"],
@@ -165,7 +157,7 @@ TOOL_GUIDANCE: dict[str, dict[str, Any]] = {
         ["Crossing mixed-release seams", "Natural-language place resolution"],
         {"parent_loc_id": "CAN-BC", "admin_level": "admin_2", "limit": 10},
         ["total_count", "returned_count", "truncated", "loc_ids"],
-        ["check_geometry", "estimate_geometry_package"], ["hierarchy release", "bank ids"]
+        ["get_geometry", "estimate_geometry_package"], ["hierarchy release", "bank ids"]
     ),
     "estimate_geometry_package": _g(
         ["You need a free preflight before creating a selected geometry export."],
@@ -321,7 +313,7 @@ def geometry_topic_help_payload(
         "workflows": [
             {
                 "name": "coordinates_to_geography",
-                "steps": ["resolve_point", "loc_id_info only when details are requested", "check_geometry then get_geometry only when shapes are requested"],
+                "steps": ["resolve_point", "loc_id_info only when details are requested", "get_geometry only when shape availability or shapes are requested"],
             },
             {
                 "name": "shallow_administrative_points",
@@ -349,8 +341,8 @@ def geometry_topic_help_payload(
                 "steps": [
                     "separate administrative loc_ids from independent reference-family loc_ids",
                     "group them according to the country catalog entry and family",
-                    "call check_geometry once per group",
-                    "call get_geometry for the same group only when bbox, centroid, or polygon output is needed",
+                    "call get_geometry once per group with include_polygon=false for availability, bbox, and centroid",
+                    "repeat with include_polygon=true only when polygon coordinates are needed",
                 ],
             },
             {

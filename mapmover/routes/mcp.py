@@ -97,7 +97,7 @@ MCP_GEOMETRY_READ_TOOLS = {
     "resolve_point", "resolve_points", "resolve_deep_point", "resolve_deep_points",
     "loc_id_info", "read_geometry_catalog",
     "list_reference_systems", "identify_dataset_geography", "identify_reference_system", "resolve_reference",
-    "convert_reference", "compare_geographies", "check_geometry", "get_geometry",
+    "convert_reference", "compare_geographies", "get_geometry",
     "resolve_loc_id_scope", "estimate_geometry_package", "estimate_conversion_job",
     "get_job_status",
 }
@@ -5020,230 +5020,6 @@ async def _execute_geometry_job_runtime_tool(request: Request, arguments: dict[s
     return response
 
 
-@_guard_mcp_execution("check_geometry")
-async def _execute_check_geometry_tool(request: Request, arguments: dict[str, Any], rpc_request_id: Any) -> Response:
-    started_at = time.perf_counter()
-    payload = _ensure_request_id(arguments, "check_geometry")
-    request_id = str(payload.get("request_id") or "")
-    if "loc_ids" in payload:
-        batch_id = str(payload.get("batch_id") or "").strip() or None
-        loc_ids = payload.get("loc_ids")
-        if not isinstance(loc_ids, list):
-            _stamp_mcp_tool_analytics(
-                request,
-                event="mcp_tool",
-                tool_mode="bulk",
-                batch_id=batch_id,
-                decision="reject",
-                error_code="invalid_loc_ids",
-            )
-            error_payload = _batch_error_payload(request_id=request_id, batch_id=batch_id, code="invalid_loc_ids", message="loc_ids must be a list")
-            _log_mcp_tool_usage_event(
-                request,
-                request_id=request_id or batch_id or "",
-                tool_name="check_geometry",
-                capability_id="geometry_availability",
-                decision="deny",
-                started_at=started_at,
-                row_count=0,
-                query_granularity="bulk_0",
-                response_payload=error_payload,
-                error_code="invalid_loc_ids",
-                metadata={"event": "geometry_availability", "tool_mode": "bulk", "quantity": 0, "loc_id_count": 0, "batch_id": batch_id},
-            )
-            return _jsonrpc_response(_tool_result(error_payload, is_error=True), rpc_request_id)
-        limit = _tool_batch_item_limit("check_geometry")
-        trusted_token, trusted_token_id = _trusted_artifact_access(request)
-        if len(loc_ids) > limit and trusted_token is None and not is_local_loopback_request(request):
-            _stamp_mcp_tool_analytics(
-                request,
-                event="mcp_tool",
-                tool_mode="bulk",
-                batch_id=batch_id,
-                decision="reject",
-                error_code="too_many_loc_ids",
-                loc_id_count=len(loc_ids),
-                batch_limit=limit,
-            )
-            error_payload = _batch_error_payload(
-                request_id=request_id,
-                batch_id=batch_id,
-                code="too_many_loc_ids",
-                message=f"loc_ids must contain at most {limit} items",
-                limit=limit,
-                loc_id_count=len(loc_ids),
-            )
-            _log_mcp_tool_usage_event(
-                request,
-                request_id=request_id or batch_id or "",
-                tool_name="check_geometry",
-                capability_id="geometry_availability",
-                decision="deny",
-                started_at=started_at,
-                row_count=len(loc_ids),
-                query_granularity=f"bulk_{len(loc_ids)}",
-                response_payload=error_payload,
-                error_code="too_many_loc_ids",
-                metadata={"event": "geometry_availability", "tool_mode": "bulk", "quantity": len(loc_ids), "batch_id": batch_id, "loc_id_count": len(loc_ids), "batch_limit": limit},
-            )
-            return _jsonrpc_response(_tool_result(error_payload, is_error=True), rpc_request_id)
-        try:
-            from mapmover.runtime.reference_exchange import get_geometry_availability
-
-            runtime_started = time.perf_counter()
-            result = await run_mcp_blocking(
-                "check_geometry", get_geometry_availability, [str(loc_id) for loc_id in loc_ids]
-            )
-            stages = {"geometry_availability_ms": _elapsed_ms(runtime_started)}
-        except (MCPExecutionCapacityError, MCPExecutionTimeoutError):
-            raise
-        except Exception as exc:
-            _stamp_mcp_tool_analytics(
-                request,
-                event="mcp_tool",
-                tool_mode="bulk",
-                batch_id=batch_id,
-                decision="error",
-                error_code="check_geometry_failed",
-                loc_id_count=len(loc_ids),
-                batch_limit=limit,
-            )
-            error_payload = _batch_error_payload(request_id=request_id, batch_id=batch_id, code="check_geometry_failed", message=str(exc))
-            _log_mcp_tool_usage_event(
-                request,
-                request_id=request_id or batch_id or "",
-                tool_name="check_geometry",
-                capability_id="geometry_availability",
-                decision="deny",
-                started_at=started_at,
-                row_count=len(loc_ids),
-                query_granularity=f"bulk_{len(loc_ids)}",
-                response_payload=error_payload,
-                error_code="check_geometry_failed",
-                metadata={"event": "geometry_availability", "tool_mode": "bulk", "quantity": len(loc_ids), "batch_id": batch_id, "loc_id_count": len(loc_ids), "batch_limit": limit},
-            )
-            return _jsonrpc_response(_tool_result(error_payload, is_error=True), rpc_request_id)
-        available = int(result.get("available") or 0)
-        missing = int(result.get("missing") or 0)
-        _stamp_mcp_tool_analytics(
-            request,
-            event="mcp_tool",
-            tool_mode="bulk",
-            batch_id=batch_id,
-            decision="allow",
-            loc_id_count=len(loc_ids),
-            available_count=available,
-            missing_count=missing,
-            batch_limit=limit,
-        )
-        result_payload = {"request_id": request_id, "batch_id": batch_id, "limit": limit, **result}
-        _log_mcp_tool_usage_event(
-            request,
-            request_id=request_id or batch_id or "",
-            tool_name="check_geometry",
-            capability_id="geometry_availability",
-            decision="allow",
-            started_at=started_at,
-            row_count=len(loc_ids),
-            query_granularity=f"bulk_{len(loc_ids)}",
-            response_payload=result_payload,
-            payment_rail=_request_access_lane(request, trusted_token),
-            artifact_token_id=trusted_token_id,
-            metadata={
-                "event": "geometry_availability",
-                "tool_mode": "bulk",
-                "quantity": len(loc_ids),
-                "batch_id": batch_id,
-                "loc_id_count": len(loc_ids),
-                "available_count": available,
-                "missing_count": missing,
-                "batch_limit": limit,
-                "access_lane": _request_access_lane(request, trusted_token),
-                "artifact_token_id": trusted_token_id,
-                **_compute_metadata(
-                    response_payload=result_payload,
-                    stages=stages,
-                    input_count=len(loc_ids),
-                    output_count=available,
-                    batch_limit=limit,
-                ),
-            },
-        )
-        return _jsonrpc_response(_tool_result(result_payload), rpc_request_id)
-
-    loc_id = str(payload.get("loc_id") or "").strip()
-    if not loc_id:
-        error_payload = {"request_id": request_id, "error": {"code": "invalid_loc_id", "message": "loc_id is required"}}
-        _log_mcp_tool_usage_event(
-            request,
-            request_id=request_id,
-            tool_name="check_geometry",
-            capability_id="geometry_availability",
-            decision="deny",
-            started_at=started_at,
-            row_count=0,
-            query_granularity="single",
-            response_payload=error_payload,
-            error_code="invalid_loc_id",
-            metadata={"event": "geometry_availability", "tool_mode": "single", "quantity": 0, "loc_id_count": 0},
-        )
-        return _jsonrpc_response(
-            _tool_result(error_payload, is_error=True),
-            rpc_request_id,
-        )
-    try:
-        from mapmover.runtime.reference_exchange import get_geometry_availability
-
-        runtime_started = time.perf_counter()
-        result = await run_mcp_blocking("check_geometry", get_geometry_availability, [loc_id])
-        stages = {"geometry_availability_ms": _elapsed_ms(runtime_started)}
-    except (MCPExecutionCapacityError, MCPExecutionTimeoutError):
-        raise
-    except Exception as exc:
-        error_payload = {"request_id": request_id, "error": {"code": "check_geometry_failed", "message": str(exc)}}
-        _log_mcp_tool_usage_event(
-            request,
-            request_id=request_id,
-            tool_name="check_geometry",
-            capability_id="geometry_availability",
-            decision="deny",
-            started_at=started_at,
-            row_count=1,
-            query_granularity="single",
-            response_payload=error_payload,
-            error_code="check_geometry_failed",
-            metadata={"event": "geometry_availability", "tool_mode": "single", "quantity": 1, "loc_id": loc_id, "loc_id_count": 1},
-        )
-        return _jsonrpc_response(
-            _tool_result(error_payload, is_error=True),
-            rpc_request_id,
-        )
-    items = result.get("items") or result.get("results") or []
-    item = items[0] if items else {"loc_id": loc_id, "has_shape": False, "error": "no geometry found"}
-    result_payload = {"request_id": request_id, **item}
-    _log_mcp_tool_usage_event(
-        request,
-        request_id=request_id,
-        tool_name="check_geometry",
-        capability_id="geometry_availability",
-        decision="allow",
-        started_at=started_at,
-        row_count=1,
-        query_granularity="single",
-        response_payload=result_payload,
-        metadata={
-            "event": "geometry_availability",
-            "tool_mode": "single",
-            "quantity": 1,
-            "loc_id": loc_id,
-            "loc_id_count": 1,
-            "has_shape": bool(item.get("has_shape")),
-            **_compute_metadata(response_payload=result_payload, stages=stages, input_count=1, output_count=1 if item.get("has_shape") else 0),
-        },
-    )
-    return _jsonrpc_response(_tool_result(result_payload), rpc_request_id)
-
-
 def _normalize_crosswalk_limit(value: Any) -> int | None:
     if value is None or value == "":
         return None
@@ -5453,7 +5229,7 @@ async def mcp_endpoint_info(pack_id: str | None = None):
             "Call read_geometry_catalog with view='capabilities' and a country_scope when known.",
             "Call get_tool_help with an exact name from tools/list before an unfamiliar tool.",
             "Use resolve_point for coordinates or identify_reference_system and resolve_reference for outside identifiers.",
-            "Use check_geometry before get_geometry when you need a shape.",
+            "Use get_geometry with include_polygon=false for a lightweight availability check.",
         ]
     else:
         how_to_start = [
@@ -5919,12 +5695,6 @@ async def mcp_endpoint(request: Request, pack_id: str | None = None):
         if rate_limit_response:
             return rate_limit_response
         return await _execute_compare_geographies_tool(request, arguments, request_id)
-
-    if tool_name == "check_geometry":
-        rate_limit_response = _live_tool_rate_limit_response(request, tool_name, request_id)
-        if rate_limit_response:
-            return rate_limit_response
-        return await _execute_check_geometry_tool(request, arguments, request_id)
 
     if tool_name == "get_geometry":
         rate_limit_response = _live_tool_rate_limit_response(request, tool_name, request_id)

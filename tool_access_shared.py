@@ -172,15 +172,6 @@ TOOL_ACCESS_REGISTRY: dict[str, dict] = {
         "paid_item_limit": 100,
         "notes": "Initial technical rollout is bounded to one Admin1 partition and 100 points; payment policy comes later.",
     },
-    "check_geometry": {
-        "family": FAMILY_GEOGRAPHY,
-        "capability_id": "geometry_availability",
-        "pricing": PRICING_FREE,
-        "item_field": "loc_ids",
-        "free_item_limit": 1000,
-        "paid_item_limit": 25000,
-        "legacy_limit_env": ("GEOMETRY_CHECK_BATCH_LIMIT",),
-    },
     "get_geometry": {
         "family": FAMILY_GEOGRAPHY,
         "capability_id": "geometry_lookup",

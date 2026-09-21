@@ -811,7 +811,7 @@ class ToolAccessRegistryTests(unittest.TestCase):
         import mapmover.routes.mcp as mcp_module
         from tool_access_shared import tool_free_item_limit
 
-        for tool in ("resolve_points", "get_geometry", "check_geometry", "loc_id_info"):
+        for tool in ("resolve_points", "get_geometry", "loc_id_info"):
             with self.subTest(tool=tool):
                 self.assertEqual(
                     mcp_module._tool_batch_item_limit(tool),
@@ -884,7 +884,7 @@ class PaidBulkLicensingTests(unittest.TestCase):
     def test_free_tools_never_enforce_paid_bulk(self) -> None:
         import mapmover.routes.mcp as mcp_module
 
-        for tool in ("get_geometry", "check_geometry", "read_geometry_catalog", "get_catalog"):
+        for tool in ("get_geometry", "read_geometry_catalog", "get_catalog"):
             with self.subTest(tool=tool):
                 self.assertFalse(mcp_module._tool_paid_bulk_enforced(tool))
 

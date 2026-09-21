@@ -60,7 +60,7 @@ before any charge. `get_catalog` reports the access lane for each pack.
 | Identify a column of codes | `identify_dataset_geography`, `identify_reference_system` |
 | Translate codes between systems | `resolve_reference`, `convert_reference` |
 | Inspect and relate places | `loc_id_info`, `compare_geographies`, `resolve_loc_id_scope` |
-| Shapes and exports | `check_geometry`, `get_geometry`, `estimate_geometry_package`, `create_geometry_export` |
+| Shapes and exports | `get_geometry`, `estimate_geometry_package`, `create_geometry_export` |
 | Convert your own rows | `estimate_conversion_job`, `create_conversion_job`, `get_job_status` |
 | Query maintained data | `get_data` with a `pack_id`, exact metrics, and structured filters |
 | Live feeds | `get_live_earthquake_events`, `get_live_volcano_events` |

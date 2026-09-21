@@ -107,7 +107,7 @@ def geography_workflow_section() -> str:
         "1. Point to loc_id: use `resolve_point` for one coordinate or `resolve_points` for an array; both stop at Admin 3. For Admin 4-6, use `resolve_deep_point` for one coordinate or group bulk results by Admin 1 and call `resolve_deep_points` with one `admin_1_loc_id` per call.\n"
         "2. What a loc_id is connected to: call `loc_id_info` with `include_references=true`; add `include_hierarchy=true` for its strict stored ancestry.\n"
         "3. Dataset to loc_id: pass bounded, structurally filtered column samples to `identify_dataset_geography`; it selects the column, country, level, and system. For one already-selected identifier column, use `identify_reference_system`. Resolve a known outside code or name with `resolve_reference`, and use `convert_reference` only when another reference system is the desired output.\n"
-        "4. Shape lookup: call `check_geometry` for availability, then `get_geometry`. Metadata, bbox, and centroid are the default; set `include_polygon=true` only when shape coordinates are needed. If the requested record is historical, return it first; present any `supersession` prompt as a second question and do not fetch the successor until the caller chooses it.\n"
+        "4. Shape lookup: call `get_geometry` with its default `include_polygon=false` for availability, metadata, bbox, and centroid; set `include_polygon=true` only when shape coordinates are needed. If the requested record is historical, return it first; present any `supersession` prompt as a second question and do not fetch the successor until the caller chooses it.\n"
         "5. Coverage discovery: call `read_geometry_catalog` with `view=capabilities` and `country_scope=<ISO3>`, or `list_reference_systems` with `country_scope=<ISO3>` for the canonical published crosswalk registry. Only callable crosswalks appear publicly; preserve all matches and weights. A catalog family alone does not promise a conversion path.\n"
         "6. Relationship between two loc_ids: call `compare_geographies`. For descendants under one parent and level, call `resolve_loc_id_scope`.\n"
         "7. Batch rule: use a bounded batch where supported; split deep work by Admin1 owner.\n"
@@ -171,7 +171,7 @@ def agent_ai_plugin_description_for_model(*, app_origin: str, docs_origin: str, 
         "read_geometry_catalog for country and family coverage, or list_reference_systems for "
         "usable crosswalks; catalog presence alone does not promise a conversion path. "
         "Use identify_reference_system when an input column is unknown. "
-        "resolve_points, resolve_deep_points, loc_id_info, check_geometry, and get_geometry accept a bounded batch. "
+        "resolve_points, resolve_deep_points, loc_id_info, and get_geometry accept a bounded batch. "
         "request_id is optional but recommended for tracing and idempotency. "
         f"{free_vs_paid_sentence()}"
     )

@@ -529,30 +529,6 @@ def build_tool_definitions() -> list[dict]:
             "annotations": {"readOnlyHint": True},
         },
         {
-            "name": "check_geometry",
-            "title": "Check loc_id Geometry Availability",
-            "description": "Fast shape-only preflight for one loc_id or a bounded loc_id list. Reports whether each exact identity has reusable geometry and its geometry vintage. Historical geometry remains the primary result; an evidenced current successor is only an explicit follow-up choice. It does not resolve points or explain other identity relationships. Use before get_geometry or an export. No payment required.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "loc_id": {"type": "string", "description": "DaedalMap loc_id to check for available geometry."},
-                    "loc_ids": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "DaedalMap loc_ids to check for available geometry. Default public cap is deployment-configurable.",
-                    },
-                    "batch_id": {"type": "string", "description": "Optional caller-supplied batch id for tracing."},
-                    "request_id": {"type": "string", "description": "Optional caller-supplied request id for tracing."},
-                },
-                "anyOf": [
-                    {"required": ["loc_id"]},
-                    {"required": ["loc_ids"]},
-                ],
-                "additionalProperties": False,
-            },
-            "annotations": {"readOnlyHint": True},
-        },
-        {
             "name": "compare_geographies",
             "title": "Compare Geographic Identities",
             "description": "Detailed relationship tool for two geographic identities. Returns temporal validity, N-way successor context, topology, geodesic intersection area, and directional overlap shares when approved geometry exists. Use this after a compact point lookup when the caller asks whether two tiers/releases really contain or overlap one another. A point-chain seam is not proof of strict parentage. Use resolve_reference first for names or outside identifiers. No payment required.",
@@ -599,7 +575,7 @@ def build_tool_definitions() -> list[dict]:
         {
             "name": "get_geometry",
             "title": "Get loc_id Geometry",
-            "description": "Bounded shape retrieval for exact loc_ids or one administrative scope. Exact selection accepts loc_id or loc_ids. Scope selection accepts parent_loc_id plus admin_level and uses the optimized Admin Spine layout: Admin 0-3 stays on one national bank, while deeper levels require an Admin 1 parent and stay on one deep partition. The default response projects shape metadata, centroid, and bounding box without materializing polygon coordinates; set include_polygon=true only when exact coordinates are needed. Independent geometry families are selected by exact loc_ids, not inferred as administrative descendants. Use loc_id_info for hierarchy or crosswalk details. Historical geometry is returned first and successors are never substituted automatically. No payment required.",
+            "description": "Availability check and bounded shape retrieval for exact loc_ids or one administrative scope. Exact selection accepts loc_id or loc_ids. Scope selection accepts parent_loc_id plus admin_level and uses the optimized Admin Spine layout: Admin 0-3 stays on one national bank, while deeper levels require an Admin 1 parent and stay on one deep partition. The default response is the fast preflight: it projects has_shape, shape metadata, centroid, and bounding box without reading polygon coordinates. Set include_polygon=true only when exact coordinates are needed. Independent geometry families are selected by exact loc_ids, not inferred as administrative descendants. Use loc_id_info for hierarchy or crosswalk details. Historical geometry is returned first and successors are never substituted automatically. No payment required.",
             "inputSchema": {
                 "type": "object",
                 "properties": {

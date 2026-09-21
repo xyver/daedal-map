@@ -165,7 +165,7 @@ class AccountLaneTests(unittest.TestCase):
 
     def test_account_limit_never_exceeds_the_paid_limit(self) -> None:
         """The derived 10x must clamp, or a free account could outrank a paying one."""
-        for tool in ("resolve_points", "check_geometry", "get_geometry", "resolve_loc_id_scope"):
+        for tool in ("resolve_points", "get_geometry", "resolve_loc_id_scope"):
             with self.subTest(tool=tool):
                 self.assertLessEqual(tool_account_item_limit(tool), tool_effective_item_limit(tool, lane="paid"))
 

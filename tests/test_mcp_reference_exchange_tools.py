@@ -79,7 +79,7 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         self.assertIn("resolve_reference", tool_names)
         self.assertIn("convert_reference", tool_names)
         self.assertIn("compare_geographies", tool_names)
-        self.assertIn("check_geometry", tool_names)
+        self.assertNotIn("check_geometry", tool_names)
         self.assertIn("get_geometry", tool_names)
         self.assertIn("compare_geographies", tool_names)
         self.assertIn("resolve_point", tool_names)
@@ -298,7 +298,7 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         envelope = _mcp_call(self.client, "tools/list", path="/mcp/boundaries")
         tool_names = {tool["name"] for tool in envelope["result"]["tools"]}
 
-        self.assertIn("check_geometry", tool_names)
+        self.assertNotIn("check_geometry", tool_names)
         self.assertNotIn("check_geometries", tool_names)
         self.assertIn("get_geometry", tool_names)
         self.assertNotIn("get_boundary", tool_names)
@@ -916,57 +916,6 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         self.assertFalse(payload["ok"])
         self.assertEqual(payload["error"]["code"], "invalid_request")
 
-    def test_check_geometry_tool_accepts_loc_id_batch(self) -> None:
-        with (
-            mock.patch(
-                "mapmover.runtime.reference_exchange.get_geometry_availability",
-                return_value={
-                    "ok": True,
-                    "requested": 3,
-                    "available": 2,
-                    "missing": 1,
-                    "items": [
-                        {"loc_id": "USA-CA-037", "has_shape": True},
-                        {"loc_id": "USA-CA-075", "has_shape": True},
-                        {"loc_id": "USA-NOPE", "has_shape": False, "error": "no geometry found"},
-                    ],
-                    "results": [
-                        {"loc_id": "USA-CA-037", "has_shape": True},
-                        {"loc_id": "USA-CA-075", "has_shape": True},
-                        {"loc_id": "USA-NOPE", "has_shape": False, "error": "no geometry found"},
-                    ],
-                },
-            ),
-            mock.patch("mapmover.routes.mcp.log_api_query_event") as analytics_mock,
-        ):
-            payload = _tool_call(
-                self.client,
-                "check_geometry",
-                {"batch_id": "shapes-1", "loc_ids": ["USA-CA-037", "USA-CA-075", "USA-NOPE"]},
-            )
-
-        self.assertEqual(payload["batch_id"], "shapes-1")
-        self.assertEqual(payload["requested"], 3)
-        self.assertEqual(payload["available"], 2)
-        self.assertEqual(payload["missing"], 1)
-        self.assertEqual(payload["items"][2]["has_shape"], False)
-        analytics = analytics_mock.call_args.kwargs
-        self.assertEqual(analytics["capability_id"], "geometry_availability")
-        self.assertEqual(analytics["pack_id"], "geography_tools")
-        self.assertEqual(analytics["source_id"], "check_geometry")
-        self.assertEqual(analytics["decision"], "allow")
-        self.assertEqual(analytics["payment_rail"], "free")
-        self.assertEqual(analytics["row_count"], 3)
-        self.assertEqual(analytics["query_granularity"], "bulk_3")
-        self.assertEqual(analytics["metadata"]["event"], "geometry_availability")
-        self.assertEqual(analytics["metadata"]["tool_mode"], "bulk")
-        self.assertEqual(analytics["metadata"]["quantity"], 3)
-        self.assertEqual(analytics["metadata"]["available_count"], 2)
-        self.assertEqual(analytics["metadata"]["missing_count"], 1)
-        self.assertEqual(analytics["metadata"]["compute"]["input_count"], 3)
-        self.assertEqual(analytics["metadata"]["compute"]["output_count"], 2)
-        self.assertIn("geometry_availability_ms", analytics["metadata"]["compute"]["stage_ms"])
-
     def test_geometry_availability_uses_metadata_only_fetch(self) -> None:
         metadata_rows = [
                 {
@@ -1043,18 +992,6 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         self.assertEqual(payload["items"][0]["error"]["message"], "no geometry found")
         self.assertEqual(analytics_mock.call_args.kwargs["error_code"], "not_found")
 
-    def test_check_geometry_tool_uses_per_tool_batch_limit_override(self) -> None:
-        with mock.patch.dict("os.environ", {"MCP_TOOL_BATCH_LIMIT_CHECK_GEOMETRY": "2"}):
-            with mock.patch("mapmover.routes.mcp.log_api_query_event"):
-                payload = _tool_call(
-                    self.client,
-                    "check_geometry",
-                    {"loc_ids": ["USA", "CAN", "MEX"]},
-                )
-
-        self.assertEqual(payload["limit"], 2)
-        self.assertEqual(payload["error"]["code"], "too_many_loc_ids")
-
     def test_get_geometry_tool_accepts_loc_id_batch(self) -> None:
         with (
             mock.patch(
@@ -1116,7 +1053,8 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         self.assertIn("drill-down tool", tools["loc_id_info"]["description"])
         self.assertIn("Use loc_id_info for hierarchy", tools["get_geometry"]["description"])
         self.assertIn("never substituted", tools["get_geometry"]["description"])
-        self.assertIn("explicit follow-up choice", tools["check_geometry"]["description"])
+        self.assertNotIn("check_geometry", tools)
+        self.assertIn("fast preflight", tools["get_geometry"]["description"])
 
     def test_get_geometry_tool_resolves_an_admin_scope_before_shape_read(self) -> None:
         scope_result = {

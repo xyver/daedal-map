@@ -358,7 +358,6 @@ PACK_REGISTRY: dict[str, dict] = {
             "resolve_reference",
             "convert_reference",
             "compare_geographies",
-            "check_geometry",
             "get_geometry",
             "resolve_point",
             "resolve_points",
@@ -398,8 +397,7 @@ PACK_REGISTRY: dict[str, dict] = {
             {"name": "resolve_reference", "summary": "one reference or reference batch -> ranked DaedalMap loc_id matches"},
             {"name": "convert_reference", "summary": "one reference or reference batch -> loc_id -> target reference system"},
             {"name": "compare_geographies", "summary": "two loc_ids -> temporal validity, successors, topology, intersection area, and directional overlap shares"},
-            {"name": "check_geometry", "summary": "loc_id or loc_ids -> available/missing shape preflight"},
-            {"name": "get_geometry", "summary": "loc_id or loc_ids -> geometry metadata, bbox, centroid, and optional polygon"},
+            {"name": "get_geometry", "summary": "loc_id, loc_ids, or admin scope -> available/missing shape preflight, metadata, and optional polygons"},
             {"name": "resolve_point", "summary": "one point -> compact Admin 0-3 chain and Admin 1 routing key"},
             {"name": "resolve_points", "summary": "point array -> compact Admin 0-3 chains and Admin 1 routing keys"},
             {"name": "resolve_deep_point", "summary": "one point + one Admin 1 loc_id -> compact Admin 4-6 chain"},
@@ -446,7 +444,6 @@ PACK_REGISTRY: dict[str, dict] = {
         "mcp_tool_allowlist": (
             "get_catalog",
             "get_pack",
-            "check_geometry",
             "get_geometry",
             "compare_geographies",
             "loc_id_info",
@@ -469,8 +466,7 @@ PACK_REGISTRY: dict[str, dict] = {
         },
         "routing": {"preferred_tool": "get_geometry"},
         "tool_summaries": (
-            {"name": "check_geometry", "summary": "loc_id or loc_ids -> available/missing shape preflight"},
-            {"name": "get_geometry", "summary": "exact loc_id shape/vintage -> bounding box, centroid, and optional polygon"},
+            {"name": "get_geometry", "summary": "exact loc_ids or admin scope -> availability, shape metadata, and optional polygons"},
             {"name": "compare_geographies", "summary": "two loc_ids -> exact spatial and temporal relationship"},
             {"name": "loc_id_info", "summary": "loc_id or point-chain loc_ids -> detailed metadata, strict hierarchy, lifecycle, and references"},
             {"name": "resolve_loc_id_scope", "summary": "strict parent loc_id + admin level -> coherent descendants"},
@@ -617,7 +613,7 @@ def tool_family_pack_detail(pack_id: str | None) -> dict:
             "These are free utility tools, not a get_data pack.",
             "Use canonical loc_ids such as USA, CAN-BC, or USA-CA-037.",
             "BBox/centroid is the default response shape because full polygons can be large.",
-            "Use check_geometry first for larger shape lists, then get_geometry for the available loc_ids.",
+            "Use get_geometry with include_polygon=false to check larger shape lists without reading polygon coordinates.",
             "Use loc_id_info for hierarchy, lifecycle, provenance, or non-geometry references; get_geometry stays shape-focused.",
         ]
     else:
