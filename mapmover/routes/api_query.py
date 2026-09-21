@@ -28,6 +28,11 @@ from mapmover.api_query_commercial import (
     settlement_headers,
 )
 from mapmover.api_query_limits import QueryConcurrencyLimitError, acquire_query_slot
+from mapmover.mcp_execution import (
+    MCPExecutionCapacityError,
+    MCPExecutionTimeoutError,
+    run_mcp_blocking,
+)
 from mapmover.api_query_scope import (
     build_query_scope,
     format_query_time_value,
@@ -1240,7 +1245,9 @@ async def execute_query_dataset_payload(req: Request, payload: dict[str, Any]) -
         async with AsyncExitStack() as concurrency_stack:
             for concurrency_key in dict.fromkeys(concurrency_keys):
                 await concurrency_stack.enter_async_context(acquire_query_slot(concurrency_key))
-            rows = execute_dataset_query(
+            rows = await run_mcp_blocking(
+                "get_data",
+                execute_dataset_query,
                 spec,
                 select_columns=select_columns,
                 exact_filters=exact_filters or None,
@@ -1261,6 +1268,26 @@ async def execute_query_dataset_payload(req: Request, payload: dict[str, Any]) -
             429,
             details=exc.details,
             retry_hint="Retry after in-flight requests complete or reduce caller concurrency.",
+            pack_id=spec.pack_id,
+            source_id=source_id,
+        )
+    except MCPExecutionCapacityError as exc:
+        return error_response(
+            request_id,
+            "query_capacity_busy",
+            str(exc),
+            429,
+            retry_hint="Retry after another data or geometry request finishes.",
+            pack_id=spec.pack_id,
+            source_id=source_id,
+        )
+    except MCPExecutionTimeoutError as exc:
+        return error_response(
+            request_id,
+            "query_timeout",
+            str(exc),
+            504,
+            retry_hint="Reduce the requested scope, time range, metrics, or row limit.",
             pack_id=spec.pack_id,
             source_id=source_id,
         )

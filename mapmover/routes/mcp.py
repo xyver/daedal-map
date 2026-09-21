@@ -310,6 +310,7 @@ def _guard_mcp_execution(tool_name: str):
                     error_code=code,
                     metadata=analytics_metadata,
                 )
+                request.state.mcp_tool_usage_logged = tool_name
                 return _jsonrpc_response(_tool_result(payload, is_error=True), rpc_request_id)
 
         return guarded
@@ -352,12 +353,15 @@ ANALYTICS_PACK_DISCOVERY = "agent_api_discovery"
 # Free data helpers dispatched inline here. Each maps to a stable capability_id
 # so it produces an api_usage_events row like every other tool in the universe.
 DATA_HELPER_CAPABILITIES: dict[str, str] = {
-    "get_tool_help": "tool_help_discovery",
-    "get_catalog": "catalog_discovery",
-    "get_pack": "pack_detail_discovery",
-    "get_live_earthquake_events": "live_earthquake_lookup",
-    "get_live_volcano_events": "live_volcano_lookup",
-    "get_event": "disaster_event_lookup",
+    name: tool_capability_id(name)
+    for name in (
+        "get_tool_help",
+        "get_catalog",
+        "get_pack",
+        "get_live_earthquake_events",
+        "get_live_volcano_events",
+        "get_event",
+    )
 }
 
 
@@ -1364,12 +1368,15 @@ def _log_passthrough_data_helper(
     tool_name: str,
     started_at: float,
     response: Response,
+    analytics_pack_id: str = ANALYTICS_PACK_DISCOVERY,
 ) -> Response:
     """Log a data helper whose handler already built the JSON-RPC response.
 
     Reads the tool envelope back out so row count and error state match what the
     caller actually received, then returns the untouched response.
     """
+    if getattr(request.state, "mcp_tool_usage_logged", None) == tool_name:
+        return response
     payload: Any = None
     is_error = False
     try:
@@ -1380,6 +1387,12 @@ def _log_passthrough_data_helper(
             is_error = bool(result.get("isError"))
     except Exception:
         payload = None
+    if (
+        analytics_pack_id == ANALYTICS_PACK_DISCOVERY
+        and isinstance(payload, dict)
+        and str(payload.get("pack_id") or "").strip()
+    ):
+        analytics_pack_id = str(payload["pack_id"]).strip().lower()
     _log_mcp_tool_usage_event(
         request,
         request_id="",
@@ -1391,7 +1404,7 @@ def _log_passthrough_data_helper(
         query_granularity="single",
         response_payload=payload,
         error_code="tool_error" if is_error else None,
-        analytics_pack_id=ANALYTICS_PACK_DISCOVERY,
+        analytics_pack_id=analytics_pack_id,
         metadata={
             "event": DATA_HELPER_CAPABILITIES.get(tool_name, tool_name),
             "tool_mode": "single",
@@ -4706,7 +4719,12 @@ async def _execute_live_volcano_tool(arguments: dict[str, Any], rpc_request_id: 
     return _jsonrpc_response(_tool_result(result), rpc_request_id)
 
 
-async def _execute_get_event_tool(arguments: dict[str, Any], rpc_request_id: Any) -> Response:
+@_guard_mcp_execution("get_event")
+async def _execute_get_event_tool(
+    request: Request,
+    arguments: dict[str, Any],
+    rpc_request_id: Any,
+) -> Response:
     payload = _ensure_request_id(arguments, "get_event")
     event_id = str(payload.get("event_id") or "").strip()
     if not event_id:
@@ -4721,16 +4739,44 @@ async def _execute_get_event_tool(arguments: dict[str, Any], rpc_request_id: Any
             rpc_request_id,
         )
     try:
+        include = [str(value).strip().lower() for value in (payload.get("include") or [])]
+        requested_limit = int(payload.get("limit") or 100)
+        base_limit = _tool_batch_item_limit("get_event", default=500)
+        geometry_policy = tool_sub_limit("get_event", "geometry")
+        geometry_limit_env = str(geometry_policy.get("limit_env") or "").strip()
+        geometry_limit = (
+            (_parse_env_int_optional(geometry_limit_env) if geometry_limit_env else None)
+            or int(geometry_policy.get("free_item_limit") or base_limit)
+        )
+        effective_limit = min(base_limit, geometry_limit) if "geometry" in include else base_limit
+        if requested_limit < 1 or requested_limit > effective_limit:
+            limit_kind = "geometry expansion" if "geometry" in include else "event companion rows"
+            return _jsonrpc_response(
+                _tool_result(
+                    normalize_data_tool_error("get_event", {
+                        "request_id": payload.get("request_id"),
+                        "error": {
+                            "code": "result_too_large",
+                            "message": f"get_event {limit_kind} limit must be between 1 and {effective_limit}",
+                        },
+                        "limit": effective_limit,
+                    }, status_code=400),
+                    is_error=True,
+                ),
+                rpc_request_id,
+            )
         result = await run_mcp_blocking(
             "get_event",
             get_event_payload,
             event_id,
             pack_id=str(payload.get("pack_id") or "").strip().lower() or None,
-            include=payload.get("include") or [],
+            include=include,
             relationship_depth=int(payload.get("relationship_depth") or 1),
             geometry_mode=str(payload.get("geometry_mode") or "current"),
-            limit=int(payload.get("limit") or 100),
+            limit=requested_limit,
         )
+    except (MCPExecutionCapacityError, MCPExecutionTimeoutError):
+        raise
     except (ValueError, TypeError) as exc:
         return _jsonrpc_response(
             _tool_result(
@@ -5316,12 +5362,13 @@ async def mcp_endpoint(request: Request, pack_id: str | None = None):
         rate_limit_response = _live_tool_rate_limit_response(request, tool_name, request_id)
         if rate_limit_response:
             return rate_limit_response
-        event_response = await _execute_get_event_tool(arguments, request_id)
+        event_response = await _execute_get_event_tool(request, arguments, request_id)
         return _log_passthrough_data_helper(
             request,
             tool_name=tool_name,
             started_at=helper_started_at,
             response=event_response,
+            analytics_pack_id=str(arguments.get("pack_id") or "").strip().lower() or ANALYTICS_PACK_DISCOVERY,
         )
 
     if tool_name not in {

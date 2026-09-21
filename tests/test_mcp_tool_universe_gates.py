@@ -697,12 +697,40 @@ class TrustedArtifactBypassTests(unittest.TestCase):
         }
         for tool, arguments in cases.items():
             with self.subTest(tool=tool):
-                envelope = _tool_call_envelope(self.client, tool, arguments)
+                with mock.patch("mapmover.routes.mcp.rate_limiter.check", return_value=(True, 0)):
+                    envelope = _tool_call_envelope(self.client, tool, arguments)
                 result = envelope["result"]
                 self.assertTrue(
                     result.get("isError"),
                     f"{tool} should reject an over-cap batch without a trusted token",
                 )
+
+    def test_get_event_geometry_expansion_uses_the_central_sub_limit(self) -> None:
+        with (
+            mock.patch.dict(
+                "os.environ",
+                {"MCP_TOOL_GEOMETRY_BATCH_LIMIT_GET_EVENT": "2"},
+                clear=False,
+            ),
+            mock.patch("mapmover.routes.mcp.rate_limiter.check", return_value=(True, 0)),
+            mock.patch("mapmover.routes.mcp.get_event_payload") as event_lookup,
+        ):
+            envelope = _tool_call_envelope(
+                self.client,
+                "get_event",
+                {
+                    "event_id": "USA-HRCN-example",
+                    "pack_id": "hurricanes",
+                    "include": ["geometry"],
+                    "limit": 3,
+                },
+            )
+
+        result = envelope["result"]
+        self.assertTrue(result["isError"])
+        self.assertEqual(result["structuredContent"]["error"]["code"], "result_too_large")
+        self.assertEqual(result["structuredContent"]["limit"], 2)
+        event_lookup.assert_not_called()
 
     def test_trusted_token_lifts_the_cap_on_every_capped_tool(self) -> None:
         env = {"ARTIFACT_ACCESS_TOKENS": f"qa={self.token}"}

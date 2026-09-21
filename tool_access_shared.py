@@ -321,7 +321,16 @@ TOOL_ACCESS_REGISTRY: dict[str, dict] = {
         "family": FAMILY_DISCOVERY,
         "capability_id": "disaster_event_lookup",
         "pricing": PRICING_FREE,
-        "notes": "One exact event lookup; companion rows and geometry are explicit, bounded includes.",
+        "item_field": "limit",
+        "free_item_limit": 500,
+        "paid_item_limit": 500,
+        "sub_limits": {
+            "geometry": {
+                "free_item_limit": 25,
+                "limit_env": "MCP_TOOL_GEOMETRY_BATCH_LIMIT_GET_EVENT",
+            },
+        },
+        "notes": "One exact event lookup; companion rows and geometry are explicit, centrally bounded includes.",
     },
     # ---- dataset tools: priced by pack, not here. Listed so the universe is
     # complete and nothing is silently ungoverned. ----
