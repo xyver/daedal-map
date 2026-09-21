@@ -29,6 +29,7 @@ class LoadStrategiesRuntimeTests(unittest.TestCase):
             {
                 "naics": "31----",
                 "enterprise_size": "2: <20 employees",
+                "ignored_presence": True,
             },
         )
         self.assertEqual(
@@ -210,7 +211,7 @@ class LoadStrategiesRuntimeTests(unittest.TestCase):
         )
 
         self.assertEqual(captured["source_id"], "fairfax_nlcd_impervious")
-        self.assertEqual(captured["kwargs"]["exact_filters"]["geo_level"], "blockgroup")
+        self.assertEqual(captured["kwargs"]["exact_filters"]["geo_level"], "block_group")
 
     def test_load_order_item_dataframe_uses_timestamp_bounds_for_monthly_source(self):
         captured = {}

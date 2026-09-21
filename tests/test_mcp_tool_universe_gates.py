@@ -238,8 +238,6 @@ class DataHelperTelemetryTests(unittest.TestCase):
             "get_tool_help",
             "get_catalog",
             "get_pack",
-            "get_live_earthquake_events",
-            "get_live_volcano_events",
             "get_event",
         }
         self.assertEqual(set(DATA_HELPER_CAPABILITIES), expected)
@@ -248,6 +246,15 @@ class DataHelperTelemetryTests(unittest.TestCase):
             len(set(DATA_HELPER_CAPABILITIES.values())),
             len(DATA_HELPER_CAPABILITIES),
         )
+
+    def test_paused_live_tools_are_not_discoverable_or_callable(self) -> None:
+        from mcp_surface_shared import PAUSED_PUBLIC_TOOL_NAMES, build_tool_definitions
+
+        published = {str(tool.get("name")) for tool in build_tool_definitions()}
+        self.assertTrue(PAUSED_PUBLIC_TOOL_NAMES.isdisjoint(published))
+        for tool_name in sorted(PAUSED_PUBLIC_TOOL_NAMES):
+            envelope = _tool_call_envelope(self.client, tool_name)
+            self.assertEqual(envelope["error"]["code"], -32601)
 
     def test_get_catalog_writes_a_usage_row(self) -> None:
         with mock.patch("mapmover.routes.mcp.log_api_query_event") as analytics_mock:
@@ -387,6 +394,10 @@ class DataHelperTelemetryTests(unittest.TestCase):
         }
         with (
             mock.patch("mapmover.routes.mcp.get_event_payload", return_value=event_payload) as lookup,
+            mock.patch(
+                "mapmover.routes.mcp._pack_material_effective_access",
+                return_value={"allow": True, "settlement_required": False, "access_lane": "free"},
+            ),
             mock.patch("mapmover.routes.mcp.log_api_query_event") as analytics_mock,
         ):
             envelope = _tool_call_envelope(
@@ -406,6 +417,35 @@ class DataHelperTelemetryTests(unittest.TestCase):
         self.assertNotIn("metrics", lookup.call_args.kwargs)
         analytics_mock.assert_called_once()
         self.assertEqual(analytics_mock.call_args.kwargs["capability_id"], "disaster_event_lookup")
+
+    def test_get_event_paid_pack_uses_shared_commercial_gate(self) -> None:
+        event_payload = {
+            "event_id": "USA-HRCN-example",
+            "pack_id": "hurricanes",
+            "event": {"event_id": "USA-HRCN-example"},
+        }
+        with (
+            mock.patch("mapmover.routes.mcp.get_event_payload", return_value=event_payload),
+            mock.patch(
+                "mapmover.routes.mcp._pack_material_effective_access",
+                return_value={"allow": True, "settlement_required": True, "access_lane": "metered"},
+            ),
+            mock.patch("mapmover.routes.mcp.commercial_access_enabled", return_value=True),
+            mock.patch(
+                "mapmover.routes.mcp._commercial_access_decision",
+                return_value=("challenge", {"status": "challenge", "message": "Payment required"}),
+            ) as commercial_gate,
+        ):
+            envelope = _tool_call_envelope(
+                self.client,
+                "get_event",
+                {"event_id": "USA-HRCN-example", "pack_id": "hurricanes"},
+            )
+
+        result = envelope["result"]["structuredContent"]
+        self.assertTrue(result["payment_required"])
+        self.assertEqual(result["error"]["code"], "payment_required")
+        commercial_gate.assert_awaited_once()
 
 
 class CatalogDrivenPackFacadeTests(unittest.TestCase):
@@ -516,7 +556,7 @@ class BlindCallerHelpTests(unittest.TestCase):
         self.client = TestClient(app)
 
     def test_every_published_tool_has_complete_guidance_and_valid_example_keys(self) -> None:
-        from mcp_surface_shared import build_tool_definitions
+        from mcp_surface_shared import PAUSED_PUBLIC_TOOL_NAMES, build_tool_definitions
         from mcp_tool_help_shared import validate_guidance_examples, validate_tool_guidance
 
         definitions = build_tool_definitions()
@@ -530,7 +570,7 @@ class BlindCallerHelpTests(unittest.TestCase):
             DATA_TOOL_IDS,
             normalize_data_tool_error,
         )
-        from mcp_surface_shared import build_tool_definitions
+        from mcp_surface_shared import PAUSED_PUBLIC_TOOL_NAMES, build_tool_definitions
         from tool_access_shared import tool_capability_id, tool_pricing
 
         definitions = {
@@ -538,7 +578,7 @@ class BlindCallerHelpTests(unittest.TestCase):
             for definition in build_tool_definitions()
         }
         self.assertTrue(DATA_TOOL_IDS)
-        for name in sorted(DATA_TOOL_IDS):
+        for name in sorted(DATA_TOOL_IDS - PAUSED_PUBLIC_TOOL_NAMES):
             with self.subTest(tool=name):
                 definition = definitions[name]
                 schema = definition.get("outputSchema") or {}
@@ -565,7 +605,7 @@ class BlindCallerHelpTests(unittest.TestCase):
         )
         for retired_name in {
             "query_dataset", "get_earthquake_events", "get_volcanic_activity",
-            "get_tsunami_events", "get_fx_rates",
+            "get_tsunami_events", "get_fx_rates", *PAUSED_PUBLIC_TOOL_NAMES,
         }:
             self.assertNotIn(retired_name, definitions)
 
@@ -582,8 +622,6 @@ class BlindCallerHelpTests(unittest.TestCase):
             "get_catalog": {"catalog": "data", "detail": "lite", "packs": []},
             "get_pack": {"catalog": "data", "pack_id": "currency", "detail": "lite"},
             "get_data": {"source_id": "example", "row_count": 0, "rows": []},
-            "get_live_earthquake_events": {"source_id": "usgs_live", "row_count": 0, "rows": []},
-            "get_live_volcano_events": {"source_id": "gvp_live", "row_count": 0, "rows": []},
             "get_event": {"event_id": "event-1", "pack_id": "earthquakes", "event": {}},
         }
         for name, payload in examples.items():

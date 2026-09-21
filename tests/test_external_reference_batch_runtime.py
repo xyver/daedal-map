@@ -35,7 +35,13 @@ def test_external_edge_batch_uses_one_partition_query() -> None:
         )
 
     query.assert_called_once_with(
-        bridge, partitions, reverse=False, values=[first, second],
+        bridge,
+        partitions,
+        reverse=False,
+        values=[first, second],
+        source_release=None,
+        internal_release=None,
+        country_scope="CAN",
     )
     assert result == {first: [edge], second: []}
 
@@ -71,6 +77,12 @@ def test_reverse_external_edge_batch_uses_one_partition_query() -> None:
         )
 
     query.assert_called_once_with(
-        bridge, partitions, reverse=True, values=[first, second],
+        bridge,
+        partitions,
+        reverse=True,
+        values=[first, second],
+        source_release=None,
+        internal_release=None,
+        country_scope="CAN",
     )
     assert result == {first: [edge], second: []}

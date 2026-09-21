@@ -79,7 +79,14 @@ class GeometryCatalogTaxonomyTests(unittest.TestCase):
             self.assertIsInstance(product["family_ids"], list)
             self.assertTrue(set(product["family_ids"]).issubset(family_ids))
             self.assertNotIn("asset_id", product)
-            self.assertNotIn("download", product)
+            # A product remains a stable capability even when it points to its
+            # current published download. Versioned packages still live in the
+            # separate release_packages collection below.
+            download = product.get("download")
+            if download is not None:
+                self.assertTrue(download.get("available"))
+                self.assertTrue(download.get("artifact_url"))
+                self.assertNotIn("package_id", product)
         product_ids_from_releases = {
             str(item.get("geometry_product_id") or "")
             for item in self.catalog["release_packages"]

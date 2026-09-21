@@ -164,18 +164,6 @@ TOOL_GUIDANCE: dict[str, dict[str, Any]] = {
         ["event", "available", "relationships", "affected_places", "observations", "geometry"],
         ["get_data"], ["source event id", "relationship source/method", "companion-layer provenance"]
     ),
-    "get_live_earthquake_events": _g(
-        ["You explicitly need recent preliminary USGS earthquake events beyond the canonical window."],
-        ["Canonical historical analysis"],
-        {"hours": 24, "min_magnitude": 4, "limit": 20},
-        ["events", "row_count", "fetched_at"], ["get_data"], ["upstream URL", "fetch time"]
-    ),
-    "get_live_volcano_events": _g(
-        ["You explicitly need recent preliminary Smithsonian/GVP eruption updates."],
-        ["Canonical historical eruption analysis"],
-        {"days": 30, "limit": 20}, ["events", "row_count", "fetched_at"],
-        ["get_data"], ["upstream URL", "fetch time"]
-    ),
     "get_data": _g(
         ["You selected a published data pack and need its canonical rows or supported aggregate metrics."],
         ["Calling geometry tool families", "Passing internal source_id values", "Guessing metrics without get_pack", "Unbounded event scans"],
@@ -336,7 +324,6 @@ TOPIC_TOOLS: dict[str, tuple[str, ...]] = {
     "data": ("get_catalog", "get_pack", "get_data"),
     "disasters": (
         "get_catalog", "get_pack", "get_data", "get_event",
-        "get_live_earthquake_events", "get_live_volcano_events",
     ),
     "custom_data": (
         "identify_dataset_geography", "identify_reference_system", "resolve_loc_id_scope",

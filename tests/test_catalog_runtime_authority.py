@@ -146,7 +146,7 @@ def test_pack_access_reads_material_policy_from_normal_catalog() -> None:
     ):
         result = api_query_commercial.pack_effective_access("paid_pack")
 
-    assert result["authored_pricing"] == "paid_x402_base_usdc"
+    assert result["authored_pricing"] == "by_pack"
     assert result["license_permissions"] == {"paid"}
     assert result["publication_cleared"] is True
 

@@ -91,7 +91,7 @@ class GeometryCountryCapabilityTests(unittest.TestCase):
     def test_catalog_tool_schema_accepts_country_scope(self) -> None:
         definition = next(
             item for item in build_tool_definitions()
-            if item.get("name") == "read_geometry_catalog"
+            if item.get("name") == "get_catalog"
         )
         properties = definition["inputSchema"]["properties"]
 

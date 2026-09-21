@@ -45,7 +45,7 @@ PACK_REGISTRY: dict[str, dict] = {
     "earthquakes": {
         "display_name": "earthquakes",
         "pricing": "paid_x402_base_usdc",
-        "mcp_tool_allowlist": ("get_catalog", "get_pack", "get_data", "get_event", "get_live_earthquake_events"),
+        "mcp_tool_allowlist": ("get_catalog", "get_pack", "get_data", "get_event"),
         "mcp_prompt_allowlist": ("largest_earthquake_in_range", "count_disaster_events"),
         "mcp_name": "com.daedalmap/earthquakes",
         "mcp_title": "DaedalMap Earthquake Data",
@@ -60,8 +60,6 @@ PACK_REGISTRY: dict[str, dict] = {
         },
         "routing": {
             "preferred_tool": "get_data",
-            "live_fallback_tool": "get_live_earthquake_events",
-            "live_fallback_when": "Only when the caller explicitly asks for live/preliminary upstream data or needs time beyond canonical_available_through.",
         },
     },
     "floods": {
@@ -286,7 +284,7 @@ PACK_REGISTRY: dict[str, dict] = {
     "volcanoes": {
         "display_name": "volcanoes",
         "pricing": "free",
-        "mcp_tool_allowlist": ("get_catalog", "get_pack", "get_data", "get_event", "get_live_volcano_events"),
+        "mcp_tool_allowlist": ("get_catalog", "get_pack", "get_data", "get_event"),
         "mcp_prompt_allowlist": ("count_disaster_events",),
         "mcp_name": "com.daedalmap/volcanoes",
         "mcp_title": "DaedalMap Volcanic Activity",
@@ -301,8 +299,6 @@ PACK_REGISTRY: dict[str, dict] = {
         },
         "routing": {
             "preferred_tool": "get_data",
-            "live_fallback_tool": "get_live_volcano_events",
-            "live_fallback_when": "Only when the caller explicitly asks for live/preliminary upstream data or needs time beyond canonical_available_through.",
         },
     },
     "world_factbook": {

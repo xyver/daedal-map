@@ -41,7 +41,7 @@ class CanadaExactGeometryTests(unittest.TestCase):
 
         names = [{"loc_id": loc_id, "name": loc_id} for loc_id in loc_ids]
         with mock.patch.object(
-            canada_exact_geometry, "build_guarded_connection", return_value=_Connection()
+            canada_exact_geometry, "lease_query_connection", return_value=_Connection()
         ), mock.patch.object(
             canada_exact_geometry, "_match_partition", side_effect=match
         ), mock.patch(

@@ -67,10 +67,13 @@ def quantize_credit_price(amount_micro_usd: int) -> int:
     return max(quantum, ((amount + quantum // 2) // quantum) * quantum)
 
 
-# Only pricing values starting with "paid" are enforced as paid, matching the
-# pack registry convention. Default is free.
+# Explicit conversion-tool prices start with ``paid``. Material-backed tools
+# use ``by_pack`` / ``by_material`` and let the catalog's legal policy decide
+# whether the hosted call is metered, forced free, or blocked.
 PRICING_FREE = "free"
 PRICING_PAID_BULK = "paid_bulk_x402_base_usdc"
+PRICING_BY_PACK = "by_pack"
+PRICING_BY_MATERIAL = "by_material"
 
 # Tool families. "geography" is the geometry/loc_id utility family; "discovery"
 # is the free catalog/helper surface; "dataset" tools price through the pack
@@ -97,6 +100,11 @@ IDENTIFIER_RATE_USD_PER_100 = 0.05
 # Point lane: coordinate to loc_id chain (resolve_point). Point-in-polygon
 # work reads geometry, so it is priced above the identifier join.
 POINT_RATE_USD_PER_100 = 0.10
+# Hosted retrieval is a managed-service fee, not a different data product.
+# These two levers price material-aware MCP calls while downloads and local
+# execution remain outside this gate.
+HOSTED_RETRIEVAL_BASE_USD = 0.01
+HOSTED_RETRIEVAL_RATE_USD_PER_100 = 0.01
 # Fixed charge added to every paid call once it exceeds its free allowance.
 PAID_CALL_BASE_USD = 0.01
 
@@ -163,7 +171,13 @@ TOOL_ACCESS_REGISTRY: dict[str, dict] = {
     "get_geometry": {
         "family": FAMILY_GEOGRAPHY,
         "capability_id": "geometry_lookup",
-        "pricing": PRICING_FREE,
+        "pricing": PRICING_BY_MATERIAL,
+        "price": {
+            "base_usd": HOSTED_RETRIEVAL_BASE_USD,
+            "per_unit_usd": HOSTED_RETRIEVAL_RATE_USD_PER_100 / 100,
+        },
+        "pricing_version": "hosted-retrieval-2026-09-21.1",
+        "meter": {"unit": "geometry_result", "items_per_charge_unit": 1},
         "item_field": "loc_ids",
         "free_item_limit": 1000,
         "paid_item_limit": 25000,
@@ -318,9 +332,15 @@ TOOL_ACCESS_REGISTRY: dict[str, dict] = {
         "pricing": PRICING_FREE,
     },
     "get_event": {
-        "family": FAMILY_DISCOVERY,
+        "family": FAMILY_DATASET,
         "capability_id": "disaster_event_lookup",
-        "pricing": PRICING_FREE,
+        "pricing": PRICING_BY_PACK,
+        "price": {
+            "base_usd": HOSTED_RETRIEVAL_BASE_USD,
+            "per_unit_usd": HOSTED_RETRIEVAL_RATE_USD_PER_100 / 100,
+        },
+        "pricing_version": "hosted-retrieval-2026-09-21.1",
+        "meter": {"unit": "event_lookup", "items_per_charge_unit": 1},
         "item_field": "limit",
         "free_item_limit": 500,
         "paid_item_limit": 500,
@@ -334,7 +354,7 @@ TOOL_ACCESS_REGISTRY: dict[str, dict] = {
     },
     # ---- dataset tools: priced by pack, not here. Listed so the universe is
     # complete and nothing is silently ungoverned. ----
-    "get_data": {"family": FAMILY_DATASET, "capability_id": "dataset_query", "pricing": "by_pack"},
+    "get_data": {"family": FAMILY_DATASET, "capability_id": "dataset_query", "pricing": PRICING_BY_PACK},
 }
 
 
@@ -359,10 +379,10 @@ def tool_pricing(tool_name: str) -> str:
 
 
 def tool_is_paid_bulk(tool_name: str) -> bool:
-    """True when exceeding the free item limit should produce a paid quote.
+    """True for the explicit paid conversion/bulk lane.
 
-    Mirrors the pack registry convention: only values starting with "paid" are
-    enforced as paid, so an unknown or misspelled value fails safe to free.
+    Material-priced tools are authorized separately against their selected
+    pack or geometry banks; they are not unconditional bulk conversions here.
     """
     return tool_pricing(tool_name).startswith("paid")
 

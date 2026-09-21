@@ -375,7 +375,10 @@ def _build_root_index(data_root: Path, scopes: dict):
     geometry_dir = data_root / "geometry"
     has_admin0_full = (geometry_dir / "admin0" / "full.parquet").exists() if geometry_dir.exists() else False
     has_entities = (geometry_dir / "global_entities.parquet").exists() if geometry_dir.exists() else False
-    gadm_count = len(list(geometry_dir.glob("*.parquet"))) - (1 if has_entities else 0) if geometry_dir.exists() else 0
+    global_baseline_country_count = (
+        len(list(geometry_dir.glob("*.parquet"))) - (1 if has_entities else 0)
+        if geometry_dir.exists() else 0
+    )
 
     root_index = {
         "_description": "Data folder routing - which countries have sub-national data folders",
@@ -403,7 +406,7 @@ def _build_root_index(data_root: Path, scopes: dict):
         "fallback_pattern": "geometry/{ISO3}.parquet",
         "country_pattern": "geometry/countries/{ISO3}/",
         "catalog": "geometry/geometry_catalog.json",
-        "country_count": gadm_count
+        "country_count": global_baseline_country_count
     }
 
     root_index["_layout"] = {
@@ -422,7 +425,9 @@ def _build_root_index(data_root: Path, scopes: dict):
         "_description": "Default for countries without dedicated folders",
         "has_folder": False,
         "geometry_outline": "geometry/admin0/full.parquet" if has_admin0_full else None,
-        "geometry_fallback": "geometry/{ISO3}.parquet" if gadm_count > 0 else None,
+        "geometry_global_baseline": (
+            "geometry/{ISO3}.parquet" if global_baseline_country_count > 0 else None
+        ),
         "admin_levels": [0],
         "datasets": []
     }

@@ -54,6 +54,7 @@ from mapmover.routes.api_query import execute_query_dataset_payload
 from mapmover.api_query_commercial import (
     commercial_access_enabled,
     get_trusted_artifact_token,
+    pack_effective_access,
     pack_requires_commercial_access,
     settle_commercial_access,
     settlement_headers,
@@ -358,8 +359,6 @@ DATA_HELPER_CAPABILITIES: dict[str, str] = {
         "get_tool_help",
         "get_catalog",
         "get_pack",
-        "get_live_earthquake_events",
-        "get_live_volcano_events",
         "get_event",
     )
 }
@@ -858,6 +857,121 @@ async def _settle_paid_batch_tool(
         meter_receipt=meter_receipt,
     )
     return settled, payload, meter_receipt
+
+
+def _material_caller_context(request: Request) -> tuple[Any, bool, bool]:
+    caller = request_caller_identity(
+        request, ip_hash=hash_ip_for_analytics(get_client_ip(request))
+    )
+    trusted = get_trusted_artifact_token(request) is not None
+    local = is_local_loopback_request(request)
+    return caller, trusted, local
+
+
+def _pack_material_effective_access(request: Request, pack_id: str) -> dict[str, Any]:
+    caller, trusted, local = _material_caller_context(request)
+    return pack_effective_access(
+        pack_id,
+        caller_authenticated=bool(caller.auth_user_id),
+        caller_entitled=caller.can_use_included_bulk,
+        local_installed=local,
+        trusted_artifact=trusted,
+    )
+
+
+def _geometry_material_effective_access(
+    request: Request,
+    *,
+    bank_ids: set[str],
+    include_polygon: bool,
+) -> dict[str, Any]:
+    from mapmover.runtime.geometry_catalog import geometry_bank_access_facts
+
+    caller, trusted, local = _material_caller_context(request)
+    if bank_ids:
+        permissions, publication_cleared = geometry_bank_access_facts(
+            bank_ids=bank_ids,
+            surface="client_geometry" if include_polygon else "hosted_results",
+        )
+    else:
+        permissions, publication_cleared = set(), False
+    return resolve_effective_access(
+        resource_kind="tool",
+        resource_id="get_geometry",
+        authored_pricing=tool_profile("get_geometry").get("pricing") or "by_material",
+        license_permissions=permissions,
+        publication_cleared=publication_cleared,
+        caller_authenticated=bool(caller.auth_user_id),
+        caller_entitled=caller.can_use_included_bulk,
+        local_installed=local,
+        trusted_artifact=trusted,
+    )
+
+
+async def _authorize_material_tool(
+    request: Request,
+    *,
+    tool_name: str,
+    effective_access: dict[str, Any],
+    item_count: int,
+    request_id: str,
+    include_polygon: bool = False,
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    existing = getattr(request.state, "analytics_metadata", {})
+    existing = existing if isinstance(existing, dict) else {}
+    request.state.analytics_metadata = {
+        **existing,
+        "access_policy_revision": effective_access.get("policy_revision"),
+        "access_policy_fingerprint": effective_access.get("policy_fingerprint"),
+        "effective_access_lane": effective_access.get("access_lane"),
+    }
+    if not effective_access.get("allow"):
+        return None, {
+            "ok": False,
+            "error": {
+                "code": "material_access_blocked",
+                "message": "The selected material is not cleared for this hosted response surface.",
+            },
+            "reason_codes": effective_access.get("reason_codes") or [],
+        }
+    if not effective_access.get("settlement_required"):
+        return None, None
+    if not commercial_access_enabled():
+        return None, {
+            "ok": False,
+            "error": {
+                "code": "commercial_access_unavailable",
+                "message": "This hosted material call requires the commercial-access verifier.",
+            },
+        }
+    units = max(1, int(item_count or 0))
+    quote = tool_quote(tool_name, units, free_limit=0)
+    decision, verifier_payload = await _commercial_access_decision(
+        request,
+        tool_name=tool_name,
+        capability_id=tool_capability_id(tool_name),
+        units=units,
+        include_polygon=include_polygon,
+        pricing_quote=quote,
+        request_id=request_id,
+    )
+    if decision != "allow":
+        return None, _commercial_tool_denial(
+            tool_name=tool_name,
+            quote=quote,
+            decision=decision,
+            verifier_payload=verifier_payload,
+        )
+    context = verifier_payload.get("context") if isinstance(verifier_payload.get("context"), dict) else {}
+    settlement = verifier_payload.get("settlement") if isinstance(verifier_payload.get("settlement"), dict) else {}
+    return {
+        "settlement_id": str(settlement.get("settlement_id") or "").strip(),
+        "payment_rail": str(verifier_payload.get("rail") or "").strip() or "paid",
+        "request_fingerprint": str(context.get("request_fingerprint") or "").strip(),
+        "caller_binding": str(context.get("caller_binding") or "").strip(),
+        "free_limit": 0,
+        "reserved_quote": quote,
+    }, None
 
 
 def _tool_effective_access(tool_name: str, *, country_scope: str | None = None) -> dict[str, Any]:
@@ -1998,9 +2112,8 @@ def _read_resource(uri: str, pack_id: str | None = None) -> dict[str, Any] | Non
                 "Requests too broad for live API access return narrowing suggestions instead of a payment challenge.\n\n"
                 "## Canonical first, live second\n\n"
                 "Prefer canonical DaedalMap get_data pack reads first.\n"
-                "Use the get_pack response as the source of truth for canonical_available_through, preferred_tool, and any live_fallback_tool guidance.\n"
-                "For earthquakes, use get_data with pack_id=earthquakes for normal historical or recent questions because it is the processed canonical lane.\n"
-                "Only use get_live_earthquake_events when the caller explicitly asks for live/preliminary upstream results or needs a very recent window not yet present in the published canonical lane.\n\n"
+                "Use the get_pack response as the source of truth for canonical_available_through and preferred_tool guidance.\n"
+                "For earthquakes and volcanoes, use get_data for the processed canonical lane. Collector-backed live MCP access is paused until it reads the same normalized Ops state as the website rather than calling upstream sources per user request.\n\n"
                 "## Step 4: Use prompts for ready-to-use examples\n\n"
                 "Call prompts/list to get complete example tool calls for every supported query shape.\n\n"
                 "## Reference\n\n"
@@ -4227,6 +4340,40 @@ async def _execute_get_geometry_tool(request: Request, arguments: dict[str, Any]
         )
         return _jsonrpc_response(_tool_result(error_payload, is_error=True), rpc_request_id)
 
+    # Resolve the exact contributing banks from metadata before any polygon
+    # read. Paid hosted calls are challenged before the expensive shape path;
+    # free-only and blocked material are decided by the same catalog facts.
+    from mapmover.geometry_handlers import get_selection_geometry_metadata
+
+    access_rows = await run_mcp_blocking(
+        "get_geometry_access_metadata",
+        get_selection_geometry_metadata,
+        loc_ids,
+    )
+    access_bank_ids = {
+        str(row.get("bank_id") or "").strip()
+        for row in access_rows or []
+        if isinstance(row, dict) and str(row.get("bank_id") or "").strip()
+    }
+    commercial_context = None
+    if access_bank_ids:
+        effective_access = _geometry_material_effective_access(
+            request,
+            bank_ids=access_bank_ids,
+            include_polygon=include_polygon,
+        )
+        commercial_context, access_error = await _authorize_material_tool(
+            request,
+            tool_name="get_geometry",
+            effective_access=effective_access,
+            item_count=len(loc_ids),
+            request_id=request_id or batch_id or "",
+            include_polygon=include_polygon,
+        )
+        if access_error is not None:
+            access_error.update({"request_id": request_id, "batch_id": batch_id})
+            return _jsonrpc_response(_tool_result(access_error, is_error=True), rpc_request_id)
+
     try:
         runtime_started = time.perf_counter()
         result = await run_mcp_blocking(
@@ -4294,6 +4441,70 @@ async def _execute_get_geometry_tool(request: Request, arguments: dict[str, Any]
             "code": "not_found",
             "message": "No geometry was found for the selected loc_ids",
         }
+    elif not access_bank_ids:
+        # An unexpected successful row without a catalog bank id must not evade
+        # the material gate. Missing rows still return the ordinary not-found
+        # response above without asking a caller to pay for nothing.
+        effective_access = _geometry_material_effective_access(
+            request,
+            bank_ids=set(),
+            include_polygon=include_polygon,
+        )
+        _unused_context, access_error = await _authorize_material_tool(
+            request,
+            tool_name="get_geometry",
+            effective_access=effective_access,
+            item_count=available_count,
+            request_id=request_id or batch_id or "",
+            include_polygon=include_polygon,
+        )
+        if access_error is not None:
+            access_error.update({"request_id": request_id, "batch_id": batch_id})
+            return _jsonrpc_response(_tool_result(access_error, is_error=True), rpc_request_id)
+    settlement_payload = None
+    if commercial_context is not None:
+        if not is_error:
+            settled, settlement_payload, meter_receipt = await _settle_paid_batch_tool(
+                commercial_context,
+                tool_name="get_geometry",
+                request_id=request_id or batch_id or "",
+                requested_items=requested_count,
+                successful_items=available_count,
+            )
+            if not settled:
+                error_payload = {
+                    "request_id": request_id,
+                    "batch_id": batch_id,
+                    "error": {
+                        "code": str((settlement_payload or {}).get("code") or "commercial_access_settlement_failed"),
+                        "message": str((settlement_payload or {}).get("message") or "Commercial settlement failed."),
+                    },
+                }
+                return _jsonrpc_response(_tool_result(error_payload, is_error=True), rpc_request_id)
+            result_payload["meter_receipt"] = meter_receipt
+            result_payload["settlement_receipt"] = (settlement_payload or {}).get("context") or {}
+        else:
+            # Release a reserved paid call without charging when no geometry
+            # was returned.
+            settled, settlement_payload, _meter_receipt = await _settle_paid_batch_tool(
+                commercial_context,
+                tool_name="get_geometry",
+                request_id=request_id or batch_id or "",
+                requested_items=requested_count,
+                successful_items=0,
+            )
+            if not settled:
+                return _jsonrpc_response(
+                    _tool_result({
+                        "request_id": request_id,
+                        "batch_id": batch_id,
+                        "error": {
+                            "code": str((settlement_payload or {}).get("code") or "commercial_access_settlement_failed"),
+                            "message": str((settlement_payload or {}).get("message") or "Commercial settlement failed."),
+                        },
+                    }, is_error=True),
+                    rpc_request_id,
+                )
     tool_mode = "scope" if scope_result else ("single" if len(loc_ids) == 1 else "bulk")
     granularity = "scope" if scope_result else ("single" if len(loc_ids) == 1 else f"bulk_{len(loc_ids)}")
     _log_mcp_tool_usage_event(
@@ -4307,7 +4518,7 @@ async def _execute_get_geometry_tool(request: Request, arguments: dict[str, Any]
         query_granularity=granularity,
         response_payload=result_payload,
         error_code="not_found" if is_error else None,
-        payment_rail=_request_access_lane(request, trusted_token),
+        payment_rail=_request_access_lane(request, trusted_token, paid=commercial_context is not None),
         artifact_token_id=trusted_token_id,
         metadata={
             "event": "geometry_lookup",
@@ -4319,7 +4530,7 @@ async def _execute_get_geometry_tool(request: Request, arguments: dict[str, Any]
             "batch_id": batch_id,
             "include_polygon": include_polygon,
             "batch_limit": limit,
-            "access_lane": _request_access_lane(request, trusted_token),
+            "access_lane": _request_access_lane(request, trusted_token, paid=commercial_context is not None),
             "artifact_token_id": trusted_token_id,
             **_compute_metadata(
                 response_payload=result_payload,
@@ -4331,7 +4542,11 @@ async def _execute_get_geometry_tool(request: Request, arguments: dict[str, Any]
             ),
         },
     )
-    return _jsonrpc_response(_tool_result(result_payload, is_error=is_error), rpc_request_id)
+    response = _jsonrpc_response(_tool_result(result_payload, is_error=is_error), rpc_request_id)
+    if commercial_context is not None:
+        for key, value in settlement_headers(settlement_payload).items():
+            response.headers[key] = value
+    return response
 
 
 def _result_row_count(tool_name: str, payload: dict[str, Any], result: dict[str, Any]) -> int:
@@ -4811,8 +5026,47 @@ async def _execute_get_event_tool(
             ),
             rpc_request_id,
         )
+    result_pack_id = str(result.get("pack_id") or payload.get("pack_id") or "").strip().lower()
+    effective_access = _pack_material_effective_access(request, result_pack_id)
+    commercial_context, access_error = await _authorize_material_tool(
+        request,
+        tool_name="get_event",
+        effective_access=effective_access,
+        item_count=1,
+        request_id=str(payload.get("request_id") or event_id),
+    )
+    if access_error is not None:
+        access_error["request_id"] = payload.get("request_id")
+        access_error["pack_id"] = result_pack_id or None
+        return _jsonrpc_response(_tool_result(access_error, is_error=True), rpc_request_id)
+    settlement_payload = None
+    if commercial_context is not None:
+        settled, settlement_payload, meter_receipt = await _settle_paid_batch_tool(
+            commercial_context,
+            tool_name="get_event",
+            request_id=str(payload.get("request_id") or event_id),
+            requested_items=1,
+            successful_items=1,
+        )
+        if not settled:
+            return _jsonrpc_response(
+                _tool_result({
+                    "request_id": payload.get("request_id"),
+                    "error": {
+                        "code": str((settlement_payload or {}).get("code") or "commercial_access_settlement_failed"),
+                        "message": str((settlement_payload or {}).get("message") or "Commercial settlement failed."),
+                    },
+                }, is_error=True),
+                rpc_request_id,
+            )
+        result["meter_receipt"] = meter_receipt
+        result["settlement_receipt"] = (settlement_payload or {}).get("context") or {}
     result["request_id"] = payload.get("request_id")
-    return _jsonrpc_response(_tool_result(result), rpc_request_id)
+    response = _jsonrpc_response(_tool_result(result), rpc_request_id)
+    if commercial_context is not None:
+        for key, value in settlement_headers(settlement_payload).items():
+            response.headers[key] = value
+    return response
 
 
 # Registry attribution: each MCP registry publishes a per-source tagged endpoint
@@ -5033,6 +5287,8 @@ async def mcp_endpoint(request: Request, pack_id: str | None = None):
         return _jsonrpc_error(request_id, -32602, "Tool name is required")
     if arguments and not isinstance(arguments, dict):
         return _jsonrpc_error(request_id, -32602, "Tool arguments must be an object")
+    if _tool_definition(tool_name) is None:
+        return _jsonrpc_error(request_id, -32601, f"Tool '{tool_name}' not found")
     if not _tool_allowed_for_facade(tool_name, normalized_pack_id):
         return _jsonrpc_error(request_id, -32601, f"Tool '{tool_name}' is not available on this MCP facade")
     scope_denial = _mcp_scope_denial(request, tool_name, request_id)

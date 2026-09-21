@@ -51,7 +51,13 @@ def build_mcp_instructions(*, safety_notice: str | None = None) -> str:
     return base
 
 
-def build_tool_definitions() -> list[dict]:
+PAUSED_PUBLIC_TOOL_NAMES = frozenset({
+    "get_live_earthquake_events",
+    "get_live_volcano_events",
+})
+
+
+def build_tool_definitions(*, include_paused: bool = False) -> list[dict]:
     definitions = [
         {
             "name": "get_tool_help",
@@ -742,4 +748,5 @@ def build_tool_definitions() -> list[dict]:
     return [
         decorate_shared_help_definition(decorate_data_tool_definition(definition))
         for definition in definitions
+        if include_paused or str(definition.get("name") or "") not in PAUSED_PUBLIC_TOOL_NAMES
     ]

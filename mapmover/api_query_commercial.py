@@ -73,7 +73,10 @@ def pack_effective_access(
     material_policy = pack.get("material_policy") if isinstance(pack.get("material_policy"), dict) else {}
     hosted_access = material_policy.get("hosted_access") if isinstance(material_policy.get("hosted_access"), dict) else {}
     catalog_permission = str(material_policy.get("permission") or hosted_access.get("maximum_lane") or "").strip().lower()
-    authored_pricing = "paid_x402_base_usdc" if catalog_permission == "paid" else "free"
+    # Hosted retrieval is metered by default. The material permission remains
+    # the legal ceiling: free-only material forces a free lane and blocked or
+    # unpublished material never becomes callable merely because it has a price.
+    authored_pricing = "by_pack"
     permissions = ({catalog_permission} if catalog_permission else set()) if license_permissions is None else license_permissions
     publication_cleared = bool(hosted_access.get("publication_ready", False))
     return resolve_effective_access(
@@ -95,10 +98,11 @@ def pack_requires_commercial_access(
     license_permissions=None,
     publication_cleared: bool = True,
 ) -> bool:
-    """Return the *effective* settlement requirement for one hosted pack.
+    """Return the effective settlement requirement for one hosted pack.
 
-    catalog.json owns the authored free/paid lane and licensing clearance.
-    Temporary operator overrides remain external access-policy decisions.
+    Hosted retrieval is priced by default. ``catalog.json`` supplies the
+    material ceiling that may force the request free or block publication;
+    temporary operator overrides remain separate access-policy decisions.
     """
     normalized = str(pack_id or "").strip().lower()
     if not normalized:

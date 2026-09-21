@@ -1044,6 +1044,10 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
                     ],
                 },
             ) as geometry_mock,
+            mock.patch(
+                "mapmover.routes.mcp._geometry_material_effective_access",
+                return_value={"allow": True, "settlement_required": False, "access_lane": "free"},
+            ),
             mock.patch("mapmover.routes.mcp.log_api_query_event") as analytics_mock,
         ):
             payload = _tool_call(
@@ -1122,6 +1126,10 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
                     ],
                 },
             ) as geometry_mock,
+            mock.patch(
+                "mapmover.routes.mcp._geometry_material_effective_access",
+                return_value={"allow": True, "settlement_required": False, "access_lane": "free"},
+            ),
             mock.patch("mapmover.routes.mcp.log_api_query_event"),
         ):
             payload = _tool_call(
@@ -1137,6 +1145,37 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         self.assertEqual(payload["selection"], "admin_scope")
         self.assertEqual(payload["scope"]["parent_loc_id"], "USA-TX")
         self.assertEqual(payload["requested"], 2)
+
+    def test_paid_geometry_is_challenged_before_polygon_read(self) -> None:
+        with (
+            mock.patch(
+                "mapmover.runtime.geometry_tool_jobs.resolve_geometry_selection",
+                return_value=(["USA-TX-201"], None),
+            ),
+            mock.patch(
+                "mapmover.geometry_handlers.get_selection_geometry_metadata",
+                return_value=[{"loc_id": "USA-TX-201", "bank_id": "usa_admin"}],
+            ),
+            mock.patch(
+                "mapmover.routes.mcp._geometry_material_effective_access",
+                return_value={"allow": True, "settlement_required": True, "access_lane": "metered"},
+            ),
+            mock.patch("mapmover.routes.mcp.commercial_access_enabled", return_value=True),
+            mock.patch(
+                "mapmover.routes.mcp._commercial_access_decision",
+                return_value=("challenge", {"status": "challenge", "message": "Payment required"}),
+            ),
+            mock.patch("mapmover.runtime.reference_exchange.get_geometry_references") as geometry_mock,
+        ):
+            payload = _tool_call(
+                self.client,
+                "get_geometry",
+                {"loc_id": "USA-TX-201", "include_polygon": True},
+            )
+
+        self.assertTrue(payload["payment_required"])
+        self.assertEqual(payload["error"]["code"], "payment_required")
+        geometry_mock.assert_not_called()
 
     def test_get_geometry_polygons_use_a_tighter_default_limit(self) -> None:
         loc_ids = [f"USA-TEST-{index:03d}" for index in range(101)]

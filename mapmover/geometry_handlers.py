@@ -356,8 +356,8 @@ def load_country_parquet(iso3: str, admin_level: int = None, columns: list[str] 
                 else:
                     df = pd.read_parquet(parquet_file, columns=read_columns)
 
-        # If crosswalk exists, add reverse mapping for lookup
-        # This allows data with local loc_ids to find GADM geometry
+        # If a crosswalk exists, add the reverse mapping so country-family
+        # loc_ids can resolve against the admitted global-baseline bank.
         if crosswalk_data:
             _, reverse_map = build_crosswalk_maps(crosswalk_data)
             # Add local_loc_id column for joining

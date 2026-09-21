@@ -33,6 +33,25 @@ class AccessPolicySharedTests(unittest.TestCase):
         self.assertTrue(decision["settlement_required"])
         self.assertEqual(decision["access_lane"], "metered")
 
+    def test_material_pricing_defaults_paid_but_free_only_material_forces_free(self) -> None:
+        paid = resolve_effective_access(
+            resource_kind="pack",
+            resource_id="commercial_pack",
+            authored_pricing="by_pack",
+            license_permissions={"paid"},
+        )
+        free_only = resolve_effective_access(
+            resource_kind="pack",
+            resource_id="restricted_pack",
+            authored_pricing="by_pack",
+            license_permissions={"free"},
+        )
+        self.assertTrue(paid["settlement_required"])
+        self.assertEqual(paid["access_lane"], "metered")
+        self.assertFalse(free_only["settlement_required"])
+        self.assertEqual(free_only["access_lane"], "free")
+        self.assertIn("licence_blocks_paid_lane", free_only["reason_codes"])
+
     def test_launch_free_waives_only_settlement(self) -> None:
         policy = {
             "schema_version": "1.0.0",
@@ -99,6 +118,7 @@ class AccessPolicySharedTests(unittest.TestCase):
         catalog = {
             "geometry_banks": [
                 {
+                    "bank_id": "usa_admin",
                     "scope": "USA",
                     "family": "admin_boundary",
                     "material_policy": {
@@ -119,6 +139,7 @@ class AccessPolicySharedTests(unittest.TestCase):
                     },
                 },
                 {
+                    "bank_id": "marine_eez",
                     "scope": None,
                     "family": "eez",
                     "material_policy": {
@@ -143,6 +164,10 @@ class AccessPolicySharedTests(unittest.TestCase):
         with mock.patch("mapmover.runtime.geometry_catalog.load_geometry_catalog", return_value=catalog):
             self.assertEqual(
                 geometry_bank_access_facts(scopes={"USA"}, families={"admin_boundary"}),
+                ({"paid"}, True),
+            )
+            self.assertEqual(
+                geometry_bank_access_facts(bank_ids={"usa_admin"}, surface="client_geometry"),
                 ({"paid"}, True),
             )
             self.assertEqual(geometry_bank_access_facts(), ({"paid", "free"}, False))

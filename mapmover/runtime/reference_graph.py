@@ -77,6 +77,7 @@ PARTITION_INDEXES = {
 }
 
 IDENTITY_RECENCY_ORDER = (
+    "CASE WHEN valid_to IS NULL OR CAST(valid_to AS VARCHAR) = '' THEN 0 ELSE 1 END ASC, "
     "NULLIF(CAST(valid_from AS VARCHAR), '') DESC NULLS LAST, "
     "NULLIF(CAST(namespace_release AS VARCHAR), '') DESC NULLS LAST, "
     "NULLIF(CAST(source_vintage AS VARCHAR), '') DESC NULLS LAST, "

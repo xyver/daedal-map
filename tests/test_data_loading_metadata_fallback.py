@@ -12,7 +12,7 @@ class SourceMetadataFallbackTests(unittest.TestCase):
         }
         data_loading._metadata_cache.pop("example_monthly_source", None)
 
-        with patch("mapmover.data_loading.get_runtime_config", return_value={"runtime_mode": "cloud"}), patch(
+        with patch("mapmover.data_loading.get_data_plane_mode", return_value="cloud"), patch(
             "mapmover.data_loading._catalog_cache", {"sources": [source_contract]}
         ), patch(
             "mapmover.data_loading.load_catalog", side_effect=AssertionError("metadata lookup must not build active catalog")
@@ -35,7 +35,7 @@ class SourceMetadataFallbackTests(unittest.TestCase):
         }
         data_loading._metadata_cache.pop("example_monthly_source", None)
 
-        with patch("mapmover.data_loading.get_runtime_config", return_value={"runtime_mode": "cloud"}), patch(
+        with patch("mapmover.data_loading.get_data_plane_mode", return_value="cloud"), patch(
             "mapmover.data_loading._catalog_cache", {"sources": [source_contract]}
         ), patch(
             "mapmover.data_loading.load_full_catalog", return_value={"sources": []}

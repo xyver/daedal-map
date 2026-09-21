@@ -1150,10 +1150,11 @@ def get_countries_folder():
 
 def load_geometry_for_country(iso3: str):
     """
-    Load geometry for a country using 3-tier fallback:
-    1. geometry/countries/{ISO3}/geometry.parquet (local/official source like NUTS)
-    2. geometry/countries/{ISO3}/crosswalk.json -> geometry/{ISO3}.parquet (translated)
-    3. geometry/{ISO3}.parquet (GADM fallback)
+    Load geometry through the canonical country-to-global-baseline order:
+    1. released country authority spine
+    2. admitted country geometry bank
+    3. crosswalk into the geoBoundaries global baseline
+    4. the geoBoundaries global baseline directly
 
     Returns:
         tuple: (GeoDataFrame, crosswalk_dict or None)

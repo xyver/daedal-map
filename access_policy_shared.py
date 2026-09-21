@@ -48,6 +48,7 @@ BILLING_FREE = "free"
 BILLING_METERED = "metered"
 BILLING_DISABLED = "disabled"
 VALID_BILLING = frozenset({BILLING_INHERIT, BILLING_FREE, BILLING_METERED, BILLING_DISABLED})
+MATERIAL_PRICING_MODES = frozenset({"by_pack", "by_material"})
 
 DEFAULT_POLICY: dict[str, Any] = {
     "schema_version": POLICY_SCHEMA_VERSION,
@@ -259,7 +260,8 @@ def resolve_effective_access(
     mode = _normalized_id(active.get("mode"))
     audience = _normalized_id(override.get("audience", active.get("audience")))
     billing = _normalized_id(override.get("billing", BILLING_INHERIT))
-    product_metered = str(authored_pricing or "free").strip().lower().startswith("paid")
+    normalized_pricing = str(authored_pricing or "free").strip().lower()
+    product_metered = normalized_pricing.startswith("paid") or normalized_pricing in MATERIAL_PRICING_MODES
     if billing == BILLING_FREE:
         product_metered = False
     elif billing == BILLING_METERED:

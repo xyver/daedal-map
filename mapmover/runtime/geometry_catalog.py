@@ -293,6 +293,7 @@ def geometry_bank_access_facts(
     *,
     scopes: set[str] | None = None,
     families: set[str] | None = None,
+    bank_ids: set[str] | None = None,
     surface: str = "hosted_results",
 ) -> tuple[set[str], bool]:
     """Return commercial-use permissions and hosted publication clearance.
@@ -310,6 +311,7 @@ def geometry_bank_access_facts(
 
     normalized_scopes = {str(value).strip().upper() for value in (scopes or set()) if str(value).strip()}
     normalized_families = {str(value).strip().lower() for value in (families or set()) if str(value).strip()}
+    normalized_bank_ids = {str(value).strip() for value in (bank_ids or set()) if str(value).strip()}
     valid_surfaces = {"hosted_results", "server_rendered_display", "client_geometry", "download"}
     if surface not in valid_surfaces:
         return set(), False
@@ -321,6 +323,9 @@ def geometry_bank_access_facts(
             continue
         bank_scope = str(bank.get("scope") or "").strip().upper()
         bank_family = str(bank.get("family") or "").strip().lower()
+        bank_id = str(bank.get("bank_id") or bank.get("id") or "").strip()
+        if normalized_bank_ids and bank_id not in normalized_bank_ids:
+            continue
         partition_contract = (
             bank.get("partition_surface_contract")
             if isinstance(bank.get("partition_surface_contract"), dict) else {}

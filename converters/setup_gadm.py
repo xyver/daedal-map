@@ -1,5 +1,11 @@
-"""
-Download and process GADM geometry into per-country parquet files.
+"""Historical GADM conversion utility; not part of any active build or runtime.
+
+Do not use this script to populate DaedalMap geometry. The active global
+baseline is geoBoundaries and country releases use reviewed authority sources.
+A future GADM integration, if pursued, belongs in the free external-reference
+bridge family and must map identifiers without admitting GADM polygons.
+
+Historical behavior: download and process GADM into per-country Parquet files.
 
 GADM (Global Administrative Areas) provides sub-national boundaries for 267 countries.
 This script downloads the GeoPackage and converts it to per-country parquet files
