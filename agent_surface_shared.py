@@ -109,10 +109,9 @@ def geography_workflow_section() -> str:
         "3. Dataset to loc_id: pass bounded, structurally filtered column samples to `identify_dataset_geography`; it selects the column, country, level, and system. For one already-selected identifier column, use `identify_reference_system`. Resolve a known outside code or name with `convert_reference` and omit `to_system`; provide `to_system` only when another reference system is the desired output.\n"
         "4. Shape lookup: call `get_geometry` with its default `include_polygon=false` for availability, metadata, bbox, and centroid; set `include_polygon=true` only when shape coordinates are needed. If the requested record is historical, return it first; present any `supersession` prompt as a second question and do not fetch the successor until the caller chooses it.\n"
         "5. Coverage discovery: call `get_catalog(catalog='geometry', detail='lite')`, then `get_pack(catalog='geometry', pack_id='<family>', country_scope='<ISO3>')` for country systems, vintages, levels, and artifacts. A listed family-country pair is exchangeable through loc_id.\n"
-        "6. Relationship between two loc_ids: call `compare_geographies`. For descendants under one parent and level, call `resolve_loc_id_scope`.\n"
+        "6. Relationship between two loc_ids: call `compare_geographies`. For bounded shapes under a supported administrative parent and level, use the `scope` input on `get_geometry`.\n"
         "7. Batch rule: use a bounded batch where supported; split deep work by Admin1 owner.\n"
-        "8. If the right path is unclear: call `get_tool_help` with a topic, then with one exact tool name.\n"
-        "9. Advanced builder foundation, not the normal entry path: `estimate_geometry_package`, `create_geometry_export`, `estimate_conversion_job`, `create_conversion_job`, and `get_job_status` expose bounded contracts only. Durable uploads, saved projects, and custom downloadable artifacts remain future builder capabilities."
+        "8. If the right path is unclear: call `get_tool_help` with a topic, then with one exact visible tool name. Future estimate/create/status builder contracts are retained internally but are not part of the public MCP roster."
     )
 
 

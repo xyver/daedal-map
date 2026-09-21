@@ -827,12 +827,12 @@ class TrustedArtifactBypassTests(unittest.TestCase):
         self.assertIn("result", envelope)
         limiter_mock.assert_called_once()
 
-    def test_local_runtime_bypasses_rate_and_conversion_job_cap(self) -> None:
+    def test_local_runtime_bypasses_rate_and_conversion_cap(self) -> None:
         with (
             mock.patch("mapmover.routes.mcp.is_local_loopback_request", return_value=True),
             mock.patch("mapmover.routes.mcp.rate_limiter.check", return_value=(False, 60)) as limiter_mock,
             mock.patch(
-                "mapmover.runtime.geometry_tool_jobs.resolve_references_batch",
+                "mapmover.runtime.reference_exchange.convert_references_batch",
                 return_value=[
                     {"ok": True, "resolved_loc_id": f"USA-CA-00{index}"}
                     for index in range(1, 4)
@@ -840,18 +840,18 @@ class TrustedArtifactBypassTests(unittest.TestCase):
             ),
             mock.patch.dict(
                 "os.environ",
-                {"MCP_TOOL_BATCH_LIMIT_CREATE_CONVERSION_JOB": "2"},
+                {"MCP_TOOL_BATCH_LIMIT_CONVERT_REFERENCE": "2"},
                 clear=False,
             ),
         ):
             help_envelope = _tool_call_envelope(
                 self.client,
                 "get_tool_help",
-                {"tool_name": "create_conversion_job"},
+                {"tool_name": "convert_reference"},
             )
             create_envelope = _tool_call_envelope(
                 self.client,
-                "create_conversion_job",
+                "convert_reference",
                 {
                     "from_system": "admin.native_id",
                     "items": [{"value": str(index)} for index in range(3)],
@@ -866,8 +866,8 @@ class TrustedArtifactBypassTests(unittest.TestCase):
         self.assertFalse(access["service_item_caps_enforced"])
         self.assertFalse(access["payment_required"])
         created = create_envelope["result"]["structuredContent"]
-        self.assertTrue(created["ok"])
-        self.assertEqual(created["result"]["row_count"], 3)
+        self.assertEqual(created["converted_count"], 3)
+        self.assertEqual(len(created["results"]), 3)
         limiter_mock.assert_not_called()
 
 

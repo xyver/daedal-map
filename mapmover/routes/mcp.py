@@ -1562,8 +1562,8 @@ def get_server_description(pack_id: str | None = None) -> str:
             "Start with free discovery: call get_catalog with catalog='geometry' to see each family and the countries where it exists. Then call get_pack for one family; add country_scope only when country-specific systems, versions, vintages, levels, and artifacts are needed. A listed family-country pair is the capability signal. "
             "Call resolve_point with either one coordinate or a point array for compact chains through Admin 3 without opening deep partitions. Then call resolve_deep_point with one coordinate or a scoped point array, a returned shallow_loc_id, and one family. family defaults to administrative; other shape-backed families use direct point lookup. "
             "When the caller asks for details about that chain, pass its stack loc_ids to get_loc_id_info; use get_geometry only for shapes and compare_geographies only for overlap, topology, validity, or successor questions. Mixed-vintage point context is not strict parentage. "
-            "For a user dataset with unknown or informally declared geography keys, pass bounded scalar column samples to identify_dataset_geography; the caller may filter transport noise but must not choose the geography itself. Then pass its unambiguous geography_binding to the conversion-job tools. Use identify_reference_system only when one identifier column is already selected. For one known outside geography code or name, call convert_reference and omit to_system to return loc_id. For bulk geometry, call resolve_loc_id_scope only for one strict hierarchy, then estimate_geometry_package before create_geometry_export. "
-            "Geometry export and conversion creates are synchronous operations with hosted safety limits (currently 250 selected geometries and 7,500 conversion rows by default) sized around a 10-20 second response budget. Direct local-runtime loopback calls bypass DaedalMap hosted item caps, rate tiers, and payment challenges; local machine resources and operator-configured runtime guards are the boundary. Call the estimate tool or get_tool_help for the effective access lane. This facade does not promise a durable queue that is not deployed."
+            "For a user dataset with unknown or informally declared geography keys, pass bounded scalar column samples to identify_dataset_geography; the caller may filter transport noise but must not choose the geography itself. Use identify_reference_system only when one identifier column is already selected. For a known outside geography code, name, or bounded identifier batch, call convert_reference and omit to_system to return loc_id. For bounded administrative shapes, use get_geometry with exact loc_ids or its supported scope input. "
+            "Future estimate/create/status builder contracts remain implemented internally but are not public MCP tools until durable job and artifact delivery is ready."
         )
     if not normalized:
         return (
@@ -4315,9 +4315,8 @@ async def _execute_get_geometry_tool(request: Request, arguments: dict[str, Any]
             loc_id_count=requested_count,
         )
         error_payload["guidance"] = {
-            "action": "narrow_or_export",
-            "message": "Choose a narrower parent, omit polygon coordinates, split exact loc_ids, or use estimate_geometry_package for a bulk artifact.",
-            "next_tool": "estimate_geometry_package",
+            "action": "narrow_or_split",
+            "message": "Choose a narrower parent, omit polygon coordinates, or split exact loc_ids into bounded requests.",
         }
         _log_mcp_tool_usage_event(
             request,

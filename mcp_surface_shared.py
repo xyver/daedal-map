@@ -54,6 +54,15 @@ def build_mcp_instructions(*, safety_notice: str | None = None) -> str:
 PAUSED_PUBLIC_TOOL_NAMES = frozenset({
     "get_live_earthquake_events",
     "get_live_volcano_events",
+    # Retained for the future custom-data/bulk-export product, but hidden from
+    # ordinary public MCP discovery and execution until that workflow has a
+    # durable queue/artifact lifecycle.
+    "resolve_loc_id_scope",
+    "estimate_geometry_package",
+    "create_geometry_export",
+    "estimate_conversion_job",
+    "create_conversion_job",
+    "get_job_status",
 })
 
 

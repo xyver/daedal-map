@@ -81,7 +81,7 @@ TOOL_GUIDANCE: dict[str, dict[str, Any]] = {
         ["Passing the user's prose question as arguments", "Converting every dataset row", "Returning polygons", "Claiming full-dataset validation from a sample"],
         {"identifiers": ["06073000100", "06073000201"], "expected": {"system": "us_census_geoid", "geo_level": "tract", "vintage": "2020"}, "country_scope": "USA"},
         ["status", "candidates", "match_rate", "geometry_available_count", "geometry_bank_ids", "recommended_binding"],
-        ["estimate_conversion_job", "convert_reference", "get_geometry"],
+        ["convert_reference", "get_geometry"],
         ["reference system", "source vintage", "geometry bank ids", "validation scope"],
     ),
     "identify_dataset_geography": _g(
@@ -89,7 +89,7 @@ TOOL_GUIDANCE: dict[str, dict[str, Any]] = {
         ["Uploading the complete source file", "Pre-classifying systems in browser code", "Returning polygons", "Converting every row"],
         {"columns": [{"name": "municipality_code", "values": ["1200013", "1200054"]}], "dataset_context": {"file_name": "population.csv", "row_count": 200}},
         ["status", "candidates", "recommended_candidate_id", "recommended_binding"],
-        ["identify_reference_system", "estimate_conversion_job", "resolve_point"],
+        ["identify_reference_system", "convert_reference", "resolve_point"],
         ["selected input column", "reference system", "country scope", "admin level", "sample match rate"],
     ),
     "convert_reference": _g(
@@ -113,49 +113,8 @@ TOOL_GUIDANCE: dict[str, dict[str, Any]] = {
         ["Identifying unknown geography", "Resolving names", "Inferring independent families from admin ancestry", "Bulk export packaging"],
         {"scope": {"parent_loc_id": "USA-TX", "admin_level": "admin_2"}, "include_polygon": False},
         ["selection", "scope", "requested", "available", "missing", "items"],
-        ["get_loc_id_info", "estimate_geometry_package"],
+        ["get_loc_id_info"],
         ["bank_id", "geometry_vintage", "source", "license", "release_id"]
-    ),
-    "resolve_loc_id_scope": _g(
-        ["You need strict descendants of one stored parent at a target administrative level."],
-        ["Crossing mixed-release seams", "Natural-language place resolution"],
-        {"parent_loc_id": "CAN-BC", "admin_level": "admin_2", "limit": 10},
-        ["total_count", "returned_count", "truncated", "loc_ids"],
-        ["get_geometry", "estimate_geometry_package"], ["hierarchy release", "bank ids"]
-    ),
-    "estimate_geometry_package": _g(
-        ["You need a free preflight before creating a selected geometry export."],
-        ["Publishing a canonical geometry release", "Creating an artifact"],
-        {"loc_ids": ["CAN-BC"], "format": "geojson_gzip", "include_polygon": True},
-        ["quote_id", "available_shape_count", "estimated_transfer_bytes", "recommended_delivery_mode", "create_call"],
-        ["create_geometry_export"], ["contributing banks", "license/citation requirements", "vintages"]
-    ),
-    "create_geometry_export": _g(
-        ["You accepted a synchronous geometry export plan within the advertised effective limit and want a real artifact."],
-        ["Publishing or mutating official geometry", "Skipping estimate for large selections"],
-        {"loc_ids": ["CAN-BC"], "format": "geojson", "include_polygon": False},
-        ["job_id", "status", "result", "artifact", "next_call"],
-        ["get_job_status"], ["contributing banks", "license/citations", "format", "artifact hash"]
-    ),
-    "estimate_conversion_job": _g(
-        ["You need a free sample-based estimate before converting user-supplied reference rows."],
-        ["Resolving coordinate rows", "Executing the conversion"],
-        {"from_system": "admin.native_id", "items": [{"row_index": 1, "value": "10", "iso3": "CAN", "data": {"population": 1000}}], "output_format": "csv"},
-        ["quote_id", "row_count", "sample_resolved", "estimated_output_bytes", "output_format", "create_call"],
-        ["create_conversion_job"], ["input system", "bridge vintages", "sample evidence"]
-    ),
-    "create_conversion_job": _g(
-        ["You accepted a synchronous reference-conversion plan within the advertised effective limit and want real output."],
-        ["Resolving coordinate CSVs", "Modifying official identities"],
-        {"from_system": "admin.native_id", "items": [{"row_index": 1, "value": "10", "iso3": "CAN", "data": {"population": 1000}}], "output_format": "csv", "output_name": "cleaned-population"},
-        ["job_id", "status", "result", "output_rows", "artifact", "next_call"],
-        ["get_job_status"], ["source systems", "bridge vintages", "row-level relationship evidence"]
-    ),
-    "get_job_status": _g(
-        ["You have a job_id returned by a create tool and need its current state or result."],
-        ["Starting or altering work", "Looking up an unknown job without its id"],
-        {"job_id": "geometry_export_example"},
-        ["job_id", "kind", "status", "progress", "result", "artifact", "callback_state"],
     ),
     "get_event": _g(
         ["You have an exact event_id from get_data and need to inspect or traverse that event."],
@@ -176,6 +135,7 @@ def geometry_topic_help_payload(
     question: str | None = None,
     *,
     catalog_capabilities: dict[str, Any] | None = None,
+    available_tool_names: list[str] | tuple[str, ...] = (),
 ) -> dict[str, Any]:
     capabilities = dict(catalog_capabilities or {})
     return {
@@ -293,7 +253,7 @@ def geometry_topic_help_payload(
             },
             {
                 "name": "known_or_suspected_dataset_identifiers",
-                "steps": ["identify_reference_system on at most 100 representative string keys", "use the unambiguous geography_binding", "estimate_conversion_job (which resolves up to 32 sample rows)", "create_conversion_job to validate every submitted row; hosted calls use the advertised limit (7,500 rows by default), while direct local loopback jobs have no service item cap", "get_job_status to retrieve the completed result"],
+                "steps": ["identify_reference_system on at most 100 representative string keys", "use the unambiguous geography_binding", "call convert_reference with a bounded items batch when the source system is confirmed"],
             },
             {
                 "name": "one_external_reference",
@@ -305,8 +265,9 @@ def geometry_topic_help_payload(
             },
         ],
         "available_tools": sorted(
-            name for name in TOOL_GUIDANCE
-            if name == "get_tool_help" or tool_profile(name).get("family") == "geography"
+            name for name in available_tool_names
+            if name in TOOL_GUIDANCE
+            and (name == "get_tool_help" or tool_profile(name).get("family") == "geography")
         ),
         "notes": [
             capabilities.get("public_claim") or "Coverage is read from geometry_catalog.json; do not hardcode a country list or depth.",
@@ -326,9 +287,7 @@ TOPIC_TOOLS: dict[str, tuple[str, ...]] = {
         "get_catalog", "get_pack", "get_data", "get_event",
     ),
     "custom_data": (
-        "identify_dataset_geography", "identify_reference_system", "resolve_loc_id_scope",
-        "estimate_conversion_job", "create_conversion_job", "get_job_status",
-        "estimate_geometry_package", "create_geometry_export",
+        "identify_dataset_geography", "identify_reference_system", "convert_reference",
     ),
 }
 
@@ -337,7 +296,7 @@ TOPIC_SUMMARIES = {
     "overview": "Enter the loc_id universe through a resolution or onboarding tool, then use loc_id-based discovery, data, geometry, and relationship tools.",
     "data": "Use get_catalog to select a data pack, get_pack to learn its fields and routing, then query rows with loc_id-based region filters.",
     "disasters": "Use get_data to find event rows and stable event_ids, then get_event to inspect one event's relationships, affected places, native observations, or explicit geometry.",
-    "custom_data": "Identify geography from bounded samples before estimating or creating a conversion or geometry export job.",
+    "custom_data": "Identify geography from bounded samples, confirm the reference system, then convert a bounded identifier batch through loc_id.",
 }
 
 
@@ -355,6 +314,7 @@ def topic_help_payload(
         payload = geometry_topic_help_payload(
             question,
             catalog_capabilities=catalog_capabilities,
+            available_tool_names=available_tool_names,
         )
         payload["available_tools"] = [
             name for name in payload.get("available_tools") or []

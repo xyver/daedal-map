@@ -25,6 +25,17 @@ from mapmover.routes.mcp import (
     _tool_result,
     router as mcp_router,
 )
+from mcp_surface_shared import build_tool_definitions
+
+
+_RETAINED_INTERNAL_GEOMETRY_TOOLS = frozenset({
+    "resolve_loc_id_scope",
+    "estimate_geometry_package",
+    "create_geometry_export",
+    "estimate_conversion_job",
+    "create_conversion_job",
+    "get_job_status",
+})
 
 
 def _mcp_call(client: TestClient, method: str, params: dict | None = None, *, path: str = "/mcp/geography", headers: dict | None = None) -> dict:
@@ -38,13 +49,34 @@ def _mcp_call(client: TestClient, method: str, params: dict | None = None, *, pa
 
 
 def _tool_call(client: TestClient, name: str, arguments: dict | None = None, *, path: str = "/mcp/geography", headers: dict | None = None) -> dict:
-    envelope = _mcp_call(
-        client,
-        "tools/call",
-        {"name": name, "arguments": arguments or {}},
-        path=path,
-        headers=headers,
-    )
+    if name in _RETAINED_INTERNAL_GEOMETRY_TOOLS:
+        # These contracts remain implemented for future builder work, but are
+        # deliberately absent from every public MCP facade. Exercise dispatch
+        # through an explicit internal-only harness so implementation coverage
+        # cannot be mistaken for public distribution.
+        definition = next(
+            item for item in build_tool_definitions(include_paused=True)
+            if item["name"] == name
+        )
+        with (
+            mock.patch("mapmover.routes.mcp._tool_definition", return_value=definition),
+            mock.patch("mapmover.routes.mcp._tool_allowed_for_facade", return_value=True),
+        ):
+            envelope = _mcp_call(
+                client,
+                "tools/call",
+                {"name": name, "arguments": arguments or {}},
+                path=path,
+                headers=headers,
+            )
+    else:
+        envelope = _mcp_call(
+            client,
+            "tools/call",
+            {"name": name, "arguments": arguments or {}},
+            path=path,
+            headers=headers,
+        )
     return envelope["result"]["structuredContent"]
 
 
@@ -92,12 +124,7 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         self.assertIn("resolve_point", tool_names)
         self.assertIn("resolve_deep_point", tool_names)
         self.assertIn("get_loc_id_info", tool_names)
-        self.assertIn("resolve_loc_id_scope", tool_names)
-        self.assertIn("estimate_geometry_package", tool_names)
-        self.assertIn("create_geometry_export", tool_names)
-        self.assertIn("estimate_conversion_job", tool_names)
-        self.assertIn("create_conversion_job", tool_names)
-        self.assertIn("get_job_status", tool_names)
+        self.assertTrue(_RETAINED_INTERNAL_GEOMETRY_TOOLS.isdisjoint(tool_names))
         self.assertNotIn("check_geometries", tool_names)
         self.assertNotIn("loc_id_references", tool_names)
         self.assertNotIn("get_boundary", tool_names)
@@ -217,7 +244,7 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         )
 
         self.assertEqual(envelope["result"]["serverInfo"]["name"], "com.daedalmap/geography")
-        self.assertEqual(envelope["result"]["serverInfo"]["version"], "1.3.0")
+        self.assertEqual(envelope["result"]["serverInfo"]["version"], "1.4.0")
 
     def test_browser_mcp_metadata_is_bounded_and_reaches_usage_analytics(self) -> None:
         with mock.patch("mapmover.routes.mcp.log_api_query_event") as analytics_mock:
@@ -333,7 +360,7 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         self.assertIn("resolve_deep_point", tool_names)
         self.assertNotIn("get_boundary", tool_names)
 
-    def test_boundaries_facade_lists_geometry_preflight_tools(self) -> None:
+    def test_boundaries_facade_lists_public_geometry_tools_only(self) -> None:
         envelope = _mcp_call(self.client, "tools/list", path="/mcp/boundaries")
         tool_names = {tool["name"] for tool in envelope["result"]["tools"]}
 
@@ -342,10 +369,7 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         self.assertIn("get_geometry", tool_names)
         self.assertNotIn("get_boundary", tool_names)
         self.assertNotIn("resolve_point", tool_names)
-        self.assertIn("resolve_loc_id_scope", tool_names)
-        self.assertIn("estimate_geometry_package", tool_names)
-        self.assertIn("create_geometry_export", tool_names)
-        self.assertIn("get_job_status", tool_names)
+        self.assertTrue(_RETAINED_INTERNAL_GEOMETRY_TOOLS.isdisjoint(tool_names))
 
     def test_resolve_points_tool_accepts_point_batch(self) -> None:
         def fake_resolve(points, include_geometry=False, **_kwargs):
@@ -1191,7 +1215,7 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
 
         self.assertEqual(payload["limit"], 100)
         self.assertEqual(payload["error"]["code"], "too_many_loc_ids")
-        self.assertEqual(payload["guidance"]["next_tool"], "estimate_geometry_package")
+        self.assertEqual(payload["guidance"]["action"], "narrow_or_split")
         geometry_mock.assert_not_called()
 
     def test_get_geometry_polygon_limit_is_authored_in_the_access_registry(self) -> None:
@@ -1328,7 +1352,8 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
                 {"loc_id": "USA-PLACE-SPRINGFIELD-IL"},
             )
 
-        info_mock.assert_called_once_with("USA-IL-167-PLACE-12345", include_memberships=False)
+        expected_call = mock.call("USA-IL-167-PLACE-12345", include_memberships=False)
+        self.assertEqual(info_mock.call_args_list.count(expected_call), 1)
         self.assertEqual(payload["loc_id"], "USA-IL-167-PLACE-12345")
         self.assertEqual(payload["requested_loc_id"], "USA-PLACE-SPRINGFIELD-IL")
         self.assertTrue(payload["resolved_from_public_alias"])
