@@ -58,6 +58,9 @@ from .family_admin_crosswalk import (
 
 LOC_ID_SYSTEM = "daedalmap.loc_id"
 ADMIN_SYSTEM = "admin_boundary"
+FAMILY_DEFAULT_SYSTEMS = {
+    "marine_jurisdiction": "marine_eez",
+}
 
 SYSTEM_ALIASES = {
     "loc_id": LOC_ID_SYSTEM,
@@ -1367,6 +1370,392 @@ def _geometry_catalog_named_reference_objects(
     return {"items": rows, "returned": len(rows), "total": len(items), "truncated": len(rows) < len(items)}
 
 
+def _published_geometry_family_index(catalog: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """Index published families by family id and retain only available countries."""
+    # This is also the vocabulary rendered by docs_geometry_families.html. It is
+    # the naming authority; source-specific reference-system IDs must never be
+    # promoted into the top-level family list.
+    definitions = {
+        str(item.get("family_id") or "").strip(): item
+        for item in catalog.get("geometry_family_definitions") or []
+        if isinstance(item, dict) and str(item.get("family_id") or "").strip()
+    }
+    families: dict[str, dict[str, Any]] = {}
+    for coverage in _public_catalog_records(catalog, "country_family_coverage"):
+        country_code = str(coverage.get("country_code") or "").strip().upper()
+        if not country_code:
+            continue
+        country_label = str(coverage.get("label") or country_code)
+        for raw_family in coverage.get("families") or []:
+            if not isinstance(raw_family, dict) or raw_family.get("available") is not True:
+                continue
+            family_id = str(raw_family.get("family_id") or "").strip()
+            if not family_id or family_id not in definitions:
+                continue
+            definition = definitions[family_id]
+            entry = families.setdefault(family_id, {
+                "family_id": family_id,
+                "label": definition.get("label") or family_id.replace("_", " ").title(),
+                "short_label": definition.get("short_label"),
+                "description": definition.get("description"),
+                "examples": list(definition.get("examples") or []),
+                "search_terms": list(definition.get("search_terms") or []),
+                "countries": [],
+                "scopes": [],
+                "domain_units": [],
+            })
+            if country_code == "GLOBAL":
+                entry["scopes"].append("GLOBAL")
+                entry["domain_units"].append({
+                    "unit_id": "GLOBAL",
+                    "kind": "global_domain",
+                    "domain_type": "baseline",
+                    "label": "Global baseline",
+                })
+            else:
+                entry["countries"].append({
+                    "country_code": country_code,
+                    "label": country_label,
+                    "coverage_status": raw_family.get("coverage_status"),
+                    "coverage_complete": bool(raw_family.get("coverage_complete")),
+                })
+
+    for profile in _public_catalog_records(catalog, "domain_profiles"):
+        scope = str(profile.get("release_unit_id") or "").strip().upper()
+        active = profile.get("active_release") if isinstance(profile.get("active_release"), dict) else {}
+        publication_status = str(active.get("publication_status") or profile.get("release_status") or "").lower()
+        if not scope or publication_status not in {
+            "published", "approved_for_publication", "active", "current",
+        }:
+            continue
+        for family_id in profile.get("family_ids") or []:
+            family_id = str(family_id or "").strip()
+            # Physical masks and raster surfaces are products, not loc_id
+            # reference families. They remain in the downloadable catalog.
+            if family_id not in definitions or family_id == "physical_surface":
+                continue
+            definition = definitions[family_id]
+            entry = families.setdefault(family_id, {
+                "family_id": family_id,
+                "label": definition.get("label") or family_id.replace("_", " ").title(),
+                "short_label": definition.get("short_label"),
+                "description": definition.get("description"),
+                "examples": list(definition.get("examples") or []),
+                "search_terms": list(definition.get("search_terms") or []),
+                "countries": [],
+                "scopes": [],
+                "domain_units": [],
+            })
+            if scope not in entry["scopes"]:
+                entry["scopes"].append(scope)
+            if scope not in {item["unit_id"] for item in entry["domain_units"]}:
+                entry["domain_units"].append({
+                    "unit_id": scope,
+                    "kind": "global_domain",
+                    "domain_type": scope.lower(),
+                    "label": profile.get("label") or scope,
+                })
+
+    for entry in families.values():
+        entry["countries"] = sorted(entry["countries"], key=lambda item: item["country_code"])
+        entry["scopes"] = sorted(entry.get("scopes") or [])
+        entry["domain_units"] = sorted(entry.get("domain_units") or [], key=lambda item: item["unit_id"])
+    return families
+
+
+def geometry_catalog_discovery(
+    *, detail: str = "lite", country_scope: str | None = None,
+) -> dict[str, Any]:
+    """Return the agent-facing geometry catalog used by the unified get_catalog."""
+    catalog = load_geometry_catalog()
+    selected_country = str(country_scope or "").strip().upper()
+    family_index = _published_geometry_family_index(catalog)
+    families = []
+    for family_id, entry in sorted(family_index.items()):
+        countries = entry["countries"]
+        if selected_country:
+            countries = [item for item in countries if item["country_code"] == selected_country]
+            if not countries:
+                continue
+        row = {
+            "pack_id": family_id,
+            "label": entry["label"],
+            "short_label": entry.get("short_label"),
+            "countries": [item["country_code"] for item in countries],
+            "country_count": len(countries),
+            "scopes": entry.get("scopes") or [],
+            "release_units": [
+                {"unit_id": item["country_code"], "kind": "country", "label": item["label"]}
+                for item in countries
+            ] + list(entry.get("domain_units") or []),
+            "next_call": {
+                "tool": "get_pack",
+                "arguments": {"catalog": "geometry", "pack_id": family_id, "detail": "lite"},
+            },
+        }
+        if selected_country:
+            row["next_call"]["arguments"]["country_scope"] = selected_country
+        if detail == "full":
+            row.update({
+                "description": entry.get("description"),
+                "examples": entry.get("examples") or [],
+                "search_terms": entry.get("search_terms") or [],
+                "country_details": countries,
+                "reference_systems": sorted({
+                    str(item.get("system") or "")
+                    for item in _public_catalog_records(catalog, "reference_systems")
+                    if item.get("callable") is True
+                    and str(item.get("family_id") or "") == family_id
+                    and (not selected_country or str(item.get("country_code") or "").upper() == selected_country)
+                    and str(item.get("system") or "")
+                }),
+            })
+        families.append(_clean_json(row))
+    return _clean_json({
+        "ok": True,
+        "catalog": "geometry",
+        "detail": detail,
+        "country_scope": selected_country or None,
+        "family_count": len(families),
+        "families": families,
+        "usage": {
+            "meaning": "A listed family release unit exists and can be used through loc_id. Release units are countries or global domains.",
+            "next_step": "Call get_pack for a family. Add country_scope for a country or release_unit for a global domain when versions, vintages, levels, or artifacts are needed.",
+        },
+        "download": {
+            "download_url": "https://app.daedalmap.com/api/v1/geometry/catalog/download",
+            "media_type": "application/json",
+        },
+    })
+
+
+def geometry_pack_detail(
+    pack_id: str, *, country_scope: str | None = None,
+    release_unit: str | None = None, detail: str = "lite",
+) -> dict[str, Any]:
+    """Describe one geometry family globally or within one selected country."""
+    catalog = load_geometry_catalog()
+    requested = str(pack_id or "").strip()
+    selected_country = str(country_scope or "").strip().upper()
+    selected_unit = str(release_unit or "").strip().upper()
+    family_index = _published_geometry_family_index(catalog)
+    references = _public_catalog_records(catalog, "reference_systems")
+
+    normalized = SYSTEM_ALIASES.get(requested.lower(), requested.lower())
+    family_id = normalized if normalized in family_index else ""
+    if not family_id:
+        family_id = next((
+            candidate for candidate, system in FAMILY_DEFAULT_SYSTEMS.items()
+            if normalized == system and candidate in family_index
+        ), "")
+    if not family_id:
+        for system in references:
+            identifiers = {
+                str(system.get("system") or "").strip().lower(),
+                str(system.get("reference_system_id") or "").strip().lower(),
+            }
+            if normalized in identifiers or requested.lower() in identifiers:
+                family_id = str(system.get("family_id") or "").strip()
+                break
+    family = family_index.get(family_id)
+    if not family:
+        return {
+            "ok": False,
+            "catalog": "geometry",
+            "pack_id": requested,
+            "error": {
+                "code": "geometry_family_not_found",
+                "message": f"Geometry family or reference system '{requested}' is not published.",
+            },
+        }
+
+    countries = family["countries"]
+    domain_units = list(family.get("domain_units") or [])
+    if selected_country:
+        countries = [item for item in countries if item["country_code"] == selected_country]
+        if not countries:
+            return {
+                "ok": False,
+                "catalog": "geometry",
+                "pack_id": family_id,
+                "country_scope": selected_country,
+                "error": {
+                    "code": "geometry_family_not_found_for_country",
+                    "message": f"Family '{family_id}' is not published for {selected_country}.",
+                },
+            }
+    if selected_unit and selected_unit not in {item["unit_id"] for item in domain_units}:
+        return {
+            "ok": False,
+            "catalog": "geometry",
+            "pack_id": family_id,
+            "release_unit": selected_unit,
+            "error": {
+                "code": "geometry_family_not_found_for_release_unit",
+                "message": f"Family '{family_id}' is not published in release unit {selected_unit}.",
+            },
+        }
+
+    base = {
+        "ok": True,
+        "catalog": "geometry",
+        "kind": "geometry_family",
+        "pack_id": family_id,
+        "requested_as": requested if requested != family_id else None,
+        "label": family.get("label"),
+        "short_label": family.get("short_label"),
+        "description": family.get("description"),
+        "country_scope": selected_country or None,
+        "release_unit": selected_unit or None,
+        "country_count": len(countries),
+        "countries": [item["country_code"] for item in countries],
+        "scopes": family.get("scopes") or [],
+        "release_units": [
+            {"unit_id": item["country_code"], "kind": "country", "label": item["label"]}
+            for item in countries
+        ] + domain_units,
+        "detail": detail,
+        "next_step": {
+            "tool": "convert_reference",
+            "arguments": {
+                "from_system": "<system listed by this family>",
+                "value": "<identifier>",
+                "to_system": "daedalmap.loc_id",
+            },
+        },
+    }
+    if not selected_country and not selected_unit and countries:
+        base["next_step"] = {
+            "tool": "get_pack",
+            "arguments": {
+                "catalog": "geometry",
+                "pack_id": family_id,
+                "country_scope": "<ISO3 from countries>",
+                "detail": "full",
+            },
+        }
+        base["usage"] = (
+            "This family-level view answers where the family exists. Call get_pack again with "
+            "country_scope for country-specific versions, vintages, levels, and artifacts."
+        )
+        base["country_detail_call"] = {
+            "tool": "get_pack",
+            "arguments": {
+                "catalog": "geometry",
+                "pack_id": family_id,
+                "country_scope": "<ISO3 from countries>",
+                "detail": "full",
+            },
+        }
+        base["release_unit_detail_calls"] = [
+            {
+                "tool": "get_pack",
+                "arguments": {
+                    "catalog": "geometry",
+                    "pack_id": family_id,
+                    "release_unit": item["unit_id"],
+                    "detail": "full",
+                },
+            }
+            for item in domain_units
+        ]
+        return _clean_json(base)
+
+    if not selected_country:
+        default_system = FAMILY_DEFAULT_SYSTEMS.get(family_id, family_id)
+        domains = []
+        for profile in _public_catalog_records(catalog, "domain_profiles"):
+            if selected_unit and str(profile.get("release_unit_id") or "").upper() != selected_unit:
+                continue
+            if family_id not in {str(value or "") for value in profile.get("family_ids") or []}:
+                continue
+            active = profile.get("active_release") if isinstance(profile.get("active_release"), dict) else {}
+            domain = {
+                "scope": profile.get("release_unit_id"),
+                "label": profile.get("label"),
+                "release_id": active.get("release_id") or profile.get("release_id"),
+                "release_version": active.get("release_version") or profile.get("release_version"),
+                "publication_status": active.get("publication_status") or profile.get("release_status"),
+            }
+            if detail == "full":
+                domain["family"] = next((
+                    dict(item) for item in profile.get("family_coverage") or []
+                    if isinstance(item, dict) and str(item.get("family_id") or "") == family_id
+                ), {})
+                domain["package_recipes"] = list(profile.get("package_recipes") or [])
+            domains.append(domain)
+        base["domains"] = domains
+        base["next_step"] = {
+            "tool": "convert_reference",
+            "arguments": {
+                "from_system": default_system,
+                "value": "<identifier>",
+                "to_system": "daedalmap.loc_id",
+            },
+        }
+        base["usage"] = (
+            "This is a published non-country geometry release unit; no ISO3 country drill-down is required."
+            if selected_unit else
+            "This family is published only in non-country geometry release units; select release_unit if more than one is listed."
+        )
+        return _clean_json(base)
+
+    coverage_record: dict[str, Any] = {}
+    for coverage in _public_catalog_records(catalog, "country_family_coverage"):
+        if str(coverage.get("country_code") or "").upper() != selected_country:
+            continue
+        coverage_record = next((
+            dict(item) for item in coverage.get("families") or []
+            if isinstance(item, dict)
+            and item.get("available") is True
+            and str(item.get("family_id") or "") == family_id
+        ), {})
+        break
+    family_systems = [
+        dict(item) for item in references
+        if item.get("callable") is True
+        and str(item.get("country_code") or "").upper() == selected_country
+        and str(item.get("family_id") or "") == family_id
+    ]
+    if family_systems:
+        base["next_step"]["arguments"]["from_system"] = family_systems[0].get("system") or family_id
+    profile = next((
+        dict(item) for item in _public_catalog_records(catalog, "country_profiles")
+        if str(item.get("country_code") or "").upper() == selected_country
+    ), {})
+    base["reference_systems"] = family_systems
+    base["country_details"] = countries
+    base["release"] = {
+        key: profile.get(key)
+        for key in ("release_id", "release_version", "graph_release_id", "release_status")
+        if profile.get(key) is not None
+    }
+    if detail == "full":
+        base["family"] = coverage_record
+        systems = {str(item.get("system") or "") for item in family_systems}
+        base["crosswalks"] = [
+            dict(item) for item in _public_catalog_records(catalog, "crosswalks")
+            if str(item.get("country_code") or "").upper() == selected_country
+            and (
+                str(item.get("source_family_id") or "") == family_id
+                or str(item.get("target_family_id") or "") == family_id
+                or str(item.get("source_system") or "") in systems
+                or str(item.get("target_system") or "") in systems
+            )
+        ]
+    else:
+        base["family"] = {
+            key: coverage_record.get(key)
+            for key in (
+                "family_id", "label", "publication_status", "coverage_status",
+                "coverage_complete", "max_admin_level", "native_tier_names",
+                "subtypes", "source_ids", "source_releases",
+            )
+            if coverage_record.get(key) is not None
+        }
+    return _clean_json(base)
+
+
 def read_geometry_catalog(
     *, view: str = "capabilities", limit: int | None = 50, country_scope: str | None = None,
     read_wip: bool = False,
@@ -2330,7 +2719,7 @@ def convert_reference(
     *,
     from_system: str,
     value: str,
-    to_system: str,
+    to_system: str = LOC_ID_SYSTEM,
     iso3: str = "USA",
     target_admin_level: int | str | None = "admin_2",
     relationship_vintage: str | None = None,
@@ -2338,6 +2727,9 @@ def convert_reference(
     limit: int | None = 10,
     source_release: str | None = None,
     internal_release: str | None = None,
+    country_hint: str | None = None,
+    admin_level_hint: int | None = None,
+    as_of: str | None = None,
 ) -> dict[str, Any]:
     """Convert a value from one reference system to another through ``loc_id``."""
     source = _normalize_system(from_system)
@@ -2416,6 +2808,9 @@ def convert_reference(
         limit=limit,
         source_release=source_release,
         internal_release=internal_release,
+        country_hint=country_hint,
+        admin_level_hint=admin_level_hint,
+        as_of=as_of,
     )
     loc_id = resolved.get("resolved_loc_id")
     if not loc_id:

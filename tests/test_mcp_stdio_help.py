@@ -63,7 +63,7 @@ class StdioToolHelpTests(unittest.TestCase):
         self.assertIn("loc_ids", payload["loc_id_boundary"]["rule"])
         self.assertEqual(
             {entry.get("tool") for entry in payload["loc_id_boundary"]["entry_paths"] if entry.get("tool")},
-            {"resolve_point", "resolve_reference", "identify_dataset_geography"},
+            {"resolve_point", "convert_reference", "identify_dataset_geography"},
         )
 
     def test_unknown_static_help_is_typed(self) -> None:

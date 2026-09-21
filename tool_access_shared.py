@@ -90,8 +90,8 @@ FAMILY_DATASET = "dataset"
 # (MCP_TOOL_PRICE_*_<TOOL>, legacy_price_env names, and the Access & Payment
 # dashboard) win over these values without a code change.
 #
-# Identifier lane: external code to loc_id (resolve_reference,
-# convert_reference, create_conversion_job). This is an index join, not a
+# Identifier lane: external code to loc_id (convert_reference,
+# create_conversion_job). This is an index join, not a
 # spatial computation.
 IDENTIFIER_RATE_USD_PER_100 = 0.05
 # Point lane: coordinate to loc_id chain (resolve_points). Point-in-polygon
@@ -207,19 +207,6 @@ TOOL_ACCESS_REGISTRY: dict[str, dict] = {
             },
         },
     },
-    "resolve_reference": {
-        "family": FAMILY_GEOGRAPHY,
-        "capability_id": "reference_resolution",
-        "pricing": PRICING_PAID_BULK,
-        "item_field": "items",
-        "free_item_limit": 100,
-        "account_item_limit": 1000,
-        "paid_item_limit": 2500,
-        "legacy_limit_env": ("REFERENCE_RESOLVE_BATCH_LIMIT",),
-        "price": {"base_usd": PAID_CALL_BASE_USD, "per_unit_usd": IDENTIFIER_RATE_USD_PER_100 / 100},
-        "pricing_version": "geography-tools-2026-09-18.1",
-        "meter": {"unit": "resolved_reference", "items_per_charge_unit": 1},
-    },
     "identify_reference_system": {
         "family": FAMILY_GEOGRAPHY,
         "capability_id": "reference_system_identification",
@@ -319,17 +306,6 @@ TOOL_ACCESS_REGISTRY: dict[str, dict] = {
         "capability_id": "geometry_job_status",
         "pricing": PRICING_FREE,
         "notes": "Polling a job you already paid for must never be gated.",
-    },
-    # ---- geography discovery: always free, no item cap ----
-    "read_geometry_catalog": {
-        "family": FAMILY_GEOGRAPHY,
-        "capability_id": "geometry_catalog_discovery",
-        "pricing": PRICING_FREE,
-    },
-    "list_reference_systems": {
-        "family": FAMILY_GEOGRAPHY,
-        "capability_id": "reference_system_discovery",
-        "pricing": PRICING_FREE,
     },
     # ---- discovery helpers: always free. Gating these would make the catalog
     # undiscoverable and break the funnel. ----

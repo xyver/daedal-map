@@ -290,8 +290,8 @@ class DataHelperTelemetryTests(unittest.TestCase):
 
     def test_get_catalog_geometry_lite_uses_bounded_capability_view(self) -> None:
         with mock.patch(
-            "mapmover.runtime.reference_exchange.read_geometry_catalog",
-            return_value={"ok": True, "view": "capabilities", "country": {"country_code": "CAN"}},
+            "mapmover.runtime.reference_exchange.geometry_catalog_discovery",
+            return_value={"ok": True, "catalog": "geometry", "detail": "lite", "families": []},
         ) as read_catalog:
             envelope = _tool_call_envelope(
                 self.client,
@@ -302,7 +302,7 @@ class DataHelperTelemetryTests(unittest.TestCase):
         result = envelope["result"]["structuredContent"]
         self.assertEqual(result["catalog"], "geometry")
         self.assertEqual(result["detail"], "lite")
-        read_catalog.assert_called_once_with(view="capabilities", country_scope="CAN")
+        read_catalog.assert_called_once_with(detail="lite", country_scope="CAN")
 
     def test_get_catalog_data_full_adds_metric_inventory_and_pack_next_step(self) -> None:
         catalog = {"packs": [{"pack_id": "demo", "title": "Demo"}]}
@@ -348,8 +348,8 @@ class DataHelperTelemetryTests(unittest.TestCase):
 
     def test_get_catalog_defaults_to_geometry_on_geometry_facade(self) -> None:
         with mock.patch(
-            "mapmover.runtime.reference_exchange.read_geometry_catalog",
-            return_value={"ok": True, "view": "capabilities"},
+            "mapmover.runtime.reference_exchange.geometry_catalog_discovery",
+            return_value={"ok": True, "catalog": "geometry", "detail": "lite", "families": []},
         ) as read_catalog:
             envelope = _tool_call_envelope(
                 self.client,
@@ -359,7 +359,7 @@ class DataHelperTelemetryTests(unittest.TestCase):
 
         result = envelope["result"]["structuredContent"]
         self.assertEqual(result["catalog"], "geometry")
-        read_catalog.assert_called_once_with(view="capabilities", country_scope=None)
+        read_catalog.assert_called_once_with(detail="lite", country_scope=None)
 
     def test_get_pack_missing_pack_logs_a_deny(self) -> None:
         with mock.patch("mapmover.routes.mcp.log_api_query_event") as analytics_mock:
@@ -655,7 +655,6 @@ class TrustedArtifactBypassTests(unittest.TestCase):
 
     def test_capped_tools_reject_oversized_batches_without_a_token(self) -> None:
         cases = {
-            "resolve_reference": {"from_system": "zip", "items": [{"value": str(i)} for i in range(200)]},
             "convert_reference": {
                 "from_system": "zip",
                 "to_system": "loc_id",
@@ -678,7 +677,6 @@ class TrustedArtifactBypassTests(unittest.TestCase):
     def test_trusted_token_lifts_the_cap_on_every_capped_tool(self) -> None:
         env = {"ARTIFACT_ACCESS_TOKENS": f"qa={self.token}"}
         cases = {
-            "resolve_reference": {"from_system": "zip", "items": [{"value": str(i)} for i in range(200)]},
             "convert_reference": {
                 "from_system": "zip",
                 "to_system": "loc_id",
@@ -884,7 +882,7 @@ class PaidBulkLicensingTests(unittest.TestCase):
     def test_free_tools_never_enforce_paid_bulk(self) -> None:
         import mapmover.routes.mcp as mcp_module
 
-        for tool in ("get_geometry", "read_geometry_catalog", "get_catalog"):
+        for tool in ("get_geometry", "get_catalog", "get_pack"):
             with self.subTest(tool=tool):
                 self.assertFalse(mcp_module._tool_paid_bulk_enforced(tool))
 
@@ -896,8 +894,6 @@ class PaidBulkLicensingTests(unittest.TestCase):
             "estimate_geometry_package",
             "estimate_conversion_job",
             "get_job_status",
-            "read_geometry_catalog",
-            "list_reference_systems",
             "get_catalog",
             "get_pack",
         ):

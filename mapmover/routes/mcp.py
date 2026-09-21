@@ -39,7 +39,6 @@ from pack_registry_shared import (
     tool_family_alias_ids,
     tool_family_catalog_entry,
     tool_family_ids,
-    tool_family_pack_detail,
 )
 from mapmover.data_loading import load_api_catalog, load_api_pack_detail
 from mapmover.live_earthquake_usgs import fetch_live_earthquakes
@@ -95,8 +94,7 @@ router = APIRouter()
 MCP_PACK_READ_TOOLS = {"get_tool_help", "get_catalog", "get_pack"}
 MCP_GEOMETRY_READ_TOOLS = {
     "resolve_point", "resolve_points", "resolve_deep_point", "resolve_deep_points",
-    "loc_id_info", "read_geometry_catalog",
-    "list_reference_systems", "identify_dataset_geography", "identify_reference_system", "resolve_reference",
+    "loc_id_info", "identify_dataset_geography", "identify_reference_system",
     "convert_reference", "compare_geographies", "get_geometry",
     "resolve_loc_id_scope", "estimate_geometry_package", "estimate_conversion_job",
     "get_job_status",
@@ -1438,10 +1436,10 @@ def get_server_description(pack_id: str | None = None) -> str:
         return (
             f"{PACK_SERVER_PROFILES[normalized]['description']} Safety: {AGENT_SAFETY_NOTICE} {coverage_prefix}"
             "The calling LLM translates the user's natural-language request into strict tool JSON; geometry execution tools do not accept prose unless a schema explicitly says they do. Call get_tool_help before an unfamiliar tool. On error, inspect error, warnings, guidance, and clarification; ask the user only when clarification.required is true. "
-            "Start with free discovery: call read_geometry_catalog with view='capabilities' for the current global baseline and catalog-admitted country enrichment; use its focused inventory views for admin depths, shape-backed families, crosswalks, named geometries, and package availability. Then call list_reference_systems to see supported exchange systems, relationship vintages, counts, and license/source context. "
+            "Start with free discovery: call get_catalog with catalog='geometry' to see each family and the countries where it exists. Then call get_pack for one family; add country_scope only when country-specific systems, versions, vintages, levels, and artifacts are needed. A listed family-country pair is the capability signal. "
             "For one coordinate call resolve_point; for a point array call resolve_points. Both return compact chains through Admin 3 without opening deep partitions. Then call resolve_deep_point or resolve_deep_points with a returned shallow_loc_id and one family. family defaults to administrative; other shape-backed families use direct point lookup. "
             "When the caller asks for details about that chain, pass its stack loc_ids to loc_id_info; use get_geometry only for shapes and compare_geographies only for overlap, topology, validity, or successor questions. Mixed-vintage point context is not strict parentage. "
-            "For a user dataset with unknown or informally declared geography keys, pass bounded scalar column samples to identify_dataset_geography; the caller may filter transport noise but must not choose the geography itself. Then pass its unambiguous geography_binding to the conversion-job tools. Use identify_reference_system only when one identifier column is already selected. For one known outside geography code or name, call resolve_reference. For bulk geometry, call resolve_loc_id_scope only for one strict hierarchy, then estimate_geometry_package before create_geometry_export. "
+            "For a user dataset with unknown or informally declared geography keys, pass bounded scalar column samples to identify_dataset_geography; the caller may filter transport noise but must not choose the geography itself. Then pass its unambiguous geography_binding to the conversion-job tools. Use identify_reference_system only when one identifier column is already selected. For one known outside geography code or name, call convert_reference and omit to_system to return loc_id. For bulk geometry, call resolve_loc_id_scope only for one strict hierarchy, then estimate_geometry_package before create_geometry_export. "
             "Geometry export and conversion creates are synchronous operations with hosted safety limits (currently 250 selected geometries and 7,500 conversion rows by default) sized around a 10-20 second response budget. Direct local-runtime loopback calls bypass DaedalMap hosted item caps, rate tiers, and payment challenges; local machine resources and operator-configured runtime guards are the boundary. Call the estimate tool or get_tool_help for the effective access lane. This facade does not promise a durable queue that is not deployed."
         )
     if not normalized:
@@ -1711,7 +1709,7 @@ def _tool_definitions_cached(_epoch: int) -> list[dict[str, Any]]:
     if not claim:
         return definitions
     for definition in definitions:
-        if definition.get("name") in {"read_geometry_catalog", "resolve_point", "resolve_points", "resolve_deep_point", "resolve_deep_points"}:
+        if definition.get("name") in {"get_catalog", "resolve_point", "resolve_points", "resolve_deep_point", "resolve_deep_points"}:
             definition["description"] = f"{definition.get('description', '').rstrip()} Current catalog: {claim}"
     return definitions
 
@@ -3517,79 +3515,6 @@ def _normalize_tool_error(value: Any, *, default_code: str, default_message: str
     return {"code": default_code, "message": default_message}
 
 
-@_guard_mcp_execution("list_reference_systems")
-async def _execute_list_reference_systems_tool(request: Request, arguments: dict[str, Any], rpc_request_id: Any) -> Response:
-    started_at = time.perf_counter()
-    payload = _ensure_request_id(arguments, "list_reference_systems")
-    request_id = str(payload.get("request_id") or "")
-    read_wip = bool(payload.get("read_wip", False))
-    if read_wip and not is_local_loopback_request(request):
-        error_payload = {
-            "request_id": request_id,
-            "ok": False,
-            "catalog_surface": "published",
-            "error": {
-                "code": "wip_crosswalk_catalog_not_available",
-                "message": "The WIP crosswalk catalog is available only through a local loopback MCP connection.",
-            },
-        }
-        return _jsonrpc_response(_tool_result(error_payload, is_error=True), rpc_request_id)
-    try:
-        from mapmover.runtime.reference_exchange import list_reference_systems
-
-        runtime_started = time.perf_counter()
-        result = await run_mcp_blocking(
-            "list_reference_systems",
-            list_reference_systems,
-            country_scope=payload.get("country_scope"),
-            include_crosswalks=payload.get("include_crosswalks", False) is True,
-            read_wip=read_wip,
-        )
-        stages = {"catalog_lookup_ms": _elapsed_ms(runtime_started)}
-    except (MCPExecutionCapacityError, MCPExecutionTimeoutError):
-        raise
-    except Exception as exc:
-        error_payload = {"request_id": request_id, "error": {"code": "reference_systems_failed", "message": str(exc)}}
-        _log_mcp_tool_usage_event(
-            request,
-            request_id=request_id,
-            tool_name="list_reference_systems",
-            capability_id="reference_system_discovery",
-            decision="deny",
-            started_at=started_at,
-            row_count=0,
-            query_granularity="single",
-            response_payload=error_payload,
-            error_code="reference_systems_failed",
-            metadata={"event": "reference_system_discovery", "tool_mode": "single", "quantity": 0},
-        )
-        return _jsonrpc_response(
-            _tool_result(error_payload, is_error=True),
-            rpc_request_id,
-        )
-    result_payload = {"request_id": request_id, **result}
-    system_count = len(result.get("systems") or []) if isinstance(result, dict) else 0
-    _log_mcp_tool_usage_event(
-        request,
-        request_id=request_id,
-        tool_name="list_reference_systems",
-        capability_id="reference_system_discovery",
-        decision="allow",
-        started_at=started_at,
-        row_count=system_count,
-        query_granularity=f"bulk_{system_count}" if system_count > 1 else "single",
-        response_payload=result_payload,
-        metadata={
-            "event": "reference_system_discovery",
-            "tool_mode": "discovery",
-            "quantity": system_count,
-            "system_count": system_count,
-            **_compute_metadata(response_payload=result_payload, stages=stages, input_count=1, output_count=system_count),
-        },
-    )
-    return _jsonrpc_response(_tool_result(result_payload), rpc_request_id)
-
-
 @_guard_mcp_execution("identify_reference_system")
 async def _execute_identify_reference_system_tool(request: Request, arguments: dict[str, Any], rpc_request_id: Any) -> Response:
     started_at = time.perf_counter()
@@ -3773,302 +3698,6 @@ async def _execute_identify_dataset_geography_tool(request: Request, arguments: 
     return _jsonrpc_response(_tool_result(result_payload, is_error=not allowed), rpc_request_id)
 
 
-@_guard_mcp_execution("read_geometry_catalog")
-async def _execute_read_geometry_catalog_tool(request: Request, arguments: dict[str, Any], rpc_request_id: Any) -> Response:
-    started_at = time.perf_counter()
-    payload = _ensure_request_id(arguments, "read_geometry_catalog")
-    request_id = str(payload.get("request_id") or "")
-    view = str(payload.get("view") or "capabilities").strip() or "capabilities"
-    read_wip = bool(payload.get("read_wip", False))
-    if read_wip and not is_local_loopback_request(request):
-        error_payload = {
-            "request_id": request_id,
-            "ok": False,
-            "catalog_surface": "published",
-            "error": {
-                "code": "wip_geometry_catalog_not_available",
-                "message": "The WIP geometry catalog is available only through a local loopback MCP connection.",
-            },
-        }
-        _log_mcp_tool_usage_event(
-            request,
-            request_id=request_id,
-            tool_name="read_geometry_catalog",
-            capability_id="geometry_catalog_discovery",
-            decision="deny",
-            started_at=started_at,
-            row_count=0,
-            query_granularity="single",
-            response_payload=error_payload,
-            error_code="wip_geometry_catalog_not_available",
-            metadata={"event": "geometry_catalog_discovery", "tool_mode": "discovery", "quantity": 0, "view": view, "read_wip": True},
-        )
-        return _jsonrpc_response(_tool_result(error_payload, is_error=True), rpc_request_id)
-    try:
-        from mapmover.runtime.reference_exchange import read_geometry_catalog
-
-        runtime_started = time.perf_counter()
-        result = await run_mcp_blocking(
-            "read_geometry_catalog",
-            read_geometry_catalog,
-            view=view,
-            limit=payload.get("limit"),
-            country_scope=payload.get("country_scope"),
-            read_wip=read_wip,
-        )
-        stages = {"catalog_lookup_ms": _elapsed_ms(runtime_started)}
-    except (MCPExecutionCapacityError, MCPExecutionTimeoutError):
-        raise
-    except Exception as exc:
-        error_payload = {"request_id": request_id, "error": {"code": "geometry_catalog_read_failed", "message": str(exc)}}
-        _log_mcp_tool_usage_event(
-            request,
-            request_id=request_id,
-            tool_name="read_geometry_catalog",
-            capability_id="geometry_catalog_discovery",
-            decision="deny",
-            started_at=started_at,
-            row_count=0,
-            query_granularity="single",
-            response_payload=error_payload,
-            error_code="geometry_catalog_read_failed",
-            metadata={"event": "geometry_catalog_discovery", "tool_mode": "discovery", "quantity": 0, "view": view, "read_wip": read_wip},
-        )
-        return _jsonrpc_response(_tool_result(error_payload, is_error=True), rpc_request_id)
-
-    result_payload = {"request_id": request_id, **result}
-    counts = result.get("counts") if isinstance(result, dict) else {}
-    if isinstance(counts, dict):
-        row_count = int(counts.get("geometry_products") or counts.get("geometry_banks") or 0)
-    else:
-        row_count = 0
-    if isinstance(result, dict) and result.get("ok") is False:
-        error_payload = result_payload
-        _log_mcp_tool_usage_event(
-            request,
-            request_id=request_id,
-            tool_name="read_geometry_catalog",
-            capability_id="geometry_catalog_discovery",
-            decision="deny",
-            started_at=started_at,
-            row_count=0,
-            query_granularity="single",
-            response_payload=error_payload,
-            error_code=((result.get("error") or {}).get("code") if isinstance(result.get("error"), dict) else "invalid_view"),
-            metadata={"event": "geometry_catalog_discovery", "tool_mode": "discovery", "quantity": 0, "view": view, "read_wip": read_wip},
-        )
-        return _jsonrpc_response(_tool_result(error_payload, is_error=True), rpc_request_id)
-
-    _log_mcp_tool_usage_event(
-        request,
-        request_id=request_id,
-        tool_name="read_geometry_catalog",
-        capability_id="geometry_catalog_discovery",
-        decision="allow",
-        started_at=started_at,
-        row_count=row_count,
-        query_granularity=f"catalog_{view}",
-        response_payload=result_payload,
-        metadata={
-            "event": "geometry_catalog_discovery",
-            "tool_mode": "discovery",
-            "quantity": row_count,
-            "view": view,
-            "read_wip": read_wip,
-            **_compute_metadata(response_payload=result_payload, stages=stages, input_count=1, output_count=row_count),
-        },
-    )
-    return _jsonrpc_response(_tool_result(result_payload), rpc_request_id)
-
-
-@_guard_mcp_execution("resolve_reference")
-async def _execute_resolve_reference_tool(request: Request, arguments: dict[str, Any], rpc_request_id: Any) -> Response:
-    started_at = time.perf_counter()
-    payload = _ensure_request_id(arguments, "resolve_reference")
-    request_id = str(payload.get("request_id") or "")
-    if "items" in payload:
-        batch_id = str(payload.get("batch_id") or "").strip() or None
-        items = payload.get("items")
-        if not isinstance(items, list):
-            error_payload = {"request_id": request_id, "batch_id": batch_id, "error": {"code": "invalid_items", "message": "items must be a list"}}
-            _log_mcp_tool_usage_event(
-                request,
-                request_id=request_id or batch_id or "",
-                tool_name="resolve_reference",
-                capability_id="reference_resolution",
-                decision="deny",
-                started_at=started_at,
-                row_count=0,
-                query_granularity="bulk_0",
-                response_payload=error_payload,
-                error_code="invalid_items",
-                metadata={"event": "reference_resolution", "tool_mode": "bulk", "quantity": 0, "item_count": 0, "batch_id": batch_id},
-            )
-            return _jsonrpc_response(
-                _tool_result(error_payload, is_error=True),
-                rpc_request_id,
-            )
-        trusted_token, trusted_token_id = _trusted_artifact_access(request)
-        commercial_context, access_error, free_limit, paid_limit = await _authorize_paid_batch_tool(
-            request,
-            tool_name="resolve_reference",
-            item_count=len(items),
-            request_id=request_id or batch_id or "",
-        )
-        limit = paid_limit
-        if access_error is not None:
-            access_error["batch_id"] = batch_id
-            return _jsonrpc_response(_tool_result(access_error, is_error=True), rpc_request_id)
-        runtime_started = time.perf_counter()
-        base_payload = {key: value for key, value in payload.items() if key not in {"items", "request_id", "batch_id"}}
-        results = await run_mcp_blocking(
-            "resolve_reference",
-            _resolve_reference_items,
-            items,
-            base_payload,
-        )
-        stages = {"crosswalk_lookup_ms": _elapsed_ms(runtime_started)}
-        result_payload = {
-            "request_id": request_id,
-            "batch_id": batch_id,
-            "limit": limit,
-            "item_count": len(items),
-            "resolved_count": sum(1 for result in results if result.get("ok")),
-            "unresolved_count": sum(1 for result in results if not result.get("ok")),
-            "results": results,
-        }
-        settlement_payload = None
-        if commercial_context is not None:
-            settled, settlement_payload, meter_receipt = await _settle_paid_batch_tool(
-                commercial_context,
-                tool_name="resolve_reference",
-                request_id=request_id or batch_id or "",
-                requested_items=len(items),
-                successful_items=result_payload["resolved_count"],
-            )
-            if not settled:
-                error_payload = {
-                    "request_id": request_id,
-                    "error": {
-                        "code": str((settlement_payload or {}).get("code") or "commercial_access_settlement_failed"),
-                        "message": str((settlement_payload or {}).get("message") or "Commercial settlement failed."),
-                    },
-                }
-                return _jsonrpc_response(_tool_result(error_payload, is_error=True), rpc_request_id)
-            result_payload["meter_receipt"] = meter_receipt
-            result_payload["settlement_receipt"] = (settlement_payload or {}).get("context") or {}
-        _log_mcp_tool_usage_event(
-            request,
-            request_id=request_id or batch_id or "",
-            tool_name="resolve_reference",
-            capability_id="reference_resolution",
-            decision="allow",
-            started_at=started_at,
-            row_count=len(items),
-            query_granularity=f"bulk_{len(items)}",
-            response_payload=result_payload,
-            metadata={
-                "event": "reference_resolution",
-                "tool_mode": "bulk",
-                "quantity": len(items),
-                "item_count": len(items),
-                "batch_id": batch_id,
-                "resolved_count": result_payload["resolved_count"],
-                "unresolved_count": result_payload["unresolved_count"],
-                **_reference_analytics_metadata(base_payload, result_payload),
-                **_compute_metadata(
-                    response_payload=result_payload,
-                    stages=stages,
-                    input_count=len(items),
-                    output_count=result_payload["resolved_count"],
-                    batch_limit=limit,
-                ),
-            },
-            payment_rail=(commercial_context or {}).get("payment_rail") or _request_access_lane(
-                request, trusted_token, paid=commercial_context is not None
-            ),
-            artifact_token_id=trusted_token_id,
-        )
-        response = _jsonrpc_response(_tool_result(result_payload), rpc_request_id)
-        if commercial_context is not None:
-            for key, value in settlement_headers(settlement_payload).items():
-                response.headers[key] = value
-        return response
-    runtime_started = time.perf_counter()
-    item = await run_mcp_blocking("resolve_reference", _resolve_reference_item, payload)
-    result = {"request_id": request_id, **item}
-    stages = {"crosswalk_lookup_ms": _elapsed_ms(runtime_started)}
-    if not result.get("ok"):
-        result["error"] = _normalize_tool_error(
-            result.get("error"),
-            default_code="not_found",
-            default_message="no loc_id match found for the reference",
-        )
-        _log_mcp_tool_usage_event(
-            request,
-            request_id=request_id,
-            tool_name="resolve_reference",
-            capability_id="reference_resolution",
-            decision="deny",
-            started_at=started_at,
-            row_count=1,
-            query_granularity="single",
-            response_payload=result,
-            error_code=str((result.get("error") or {}).get("code") or "not_found"),
-            metadata={
-                "event": "reference_resolution",
-                "tool_mode": "single",
-                "quantity": 1,
-                "item_count": 1,
-                **_compute_metadata(response_payload=result, stages=stages, input_count=1, output_count=0),
-            },
-        )
-        return _jsonrpc_response(_tool_result(result, is_error=True), rpc_request_id)
-    _log_mcp_tool_usage_event(
-        request,
-        request_id=request_id,
-        tool_name="resolve_reference",
-        capability_id="reference_resolution",
-        decision="allow",
-        started_at=started_at,
-        row_count=1,
-        query_granularity="single",
-        response_payload=result,
-        metadata={
-            "event": "reference_resolution",
-            "tool_mode": "single",
-            "quantity": 1,
-            "item_count": 1,
-            **_compute_metadata(response_payload=result, stages=stages, input_count=1, output_count=1),
-        },
-    )
-    return _jsonrpc_response(_tool_result(result), rpc_request_id)
-
-
-def _resolve_reference_item(payload: dict[str, Any]) -> dict[str, Any]:
-    from_system = str(payload.get("from_system") or payload.get("system") or "").strip()
-    value = str(payload.get("value") or "").strip()
-    if not from_system or not value:
-        return {"ok": False, "error": {"code": "invalid_reference_request", "message": "from_system and value are required"}}
-    try:
-        from mapmover.runtime.reference_exchange import resolve_reference
-
-        return resolve_reference(
-            from_system=from_system,
-            value=value,
-            iso3=str(payload.get("iso3") or "").strip().upper() or None,
-            target_admin_level=payload.get("target_admin_level", "admin_2"),
-            relationship_vintage=payload.get("relationship_vintage"),
-            min_share=_normalize_crosswalk_share(payload.get("min_share")),
-            limit=_normalize_crosswalk_limit(payload.get("limit")) or 10,
-            country_hint=payload.get("country_hint"),
-            admin_level_hint=payload.get("admin_level_hint"),
-            as_of=payload.get("as_of"),
-        )
-    except Exception as exc:
-        return {"ok": False, "from_system": from_system, "input": value, "error": {"code": "resolve_reference_failed", "message": str(exc)}}
-
-
 @_guard_mcp_execution("convert_reference")
 async def _execute_convert_reference_tool(request: Request, arguments: dict[str, Any], rpc_request_id: Any) -> Response:
     started_at = time.perf_counter()
@@ -4232,10 +3861,10 @@ async def _execute_convert_reference_tool(request: Request, arguments: dict[str,
 
 def _convert_reference_item(payload: dict[str, Any]) -> dict[str, Any]:
     from_system = str(payload.get("from_system") or "").strip()
-    to_system = str(payload.get("to_system") or "").strip()
+    to_system = str(payload.get("to_system") or "daedalmap.loc_id").strip()
     value = str(payload.get("value") or "").strip()
-    if not from_system or not to_system or not value:
-        return {"ok": False, "error": {"code": "invalid_convert_request", "message": "from_system, value, and to_system are required"}}
+    if not from_system or not value:
+        return {"ok": False, "error": {"code": "invalid_convert_request", "message": "from_system and value are required"}}
     try:
         from mapmover.runtime.reference_exchange import convert_reference
 
@@ -4248,6 +3877,9 @@ def _convert_reference_item(payload: dict[str, Any]) -> dict[str, Any]:
             relationship_vintage=payload.get("relationship_vintage"),
             min_share=_normalize_crosswalk_share(payload.get("min_share")),
             limit=_normalize_crosswalk_limit(payload.get("limit")) or 10,
+            country_hint=payload.get("country_hint"),
+            admin_level_hint=payload.get("admin_level_hint"),
+            as_of=payload.get("as_of"),
         )
     except Exception as exc:
         return {"ok": False, "from_system": from_system, "input": value, "to_system": to_system, "error": {"code": "convert_reference_failed", "message": str(exc)}}
@@ -4275,52 +3907,6 @@ def _compare_geographies_item(payload: dict[str, Any]) -> dict[str, Any]:
         return {"ok": False, "error": {"code": "compare_geographies_failed", "message": str(exc)}}
 
 
-def _resolve_reference_items(items: list[Any], base_payload: dict[str, Any]) -> list[dict[str, Any]]:
-    from mapmover.runtime.reference_exchange import resolve_references_batch
-
-    results: list[dict[str, Any] | None] = []
-    requests: list[dict[str, Any]] = []
-    valid_indexes: list[int] = []
-    for index, item in enumerate(items):
-        if not isinstance(item, dict):
-            results.append({"row_index": index, "ok": False, "error": {"code": "invalid_item", "message": "each item must be an object"}})
-            continue
-        merged = {**base_payload, **item}
-        from_system = str(merged.get("from_system") or merged.get("system") or "").strip()
-        value = str(merged.get("value") or "").strip()
-        if not from_system or not value:
-            result = {"ok": False, "error": {"code": "invalid_reference_request", "message": "from_system and value are required"}}
-            if item.get("row_index") is not None:
-                result["row_index"] = item.get("row_index")
-            elif item.get("id") is not None:
-                result["id"] = item.get("id")
-            results.append(result)
-            continue
-        valid_indexes.append(index)
-        requests.append({
-            "from_system": from_system,
-            "value": value,
-            "iso3": str(merged.get("iso3") or "").strip().upper() or None,
-            "target_admin_level": merged.get("target_admin_level", "admin_2"),
-            "relationship_vintage": merged.get("relationship_vintage"),
-            "min_share": _normalize_crosswalk_share(merged.get("min_share")),
-            "limit": _normalize_crosswalk_limit(merged.get("limit")) or 10,
-            "country_hint": merged.get("country_hint"),
-            "admin_level_hint": merged.get("admin_level_hint"),
-            "as_of": merged.get("as_of"),
-        })
-        results.append(None)
-    batch_results = resolve_references_batch(requests)
-    for index, result in zip(valid_indexes, batch_results):
-        item = items[index]
-        if item.get("row_index") is not None:
-            result["row_index"] = item.get("row_index")
-        elif item.get("id") is not None:
-            result["id"] = item.get("id")
-        results[index] = result
-    return [result for result in results if result is not None]
-
-
 def _convert_reference_items(items: list[Any], base_payload: dict[str, Any]) -> list[dict[str, Any]]:
     from mapmover.runtime.reference_exchange import convert_references_batch
 
@@ -4333,10 +3919,10 @@ def _convert_reference_items(items: list[Any], base_payload: dict[str, Any]) -> 
             continue
         merged = {**base_payload, **item}
         from_system = str(merged.get("from_system") or "").strip()
-        to_system = str(merged.get("to_system") or "").strip()
+        to_system = str(merged.get("to_system") or "daedalmap.loc_id").strip()
         value = str(merged.get("value") or "").strip()
-        if not from_system or not to_system or not value:
-            result = {"ok": False, "error": {"code": "invalid_convert_request", "message": "from_system, value, and to_system are required"}}
+        if not from_system or not value:
+            result = {"ok": False, "error": {"code": "invalid_convert_request", "message": "from_system and value are required"}}
             if item.get("row_index") is not None:
                 result["row_index"] = item.get("row_index")
             elif item.get("id") is not None:
@@ -4353,6 +3939,9 @@ def _convert_reference_items(items: list[Any], base_payload: dict[str, Any]) -> 
             "relationship_vintage": merged.get("relationship_vintage"),
             "min_share": _normalize_crosswalk_share(merged.get("min_share")),
             "limit": _normalize_crosswalk_limit(merged.get("limit")) or 10,
+            "country_hint": merged.get("country_hint"),
+            "admin_level_hint": merged.get("admin_level_hint"),
+            "as_of": merged.get("as_of"),
         })
         results.append(None)
     batch_results = convert_references_batch(requests)
@@ -5226,9 +4815,9 @@ async def mcp_endpoint_info(pack_id: str | None = None):
     if normalized_pack_id in {"geography", "reverse-geocoding", "boundaries"}:
         how_to_start = [
             "Call get_tool_help with topic='geometry' for the family workflow.",
-            "Call read_geometry_catalog with view='capabilities' and a country_scope when known.",
+            "Call get_catalog with catalog='geometry', then get_pack for one selected family.",
             "Call get_tool_help with an exact name from tools/list before an unfamiliar tool.",
-            "Use resolve_point for coordinates or identify_reference_system and resolve_reference for outside identifiers.",
+            "Use resolve_point for coordinates or identify_reference_system and convert_reference for outside identifiers.",
             "Use get_geometry with include_polygon=false for a lightweight availability check.",
         ]
     else:
@@ -5500,19 +5089,12 @@ async def mcp_endpoint(request: Request, pack_id: str | None = None):
         if detail == "download":
             payload = catalog_download_payload(catalog)
         elif catalog == "geometry":
-            from mapmover.runtime.reference_exchange import read_geometry_catalog
+            from mapmover.runtime.reference_exchange import geometry_catalog_discovery
 
-            payload = read_geometry_catalog(
-                view="summary" if detail == "full" else "capabilities",
+            payload = geometry_catalog_discovery(
+                detail=detail,
                 country_scope=country_scope or None,
             )
-            payload["catalog"] = "geometry"
-            payload["detail"] = detail
-            payload["next_step"] = {
-                "stage": "inspect",
-                "tool": "get_pack",
-                "arguments": {"catalog": "geometry", "pack_id": normalized_pack_id or "geography", "detail": "lite"},
-            }
         else:
             payload = load_api_catalog() or {"packs": []}
             payload = _filter_catalog_payload_for_facade(payload, normalized_pack_id)
@@ -5544,37 +5126,83 @@ async def mcp_endpoint(request: Request, pack_id: str | None = None):
         pack_id = str(arguments.get("pack_id") or normalized_pack_id or "").strip()
         detail = str(arguments.get("detail") or "lite").strip().lower()
         requested_catalog = str(arguments.get("catalog") or "").strip().lower()
+        country_scope = str(arguments.get("country_scope") or "").strip().upper()
+        release_unit = str(arguments.get("release_unit") or "").strip().upper()
         if detail not in {"lite", "full", "download"}:
             return _jsonrpc_error(request_id, -32602, "detail must be 'lite', 'full', or 'download'")
         if requested_catalog and requested_catalog not in {"data", "geometry"}:
             return _jsonrpc_error(request_id, -32602, "catalog must be 'data' or 'geometry'")
         if not pack_id:
             return _jsonrpc_error(request_id, -32602, "pack_id is required")
-        if normalized_pack_id and pack_id.lower() != normalized_pack_id:
-            return _jsonrpc_error(request_id, -32602, f"Pack '{pack_id}' is not available on this MCP facade")
         geometry_ids = set(tool_family_ids()) | set(tool_family_alias_ids())
-        inferred_catalog = "geometry" if pack_id.lower() in geometry_ids else "data"
+        facade_is_geometry = normalized_pack_id in geometry_ids
+        inferred_catalog = "geometry" if facade_is_geometry or pack_id.lower() in geometry_ids else "data"
         selected_catalog = requested_catalog or inferred_catalog
-        if selected_catalog != inferred_catalog:
+        if normalized_pack_id and not facade_is_geometry and pack_id.lower() != normalized_pack_id:
+            return _jsonrpc_error(request_id, -32602, f"Pack '{pack_id}' is not available on this MCP facade")
+        if requested_catalog == "data" and inferred_catalog == "geometry":
             return _jsonrpc_error(
                 request_id,
                 -32602,
-                f"Pack '{pack_id}' belongs to catalog='{inferred_catalog}', not catalog='{selected_catalog}'",
+                f"Pack '{pack_id}' belongs to catalog='geometry', not catalog='data'",
             )
+        if country_scope and selected_catalog != "geometry":
+            return _jsonrpc_error(request_id, -32602, "country_scope is only valid for catalog='geometry'")
+        if release_unit and selected_catalog != "geometry":
+            return _jsonrpc_error(request_id, -32602, "release_unit is only valid for catalog='geometry'")
+        if country_scope and release_unit:
+            return _jsonrpc_error(request_id, -32602, "country_scope and release_unit cannot be combined")
         if selected_catalog == "geometry":
-            family_payload = tool_family_pack_detail(pack_id.lower())
+            from mapmover.runtime.reference_exchange import geometry_pack_detail
+
+            if detail == "download":
+                family_payload = geometry_pack_detail(
+                    pack_id,
+                    country_scope=country_scope or None,
+                    release_unit=release_unit or None,
+                    detail="lite",
+                )
+                if not family_payload.get("ok"):
+                    return _finish_data_helper(
+                        request,
+                        tool_name=tool_name,
+                        started_at=helper_started_at,
+                        payload=family_payload,
+                        rpc_request_id=request_id,
+                        is_error=True,
+                        error_code=str((family_payload.get("error") or {}).get("code") or "pack_not_found"),
+                    )
+                payload = {
+                    "ok": True,
+                    "catalog": "geometry",
+                    "kind": "geometry_family",
+                    "pack_id": family_payload["pack_id"],
+                    "country_scope": country_scope or None,
+                    "release_unit": release_unit or None,
+                    "detail": "download",
+                    "download_url": CATALOG_DOWNLOADS["geometry"]["download_url"],
+                    "media_type": "application/json",
+                    "usage": "Download the complete geometry catalog and select this family and country from it.",
+                    "next_step": family_payload.get("next_step"),
+                }
+            else:
+                payload = geometry_pack_detail(
+                    pack_id,
+                    country_scope=country_scope or None,
+                    release_unit=release_unit or None,
+                    detail=detail,
+                )
             return _finish_data_helper(
                 request,
                 tool_name=tool_name,
                 started_at=helper_started_at,
-                payload=(
-                    pack_download_payload(pack_id, catalog="geometry", payload=family_payload)
-                    if detail == "download"
-                    else mcp_full_pack_detail(family_payload, catalog="geometry")
-                    if detail == "full"
-                    else compact_pack_detail(family_payload, catalog="geometry")
-                ),
+                payload=payload,
                 rpc_request_id=request_id,
+                is_error=not bool(payload.get("ok")),
+                error_code=(
+                    str((payload.get("error") or {}).get("code") or "pack_not_found")
+                    if not payload.get("ok") else None
+                ),
             )
         payload = load_api_pack_detail(pack_id)
         if not payload:
@@ -5654,18 +5282,6 @@ async def mcp_endpoint(request: Request, pack_id: str | None = None):
             return rate_limit_response
         return await _execute_loc_id_info_tool(request, arguments, request_id)
 
-    if tool_name == "read_geometry_catalog":
-        rate_limit_response = _live_tool_rate_limit_response(request, tool_name, request_id)
-        if rate_limit_response:
-            return rate_limit_response
-        return await _execute_read_geometry_catalog_tool(request, arguments, request_id)
-
-    if tool_name == "list_reference_systems":
-        rate_limit_response = _live_tool_rate_limit_response(request, tool_name, request_id)
-        if rate_limit_response:
-            return rate_limit_response
-        return await _execute_list_reference_systems_tool(request, arguments, request_id)
-
     if tool_name == "identify_reference_system":
         rate_limit_response = _live_tool_rate_limit_response(request, tool_name, request_id)
         if rate_limit_response:
@@ -5677,12 +5293,6 @@ async def mcp_endpoint(request: Request, pack_id: str | None = None):
         if rate_limit_response:
             return rate_limit_response
         return await _execute_identify_dataset_geography_tool(request, arguments, request_id)
-
-    if tool_name == "resolve_reference":
-        rate_limit_response = _live_tool_rate_limit_response(request, tool_name, request_id)
-        if rate_limit_response:
-            return rate_limit_response
-        return await _execute_resolve_reference_tool(request, arguments, request_id)
 
     if tool_name == "convert_reference":
         rate_limit_response = _live_tool_rate_limit_response(request, tool_name, request_id)

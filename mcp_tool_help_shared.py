@@ -43,16 +43,16 @@ TOOL_GUIDANCE: dict[str, dict[str, Any]] = {
         ["purpose", "input_schema", "interaction_contract", "examples", "access", "recommended_next_calls", "available_on_facades"],
     ),
     "get_catalog": _g(
-        ["You need to discover currently published data packs and tool families."],
-        ["Querying pack rows", "Discovering detailed geography-bank coverage"],
-        {}, ["packs", "tool_families", "public_catalogs", "full_catalog"], ["get_pack", "read_geometry_catalog"]
+        ["You need to discover currently published data packs or geometry families and their country coverage."],
+        ["Querying pack rows", "Inspecting one selected family-country release"],
+        {"catalog": "geometry", "detail": "lite"}, ["packs", "families", "countries", "download"], ["get_pack"]
     ),
     "get_pack": _g(
-        ["You selected one data pack or geometry tool family and need its metadata and live contract before calling it."],
+        ["You selected one data pack or geometry family and need its metadata and live contract before calling it."],
         ["Executing a dataset query", "Fetching geometry"],
-        {"catalog": "data", "pack_id": "earthquakes", "detail": "lite"},
-        ["catalog", "pack_id", "detail", "quick_start", "routing", "pricing", "next_step", "download_url"],
-        ["get_data", "get_tool_help"], ["source metadata", "release/freshness fields"]
+        {"catalog": "geometry", "pack_id": "postal_area", "detail": "lite"},
+        ["catalog", "pack_id", "detail", "countries", "reference_systems", "release", "next_step", "download_url"],
+        ["get_data", "convert_reference", "get_geometry", "get_tool_help"], ["source metadata", "release/freshness fields"]
     ),
     "resolve_point": _g(
         ["You have one WGS84 latitude/longitude pair and need a first-pass administrative loc_id chain through Admin 3."],
@@ -90,26 +90,12 @@ TOOL_GUIDANCE: dict[str, dict[str, Any]] = {
         ["get_geometry", "compare_geographies"],
         ["source_system", "source_vintage", "release_id", "bank_id"]
     ),
-    "read_geometry_catalog": _g(
-        ["You need current geometry collections, families, banks, bridges, releases, or exports."],
-        ["Resolving a place", "Returning shapes"],
-        {"view": "capabilities"},
-        ["capabilities", "counts", "download_url"],
-        ["list_reference_systems", "resolve_reference", "get_geometry"],
-        ["catalog fingerprint", "bank releases", "source licenses"]
-    ),
-    "list_reference_systems": _g(
-        ["You need the canonical published list of callable crosswalks, systems, and vintages for a country."],
-        ["Converting a value", "Resolving coordinates"],
-        {"country_scope": "USA", "include_crosswalks": False}, ["systems", "crosswalks_included", "next_call", "reserve_system"],
-        ["identify_reference_system", "resolve_reference", "convert_reference"], ["source authority", "license", "relationship vintage", "crosswalk_id"]
-    ),
     "identify_reference_system": _g(
         ["You have unknown geography identifiers or want to verify a declared system, level, vintage, and matching shape bank."],
         ["Passing the user's prose question as arguments", "Converting every dataset row", "Returning polygons", "Claiming full-dataset validation from a sample"],
         {"identifiers": ["06073000100", "06073000201"], "expected": {"system": "us_census_geoid", "geo_level": "tract", "vintage": "2020"}, "country_scope": "USA"},
         ["status", "candidates", "match_rate", "geometry_available_count", "geometry_bank_ids", "recommended_binding"],
-        ["estimate_conversion_job", "resolve_reference", "get_geometry"],
+        ["estimate_conversion_job", "convert_reference", "get_geometry"],
         ["reference system", "source vintage", "geometry bank ids", "validation scope"],
     ),
     "identify_dataset_geography": _g(
@@ -120,16 +106,8 @@ TOOL_GUIDANCE: dict[str, dict[str, Any]] = {
         ["identify_reference_system", "estimate_conversion_job", "resolve_point"],
         ["selected input column", "reference system", "country scope", "admin level", "sample match rate"],
     ),
-    "resolve_reference": _g(
-        ["You have a name or external geography code and need ranked DaedalMap loc_id matches."],
-        ["Converting coordinates", "Pretending overlap is strict parentage"],
-        {"from_system": "zip", "value": "00601", "target_admin_level": "county"},
-        ["resolved_loc_id", "matches", "relationship_type", "confidence"],
-        ["loc_id_info", "convert_reference", "get_geometry"],
-        ["source_system", "source_vintage", "bridge_artifact", "relationship_method"]
-    ),
     "convert_reference": _g(
-        ["You need one reference system expressed in another through loc_id."],
+        ["You need an outside reference expressed as loc_id, or one reference system expressed in another through loc_id."],
         ["Resolving coordinates", "Discarding one-to-many weights"],
         {"from_system": "zip", "value": "00601", "to_system": "nws_fire"},
         ["from", "to_system", "results", "relationship_type", "weight"],
@@ -231,7 +209,6 @@ TOOL_GUIDANCE: dict[str, dict[str, Any]] = {
     ),
 }
 
-
 def geometry_topic_help_payload(
     question: str | None = None,
     *,
@@ -243,23 +220,29 @@ def geometry_topic_help_payload(
         "tool_name": "get_tool_help",
         "help_topic": "geometry",
         "summary": "Start here before using DaedalMap geometry tools. The tools resolve coordinates and identifiers onto loc_id, inspect geography, and return bounded shape results.",
-        "core_rule": "Learn the durable geometry model here, then read the live catalog for the selected country's current depths, families, and query guidance before constructing a large call.",
+        "core_rule": "Learn the durable geometry model here, then use get_catalog to select a canonical family and get_pack to inspect its country-specific systems before constructing an execution call.",
         "coverage": capabilities,
         "start_here": [
             {
                 "step": 1,
                 "tool": "get_catalog",
                 "arguments": {"catalog": "geometry", "detail": "lite", "country_scope": "<ISO3 when known>"},
-                "purpose": "Read the selected country's current admin depth, available_family_ids, family coverage, and query guidance. Omit country_scope for the concise global coverage model.",
+                "purpose": "Discover canonical families and the countries where each currently exists. Omit country_scope for the global family directory.",
             },
             {
                 "step": 2,
+                "tool": "get_pack",
+                "arguments": {"catalog": "geometry", "pack_id": "<selected family>", "country_scope": "<ISO3 when detail is needed>", "detail": "lite"},
+                "purpose": "Read broad country availability, or add country_scope for that country's systems and release details.",
+            },
+            {
+                "step": 3,
                 "tool": "get_tool_help",
                 "arguments": {"tool_name": "<tool selected below>"},
                 "purpose": "Read the exact input schema before constructing the call.",
             },
             {
-                "step": 3,
+                "step": 4,
                 "purpose": "Use the country result and one of the workflows below; keep identifiers as strings.",
             },
         ],
@@ -271,7 +254,7 @@ def geometry_topic_help_payload(
             },
             "reference_families": {
                 "rule": "Postal areas, places, watersheds, electoral districts, Indigenous regions, weather zones, water bodies, and other families are independent reference systems unless the catalog says they belong to the selected spine.",
-                "discovery": "Use the country's available_family_ids for family point requests, then list_reference_systems(country_scope='<ISO3>') for the callable crosswalk subset. A published family may legitimately have no overlap at a requested point.",
+                "discovery": "Use get_catalog(catalog='geometry') to choose a family, then get_pack for its countries. Add country_scope to get_pack only for that country's systems, vintages, levels, and artifacts.",
             },
             "catalog_authority": "Coverage is generated from admitted releases. Do not assume that every country has the same depth, families, or physical query layout.",
             "query_cost": "Opening and searching geometry partitions is the main cold-path cost. Item count still matters, but calls aligned with the catalog's query guidance are usually faster than calls spread across unrelated regions or families.",
@@ -351,7 +334,7 @@ def geometry_topic_help_payload(
             },
             {
                 "name": "one_external_reference",
-                "steps": ["list_reference_systems when support is unknown", "resolve_reference to loc_id", "convert_reference only when another external system is requested"],
+                "steps": ["get_catalog when the family is unknown", "get_pack for family/country details", "convert_reference through loc_id"],
             },
             {
                 "name": "relationships_and_time",
@@ -374,7 +357,7 @@ def geometry_topic_help_payload(
         "input_question": str(question or "").strip() or None,
     }
 TOPIC_TOOLS: dict[str, tuple[str, ...]] = {
-    "overview": ("get_catalog", "get_pack", "get_data", "resolve_reference", "resolve_point", "get_geometry"),
+    "overview": ("get_catalog", "get_pack", "get_data", "convert_reference", "resolve_point", "get_geometry"),
     "data": ("get_catalog", "get_pack", "get_data"),
     "disasters": (
         "get_catalog", "get_pack", "get_data", "get_disaster_links_for_event",
@@ -452,7 +435,7 @@ def topic_help_payload(
             "entry_paths": [
                 {"input": "known loc_ids", "next": "get_catalog or the exact loc_id-based tool"},
                 {"input": "coordinates", "tool": "resolve_point"},
-                {"input": "outside code or place name", "tool": "resolve_reference"},
+                {"input": "outside code or place name", "tool": "convert_reference"},
                 {"input": "unknown user dataset column", "tool": "identify_dataset_geography"},
             ],
         }
@@ -490,7 +473,7 @@ def tool_help_payload(
     }
     access = {
         "pricing": pricing,
-        "free_discovery": name in {"get_tool_help", "get_catalog", "get_pack", "read_geometry_catalog", "list_reference_systems", "identify_dataset_geography", "identify_reference_system"},
+        "free_discovery": name in {"get_tool_help", "get_catalog", "get_pack", "identify_dataset_geography", "identify_reference_system"},
         "limits": limits,
         "above_free_limit": "payment_required" if pricing.startswith("paid") else (
             "bounded_inline_limit_error" if name in {"create_geometry_export", "create_conversion_job"} else "typed_cap_error"

@@ -12,7 +12,11 @@ from fastapi.testclient import TestClient
 
 from mapmover.caller_identity import CONFIDENCE_VERIFIED, KIND_ACCOUNT, CallerIdentity
 from mapmover.mcp_execution import MCPExecutionCapacityError, MCPExecutionTimeoutError
-from mapmover.runtime.reference_exchange import get_geometry_availability, get_geometry_references
+from mapmover.runtime.reference_exchange import (
+    get_geometry_availability,
+    get_geometry_references,
+    read_geometry_catalog,
+)
 from mapmover.runtime.geometry_tool_jobs import estimate_conversion_job
 from mapmover.routes.mcp import (
     _jsonrpc_response,
@@ -72,11 +76,13 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
 
         self.assertNotIn("how_geometry_works", tool_names)
         self.assertIn("get_tool_help", tool_names)
-        self.assertIn("list_reference_systems", tool_names)
+        self.assertIn("get_catalog", tool_names)
+        self.assertIn("get_pack", tool_names)
         self.assertIn("identify_dataset_geography", tool_names)
         self.assertIn("identify_reference_system", tool_names)
-        self.assertIn("read_geometry_catalog", tool_names)
-        self.assertIn("resolve_reference", tool_names)
+        self.assertNotIn("list_reference_systems", tool_names)
+        self.assertNotIn("read_geometry_catalog", tool_names)
+        self.assertNotIn("resolve_reference", tool_names)
         self.assertIn("convert_reference", tool_names)
         self.assertIn("compare_geographies", tool_names)
         self.assertNotIn("check_geometry", tool_names)
@@ -102,11 +108,9 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
 
         catalog_tool = next(
             tool for tool in envelope["result"]["tools"]
-            if tool["name"] == "read_geometry_catalog"
+            if tool["name"] == "get_catalog"
         )
-        catalog_views = catalog_tool["inputSchema"]["properties"]["view"]["enum"]
-        self.assertIn("crosswalk_artifacts", catalog_views)
-        self.assertNotIn("bridges", catalog_views)
+        self.assertEqual(catalog_tool["inputSchema"]["properties"]["catalog"]["enum"], ["data", "geometry"])
 
     def test_dataset_geography_tool_selects_country_admin_binding(self) -> None:
         payload = _tool_call(
@@ -1402,16 +1406,46 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
             self.assertEqual(_tool_rate_limit_for_tier("resolve_point", "free"), (4, 30))
             self.assertEqual(_tool_rate_limit_for_tier("resolve_point", "plus"), (40, 30))
 
-    def test_get_pack_geography_prefers_reference_exchange(self) -> None:
-        payload = _tool_call(self.client, "get_pack", {"pack_id": "geography"})
+    def test_get_pack_geometry_family_lists_countries_before_country_detail(self) -> None:
+        payload = _tool_call(
+            self.client,
+            "get_pack",
+            {"catalog": "geometry", "pack_id": "postal_area", "detail": "lite"},
+        )
 
-        self.assertEqual(payload["routing"]["preferred_tool"], "read_geometry_catalog")
-        self.assertEqual(payload["quick_start"]["first_query_template"]["tool"], "read_geometry_catalog")
-        starter_tools = set(payload["quick_start"]["starter_tools"])
-        self.assertIn("read_geometry_catalog", starter_tools)
-        self.assertIn("list_reference_systems", starter_tools)
-        self.assertIn("resolve_reference", starter_tools)
-        self.assertIn("convert_reference", starter_tools)
+        self.assertEqual(payload["pack_id"], "postal_area")
+        self.assertEqual(payload["countries"], ["CAN", "USA"])
+        self.assertEqual(payload["next_step"]["tool"], "get_pack")
+        self.assertEqual(payload["next_step"]["arguments"]["country_scope"], "<ISO3 from countries>")
+
+    def test_convert_reference_defaults_to_loc_id(self) -> None:
+        payload = _tool_call(
+            self.client,
+            "convert_reference",
+            {"from_system": "loc_id", "value": "USA-CA"},
+        )
+
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["to_system"], "daedalmap.loc_id")
+        self.assertEqual(payload["results"], [{"system": "daedalmap.loc_id", "value": "USA-CA"}])
+
+    def test_get_pack_uses_global_domain_for_non_country_release_units(self) -> None:
+        payload = _tool_call(
+            self.client,
+            "get_pack",
+            {
+                "catalog": "geometry",
+                "pack_id": "marine_jurisdiction",
+                "release_unit": "MARINE",
+                "detail": "lite",
+            },
+        )
+
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["countries"], [])
+        self.assertEqual(payload["release_unit"], "MARINE")
+        self.assertEqual(payload["release_units"][0]["kind"], "global_domain")
+        self.assertEqual(payload["release_units"][0]["domain_type"], "marine")
 
     def test_read_geometry_catalog_returns_agent_summary(self) -> None:
         with mock.patch(
@@ -1442,7 +1476,7 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
                 "named_reference_objects": [],
             },
         ):
-            payload = _tool_call(self.client, "read_geometry_catalog", {"view": "summary"})
+            payload = read_geometry_catalog(view="summary")
 
         self.assertTrue(payload["ok"])
         self.assertEqual(payload["view"], "summary")
@@ -1470,7 +1504,7 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
                 }],
             },
         ):
-            payload = _tool_call(self.client, "read_geometry_catalog", {"view": "capabilities"})
+            payload = read_geometry_catalog(view="capabilities")
 
         self.assertTrue(payload["ok"])
         self.assertEqual(payload["view"], "capabilities")
@@ -1514,7 +1548,7 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
                 }],
             },
         ):
-            payload = _tool_call(self.client, "read_geometry_catalog", {"view": "countries"})
+            payload = read_geometry_catalog(view="countries")
 
         self.assertTrue(payload["ok"])
         self.assertEqual(payload["counts"]["country_profiles"], 1)
@@ -1544,7 +1578,7 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
                 }],
             },
         ):
-            payload = _tool_call(self.client, "read_geometry_catalog", {"view": "full"})
+            payload = read_geometry_catalog(view="full")
 
         self.assertTrue(payload["ok"])
         self.assertEqual(payload["view"], "full_redirect")
@@ -1562,7 +1596,7 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
                 ],
             },
         ):
-            payload = _tool_call(self.client, "read_geometry_catalog", {"view": "products"})
+            payload = read_geometry_catalog(view="products")
 
         self.assertEqual([item["product_id"] for item in payload["products"]], ["active"])
         self.assertEqual(payload["counts"]["geometry_products"], 1)
@@ -1580,11 +1614,7 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
             mock.patch("mapmover.routes.mcp.is_local_loopback_request", return_value=True),
             mock.patch("mapmover.runtime.reference_exchange.load_geometry_catalog", return_value=catalog),
         ):
-            payload = _tool_call(
-                self.client,
-                "read_geometry_catalog",
-                {"view": "products", "read_wip": True},
-            )
+            payload = read_geometry_catalog(view="products", read_wip=True)
 
         self.assertTrue(payload["ok"])
         self.assertEqual(payload["catalog_surface"], "wip")
@@ -1594,7 +1624,7 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         )
         self.assertEqual(payload["counts"]["geometry_products"], 3)
 
-    def test_read_geometry_catalog_denies_wip_projection_for_hosted_callers(self) -> None:
+    def retired_read_geometry_catalog_denies_wip_projection_for_hosted_callers(self) -> None:
         with (
             mock.patch("mapmover.routes.mcp.is_local_loopback_request", return_value=False),
             mock.patch("mapmover.runtime.reference_exchange.read_geometry_catalog") as reader,
@@ -1610,7 +1640,7 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         self.assertEqual(payload["error"]["code"], "wip_geometry_catalog_not_available")
         reader.assert_not_called()
 
-    def test_read_geometry_catalog_logs_runtime_analytics(self) -> None:
+    def retired_read_geometry_catalog_logs_runtime_analytics(self) -> None:
         with (
             mock.patch(
                 "mapmover.runtime.reference_exchange.read_geometry_catalog",
@@ -1635,7 +1665,7 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         self.assertEqual(analytics["metadata"]["compute"]["input_count"], 1)
         self.assertEqual(analytics["metadata"]["compute"]["output_count"], 3)
 
-    def test_list_reference_systems_logs_runtime_analytics(self) -> None:
+    def retired_list_reference_systems_logs_runtime_analytics(self) -> None:
         with (
             mock.patch(
                 "mapmover.runtime.reference_exchange.list_reference_systems",
@@ -1660,13 +1690,13 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         self.assertEqual(analytics["metadata"]["compute"]["output_count"], 2)
         self.assertIn("catalog_lookup_ms", analytics["metadata"]["compute"]["stage_ms"])
 
-    def test_list_reference_systems_denies_wip_on_hosted_request(self) -> None:
+    def retired_list_reference_systems_denies_wip_on_hosted_request(self) -> None:
         payload = _tool_call(self.client, "list_reference_systems", {"read_wip": True})
 
         self.assertFalse(payload["ok"])
         self.assertEqual(payload["error"]["code"], "wip_crosswalk_catalog_not_available")
 
-    def test_list_reference_systems_allows_wip_on_local_loopback(self) -> None:
+    def retired_list_reference_systems_allows_wip_on_local_loopback(self) -> None:
         app = FastAPI()
         app.include_router(mcp_router)
         local_client = TestClient(app, client=("127.0.0.1", 50000))
@@ -1687,10 +1717,10 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         self.assertEqual(payload["crosswalks"], expected["crosswalks"])
         listing.assert_called_once_with(country_scope="CAN", include_crosswalks=True, read_wip=True)
 
-    def test_resolve_reference_tool_resolves_zip_to_loc_id(self) -> None:
+    def test_convert_reference_resolves_zip_to_loc_id_by_default(self) -> None:
         payload = _tool_call(
             self.client,
-            "resolve_reference",
+            "convert_reference",
             {
                 "from_system": "zip",
                 "value": "00601",
@@ -1700,29 +1730,29 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         )
 
         self.assertTrue(payload["ok"])
-        self.assertEqual(payload["normalized_input"], "USA-Z-00601")
-        self.assertEqual(payload["resolved_loc_id"], "USA-PR-001")
-        self.assertEqual(payload["match_type"], "crosswalk_overlap")
+        self.assertEqual(payload["from"]["normalized_input"], "USA-Z-00601")
+        self.assertEqual(payload["from"]["resolved_loc_id"], "USA-PR-001")
+        self.assertEqual(payload["from"]["match_type"], "crosswalk_overlap")
 
-    def test_resolve_reference_tool_selects_historical_identity_as_of_date(self) -> None:
+    def test_convert_reference_selects_historical_identity_as_of_date(self) -> None:
         payload = _tool_call(
             self.client,
-            "resolve_reference",
+            "convert_reference",
             {"from_system": "iso3166_3", "value": "YUG", "as_of": "2025"},
         )
 
         self.assertTrue(payload["ok"])
-        self.assertEqual(payload["resolved_loc_id"], "HIST-YUG-FRY")
-        self.assertFalse(payload["valid_at_requested_time"])
+        self.assertEqual(payload["from"]["resolved_loc_id"], "HIST-YUG-FRY")
+        self.assertFalse(payload["from"]["valid_at_requested_time"])
         self.assertEqual(
-            {row["loc_id"] for row in payload["lifecycle"]["present_day_descendants"]},
+            {row["loc_id"] for row in payload["from"]["lifecycle"]["present_day_descendants"]},
             {"SRB", "MNE"},
         )
 
-    def test_resolve_reference_tool_accepts_item_batch(self) -> None:
+    def test_convert_reference_accepts_item_batch_with_default_target(self) -> None:
         payload = _tool_call(
             self.client,
-            "resolve_reference",
+            "convert_reference",
             {
                 "batch_id": "refs-1",
                 "from_system": "zip",
@@ -1738,32 +1768,32 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         self.assertEqual(payload["item_count"], 2)
         self.assertEqual(payload["results"][0]["row_index"], 1)
         self.assertTrue(payload["results"][0]["ok"])
-        self.assertEqual(payload["results"][0]["resolved_loc_id"], "USA-PR-001")
-        self.assertEqual(payload["resolved_count"], 1)
-        self.assertEqual(payload["unresolved_count"], 1)
+        self.assertEqual(payload["results"][0]["from"]["resolved_loc_id"], "USA-PR-001")
+        self.assertEqual(payload["converted_count"], 1)
+        self.assertEqual(payload["unconverted_count"], 1)
         # The real analytics rows carry compute.input_count/output_count and
         # crosswalk_lookup_ms; other tests assert the shared shape with mocks.
 
-    def test_resolve_reference_batch_uses_one_set_based_runtime_call(self) -> None:
+    def test_convert_reference_batch_uses_one_set_based_runtime_call(self) -> None:
         with mock.patch(
-            "mapmover.runtime.reference_exchange.resolve_references_batch",
-            return_value=[{"ok": True, "resolved_loc_id": "USA-PR-001"}],
+            "mapmover.runtime.reference_exchange.convert_references_batch",
+            return_value=[{"ok": True, "from": {"resolved_loc_id": "USA-PR-001"}}],
         ) as batch_mock:
             payload = _tool_call(
                 self.client,
-                "resolve_reference",
+                "convert_reference",
                 {"from_system": "zip", "items": [{"value": "00601"}]},
             )
 
-        self.assertEqual(payload["resolved_count"], 1)
+        self.assertEqual(payload["converted_count"], 1)
         batch_mock.assert_called_once()
         self.assertEqual(batch_mock.call_args.args[0][0]["value"], "00601")
 
-    def test_resolve_reference_tool_uses_per_tool_batch_limit_override(self) -> None:
-        with mock.patch.dict("os.environ", {"MCP_TOOL_BATCH_LIMIT_RESOLVE_REFERENCE": "1"}):
+    def test_convert_reference_uses_per_tool_batch_limit_override(self) -> None:
+        with mock.patch.dict("os.environ", {"MCP_TOOL_BATCH_LIMIT_CONVERT_REFERENCE": "1"}):
             payload = _tool_call(
                 self.client,
-                "resolve_reference",
+                "convert_reference",
                 {"from_system": "zip", "items": [{"value": "00601"}, {"value": "00602"}]},
             )
 
@@ -1772,17 +1802,17 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         self.assertEqual(payload["error"]["code"], "paid_bulk_unavailable")
         self.assertEqual(payload["limits"], {"free_batch_limit": 1, "paid_batch_limit": 2500})
 
-    def test_resolve_reference_tool_normalizes_string_error(self) -> None:
+    def test_convert_reference_normalizes_string_error(self) -> None:
         with (
             mock.patch(
-                "mapmover.runtime.reference_exchange.resolve_reference",
+                "mapmover.runtime.reference_exchange.convert_reference",
                 return_value={"ok": False, "from_system": "zip", "input": "not-real", "error": "no crosswalk artifact found"},
             ),
             mock.patch("mapmover.routes.mcp.log_api_query_event") as analytics_mock,
         ):
             payload = _tool_call(
                 self.client,
-                "resolve_reference",
+                "convert_reference",
                 {"from_system": "zip", "value": "not-real", "target_admin_level": "admin_2"},
             )
 

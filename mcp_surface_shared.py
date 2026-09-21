@@ -75,7 +75,7 @@ def build_tool_definitions() -> list[dict]:
         {
             "name": "get_catalog",
             "title": "Get Catalog",
-            "description": "Free progressive discovery for the data or geometry catalog. detail='lite' lists concise pack coverage and topics, detail='full' adds metric/query inventories, and detail='download' returns the complete raw catalog URL. Select one pack, then call get_pack.",
+            "description": "Free progressive discovery for data packs or geometry families. Geometry results list each family and its release units: ISO3 countries or global domains such as GLOBAL and MARINE. Existence is the loc_id capability signal. detail='full' adds bounded discovery fields, while detail='download' returns the complete raw catalog URL. Select one pack or family, then call get_pack.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -90,13 +90,15 @@ def build_tool_definitions() -> list[dict]:
         {
             "name": "get_pack",
             "title": "Get Pack",
-            "description": "Free progressive metadata for one selected data pack or geometry tool family. detail='lite' returns bounded selection and starter-query fields, detail='full' returns detailed MCP query metadata, and detail='download' returns the complete raw metadata URL. Use its next_step to retrieve data.",
+            "description": "Free progressive metadata for one selected data pack or geometry family. A family-level geometry request returns the countries and global domains where it exists. Add country_scope for a country or release_unit for a global domain to inspect systems, releases, vintages, levels, and artifacts. Existence is the loc_id capability signal. Use next_step to retrieve data, convert identifiers, or retrieve shapes.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "catalog": {"type": "string", "enum": ["data", "geometry"], "description": "Metadata family. When omitted, geometry facades default to geometry and known geometry-family ids are inferred; all other calls default to data."},
                     "pack_id": {"type": "string", "description": _pack_id_description()},
                     "detail": {"type": "string", "enum": ["lite", "full", "download"], "default": "lite", "description": "Use lite to decide and start, full for detailed MCP query metadata, or download for the complete raw metadata file."},
+                    "country_scope": {"type": "string", "pattern": "^[A-Za-z]{3}$", "description": "Optional ISO3 country for a geometry family. Omit it to learn which countries publish the family; provide it for country-specific versions, vintages, levels, and artifacts."},
+                    "release_unit": {"type": "string", "pattern": "^[A-Za-z0-9_-]+$", "description": "Optional non-country geometry release unit such as GLOBAL or MARINE. Do not combine with country_scope."},
                 },
                 "required": ["pack_id"],
                 "additionalProperties": False,
@@ -213,7 +215,7 @@ def build_tool_definitions() -> list[dict]:
         {
             "name": "resolve_deep_point",
             "title": "Resolve Point (Deep)",
-            "description": "Second-pass resolution for one WGS84 coordinate. Supply a shallow_loc_id returned by resolve_point and one canonical family from read_geometry_catalog. family defaults to administrative; shape-backed families use direct bbox-to-exact-shape lookup without crosswalks. For multiple coordinates use resolve_deep_points.",
+            "description": "Second-pass resolution for one WGS84 coordinate. Supply a shallow_loc_id returned by resolve_point and one canonical family from get_catalog(catalog='geometry'). family defaults to administrative; shape-backed families use direct bbox-to-exact-shape lookup without crosswalks. For multiple coordinates use resolve_deep_points.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -287,54 +289,6 @@ def build_tool_definitions() -> list[dict]:
                     {"required": ["loc_id"]},
                     {"required": ["loc_ids"]},
                 ],
-                "additionalProperties": False,
-            },
-            "annotations": {"readOnlyHint": True},
-        },
-        {
-            "name": "read_geometry_catalog",
-            "title": "Read Geometry Catalog",
-            "description": "Free compact geography discovery. Reads a small published projection and excludes staged or candidate work. Use view='capabilities' with country_scope to learn available families. Focused views return bounded inventory detail. Public view='full' redirects to the downloadable catalog instead of placing the raw catalog in an MCP response; local loopback may use read_wip=true for operator review. No payment required.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "view": {
-                        "type": "string",
-                        "enum": ["capabilities", "summary", "countries", "admin_coverage", "crosswalk_artifacts", "crosswalks", "products", "named_reference_objects", "full"],
-                        "description": "Catalog view to return. Capabilities is the compact default and first-user coverage model. Public full returns the bulk-download location rather than embedding the raw catalog.",
-                    },
-                    "limit": {
-                        "type": "integer",
-                        "minimum": 1,
-                        "maximum": 500,
-                        "description": "Maximum named reference objects to return. Default 50.",
-                    },
-                    "country_scope": {
-                        "type": "string",
-                        "description": "Optional ISO3 country code for view='capabilities'. Returns active depth, published families, and query guidance.",
-                    },
-                    "read_wip": {
-                        "type": "boolean",
-                        "description": "Local loopback MCP only. When true, reads the internal geometry catalog projection, including staged and in-progress records. Hosted/public MCP requests are denied. Default false.",
-                    },
-                    "request_id": {"type": "string", "description": "Optional caller-supplied request id for tracing."},
-                },
-                "additionalProperties": False,
-            },
-            "annotations": {"readOnlyHint": True},
-        },
-        {
-            "name": "list_reference_systems",
-            "title": "List Geographic Reference Systems",
-            "description": "Free reference-system discovery. By default returns a compact list of published systems and whether each can exchange through loc_id. Pass country_scope whenever known. Set include_crosswalks=true only after selecting a country or system and needing bridge rows, vintages, counts, or license metadata. Geometry families themselves are listed by read_geometry_catalog. No payment required.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "country_scope": {"type": "string", "description": "Optional ISO3 country filter. Use this for a focused country capability answer."},
-                    "include_crosswalks": {"type": "boolean", "description": "Include actionable crosswalk and artifact records. Default false because these records are much larger than the system index."},
-                    "read_wip": {"type": "boolean", "description": "Local loopback MCP only. Include staged or non-callable preprocessing records for operator review. Default false."},
-                    "request_id": {"type": "string", "description": "Optional caller-supplied request id for tracing."},
-                },
                 "additionalProperties": False,
             },
             "annotations": {"readOnlyHint": True},
@@ -429,67 +383,15 @@ def build_tool_definitions() -> list[dict]:
             "annotations": {"readOnlyHint": True},
         },
         {
-            "name": "resolve_reference",
-            "title": "Resolve Reference to loc_id",
-            "description": "Free geography utility. Converts one value, or a bounded list of values, from an external or adjacent geographic reference system into the DaedalMap loc_id universe. Examples: from_system='zip' value='00601'; from_system='nws_fire' value='AKZ317'; from_system='admin_boundary' value='Fairfax County'. Returns ranked loc_id matches with bridge vintage, overlap weights, and provenance where applicable. Historical references are returned as requested; an evidenced successor is a separate optional question and is never substituted automatically. No payment required.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "from_system": {"type": "string", "description": "Input reference system, such as loc_id, census_geoid/us_census_geoid, admin_boundary, zip, zcta, overlay_zcta, nws_zone, nws_fire, overlay_nws_fire_weather_zone, tribal, water_body, marine_eez, nuts, historical_country/iso3166_3, or a catalog family id."},
-                    "value": {"type": "string", "description": "Identifier or name in the input system. Examples: 00601, USA-Z-00601, AKZ317, USA-NWSFZ-AKZ317, Fairfax County, Mediterranean Sea."},
-                    "items": {
-                        "type": "array",
-                        "minItems": 1,
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "from_system": {"type": "string", "description": "Input reference system for this row. Defaults to top-level from_system when omitted."},
-                                "value": {"type": "string", "description": "Identifier or name in the input system."},
-                                "iso3": {"type": "string", "description": "Optional country hint for this row."},
-                                "target_admin_level": {"anyOf": [{"type": "string"}, {"type": "integer"}], "description": "Optional admin target level for this row."},
-                                "relationship_vintage": {"type": "string", "description": "Optional relationship vintage for this row."},
-                                "min_share": {"type": "number", "minimum": 0, "maximum": 1, "description": "Optional minimum area-share threshold for this row."},
-                                "limit": {"type": "integer", "minimum": 1, "maximum": 100, "description": "Maximum ranked matches for this row."},
-                                "country_hint": {"type": "string", "description": "Optional country hint for admin/name resolution."},
-                                "admin_level_hint": {"type": "integer", "minimum": 0, "maximum": 5, "description": "Optional admin-level hint for admin/name resolution."},
-                                "as_of": {"type": "string", "description": "ISO date or year used to select a time-bounded identity assertion."},
-                                "row_index": {"anyOf": [{"type": "integer"}, {"type": "string"}], "description": "Optional caller row identifier echoed in the result."},
-                                "id": {"anyOf": [{"type": "integer"}, {"type": "string"}], "description": "Optional caller identifier echoed in the result."},
-                            },
-                            "required": ["value"],
-                            "additionalProperties": False,
-                        },
-                        "description": "Reference values to resolve in one call. Default public cap is deployment-configurable.",
-                    },
-                    "iso3": {"type": "string", "description": "Optional country hint for system-specific crosswalks. Omit for a globally scoped identifier system."},
-                    "target_admin_level": {"anyOf": [{"type": "string"}, {"type": "integer"}], "description": "Admin target level for crosswalk-backed resolution. Default admin_2. Accepts admin_0..admin_5, 0..5, or names such as country, state, county, tract, block_group, or block."},
-                    "relationship_vintage": {"type": "string", "description": "Optional relationship vintage to require, such as usa_geometry_current or census_2020_relationship_files."},
-                    "min_share": {"type": "number", "minimum": 0, "maximum": 1, "description": "Optional minimum area-share threshold for overlap matches."},
-                    "limit": {"type": "integer", "minimum": 1, "maximum": 100, "description": "Maximum ranked matches to return. Default 10."},
-                    "country_hint": {"type": "string", "description": "Optional country hint for admin/name resolution."},
-                    "admin_level_hint": {"type": "integer", "minimum": 0, "maximum": 5, "description": "Optional admin-level hint for admin/name resolution."},
-                    "as_of": {"type": "string", "description": "ISO date or year used to select a time-bounded identity assertion, especially for historical names and codes."},
-                    "batch_id": {"type": "string", "description": "Optional caller-supplied batch id for tracing."},
-                    "request_id": {"type": "string", "description": "Optional caller-supplied request id for tracing."},
-                },
-                "anyOf": [
-                    {"required": ["from_system", "value"]},
-                    {"required": ["items"]},
-                ],
-                "additionalProperties": False,
-            },
-            "annotations": {"readOnlyHint": True},
-        },
-        {
             "name": "convert_reference",
             "title": "Convert Geographic Reference",
-            "description": "Free geography utility. Converts one reference, or a bounded list of references, from one geographic reference system into another by resolving through DaedalMap loc_id: X -> loc_id -> Y. Use this for workflows like ZIP/ZCTA to NWS fire zones, NWS zone to counties, county to overlapping ZCTAs, or any future catalog-backed crosswalk. No payment required.",
+            "description": "The single geographic reference converter. Converts one reference, or a bounded list, through DaedalMap loc_id: X -> loc_id -> Y. Omit to_system to enter the loc_id universe; provide it for any-to-any conversion. Use get_pack first when the family or country-specific system is unknown. No payment required.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "from_system": {"type": "string", "description": "Input reference system, such as zip, overlay_zcta, nws_fire, tribal, admin_boundary, or loc_id."},
                     "value": {"type": "string", "description": "Identifier or name in the input system."},
-                    "to_system": {"type": "string", "description": "Output reference system, such as loc_id, zcta, nws_fire, overlay_nws_public_zone, overlay_tribal, admin_local, or admin_geometry."},
+                    "to_system": {"type": "string", "default": "daedalmap.loc_id", "description": "Optional output reference system. Defaults to DaedalMap loc_id; provide zcta, nws_fire, overlay_nws_public_zone, overlay_tribal, admin_local, or another catalog system for any-to-any conversion."},
                     "items": {
                         "type": "array",
                         "minItems": 1,
@@ -504,6 +406,9 @@ def build_tool_definitions() -> list[dict]:
                                 "relationship_vintage": {"type": "string", "description": "Optional relationship vintage for this row."},
                                 "min_share": {"type": "number", "minimum": 0, "maximum": 1, "description": "Optional minimum overlap share threshold for this row."},
                                 "limit": {"type": "integer", "minimum": 1, "maximum": 100, "description": "Maximum ranked output references for this row."},
+                                "country_hint": {"type": "string", "description": "Optional country hint for admin/name resolution."},
+                                "admin_level_hint": {"type": "integer", "minimum": 0, "maximum": 6, "description": "Optional admin-level hint for admin/name resolution."},
+                                "as_of": {"type": "string", "description": "ISO date or year used for time-bounded identities."},
                                 "row_index": {"anyOf": [{"type": "integer"}, {"type": "string"}], "description": "Optional caller row identifier echoed in the result."},
                                 "id": {"anyOf": [{"type": "integer"}, {"type": "string"}], "description": "Optional caller identifier echoed in the result."},
                             },
@@ -517,11 +422,14 @@ def build_tool_definitions() -> list[dict]:
                     "relationship_vintage": {"type": "string", "description": "Optional source relationship vintage to require."},
                     "min_share": {"type": "number", "minimum": 0, "maximum": 1, "description": "Optional minimum overlap share threshold."},
                     "limit": {"type": "integer", "minimum": 1, "maximum": 100, "description": "Maximum ranked output references to return. Default 10."},
+                    "country_hint": {"type": "string", "description": "Optional country hint for admin/name resolution."},
+                    "admin_level_hint": {"type": "integer", "minimum": 0, "maximum": 6, "description": "Optional admin-level hint for admin/name resolution."},
+                    "as_of": {"type": "string", "description": "ISO date or year used for time-bounded identities."},
                     "batch_id": {"type": "string", "description": "Optional caller-supplied batch id for tracing."},
                     "request_id": {"type": "string", "description": "Optional caller-supplied request id for tracing."},
                 },
                 "anyOf": [
-                    {"required": ["from_system", "value", "to_system"]},
+                    {"required": ["from_system", "value"]},
                     {"required": ["items"]},
                 ],
                 "additionalProperties": False,
@@ -531,7 +439,7 @@ def build_tool_definitions() -> list[dict]:
         {
             "name": "compare_geographies",
             "title": "Compare Geographic Identities",
-            "description": "Detailed relationship tool for two geographic identities. Returns temporal validity, N-way successor context, topology, geodesic intersection area, and directional overlap shares when approved geometry exists. Use this after a compact point lookup when the caller asks whether two tiers/releases really contain or overlap one another. A point-chain seam is not proof of strict parentage. Use resolve_reference first for names or outside identifiers. No payment required.",
+            "description": "Detailed relationship tool for two geographic identities. Returns temporal validity, N-way successor context, topology, geodesic intersection area, and directional overlap shares when approved geometry exists. Use this after a compact point lookup when the caller asks whether two tiers/releases really contain or overlap one another. A point-chain seam is not proof of strict parentage. Use convert_reference first for names or outside identifiers. No payment required.",
             "inputSchema": {
                 "type": "object",
                 "properties": {

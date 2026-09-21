@@ -95,9 +95,8 @@ class PublicDiscoveryCatalogTests(unittest.TestCase):
             "geography": {
                 "get_tool_help", "get_catalog", "get_pack",
                 "resolve_point", "resolve_points", "resolve_deep_point", "resolve_deep_points",
-                "loc_id_info", "read_geometry_catalog",
-                "list_reference_systems", "identify_dataset_geography", "identify_reference_system",
-                "resolve_reference", "convert_reference",
+                "loc_id_info", "identify_dataset_geography", "identify_reference_system",
+                "convert_reference",
                 "compare_geographies", "get_geometry", "resolve_loc_id_scope",
                 "estimate_geometry_package", "create_geometry_export",
                 "estimate_conversion_job", "create_conversion_job", "get_job_status",
@@ -133,7 +132,7 @@ class PublicDiscoveryCatalogTests(unittest.TestCase):
         self.assertFalse(paid_by_name["resolve_point"])
         self.assertTrue(paid_by_name["resolve_points"])
         self.assertTrue(paid_by_name["create_geometry_export"])
-        self.assertFalse(paid_by_name["read_geometry_catalog"])
+        self.assertFalse(paid_by_name["get_catalog"])
 
     def test_catalog_routes_share_discovery_rate_limit_surface(self) -> None:
         for path in (

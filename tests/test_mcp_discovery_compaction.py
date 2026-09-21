@@ -179,6 +179,43 @@ class MCPDiscoveryCompactionTests(unittest.TestCase):
         self.assertEqual(result["returned_crosswalk_count"], 0)
         self.assertEqual(result["crosswalks"], [])
 
+    def test_geometry_discovery_uses_docs_family_vocabulary_not_source_system_ids(self) -> None:
+        catalog = {
+            "geometry_family_definitions": [{
+                "family_id": "postal_area",
+                "label": "Postal areas",
+                "short_label": "Postal",
+                "description": "Canonical postal definition.",
+            }],
+            "country_family_coverage": [{
+                "country_code": "USA",
+                "label": "United States",
+                "publication_status": "published",
+                "families": [{
+                    "family_id": "postal_area",
+                    "label": "Drifted source label",
+                    "available": True,
+                    "publication_status": "published",
+                }],
+            }],
+            "reference_systems": [{
+                "reference_system_id": "usa_overlay_zcta",
+                "country_code": "USA",
+                "system": "overlay_zcta",
+                "family_id": "usa_zcta_source_family",
+                "callable": True,
+                "publication_status": "published",
+            }],
+        }
+        with mock.patch.object(reference_exchange, "load_geometry_catalog", return_value=catalog):
+            result = reference_exchange.geometry_catalog_discovery(detail="lite")
+
+        self.assertEqual(result["family_count"], 1)
+        self.assertEqual(result["families"][0]["pack_id"], "postal_area")
+        self.assertEqual(result["families"][0]["label"], "Postal areas")
+        self.assertEqual(result["families"][0]["short_label"], "Postal")
+        self.assertEqual(result["families"][0]["countries"], ["USA"])
+
     def test_geometry_detail_controls_attached_info_independently_of_polygon(self) -> None:
         with mock.patch.object(
             reference_exchange,
