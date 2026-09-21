@@ -21,7 +21,7 @@ def test_jsonrpc_envelopes_share_one_contract():
     }
 
 
-def _body(request_id="caller-1", *, rpc_id="rpc-1", tool="resolve_points"):
+def _body(request_id="caller-1", *, rpc_id="rpc-1", tool="resolve_point"):
     return json.dumps({
         "jsonrpc": "2.0",
         "id": rpc_id,

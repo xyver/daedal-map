@@ -94,7 +94,7 @@ FAMILY_DATASET = "dataset"
 # create_conversion_job). This is an index join, not a
 # spatial computation.
 IDENTIFIER_RATE_USD_PER_100 = 0.05
-# Point lane: coordinate to loc_id chain (resolve_points). Point-in-polygon
+# Point lane: coordinate to loc_id chain (resolve_point). Point-in-polygon
 # work reads geometry, so it is priced above the identifier join.
 POINT_RATE_USD_PER_100 = 0.10
 # Fixed charge added to every paid call once it exceeds its free allowance.
@@ -135,13 +135,6 @@ TOOL_ACCESS_REGISTRY: dict[str, dict] = {
     "resolve_point": {
         "family": FAMILY_GEOGRAPHY,
         "capability_id": "point_lookup",
-        "pricing": PRICING_FREE,
-        "notes": "Single-coordinate Admin0-3 lookup.",
-    },
-    # ---- geography: bulk-capable, licence-eligible for paid throughput ----
-    "resolve_points": {
-        "family": FAMILY_GEOGRAPHY,
-        "capability_id": "point_lookup",
         "pricing": PRICING_PAID_BULK,
         "item_field": "points",
         "free_item_limit": 100,
@@ -156,14 +149,9 @@ TOOL_ACCESS_REGISTRY: dict[str, dict] = {
             "base_usd": ("POINT_LOOKUP_PAID_BASE_USD",),
             "per_unit_usd": ("POINT_LOOKUP_PAID_PER_POINT_USD",),
         },
+        "notes": "One coordinate stays free; point arrays use the authored bulk lanes.",
     },
     "resolve_deep_point": {
-        "family": FAMILY_GEOGRAPHY,
-        "capability_id": "deep_point_lookup",
-        "pricing": PRICING_FREE,
-        "notes": "Single-coordinate Admin4-6 lookup scoped by one Admin1 loc_id.",
-    },
-    "resolve_deep_points": {
         "family": FAMILY_GEOGRAPHY,
         "capability_id": "deep_point_lookup",
         "pricing": PRICING_FREE,
@@ -189,7 +177,7 @@ TOOL_ACCESS_REGISTRY: dict[str, dict] = {
         },
         "legacy_limit_env": ("GEOMETRY_GET_BATCH_LIMIT",),
     },
-    "loc_id_info": {
+    "get_loc_id_info": {
         "family": FAMILY_GEOGRAPHY,
         "capability_id": "loc_id_metadata",
         "pricing": PRICING_FREE,
@@ -329,20 +317,11 @@ TOOL_ACCESS_REGISTRY: dict[str, dict] = {
         "capability_id": "live_volcano_lookup",
         "pricing": PRICING_FREE,
     },
-    "get_disaster_links_for_event": {
+    "get_event": {
         "family": FAMILY_DISCOVERY,
-        "capability_id": "disaster_links_for_event",
+        "capability_id": "disaster_event_lookup",
         "pricing": PRICING_FREE,
-    },
-    "get_disaster_link_chain": {
-        "family": FAMILY_DISCOVERY,
-        "capability_id": "disaster_link_chain",
-        "pricing": PRICING_FREE,
-    },
-    "search_disaster_links": {
-        "family": FAMILY_DISCOVERY,
-        "capability_id": "disaster_link_search",
-        "pricing": PRICING_FREE,
+        "notes": "One exact event lookup; companion rows and geometry are explicit, bounded includes.",
     },
     # ---- dataset tools: priced by pack, not here. Listed so the universe is
     # complete and nothing is silently ungoverned. ----

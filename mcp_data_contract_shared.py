@@ -29,9 +29,7 @@ DATA_QUERY_TOOL_IDS = frozenset({
 })
 DATA_LIVE_TOOL_IDS = frozenset({"get_live_earthquake_events", "get_live_volcano_events"})
 DATA_RELATIONSHIP_TOOL_IDS = frozenset({
-    "get_disaster_links_for_event",
-    "get_disaster_link_chain",
-    "search_disaster_links",
+    "get_event",
 })
 DATA_TOOL_IDS = frozenset().union(
     DATA_DISCOVERY_TOOL_IDS,
@@ -43,12 +41,10 @@ DATA_TOOL_IDS = frozenset().union(
 DATA_TOOL_DESCRIPTIONS = {
     "get_catalog": "Discover data packs or geometry families progressively: lite selection, full metric/query inventory, or a raw catalog download URL. Choose one result and call get_pack next.",
     "get_pack": "Inspect one selected data pack or geometry family progressively: lite starter contract, full MCP query metadata, or a raw metadata download URL. Use its next_step to retrieve data or call the preferred geometry tool.",
-    "get_data": "Retrieve rows from one selected published data pack using exact metrics, loc_id-based region filters, time/metric filters, sorting, and a row limit. A parent administrative loc_id selects matching descendant rows at the pack's published grain. Call get_pack first; geometry families use their focused next-step tools.",
+    "get_data": "Retrieve rows from one selected published data pack using exact metrics, loc_id-based region filters, time/metric filters, sorting, and a row limit. Disaster event rows include stable event_id values for get_event drill-down. A parent administrative loc_id selects matching descendant rows at the pack's published grain. Call get_pack first; geometry families use their focused next-step tools.",
     "get_live_earthquake_events": "Fetch recent preliminary USGS earthquake events in the shared data-result shape. Use get_data with pack_id='earthquakes' for canonical enriched history.",
     "get_live_volcano_events": "Fetch recent preliminary Smithsonian/GVP eruption updates in the shared data-result shape. Use get_data with pack_id='volcanoes' for canonical history.",
-    "get_disaster_links_for_event": "Return published cross-hazard links for one exact event ID. Use a canonical event row to obtain the ID first.",
-    "get_disaster_link_chain": "Expand one exact event ID into a bounded published cross-hazard chain. Use a canonical event row to obtain the ID first.",
-    "search_disaster_links": "Find published cross-hazard relationship families by event type and optional year range before choosing an exact event.",
+    "get_event": "Retrieve one exact disaster event and explicitly requested relationships, affected places, native observations, or geometry. Use get_data to obtain the stable event_id first.",
 }
 
 _ERROR_PROPERTY = {
@@ -147,23 +143,22 @@ def data_tool_output_schema(tool_name: str) -> dict[str, Any] | None:
             },
         )
     if name in DATA_RELATIONSHIP_TOOL_IDS:
-        if name == "get_disaster_links_for_event":
-            required = ["event_id", "related", "count"]
-        elif name == "get_disaster_link_chain":
-            required = ["links", "count", "depth"]
-        else:
-            required = ["chains", "count"]
         return _result_schema(
-            success_required=required,
+            success_required=["event_id", "pack_id", "event"],
             properties={
-                "query_event_id": {"type": "string"},
-                "resolved_event": {"type": "object"},
                 "event_id": {"type": "string"},
-                "related": {"type": "array", "items": {"type": "object"}},
-                "links": {"type": "array", "items": {"type": "object"}},
-                "chains": {"type": "array", "items": {"type": "object"}},
-                "count": {"type": "integer", "minimum": 0},
-                "depth": {"type": "integer", "minimum": 0},
+                "pack_id": {"type": "string"},
+                "source_id": {"type": "string"},
+                "event_type": {"type": "string"},
+                "schema_class": {"type": "string"},
+                "event": {"type": "object"},
+                "available": {"type": "object"},
+                "included": {"type": "array", "items": {"type": "string"}},
+                "relationships": {"type": "object"},
+                "affected_places": {"type": "object"},
+                "observations": {"type": "object"},
+                "geometry": {"type": "object"},
+                "next_steps": {"type": "object"},
             },
         )
     return None
@@ -201,7 +196,7 @@ def data_tool_publication_meta(tool_name: str) -> dict[str, Any] | None:
         input_family = "structured_query" if name in DATA_QUERY_TOOL_IDS else "live_window"
     else:
         result_family = "relationships"
-        input_family = "relationship_search" if name == "search_disaster_links" else "exact_event"
+        input_family = "exact_event"
     return {
         "com.daedalmap/access": access,
         "com.daedalmap/data-contract": {

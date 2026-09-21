@@ -212,6 +212,26 @@ Rule-of-thumb examples:
 - "show me the triggered tsunami for this event" -> shared `links`
 - "show me the aftershocks for this event" -> earthquake-native sequence contract
 
+### Agent event contract
+
+The public agent surface keeps event discovery separate from event traversal:
+
+1. `get_data` searches or filters one disaster pack and returns stable
+   `event_id` values with event rows.
+2. `get_event` resolves one exact `event_id`. Its default response is a
+   lightweight event summary with no polygon, perimeter, or complete track.
+3. Callers explicitly request any companion sections they need:
+   `relationships`, `affected_places`, `observations`, or `geometry`.
+
+`relationships` uses `parent_event_id` and `child_event_id` as a small,
+crosswalk-like event graph. It never uses a shared geographic `loc_id` as event
+identity. `observations` remains hazard-native: hurricane positions, wildfire
+progression frames, tsunami runups, earthquake aftershocks, or a declared
+event sequence. Geometry remains opt-in and bounded independently.
+
+This boundary is intentional: `get_data` reads ordinary pack rows;
+`get_event` may traverse several event-owned artifacts one at a time.
+
 Operational aggregate rebuilding and admin2-first rollups remain documented in the internal aggregation-system notes.
 
 ---

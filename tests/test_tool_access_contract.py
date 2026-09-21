@@ -76,26 +76,26 @@ class ToolAccessContractTests(unittest.TestCase):
 
     def test_hosted_tool_rate_defaults_have_one_authored_home(self) -> None:
         self.assertEqual(HOSTED_TOOL_RATE_LIMIT_DEFAULTS["free"], {"limit": 10, "window_seconds": 60})
-        self.assertEqual(tool_authored_rate_limit("resolve_points", lane="account"), (60, 60))
-        self.assertEqual(tool_authored_rate_limit("resolve_points", lane="paid"), (120, 60))
+        self.assertEqual(tool_authored_rate_limit("resolve_point", lane="account"), (60, 60))
+        self.assertEqual(tool_authored_rate_limit("resolve_point", lane="paid"), (120, 60))
 
     def test_rate_limit_env_and_operator_policy_override_the_registry(self) -> None:
         policy = (
             '{"schema_version":"1.0.0","policy_revision":"limit-test-1",'
-            '"mode":"enforce","rate_limits":{"tools":{"resolve_points":'
+            '"mode":"enforce","rate_limits":{"tools":{"resolve_point":'
             '{"plus":{"limit":333,"window_seconds":45}}}}}'
         )
         env = {
-            "MCP_TOOL_RATE_LIMIT_RESOLVE_POINTS_PLUS": "222",
+            "MCP_TOOL_RATE_LIMIT_RESOLVE_POINT_PLUS": "222",
             "DAEDALMAP_ACCESS_POLICY_JSON": policy,
         }
         with mock.patch.dict(os.environ, env, clear=False):
             clear_access_policy_cache()
-            self.assertEqual(tool_effective_rate_limit("resolve_points", lane="paid"), (333, 45))
+            self.assertEqual(tool_effective_rate_limit("resolve_point", lane="paid"), (333, 45))
 
     def test_shared_challenge_preserves_the_canonical_quote(self) -> None:
         payload = tool_payment_required_payload(
-            "resolve_points", 101, free_limit=100, paid_limit=10_000, request_id="req-1"
+            "resolve_point", 101, free_limit=100, paid_limit=10_000, request_id="req-1"
         )
         self.assertEqual(payload["quote"]["capability_id"], "point_lookup")
         # One billable point: the base charge plus one point at the point rate.
@@ -106,7 +106,7 @@ class ToolAccessContractTests(unittest.TestCase):
     def test_conversion_lanes_read_the_two_named_rates(self) -> None:
         """Every identifier tool shares one rate; points have their own."""
         identifier_per_item = round(IDENTIFIER_RATE_USD_PER_100 / 100 * 1_000_000)
-        for tool in ("resolve_reference", "convert_reference"):
+        for tool in ("convert_reference",):
             with self.subTest(tool=tool):
                 self.assertEqual(tool_price_micro_usd(tool)["per_unit_micro_usd"], identifier_per_item)
         # create_conversion_job meters one unit per 100 references.
@@ -115,7 +115,7 @@ class ToolAccessContractTests(unittest.TestCase):
             identifier_per_item * 100,
         )
         self.assertEqual(
-            tool_price_micro_usd("resolve_points")["per_unit_micro_usd"],
+            tool_price_micro_usd("resolve_point")["per_unit_micro_usd"],
             round(POINT_RATE_USD_PER_100 / 100 * 1_000_000),
         )
 
@@ -155,7 +155,7 @@ class AccountLaneTests(unittest.TestCase):
     """
 
     def test_account_lane_sits_between_free_and_paid(self) -> None:
-        for tool in ("resolve_points", "resolve_reference", "convert_reference", "loc_id_info"):
+        for tool in ("resolve_point", "convert_reference", "get_loc_id_info"):
             with self.subTest(tool=tool):
                 free = tool_effective_item_limit(tool, lane="free")
                 account = tool_effective_item_limit(tool, lane="account")
@@ -165,19 +165,19 @@ class AccountLaneTests(unittest.TestCase):
 
     def test_account_limit_never_exceeds_the_paid_limit(self) -> None:
         """The derived 10x must clamp, or a free account could outrank a paying one."""
-        for tool in ("resolve_points", "get_geometry", "resolve_loc_id_scope"):
+        for tool in ("resolve_point", "get_geometry", "resolve_loc_id_scope"):
             with self.subTest(tool=tool):
                 self.assertLessEqual(tool_account_item_limit(tool), tool_effective_item_limit(tool, lane="paid"))
 
     def test_account_lane_has_its_own_env_override(self) -> None:
-        with mock.patch.dict(os.environ, {"MCP_TOOL_ACCOUNT_BATCH_LIMIT_RESOLVE_POINTS": "777"}, clear=False):
-            self.assertEqual(tool_effective_item_limit("resolve_points", lane="account"), 777)
-            self.assertEqual(tool_effective_item_limit("resolve_points", lane="free"), 100)
+        with mock.patch.dict(os.environ, {"MCP_TOOL_ACCOUNT_BATCH_LIMIT_RESOLVE_POINT": "777"}, clear=False):
+            self.assertEqual(tool_effective_item_limit("resolve_point", lane="account"), 777)
+            self.assertEqual(tool_effective_item_limit("resolve_point", lane="free"), 100)
 
     def test_point_help_keeps_account_and_paid_plan_limits_separate(self) -> None:
-        definition = next(tool for tool in build_tool_definitions() if tool["name"] == "resolve_points")
+        definition = next(tool for tool in build_tool_definitions() if tool["name"] == "resolve_point")
         payload = tool_help_payload(
-            "resolve_points", tool_definition=definition, available_on_facades=["/mcp/geography"]
+            "resolve_point", tool_definition=definition, available_on_facades=["/mcp/geography"]
         )
         tiers = payload["access"]["caller_tiers"]
         self.assertEqual(tiers["anonymous"]["included_items"], 100)
@@ -188,9 +188,9 @@ class AccountLaneTests(unittest.TestCase):
         self.assertEqual(payload["access"]["rate_limits"]["paid"]["limit"], 120)
 
     def test_free_bounded_tool_does_not_advertise_unenforced_item_tiers(self) -> None:
-        definition = next(tool for tool in build_tool_definitions() if tool["name"] == "loc_id_info")
+        definition = next(tool for tool in build_tool_definitions() if tool["name"] == "get_loc_id_info")
         payload = tool_help_payload(
-            "loc_id_info", tool_definition=definition, available_on_facades=["/mcp/geography"]
+            "get_loc_id_info", tool_definition=definition, available_on_facades=["/mcp/geography"]
         )
         self.assertEqual(payload["access"]["limits"]["free_item_limit"], 100)
         self.assertNotIn("account_item_limit", payload["access"]["limits"])

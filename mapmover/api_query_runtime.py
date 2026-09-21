@@ -914,6 +914,13 @@ def _build_dynamic_source_spec(source_id: str) -> ApiSourceSpec | None:
     if normalized_time_field:
         filterable_fields.add(normalized_time_field)
         sortable_fields.add(normalized_time_field)
+    # Stable event identity is part of every event-row contract.  Agents need
+    # it to move from broad get_data discovery into exact get_event traversal.
+    if str(source_defaults.get("query_mode") or "").strip() == "single_source_events":
+        for identity_field in ("event_id", "source_event_id"):
+            if identity_field in available_cols:
+                filterable_fields.add(identity_field)
+                sortable_fields.add(identity_field)
     metadata_filterable = metadata.get("filterable_fields") if isinstance(metadata.get("filterable_fields"), list) else []
     for field in metadata_filterable:
         field_name = str(field).strip()

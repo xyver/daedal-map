@@ -240,9 +240,7 @@ class DataHelperTelemetryTests(unittest.TestCase):
             "get_pack",
             "get_live_earthquake_events",
             "get_live_volcano_events",
-            "get_disaster_links_for_event",
-            "get_disaster_link_chain",
-            "search_disaster_links",
+            "get_event",
         }
         self.assertEqual(set(DATA_HELPER_CAPABILITIES), expected)
         # capability ids must be distinct so analytics can group on them
@@ -374,6 +372,40 @@ class DataHelperTelemetryTests(unittest.TestCase):
         self.assertEqual(analytics["capability_id"], "pack_detail_discovery")
         self.assertEqual(analytics["decision"], "deny")
         self.assertEqual(analytics["error_code"], "pack_not_found")
+
+    def test_get_event_is_a_separate_exact_event_call(self) -> None:
+        event_payload = {
+            "event_id": "USA-HRCN-example",
+            "pack_id": "hurricanes",
+            "source_id": "hurricanes",
+            "event_type": "hurricane",
+            "schema_class": "event_track",
+            "event": {"event_id": "USA-HRCN-example", "name": "Example"},
+            "available": {"relationships": True, "observations": True, "geometry": True},
+            "included": ["relationships"],
+            "relationships": {"links": [], "count": 0, "depth": 1, "truncated": False},
+        }
+        with (
+            mock.patch("mapmover.routes.mcp.get_event_payload", return_value=event_payload) as lookup,
+            mock.patch("mapmover.routes.mcp.log_api_query_event") as analytics_mock,
+        ):
+            envelope = _tool_call_envelope(
+                self.client,
+                "get_event",
+                {
+                    "event_id": "USA-HRCN-example",
+                    "pack_id": "hurricanes",
+                    "include": ["relationships"],
+                },
+            )
+
+        result = envelope["result"]["structuredContent"]
+        self.assertEqual(result["event_id"], "USA-HRCN-example")
+        self.assertIn("relationships", result)
+        lookup.assert_called_once()
+        self.assertNotIn("metrics", lookup.call_args.kwargs)
+        analytics_mock.assert_called_once()
+        self.assertEqual(analytics_mock.call_args.kwargs["capability_id"], "disaster_event_lookup")
 
 
 class CatalogDrivenPackFacadeTests(unittest.TestCase):
@@ -552,9 +584,7 @@ class BlindCallerHelpTests(unittest.TestCase):
             "get_data": {"source_id": "example", "row_count": 0, "rows": []},
             "get_live_earthquake_events": {"source_id": "usgs_live", "row_count": 0, "rows": []},
             "get_live_volcano_events": {"source_id": "gvp_live", "row_count": 0, "rows": []},
-            "get_disaster_links_for_event": {"event_id": "event-1", "related": [], "count": 0},
-            "get_disaster_link_chain": {"links": [], "count": 0, "depth": 1},
-            "search_disaster_links": {"chains": [], "count": 0},
+            "get_event": {"event_id": "event-1", "pack_id": "earthquakes", "event": {}},
         }
         for name, payload in examples.items():
             with self.subTest(result=name):
@@ -592,7 +622,7 @@ class BlindCallerHelpTests(unittest.TestCase):
         envelope = _tool_call_envelope(
             self.client,
             "get_tool_help",
-            {"tool_name": "resolve_points"},
+            {"tool_name": "resolve_point"},
             path="/mcp/geography",
         )
         payload = envelope["result"]["structuredContent"]
@@ -605,7 +635,7 @@ class BlindCallerHelpTests(unittest.TestCase):
         self.assertEqual(payload["interaction_contract"]["natural_language_owner"], "calling_client_llm")
         self.assertEqual(payload["interaction_contract"]["execution_input"], "strict_json_schema")
         self.assertIn("clarification_shape", payload["interaction_contract"])
-        self.assertIn("loc_id_info", payload["recommended_next_calls"])
+        self.assertIn("get_loc_id_info", payload["recommended_next_calls"])
         self.assertIn("/mcp/reverse-geocoding", payload["available_on_facades"])
         self.assertEqual(payload["provenance"]["schema_version"], "daedalmap.tool_provenance.v1")
 
@@ -663,7 +693,7 @@ class TrustedArtifactBypassTests(unittest.TestCase):
             "compare_geographies": {
                 "items": [{"left_loc_id": "USA", "right_loc_id": "USA"} for _ in range(200)]
             },
-            "loc_id_info": {"loc_ids": [f"USA-{i}" for i in range(200)]},
+            "get_loc_id_info": {"loc_ids": [f"USA-{i}" for i in range(200)]},
         }
         for tool, arguments in cases.items():
             with self.subTest(tool=tool):
@@ -685,7 +715,7 @@ class TrustedArtifactBypassTests(unittest.TestCase):
             "compare_geographies": {
                 "items": [{"left_loc_id": "USA", "right_loc_id": "USA"} for _ in range(200)]
             },
-            "loc_id_info": {"loc_ids": [f"USA-{i}" for i in range(200)]},
+            "get_loc_id_info": {"loc_ids": [f"USA-{i}" for i in range(200)]},
         }
         for tool, arguments in cases.items():
             with self.subTest(tool=tool):
@@ -802,14 +832,14 @@ class ToolAccessRegistryTests(unittest.TestCase):
         source = Path(mcp_module.__file__).read_text(encoding="utf-8")
         # An inline default would mean the registry is no longer the single
         # place to change a limit.
-        self.assertNotIn("_tool_batch_item_limit(\"resolve_points\", default=", source)
+        self.assertNotIn("_tool_batch_item_limit(\"resolve_point\", default=", source)
         self.assertNotIn("fallback_env_names=(\"POINT_LOOKUP_BATCH_LIMIT\",)", source)
 
     def test_registry_values_reach_the_runtime(self) -> None:
         import mapmover.routes.mcp as mcp_module
         from tool_access_shared import tool_free_item_limit
 
-        for tool in ("resolve_points", "get_geometry", "loc_id_info"):
+        for tool in ("resolve_point", "get_geometry", "get_loc_id_info"):
             with self.subTest(tool=tool):
                 self.assertEqual(
                     mcp_module._tool_batch_item_limit(tool),
@@ -819,8 +849,8 @@ class ToolAccessRegistryTests(unittest.TestCase):
     def test_env_override_still_wins_over_the_registry(self) -> None:
         import mapmover.routes.mcp as mcp_module
 
-        with mock.patch.dict("os.environ", {"MCP_TOOL_BATCH_LIMIT_RESOLVE_POINTS": "7"}, clear=False):
-            self.assertEqual(mcp_module._tool_batch_item_limit("resolve_points"), 7)
+        with mock.patch.dict("os.environ", {"MCP_TOOL_BATCH_LIMIT_RESOLVE_POINT": "7"}, clear=False):
+            self.assertEqual(mcp_module._tool_batch_item_limit("resolve_point"), 7)
 
 
 class PaidBulkLicensingTests(unittest.TestCase):
@@ -848,7 +878,7 @@ class PaidBulkLicensingTests(unittest.TestCase):
             "mapmover.runtime.geometry_catalog.geometry_bank_access_facts",
             return_value=({"paid", "free"}, True),
         ):
-            self.assertFalse(mcp_module._tool_paid_bulk_enforced("resolve_points"))
+            self.assertFalse(mcp_module._tool_paid_bulk_enforced("resolve_point"))
 
     def test_paid_bulk_allowed_when_every_bank_permits_paid(self) -> None:
         import mapmover.routes.mcp as mcp_module
@@ -857,7 +887,7 @@ class PaidBulkLicensingTests(unittest.TestCase):
             "mapmover.runtime.geometry_catalog.geometry_bank_access_facts",
             return_value=({"paid"}, True),
         ):
-            self.assertTrue(mcp_module._tool_paid_bulk_enforced("resolve_points"))
+            self.assertTrue(mcp_module._tool_paid_bulk_enforced("resolve_point"))
 
     def test_conversion_billing_does_not_inherit_geometry_redistribution_terms(self) -> None:
         """Identity-only conversion may meter work without returning source geometry."""

@@ -21,7 +21,7 @@ class StdioToolHelpTests(unittest.TestCase):
         return json.loads(output.getvalue())
 
     def test_static_help_executes_without_runtime_data(self) -> None:
-        envelope = self._call("resolve_points")
+        envelope = self._call("resolve_point")
         payload = envelope["result"]["structuredContent"]
         self.assertFalse(envelope["result"]["isError"])
         self.assertEqual(payload["access"]["limits"]["free_item_limit"], 100)

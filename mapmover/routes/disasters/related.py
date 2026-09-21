@@ -45,6 +45,49 @@ LINK_COLUMNS = [
     "confidence",
 ]
 
+# Event-facing reads deliberately exclude heavy shape payloads.  Geometry is
+# projected only when get_event callers explicitly request it.
+EVENT_SUMMARY_COLUMNS = [
+    "event_id", "source_event_id", "upstream_event_id", "storm_id", "eruption_id",
+    "event_type", "name", "place", "location", "volcano_name", "fire_name",
+    "loc_id", "parent_loc_id", "containing_loc_id", "iso3", "country", "region",
+    "timestamp", "start_date", "end_date", "end_timestamp", "year", "last_updated",
+    "latitude", "longitude", "end_latitude", "end_longitude",
+    "magnitude", "depth_km", "severity", "VEI", "is_ongoing", "status",
+    "area_km2", "burned_acres", "duration_days", "max_wind_kt", "min_pressure_mb",
+    "max_category", "num_positions", "made_landfall", "has_wind_radii",
+    "has_geometry", "has_progression", "runup_count", "aftershock_count",
+    "mainshock_id", "sequence_id", "sequence_position", "sequence_count",
+    "deaths", "injuries", "displaced", "damage_usd", "damage_millions",
+    "source", "source_url", "data_quality",
+]
+EVENT_GEOMETRY_COLUMNS = ["perimeter", "track_coords", "bbox"]
+EVENT_DETAIL_LIMIT = 500
+
+
+def _json_safe_event_value(value):
+    if value is None:
+        return None
+    try:
+        if pd.isna(value):
+            return None
+    except (TypeError, ValueError):
+        pass
+    if isinstance(value, pd.Timestamp):
+        return value.isoformat()
+    if hasattr(value, "item"):
+        try:
+            return value.item()
+        except Exception:
+            pass
+    if isinstance(value, tuple):
+        return [_json_safe_event_value(item) for item in value]
+    if isinstance(value, list):
+        return [_json_safe_event_value(item) for item in value]
+    if isinstance(value, dict):
+        return {str(key): _json_safe_event_value(item) for key, item in value.items()}
+    return value
+
 EVENT_TABLES = {
     "earthquake": {
         "path": GLOBAL_DIR / "disasters/earthquakes/events.parquet",
@@ -527,6 +570,436 @@ def _query_exact_event(candidate: dict, identifier_field: str, identifier_value:
             return df
 
     return pd.DataFrame()
+
+
+def _query_exact_event_projected(
+    candidate: dict,
+    identifier_field: str,
+    identifier_value: str,
+    *,
+    include_geometry: bool = False,
+) -> pd.DataFrame:
+    """Resolve one event while projecting away shape columns by default."""
+    parquet_path, _metadata = _resolve_exact_event_parquet_for_candidate(candidate)
+    columns = list(EVENT_SUMMARY_COLUMNS)
+    if identifier_field not in columns:
+        columns.append(identifier_field)
+    if include_geometry:
+        columns.extend(EVENT_GEOMETRY_COLUMNS)
+    variants = [identifier_value]
+    if isinstance(identifier_value, str):
+        for variant in (identifier_value.lower(), identifier_value.upper()):
+            if variant not in variants:
+                variants.append(variant)
+    for variant in variants:
+        df = select_rows(
+            parquet_path,
+            columns=columns,
+            exact_filters={identifier_field: variant},
+            limit=1,
+        )
+        if not df.empty:
+            return df
+    return pd.DataFrame()
+
+
+def _resolve_event_record(
+    identifier_value: str,
+    *,
+    pack_id: str | None = None,
+    include_geometry: bool = False,
+) -> tuple[dict, dict] | None:
+    normalized_identifier = str(identifier_value or "").strip()
+    if not normalized_identifier:
+        return None
+    candidates = _get_exact_event_candidates(
+        str(pack_id).strip().lower() if pack_id else None,
+        identifier_value=normalized_identifier,
+    )
+    if not pack_id:
+        hinted_packs, strict_hint = _classify_exact_event_identifier(normalized_identifier)
+        if hinted_packs:
+            hinted = set(hinted_packs)
+            candidates = sorted(candidates, key=lambda entry: 0 if entry["pack_id"] in hinted else 1)
+            if strict_hint:
+                candidates = [entry for entry in candidates if entry["pack_id"] in hinted]
+
+    for candidate in candidates:
+        for identifier_field in candidate.get("id_fields") or ("event_id",):
+            try:
+                df = _query_exact_event_projected(
+                    candidate,
+                    identifier_field,
+                    normalized_identifier,
+                    include_geometry=include_geometry,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Projected event lookup failed for %s.%s=%s: %s",
+                    candidate.get("source_id"), identifier_field, normalized_identifier, exc,
+                )
+                continue
+            if df.empty:
+                continue
+            row = {
+                str(key): _json_safe_event_value(value)
+                for key, value in df.iloc[0].to_dict().items()
+                if _json_safe_event_value(value) is not None
+            }
+            exact_value = str(row.get(identifier_field) or normalized_identifier).strip()
+            row.setdefault("event_id", exact_value)
+            return candidate, row
+    return None
+
+
+def _event_relationship_rows(event_id: str, *, depth: int, limit: int) -> dict:
+    """Traverse the event graph by event IDs, never by shared geography loc_ids."""
+    links_path = GLOBAL_DIR / "disasters/links.parquet"
+    if not parquet_available(links_path):
+        return {"depth": depth, "links": [], "count": 0, "truncated": False}
+
+    effective_depth = max(1, min(int(depth or 1), MAX_CHAIN_DEPTH))
+    effective_limit = max(1, min(int(limit or 100), EVENT_DETAIL_LIMIT))
+    queue: list[tuple[str, int]] = [(event_id, 0)]
+    visited: set[str] = set()
+    seen_edges: set[tuple[str, str, str]] = set()
+    links: list[dict] = []
+
+    while queue and len(links) < effective_limit:
+        current_event_id, current_depth = queue.pop(0)
+        if current_event_id in visited:
+            continue
+        visited.add(current_event_id)
+        if current_depth >= effective_depth:
+            continue
+        parents = select_rows(
+            links_path,
+            columns=LINK_COLUMNS + ["derivation_method"],
+            exact_filters={"parent_event_id": current_event_id},
+            limit=effective_limit,
+        )
+        children = select_rows(
+            links_path,
+            columns=LINK_COLUMNS + ["derivation_method"],
+            exact_filters={"child_event_id": current_event_id},
+            limit=effective_limit,
+        )
+        directed = [(parents, "outgoing"), (children, "incoming")]
+        for frame, direction in directed:
+            for _, raw in frame.iterrows():
+                parent = str(raw.get("parent_event_id") or "").strip()
+                child = str(raw.get("child_event_id") or "").strip()
+                link_type = str(raw.get("link_type") or "linked").strip()
+                if not parent or not child:
+                    continue
+                edge_key = (parent, child, link_type)
+                if edge_key in seen_edges:
+                    continue
+                seen_edges.add(edge_key)
+                related_event_id = child if direction == "outgoing" else parent
+                links.append({
+                    "parent_event_id": parent,
+                    "child_event_id": child,
+                    "related_event_id": related_event_id,
+                    "related_event_type": _extract_event_type(related_event_id),
+                    "direction": direction,
+                    "relationship": link_type,
+                    "source": _json_safe_event_value(raw.get("source")),
+                    "method": _json_safe_event_value(raw.get("derivation_method")),
+                    "confidence": _json_safe_event_value(raw.get("confidence")),
+                    "depth": current_depth + 1,
+                })
+                if len(links) >= effective_limit:
+                    break
+                if related_event_id not in visited:
+                    queue.append((related_event_id, current_depth + 1))
+            if len(links) >= effective_limit:
+                break
+    return {
+        "depth": effective_depth,
+        "links": links,
+        "count": len(links),
+        "truncated": bool(queue) or len(links) >= effective_limit,
+    }
+
+
+def _event_affected_places(candidate: dict, event_id: str, *, limit: int) -> dict:
+    pack_id = str(candidate.get("pack_id") or "").strip().lower()
+    source_id = str(candidate.get("source_id") or "").strip().lower()
+    event_area_name = pack_id
+    if pack_id == "wildfires" and source_id == "wildfires_usa":
+        event_area_name = "wildfires_usa"
+    elif pack_id == "wildfires" and source_id == "can_wildfires":
+        event_area_name = "wildfires_can"
+    candidate_paths = [GLOBAL_DIR / f"disasters/event_areas/{event_area_name}.parquet"]
+    try:
+        event_path, _ = _resolve_exact_event_parquet_for_candidate(candidate)
+        source_local_path = event_path.parent / "event_areas.parquet"
+        if source_local_path not in candidate_paths:
+            candidate_paths.append(source_local_path)
+    except Exception:
+        pass
+    effective_limit = max(1, min(int(limit or 100), EVENT_DETAIL_LIMIT))
+    rows = pd.DataFrame()
+    available = False
+    for path in candidate_paths:
+        if not parquet_available(path):
+            continue
+        available = True
+        rows = select_rows(
+            path,
+            columns=["event_id", "affected_loc_id", "impact_type", "area_km2", "pct_affected", "distance_km"],
+            exact_filters={"event_id": event_id},
+            limit=effective_limit + 1,
+        )
+        if not rows.empty:
+            break
+    if not available:
+        return {"places": [], "count": 0, "truncated": False, "available": False}
+    truncated = len(rows) > effective_limit
+    places = []
+    for _, row in rows.head(effective_limit).iterrows():
+        places.append({
+            str(key): _json_safe_event_value(value)
+            for key, value in row.to_dict().items()
+            if key != "event_id" and _json_safe_event_value(value) is not None
+        })
+    return {"places": places, "count": len(places), "truncated": truncated, "available": True}
+
+
+def _event_observations(candidate: dict, row: dict, *, limit: int) -> dict:
+    pack_id = str(candidate.get("pack_id") or "").strip().lower()
+    event_id = str(row.get("event_id") or "").strip()
+    effective_limit = max(1, min(int(limit or 100), EVENT_DETAIL_LIMIT))
+    path: Path | None = None
+    filters: dict = {"event_id": event_id}
+    columns: list[str] = []
+    kind = "none"
+    order_by: str | None = None
+
+    if pack_id == "hurricanes":
+        path = GLOBAL_DIR / "disasters/hurricanes/positions.parquet"
+        columns = ["event_id", "frame_id", "storm_id", "observed_at", "timestamp", "latitude", "longitude", "wind_kt", "pressure_mb", "category", "status"]
+        kind, order_by = "track_positions", "timestamp"
+    elif pack_id == "tsunamis":
+        path = GLOBAL_DIR / "disasters/tsunamis/runups.parquet"
+        columns = ["event_id", "runup_id", "timestamp", "latitude", "longitude", "location", "water_height_m", "horizontal_inundation_m", "dist_from_source_km", "arrival_travel_time_min", "deaths", "loc_id"]
+        kind, order_by = "runups", "timestamp"
+    elif pack_id == "earthquakes":
+        path, _ = _resolve_exact_event_parquet_for_candidate(candidate)
+        anchor_id = str(row.get("mainshock_id") or event_id).strip()
+        filters = {"mainshock_id": anchor_id}
+        columns = ["event_id", "mainshock_id", "sequence_id", "is_mainshock", "timestamp", "latitude", "longitude", "magnitude", "depth_km", "place", "loc_id"]
+        kind, order_by = "aftershocks", "timestamp"
+    elif pack_id == "wildfires":
+        year = row.get("year")
+        if year is None:
+            match = re.search(r"(?:^|-)((?:19|20)\d{2})(?:-|$)", event_id)
+            year = int(match.group(1)) if match else None
+        if year is not None:
+            path = GLOBAL_DIR / f"disasters/wildfires/fire_progression_{int(year)}.parquet"
+            columns = ["event_id", "frame_id", "frame_part_id", "date", "day_num", "area_km2", "loc_id", "source"]
+            kind, order_by = "progression_frames", "date"
+    elif pack_id == "tornadoes" and row.get("sequence_id"):
+        path, _ = _resolve_exact_event_parquet_for_candidate(candidate)
+        filters = {"sequence_id": row["sequence_id"]}
+        columns = ["event_id", "sequence_id", "sequence_position", "sequence_count", "timestamp", "latitude", "longitude", "end_latitude", "end_longitude", "magnitude", "loc_id"]
+        kind, order_by = "event_sequence", "timestamp"
+
+    if path is None or not parquet_available(path):
+        return {"kind": kind, "rows": [], "count": 0, "truncated": False, "available": False}
+    rows = select_rows(
+        path,
+        columns=columns,
+        exact_filters=filters,
+        order_by=order_by,
+        limit=effective_limit + 1,
+    )
+    truncated = len(rows) > effective_limit
+    shaped = [
+        {
+            str(key): _json_safe_event_value(value)
+            for key, value in item.items()
+            if _json_safe_event_value(value) is not None
+        }
+        for item in rows.head(effective_limit).to_dict(orient="records")
+    ]
+    return {"kind": kind, "rows": shaped, "count": len(shaped), "truncated": truncated, "available": True}
+
+
+def _parse_event_geometry(value):
+    if value is None:
+        return None
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except Exception:
+            return None
+    return value if isinstance(value, dict) and value.get("type") else None
+
+
+def _event_geometry(candidate: dict, row: dict, *, mode: str, limit: int) -> dict:
+    pack_id = str(candidate.get("pack_id") or "").strip().lower()
+    event_id = str(row.get("event_id") or "").strip()
+    if pack_id == "hurricanes":
+        positions = _event_observations(candidate, row, limit=limit)
+        coords = [
+            [item["longitude"], item["latitude"]]
+            for item in positions.get("rows", [])
+            if item.get("longitude") is not None and item.get("latitude") is not None
+        ]
+        return {"kind": "track", "geometry": {"type": "LineString", "coordinates": coords} if len(coords) >= 2 else None, "observation_count": len(coords), "truncated": positions.get("truncated", False)}
+    if pack_id == "tornadoes":
+        coords = []
+        for lon_key, lat_key in (("longitude", "latitude"), ("end_longitude", "end_latitude")):
+            if row.get(lon_key) is not None and row.get(lat_key) is not None:
+                coords.append([float(row[lon_key]), float(row[lat_key])])
+        geometry = {"type": "LineString", "coordinates": coords} if len(coords) == 2 else None
+        return {"kind": "path", "geometry": geometry}
+    progression_path: Path | None = None
+    if pack_id == "wildfires":
+        year = row.get("year")
+        if year is None:
+            match = re.search(r"(?:^|-)((?:19|20)\d{2})(?:-|$)", event_id)
+            year = int(match.group(1)) if match else None
+        progression_path = GLOBAL_DIR / f"disasters/wildfires/fire_progression_{int(year)}.parquet" if year is not None else None
+    if pack_id == "wildfires" and mode == "timeline":
+        if progression_path is not None and parquet_available(progression_path):
+            effective_limit = max(1, min(int(limit or 100), EVENT_DETAIL_LIMIT))
+            frames = select_rows(
+                progression_path,
+                columns=["event_id", "frame_id", "frame_part_id", "date", "day_num", "area_km2", "perimeter"],
+                exact_filters={"event_id": event_id},
+                order_by="date",
+                limit=effective_limit + 1,
+            )
+            features = []
+            for item in frames.head(effective_limit).to_dict(orient="records"):
+                geometry = _parse_event_geometry(item.pop("perimeter", None))
+                if geometry:
+                    features.append({"type": "Feature", "geometry": geometry, "properties": {key: _json_safe_event_value(value) for key, value in item.items() if key != "event_id"}})
+            return {"kind": "progression", "features": features, "count": len(features), "truncated": len(frames) > effective_limit}
+    geometry = _parse_event_geometry(row.get("perimeter"))
+    if geometry:
+        return {"kind": "perimeter", "geometry": geometry}
+    if pack_id == "wildfires" and progression_path is not None and parquet_available(progression_path):
+        # Find the actual last frame using metadata-only columns first.  Do not
+        # mistake the last row inside a response limit for the event's current
+        # perimeter, and do not read every historical polygon to find it.
+        frame_index = select_rows(
+            progression_path,
+            columns=["event_id", "frame_id", "frame_part_id", "date", "day_num", "area_km2"],
+            exact_filters={"event_id": event_id},
+        )
+        if not frame_index.empty:
+            sort_columns = [column for column in ("date", "day_num", "frame_id") if column in frame_index.columns]
+            if sort_columns:
+                frame_index = frame_index.sort_values(sort_columns, ascending=True, na_position="first")
+            latest = frame_index.iloc[-1]
+            latest_frame_id = latest.get("frame_id")
+            frame_filters = {"event_id": event_id}
+            if latest_frame_id is not None and not pd.isna(latest_frame_id):
+                frame_filters["frame_id"] = latest_frame_id
+            frame_rows = select_rows(
+                progression_path,
+                columns=["event_id", "frame_id", "frame_part_id", "date", "day_num", "area_km2", "perimeter"],
+                exact_filters=frame_filters,
+                limit=EVENT_DETAIL_LIMIT,
+            )
+            features = []
+            for item in frame_rows.to_dict(orient="records"):
+                frame_geometry = _parse_event_geometry(item.pop("perimeter", None))
+                if frame_geometry:
+                    features.append({
+                        "type": "Feature",
+                        "geometry": frame_geometry,
+                        "properties": {
+                            key: _json_safe_event_value(value)
+                            for key, value in item.items()
+                            if key != "event_id" and _json_safe_event_value(value) is not None
+                        },
+                    })
+            if features:
+                representative = features[0]["geometry"] if len(features) == 1 else {
+                    "type": "FeatureCollection",
+                    "features": features,
+                }
+                return {
+                    "kind": "perimeter",
+                    "geometry": representative,
+                    "frame": features[0]["properties"],
+                    "part_count": len(features),
+                }
+    if row.get("longitude") is not None and row.get("latitude") is not None:
+        return {"kind": "point", "geometry": {"type": "Point", "coordinates": [float(row["longitude"]), float(row["latitude"])]}}
+    return {"kind": "none", "geometry": None}
+
+
+def get_event_payload(
+    event_id: str,
+    *,
+    pack_id: str | None = None,
+    include: list[str] | None = None,
+    relationship_depth: int = 1,
+    geometry_mode: str = "current",
+    limit: int = 100,
+) -> dict | None:
+    """Return one event plus explicitly requested companion layers."""
+    requested = {str(value or "").strip().lower() for value in (include or []) if str(value or "").strip()}
+    resolved = _resolve_event_record(
+        event_id,
+        pack_id=pack_id,
+        include_geometry="geometry" in requested,
+    )
+    if resolved is None:
+        return None
+    candidate, row = resolved
+    resolved_pack_id = str(candidate.get("pack_id") or "").strip().lower()
+    canonical_event_id = str(row.get("event_id") or event_id).strip()
+    geometry_fields = {key: row.pop(key) for key in EVENT_GEOMETRY_COLUMNS if key in row}
+    geometry_row = {**row, **geometry_fields}
+    payload = {
+        "event": row,
+        "event_id": canonical_event_id,
+        "pack_id": resolved_pack_id,
+        "source_id": candidate.get("source_id"),
+        "event_type": candidate.get("event_type"),
+        "schema_class": (
+            "event_track" if resolved_pack_id == "hurricanes"
+            else "event_polygon_progression" if resolved_pack_id == "wildfires"
+            else "event_point"
+        ),
+        "available": {
+            "relationships": True,
+            "affected_places": resolved_pack_id in {"earthquakes", "floods", "hurricanes", "tornadoes", "tsunamis", "volcanoes", "wildfires"},
+            "observations": resolved_pack_id in {"earthquakes", "hurricanes", "tornadoes", "tsunamis", "wildfires"},
+            "geometry": True,
+        },
+        "included": sorted(requested),
+    }
+    if "relationships" in requested:
+        payload["relationships"] = _event_relationship_rows(
+            canonical_event_id, depth=relationship_depth, limit=limit,
+        )
+    if "affected_places" in requested:
+        payload["affected_places"] = _event_affected_places(
+            candidate, canonical_event_id, limit=limit,
+        )
+    if "observations" in requested:
+        payload["observations"] = _event_observations(candidate, row, limit=limit)
+    if "geometry" in requested:
+        payload["geometry"] = _event_geometry(
+            candidate, geometry_row, mode=geometry_mode, limit=limit,
+        )
+    payload["next_steps"] = {
+        key: {
+            "tool": "get_event",
+            "arguments": {"event_id": canonical_event_id, "pack_id": resolved_pack_id, "include": [key]},
+        }
+        for key, available in payload["available"].items()
+        if available and key not in requested
+    }
+    return payload
 
 
 def _normalize_event_search_text(value: str) -> str:

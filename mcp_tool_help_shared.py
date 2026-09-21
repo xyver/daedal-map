@@ -55,35 +55,21 @@ TOOL_GUIDANCE: dict[str, dict[str, Any]] = {
         ["get_data", "convert_reference", "get_geometry", "get_tool_help"], ["source metadata", "release/freshness fields"]
     ),
     "resolve_point": _g(
-        ["You have one WGS84 latitude/longitude pair and need a first-pass administrative loc_id chain through Admin 3."],
-        ["Point arrays", "Resolving names or outside codes", "Returning polygons", "Resolving Admin 4-6"],
+        ["You have one WGS84 coordinate or a bounded point array and need first-pass administrative loc_id chains through Admin 3."],
+        ["Resolving names or outside codes", "Returning polygons", "Resolving Admin 4-6"],
         {"lat": 49.2827, "lon": -123.1207},
         ["deepest_resolved_loc_id", "stack", "resolution_mode", "available_deeper_admin_levels"],
-        ["resolve_deep_point", "loc_id_info", "get_geometry"]
-    ),
-    "resolve_points": _g(
-        ["You have a WGS84 point array and need Admin 0-3 loc_id chains in one call."],
-        ["One coordinate", "Admin 4-6", "Returning polygons"],
-        {"points": [{"id": "row-1", "lat": 49.2827, "lon": -123.1207}]},
-        ["results", "resolved_count", "unresolved_count", "batch_id"],
-        ["resolve_deep_points", "loc_id_info", "get_geometry"]
+        ["resolve_deep_point", "get_loc_id_info", "get_geometry"]
     ),
     "resolve_deep_point": _g(
-        ["A shallow lookup returned an Admin 1-3 loc_id and you need either deeper administrative detail or one shape-backed family."],
-        ["First-pass country discovery", "Multiple families", "Returning polygons"],
+        ["A shallow lookup returned an Admin 1-3 loc_id and one coordinate or scoped point array needs deeper administrative detail or one shape-backed family."],
+        ["First-pass country discovery", "Multiple families", "Returning polygons", "Cross-scope point arrays"],
         {"lat": 34.0522, "lon": -118.2437, "shallow_loc_id": "USA-CA-037", "family": "postal_area"},
         ["shallow_loc_id", "family", "family_result"],
-        ["loc_id_info", "get_geometry"]
+        ["get_loc_id_info", "get_geometry"]
     ),
-    "resolve_deep_points": _g(
-        ["A shallow bulk lookup returned loc_ids and one scoped point array needs deeper administrative detail or one shape-backed family."],
-        ["One coordinate", "First-pass country discovery", "Multiple families", "Returning polygons"],
-        {"shallow_loc_id": "USA-CA-037", "family": "postal_area", "points": [{"id": "row-1", "lat": 34.0522, "lon": -118.2437}]},
-        ["results", "resolved_count", "unresolved_count", "shallow_loc_id", "family", "batch_id"],
-        ["loc_id_info", "get_geometry"]
-    ),
-    "loc_id_info": _g(
-        ["You already have loc_id values and need identity, hierarchy, lifecycle, or attached references."],
+    "get_loc_id_info": _g(
+        ["You already have loc_id values and need identity, catalog coverage, geometry-family availability, hierarchy, lifecycle, or attached references."],
         ["Returning full polygons", "Calculating pairwise overlap"],
         {"loc_id": "CAN-BC", "include_hierarchy": True},
         ["loc_id", "parent_id", "hierarchy", "valid_from", "valid_to", "supersession", "references"],
@@ -111,7 +97,7 @@ TOOL_GUIDANCE: dict[str, dict[str, Any]] = {
         ["Resolving coordinates", "Discarding one-to-many weights"],
         {"from_system": "zip", "value": "00601", "to_system": "nws_fire"},
         ["from", "to_system", "results", "relationship_type", "weight"],
-        ["loc_id_info", "get_geometry"],
+        ["get_loc_id_info", "get_geometry"],
         ["source and target systems", "bridge vintage", "relationship method", "artifact id"]
     ),
     "compare_geographies": _g(
@@ -119,7 +105,7 @@ TOOL_GUIDANCE: dict[str, dict[str, Any]] = {
         ["Resolving names", "Choosing one successor when evidence is one-to-many"],
         {"left_loc_id": "CAN-BC", "right_loc_id": "CAN"},
         ["spatial_relation", "temporal_relation", "left_area_share", "right_area_share", "successors"],
-        ["loc_id_info", "get_geometry"],
+        ["get_loc_id_info", "get_geometry"],
         ["left.bank_id", "right.bank_id", "geometry vintages", "calculation method"]
     ),
     "get_geometry": _g(
@@ -127,7 +113,7 @@ TOOL_GUIDANCE: dict[str, dict[str, Any]] = {
         ["Identifying unknown geography", "Resolving names", "Inferring independent families from admin ancestry", "Bulk export packaging"],
         {"scope": {"parent_loc_id": "USA-TX", "admin_level": "admin_2"}, "include_polygon": False},
         ["selection", "scope", "requested", "available", "missing", "items"],
-        ["loc_id_info", "estimate_geometry_package"],
+        ["get_loc_id_info", "estimate_geometry_package"],
         ["bank_id", "geometry_vintage", "source", "license", "release_id"]
     ),
     "resolve_loc_id_scope": _g(
@@ -171,23 +157,12 @@ TOOL_GUIDANCE: dict[str, dict[str, Any]] = {
         {"job_id": "geometry_export_example"},
         ["job_id", "kind", "status", "progress", "result", "artifact", "callback_state"],
     ),
-    "get_disaster_links_for_event": _g(
-        ["You have an exact supported disaster event id and need its direct published links."],
-        ["Fuzzy event search", "Inventing causal claims"],
-        {"event_id": "NOAA-SIG-2", "cross_type_only": True},
-        ["event", "links", "link_count"], ["get_disaster_link_chain"], ["link method", "source artifacts"]
-    ),
-    "get_disaster_link_chain": _g(
-        ["You have an exact event id and need a bounded multi-hop related-event chain."],
-        ["Unbounded graph traversal", "Fuzzy event search"],
-        {"event_id": "NOAA-SIG-2", "depth": 1}, ["chains", "depth", "truncated"],
-        ["get_disaster_links_for_event"], ["link method", "source artifacts"]
-    ),
-    "search_disaster_links": _g(
-        ["You need to discover whether a published disaster-link family exists before you have an event id."],
-        ["Querying event rows", "Claiming unsupported reverse directions"],
-        {"start_event_type": "earthquake", "end_event_type": "tsunami"},
-        ["links", "families", "count"], ["get_disaster_links_for_event"], ["published link family", "method"]
+    "get_event": _g(
+        ["You have an exact event_id from get_data and need to inspect or traverse that event."],
+        ["Searching broadly for events", "Unbounded graph traversal", "Loading geometry implicitly"],
+        {"event_id": "USA-HRCN-2022301N07140", "pack_id": "hurricanes", "include": ["relationships", "observations"]},
+        ["event", "available", "relationships", "affected_places", "observations", "geometry"],
+        ["get_data"], ["source event id", "relationship source/method", "companion-layer provenance"]
     ),
     "get_live_earthquake_events": _g(
         ["You explicitly need recent preliminary USGS earthquake events beyond the canonical window."],
@@ -266,11 +241,11 @@ def geometry_topic_help_payload(
             },
             {
                 "request": "multiple administrative points",
-                "rule": "Use resolve_points for a cross-country batch; it performs global Admin 0 discovery and then opens only each discovered country's Admin 0-3 bank.",
+                "rule": "Use resolve_point with points=[...] for a cross-country batch; it performs global Admin 0 discovery and then opens only each discovered country's Admin 0-3 bank.",
             },
             {
                 "request": "points at a partitioned deep level",
-                "rule": "First call resolve_points, group by the shallow loc_id used as scope, then call resolve_deep_points once per scope and family.",
+                "rule": "First call resolve_point with points=[...], group by the shallow loc_id used as scope, then call resolve_deep_point once per scope and family.",
             },
             {
                 "request": "geometry for known loc_ids",
@@ -296,12 +271,12 @@ def geometry_topic_help_payload(
         "workflows": [
             {
                 "name": "coordinates_to_geography",
-                "steps": ["resolve_point", "loc_id_info only when details are requested", "get_geometry only when shape availability or shapes are requested"],
+                "steps": ["resolve_point", "get_loc_id_info only when details are requested", "get_geometry only when shape availability or shapes are requested"],
             },
             {
                 "name": "shallow_administrative_points",
                 "example": {
-                    "tool": "resolve_points",
+                    "tool": "resolve_point",
                     "arguments": {
                         "points": [{"lat": 45.039641, "lon": -103.313618}],
                         "target_admin_level": 3,
@@ -315,9 +290,9 @@ def geometry_topic_help_payload(
                     "read the selected country's catalog entry and query_guidance",
                     "resolve to the declared partition-owner level",
                     "group points by the returned owner loc_id",
-                    "call resolve_deep_points separately for each scope and family with shallow_loc_id",
+                    "call resolve_deep_point separately for each scope and family with shallow_loc_id",
                 ],
-                "important": "resolve_points is the shallow bulk pass. resolve_deep_points accepts one shallow scope and one family per call; administrative requests derive the Admin 1 partition internally.",
+                "important": "resolve_point with a points array is the shallow bulk pass. resolve_deep_point accepts one shallow scope and one family per call; administrative requests derive the Admin 1 partition internally.",
             },
             {
                 "name": "known_loc_ids_to_shapes",
@@ -338,7 +313,7 @@ def geometry_topic_help_payload(
             },
             {
                 "name": "relationships_and_time",
-                "steps": ["loc_id_info for identity/hierarchy/lifecycle", "compare_geographies for spatial overlap, validity, or successors"],
+                "steps": ["get_loc_id_info for identity/catalog coverage/hierarchy/lifecycle", "compare_geographies for pairwise hierarchy, crosswalk overlap, geometry, validity, or successors"],
             },
         ],
         "available_tools": sorted(
@@ -360,9 +335,8 @@ TOPIC_TOOLS: dict[str, tuple[str, ...]] = {
     "overview": ("get_catalog", "get_pack", "get_data", "convert_reference", "resolve_point", "get_geometry"),
     "data": ("get_catalog", "get_pack", "get_data"),
     "disasters": (
-        "get_catalog", "get_pack", "get_data", "get_disaster_links_for_event",
-        "get_disaster_link_chain", "search_disaster_links", "get_live_earthquake_events",
-        "get_live_volcano_events",
+        "get_catalog", "get_pack", "get_data", "get_event",
+        "get_live_earthquake_events", "get_live_volcano_events",
     ),
     "custom_data": (
         "identify_dataset_geography", "identify_reference_system", "resolve_loc_id_scope",
@@ -375,7 +349,7 @@ TOPIC_TOOLS: dict[str, tuple[str, ...]] = {
 TOPIC_SUMMARIES = {
     "overview": "Enter the loc_id universe through a resolution or onboarding tool, then use loc_id-based discovery, data, geometry, and relationship tools.",
     "data": "Use get_catalog to select a data pack, get_pack to learn its fields and routing, then query rows with loc_id-based region filters.",
-    "disasters": "Use normal catalog and pack discovery first; use disaster-specific tools only for event links or live upstream observations.",
+    "disasters": "Use get_data to find event rows and stable event_ids, then get_event to inspect one event's relationships, affected places, native observations, or explicit geometry.",
     "custom_data": "Identify geography from bounded samples before estimating or creating a conversion or geometry export job.",
 }
 
@@ -500,7 +474,7 @@ def tool_help_payload(
             access["limits"] = {}
         access["hosted_rate_limits"] = access.pop("rate_limits")
         access["above_free_limit"] = "local_machine_resources"
-    if name == "resolve_points" and not local_installed:
+    if name == "resolve_point" and not local_installed:
         access["caller_tiers"] = {
             "anonymous": {"included_items": limits.get("free_item_limit"), "above_limit": "payment_required"},
             "verified_account": {"included_items": limits.get("account_item_limit"), "above_limit": "payment_required"},
@@ -508,10 +482,10 @@ def tool_help_payload(
         }
         access["bulk_shape"] = {
             "threshold": limits.get("free_item_limit"),
-            "shallow_tool": "resolve_points: cross-country Admin0 discovery followed by Admin0-3 country banks only",
-            "deep_tool": "resolve_deep_points: point array plus one shallow_loc_id and one family; family defaults to administrative",
+            "shallow_tool": "resolve_point: one point or a cross-country point array; Admin0 discovery is followed by Admin0-3 country banks only",
+            "deep_tool": "resolve_deep_point: one point or point array plus one shallow_loc_id and one family; family defaults to administrative",
         }
-    elif name == "resolve_deep_points" and not local_installed:
+    elif name == "resolve_deep_point" and not local_installed:
         shared_limit = limits.get("free_item_limit")
         access["caller_tiers"] = {
             "anonymous": {"included_items": shared_limit, "above_limit": "not_available"},

@@ -70,12 +70,12 @@ def _geometry_inventory_internal_view(req: Request) -> bool:
 
 
 def _point_lookup_batch_limit() -> int:
-    return int(tool_effective_item_limit("resolve_points", lane="free", default=25) or 25)
+    return int(tool_effective_item_limit("resolve_point", lane="free", default=25) or 25)
 
 
 def _point_lookup_paid_batch_limit() -> int:
     free_limit = _point_lookup_batch_limit()
-    paid_limit = int(tool_effective_item_limit("resolve_points", lane="paid", default=free_limit) or free_limit)
+    paid_limit = int(tool_effective_item_limit("resolve_point", lane="paid", default=free_limit) or free_limit)
     return max(free_limit, paid_limit)
 
 
@@ -84,7 +84,7 @@ def _caller_included_point_limit(caller_identity, *, free_limit: int, paid_limit
     lane = caller_identity.included_item_lane
     if lane == "paid":
         return paid_limit
-    resolved = tool_effective_item_limit("resolve_points", lane=lane, default=free_limit)
+    resolved = tool_effective_item_limit("resolve_point", lane=lane, default=free_limit)
     return max(free_limit, min(int(resolved or free_limit), paid_limit))
 
 
@@ -132,7 +132,7 @@ def _onboarding_context(body: dict) -> dict:
 
 def _point_lookup_quote_payload(*, request_id: str | None, batch_id: str | None, point_count: int, free_limit: int, paid_limit: int) -> dict:
     return tool_payment_required_payload(
-        "resolve_points",
+        "resolve_point",
         point_count,
         free_limit=free_limit,
         paid_limit=paid_limit,
@@ -612,11 +612,11 @@ async def resolve_points_json_endpoint(req: Request):
             paid_limit=paid_limit,
         )
         request_id = str(body.get("request_id") or batch_id or f"point-batch-{int(time.time() * 1000)}")
-        effective_access = _tool_effective_access("resolve_points")
+        effective_access = _tool_effective_access("resolve_point")
         if commercial_access_enabled() and effective_access.get("settlement_required"):
             decision, verifier_payload = await _commercial_access_decision(
                 req,
-                tool_name="resolve_points",
+                tool_name="resolve_point",
                 capability_id="point_lookup",
                 units=len(points),
                 pricing_quote=quote_payload["quote"],
@@ -635,7 +635,7 @@ async def resolve_points_json_endpoint(req: Request):
                     "free_limit": limit,
                 }
             else:
-                response = commercial_access_response(request_id, verifier_payload, source_id="resolve_points")
+                response = commercial_access_response(request_id, verifier_payload, source_id="resolve_point")
                 if decision == "unavailable" and response.status_code == 402:
                     response.status_code = 503
                 return response
@@ -663,7 +663,7 @@ async def resolve_points_json_endpoint(req: Request):
                 request_id=batch_id or str(body.get("request_id") or "") or f"point-batch-challenge-{int(time.time() * 1000)}",
                 capability_id="point_lookup_batch",
                 pack_id="geography_tools",
-                source_id="resolve_points",
+                source_id="resolve_point",
                 decision="allow" if commercial_context is not None or launch_free_access else "challenge",
                 payment_rail="launch_free" if launch_free_access else "commercial_access",
                 auth_user_id=caller_identity.auth_user_id,
@@ -769,7 +769,7 @@ async def resolve_points_json_endpoint(req: Request):
                 or ((by_index.get(point["index"]) or {}).get("matched") or {}).get("loc_id")
             )
         }
-        actual_quote = tool_quote("resolve_points", len(successful_coordinates), free_limit=limit)
+        actual_quote = tool_quote("resolve_point", len(successful_coordinates), free_limit=limit)
         meter_receipt = {
             "requested_items": len(points),
             "distinct_items_resolved": len(successful_coordinates),
@@ -803,7 +803,7 @@ async def resolve_points_json_endpoint(req: Request):
 
     req.state.analytics_request_id = batch_id
     req.state.analytics_pack_id = "geography_tools"
-    req.state.analytics_source_id = "resolve_points"
+    req.state.analytics_source_id = "resolve_point"
     req.state.analytics_metadata = {
         "surface": "test_data" if source == "try_dataset" else source,
         "event": "point_lookup_batch",
@@ -832,7 +832,7 @@ async def resolve_points_json_endpoint(req: Request):
             request_id=batch_id or f"point-batch-{int(time.time() * 1000)}",
             capability_id="point_lookup_batch",
             pack_id="geography_tools",
-            source_id="resolve_points",
+            source_id="resolve_point",
             decision="allow",
             payment_rail="commercial_access" if commercial_context is not None else _access_lane(trusted_token),
             artifact_token_id=trusted_token_id,

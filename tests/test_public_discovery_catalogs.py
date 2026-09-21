@@ -94,19 +94,19 @@ class PublicDiscoveryCatalogTests(unittest.TestCase):
         expected_tools = {
             "geography": {
                 "get_tool_help", "get_catalog", "get_pack",
-                "resolve_point", "resolve_points", "resolve_deep_point", "resolve_deep_points",
-                "loc_id_info", "identify_dataset_geography", "identify_reference_system",
+                "resolve_point", "resolve_deep_point",
+                "get_loc_id_info", "identify_dataset_geography", "identify_reference_system",
                 "convert_reference",
                 "compare_geographies", "get_geometry", "resolve_loc_id_scope",
                 "estimate_geometry_package", "create_geometry_export",
                 "estimate_conversion_job", "create_conversion_job", "get_job_status",
             },
             "reverse-geocoding": {
-                "get_tool_help", "get_catalog", "get_pack", "resolve_point",
-                "resolve_points", "resolve_deep_point", "resolve_deep_points",
+                "get_tool_help", "get_catalog", "get_pack",
+                "resolve_point", "resolve_deep_point",
             },
             "boundaries": {
-                "get_tool_help", "get_catalog", "get_pack", "loc_id_info",
+                "get_tool_help", "get_catalog", "get_pack", "get_loc_id_info",
                 "compare_geographies", "get_geometry",
                 "resolve_loc_id_scope", "estimate_geometry_package",
                 "create_geometry_export", "get_job_status",
@@ -129,8 +129,7 @@ class PublicDiscoveryCatalogTests(unittest.TestCase):
             "/.well-known/mcp/geography/server-card.json"
         ).json()
         paid_by_name = {tool["name"]: tool["paid"] for tool in geography["tools"]}
-        self.assertFalse(paid_by_name["resolve_point"])
-        self.assertTrue(paid_by_name["resolve_points"])
+        self.assertTrue(paid_by_name["resolve_point"])
         self.assertTrue(paid_by_name["create_geometry_export"])
         self.assertFalse(paid_by_name["get_catalog"])
 
@@ -416,12 +415,12 @@ class PublicDiscoveryCatalogTests(unittest.TestCase):
         self.assertTrue(body["payment_required"])
         self.assertEqual(body["limits"]["free_batch_limit"], 100)
         self.assertEqual(body["quote"]["capability_id"], "point_lookup")
-        self.assertEqual(body["quote"]["pricing_version"], f"{tool_pricing_version('resolve_points')}+credit-q1000")
+        self.assertEqual(body["quote"]["pricing_version"], f"{tool_pricing_version('resolve_point')}+credit-q1000")
         self.assertIsInstance(body["quote"]["amount_usdc_base_units"], int)
         self.assertEqual(body["quote"]["payment_rails"], ["account_credit", "x402"])
         analytics = analytics_mock.call_args.kwargs
         self.assertEqual(analytics["decision"], "challenge")
-        self.assertEqual(analytics["source_id"], "resolve_points")
+        self.assertEqual(analytics["source_id"], "resolve_point")
         self.assertEqual(analytics["capability_id"], "point_lookup_batch")
         self.assertEqual(analytics["error_code"], "payment_required")
         self.assertEqual(analytics["row_count"], 101)
@@ -500,7 +499,7 @@ class PublicDiscoveryCatalogTests(unittest.TestCase):
             response = self.client.post(
                 "/mcp/geography",
                 headers={"x-api-key": "account-mcp-test"},
-                json={"jsonrpc": "2.0", "id": "account-bulk", "method": "tools/call", "params": {"name": "resolve_points", "arguments": {"target_admin_level": "admin_2", "points": [{"lon": -118.2, "lat": 34.0} for _ in range(101)]}}},
+                json={"jsonrpc": "2.0", "id": "account-bulk", "method": "tools/call", "params": {"name": "resolve_point", "arguments": {"target_admin_level": "admin_2", "points": [{"lon": -118.2, "lat": 34.0} for _ in range(101)]}}},
             )
         self.assertEqual(response.status_code, 200, response.text)
         payload = response.json()["result"]["structuredContent"]

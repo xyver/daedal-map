@@ -14,7 +14,7 @@ def test_llm_surfaces_cover_every_current_geography_tool() -> None:
     ]
     surfaces = (render_app_llms_txt(), render_site_llms_txt(), render_site_llms_full())
 
-    assert len(tool_names) == 21
+    assert len(tool_names) == 17
     assert "identify_dataset_geography" in tool_names
     for surface in surfaces:
         for tool_name in tool_names:
@@ -22,11 +22,13 @@ def test_llm_surfaces_cover_every_current_geography_tool() -> None:
         assert "All packs share a loc_id" not in surface
         assert "four user-facing modes" not in surface
         assert "include_references=true" in surface
-        assert "country_scope=<ISO3>" in surface
-        assert "Admin1 owner" in surface
+        assert "country_scope" in surface
+        assert "shallow scope" in surface
         assert "get_boundary" not in surface
         assert "loc_id_hierarchy" not in surface
         assert "loc_id_references" not in surface
+        assert "resolve_points" not in surface
+        assert "resolve_deep_points" not in surface
     for surface in surfaces[1:]:
         assert "reusable geometry" in surface
         assert "published crosswalks" in surface

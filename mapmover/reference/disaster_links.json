@@ -1,7 +1,7 @@
 {
   "_description": "Canonical disaster link semantics for shared links.parquet and embedded relationship fields",
   "_schema_version": "1.0.0",
-  "_last_updated": "2026-06-19",
+  "_last_updated": "2026-09-20",
   "shared_table": {
     "preferred_columns": [
       "parent_event_id",
@@ -20,6 +20,9 @@
   "published_contract": {
     "supported_pack_ids": [
       "earthquakes",
+      "floods",
+      "hurricanes",
+      "tornadoes",
       "tsunamis",
       "volcanoes",
       "wildfires"
@@ -28,48 +31,48 @@
     "requires_exact_event_id": true,
     "default_cross_type_only": true,
     "max_chain_depth": 2,
-    "published_link_families_last_checked": "2026-06-27",
+    "published_link_families_last_checked": "2026-09-20",
     "published_link_families": [
       {
         "from_event_type": "earthquake",
         "to_event_type": "tsunami",
         "source": "noaa",
-        "count": 1797,
+        "count": 592,
         "notes": "Cross-hazard seismic trigger links."
       },
       {
         "from_event_type": "hurricane",
         "to_event_type": "flood",
         "source": "derived_tc_flood",
-        "count": 1541,
+        "count": 1005,
         "notes": "Tropical-cyclone flood links."
       },
       {
         "from_event_type": "hurricane",
         "to_event_type": "tornado",
         "source": "derived_tc_tornado",
-        "count": 4882,
+        "count": 1305,
         "notes": "Tropical-cyclone tornado links."
       },
       {
         "from_event_type": "volcano",
         "to_event_type": "earthquake",
         "source": "smithsonian",
-        "count": 2939,
+        "count": 29,
         "notes": "Volcano-linked earthquake references."
       },
       {
         "from_event_type": "volcano",
         "to_event_type": "tsunami",
         "source": "smithsonian",
-        "count": 5002,
+        "count": 30,
         "notes": "Volcano-linked tsunami references."
       },
       {
         "from_event_type": "wildfire",
         "to_event_type": "flood",
         "source": "derived_postfire_flood",
-        "count": 38,
+        "count": 13,
         "notes": "Post-fire flood or burn-scar runoff links."
       }
     ],

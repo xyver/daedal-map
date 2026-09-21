@@ -45,7 +45,7 @@ PACK_REGISTRY: dict[str, dict] = {
     "earthquakes": {
         "display_name": "earthquakes",
         "pricing": "paid_x402_base_usdc",
-        "mcp_tool_allowlist": ("get_catalog", "get_pack", "get_disaster_links_for_event", "get_disaster_link_chain", "search_disaster_links", "get_data", "get_live_earthquake_events"),
+        "mcp_tool_allowlist": ("get_catalog", "get_pack", "get_data", "get_event", "get_live_earthquake_events"),
         "mcp_prompt_allowlist": ("largest_earthquake_in_range", "count_disaster_events"),
         "mcp_name": "com.daedalmap/earthquakes",
         "mcp_title": "DaedalMap Earthquake Data",
@@ -67,7 +67,7 @@ PACK_REGISTRY: dict[str, dict] = {
     "floods": {
         "display_name": "floods",
         "pricing": "free",
-        "mcp_tool_allowlist": ("get_catalog", "get_pack", "search_disaster_links", "get_data"),
+        "mcp_tool_allowlist": ("get_catalog", "get_pack", "get_data", "get_event"),
         "mcp_prompt_allowlist": ("count_disaster_events",),
         "mcp_name": "com.daedalmap/floods",
         "mcp_title": "DaedalMap Flood Events",
@@ -87,7 +87,7 @@ PACK_REGISTRY: dict[str, dict] = {
     "hurricanes": {
         "display_name": "hurricanes",
         "pricing": "paid_x402_base_usdc",
-        "mcp_tool_allowlist": ("get_catalog", "get_pack", "search_disaster_links", "get_data"),
+        "mcp_tool_allowlist": ("get_catalog", "get_pack", "get_data", "get_event"),
         "mcp_prompt_allowlist": ("count_disaster_events",),
         "mcp_name": "com.daedalmap/hurricanes",
         "mcp_title": "DaedalMap Hurricane and Tropical Cyclone Data",
@@ -107,7 +107,7 @@ PACK_REGISTRY: dict[str, dict] = {
     "tornadoes": {
         "display_name": "tornadoes",
         "pricing": "paid_x402_base_usdc",
-        "mcp_tool_allowlist": ("get_catalog", "get_pack", "search_disaster_links", "get_data"),
+        "mcp_tool_allowlist": ("get_catalog", "get_pack", "get_data", "get_event"),
         "mcp_prompt_allowlist": ("count_disaster_events",),
         "mcp_name": "com.daedalmap/tornadoes",
         "mcp_title": "DaedalMap Tornado Events",
@@ -127,7 +127,7 @@ PACK_REGISTRY: dict[str, dict] = {
     "tsunamis": {
         "display_name": "tsunamis",
         "pricing": "paid_x402_base_usdc",
-        "mcp_tool_allowlist": ("get_catalog", "get_pack", "get_disaster_links_for_event", "get_disaster_link_chain", "search_disaster_links", "get_data"),
+        "mcp_tool_allowlist": ("get_catalog", "get_pack", "get_data", "get_event"),
         "mcp_prompt_allowlist": ("count_disaster_events",),
         "mcp_name": "com.daedalmap/tsunamis",
         "mcp_title": "DaedalMap Tsunami Data",
@@ -147,7 +147,7 @@ PACK_REGISTRY: dict[str, dict] = {
     "wildfires": {
         "display_name": "wildfires",
         "pricing": "paid_x402_base_usdc",
-        "mcp_tool_allowlist": ("get_catalog", "get_pack", "get_disaster_links_for_event", "get_disaster_link_chain", "search_disaster_links", "get_data"),
+        "mcp_tool_allowlist": ("get_catalog", "get_pack", "get_data", "get_event"),
         "mcp_prompt_allowlist": ("count_disaster_events",),
         "mcp_name": "com.daedalmap/wildfires",
         "mcp_title": "DaedalMap Wildfire Events",
@@ -286,7 +286,7 @@ PACK_REGISTRY: dict[str, dict] = {
     "volcanoes": {
         "display_name": "volcanoes",
         "pricing": "free",
-        "mcp_tool_allowlist": ("get_catalog", "get_pack", "get_disaster_links_for_event", "get_disaster_link_chain", "search_disaster_links", "get_data", "get_live_volcano_events"),
+        "mcp_tool_allowlist": ("get_catalog", "get_pack", "get_data", "get_event", "get_live_volcano_events"),
         "mcp_prompt_allowlist": ("count_disaster_events",),
         "mcp_name": "com.daedalmap/volcanoes",
         "mcp_title": "DaedalMap Volcanic Activity",
@@ -357,10 +357,8 @@ PACK_REGISTRY: dict[str, dict] = {
             "compare_geographies",
             "get_geometry",
             "resolve_point",
-            "resolve_points",
             "resolve_deep_point",
-            "resolve_deep_points",
-            "loc_id_info",
+            "get_loc_id_info",
             "resolve_loc_id_scope",
             "estimate_geometry_package",
             "create_geometry_export",
@@ -394,11 +392,9 @@ PACK_REGISTRY: dict[str, dict] = {
             {"name": "convert_reference", "summary": "one reference or reference batch -> loc_id by default, or any target system through loc_id"},
             {"name": "compare_geographies", "summary": "two loc_ids -> temporal validity, successors, topology, intersection area, and directional overlap shares"},
             {"name": "get_geometry", "summary": "loc_id, loc_ids, or admin scope -> available/missing shape preflight, metadata, and optional polygons"},
-            {"name": "resolve_point", "summary": "one point -> compact Admin 0-3 chain and Admin 1 routing key"},
-            {"name": "resolve_points", "summary": "point array -> compact Admin 0-3 chains and Admin 1 routing keys"},
-            {"name": "resolve_deep_point", "summary": "one point + one Admin 1 loc_id -> compact Admin 4-6 chain"},
-            {"name": "resolve_deep_points", "summary": "point array + one Admin 1 loc_id -> compact Admin 4-6 chains"},
-            {"name": "loc_id_info", "summary": "point-chain loc_ids or other loc_ids -> detailed metadata, strict hierarchy, lifecycle, and references"},
+            {"name": "resolve_point", "summary": "one point or point array -> compact Admin 0-3 chains and Admin 1 routing keys"},
+            {"name": "resolve_deep_point", "summary": "one point or scoped point array + one Admin 1 loc_id -> compact Admin 4-6 chains"},
+            {"name": "get_loc_id_info", "summary": "loc_id or loc_id array -> metadata, catalog coverage, geometry families, hierarchy, lifecycle, and references"},
             {"name": "resolve_loc_id_scope", "summary": "strict parent loc_id + admin level -> coherent descendants"},
             {"name": "estimate_geometry_package", "summary": "dry-run selected geometry export count/bytes/price/delivery estimate"},
             {"name": "create_geometry_export", "summary": "create a real synchronous geometry artifact within the effective operational limit"},
@@ -411,11 +407,11 @@ PACK_REGISTRY: dict[str, dict] = {
         "display_name": "Reverse Geocoding",
         "kind": "tool_family_alias",
         "pricing": "mixed",
-        "mcp_tool_allowlist": ("get_catalog", "get_pack", "resolve_point", "resolve_points", "resolve_deep_point", "resolve_deep_points"),
+        "mcp_tool_allowlist": ("get_catalog", "get_pack", "resolve_point", "resolve_deep_point"),
         "mcp_name": "com.daedalmap/reverse-geocoding",
         "mcp_version": "1.2.0",
         "mcp_title": "DaedalMap Reverse Geocoding (coordinates to loc_id)",
-        "mcp_description": "Four explicit reverse-geocoding tools separate single from bulk and shallow from deep. resolve_point/resolve_points return Admin 0-3; resolve_deep_point/resolve_deep_points use one returned Admin 1 loc_id to resolve Admin 4-6.",
+        "mcp_description": "Two reverse-geocoding tools separate shallow from deep while each accepts one point or a bounded point array. resolve_point returns Admin 0-3; resolve_deep_point uses one returned Admin 1 loc_id to resolve Admin 4-6.",
         "registry_meta": {
             "categories": ["geospatial", "geocoding", "data"],
             "highlights": [
@@ -427,10 +423,8 @@ PACK_REGISTRY: dict[str, dict] = {
         },
         "routing": {"preferred_tool": "resolve_point"},
         "tool_summaries": (
-            {"name": "resolve_point", "summary": "one point -> compact Admin 0-3 chain"},
-            {"name": "resolve_points", "summary": "point array -> compact Admin 0-3 chains"},
-            {"name": "resolve_deep_point", "summary": "one point + one Admin 1 loc_id -> compact Admin 4-6 chain"},
-            {"name": "resolve_deep_points", "summary": "point array + one Admin 1 loc_id -> compact Admin 4-6 chains"},
+            {"name": "resolve_point", "summary": "one point or point array -> compact Admin 0-3 chains"},
+            {"name": "resolve_deep_point", "summary": "one point or scoped point array + one Admin 1 loc_id -> compact Admin 4-6 chains"},
         ),
     },
     "boundaries": {
@@ -442,7 +436,7 @@ PACK_REGISTRY: dict[str, dict] = {
             "get_pack",
             "get_geometry",
             "compare_geographies",
-            "loc_id_info",
+            "get_loc_id_info",
             "resolve_loc_id_scope",
             "estimate_geometry_package",
             "create_geometry_export",
@@ -464,7 +458,7 @@ PACK_REGISTRY: dict[str, dict] = {
         "tool_summaries": (
             {"name": "get_geometry", "summary": "exact loc_ids or admin scope -> availability, shape metadata, and optional polygons"},
             {"name": "compare_geographies", "summary": "two loc_ids -> exact spatial and temporal relationship"},
-            {"name": "loc_id_info", "summary": "loc_id or point-chain loc_ids -> detailed metadata, strict hierarchy, lifecycle, and references"},
+            {"name": "get_loc_id_info", "summary": "loc_id or loc_id array -> metadata, catalog coverage, geometry families, hierarchy, lifecycle, and references"},
             {"name": "resolve_loc_id_scope", "summary": "strict parent loc_id + admin level -> coherent descendants"},
             {"name": "estimate_geometry_package", "summary": "dry-run geometry export count/bytes/price/delivery estimate"},
             {"name": "create_geometry_export", "summary": "create a real synchronous geometry artifact within the effective operational limit"},
@@ -570,14 +564,14 @@ def tool_family_pack_detail(pack_id: str | None) -> dict:
             "Use convert_reference for outside identifiers or names; omit to_system to return loc_id, or provide it for another system.",
         ]
         important_rules = [
-            "These are direct utility tools, not a get_data pack; discovery and small calls are free, while hosted resolve_points bulk throughput follows the applicable access policy.",
+            "These are direct utility tools, not a get_data pack; discovery and small calls are free, while hosted resolve_point arrays follow the applicable access policy.",
             "loc_id is the reserve identifier: generic conversions should flow X -> loc_id -> Y.",
             "Use get_catalog for live catalog-backed family discovery instead of assuming a fixed list of countries or admin depths.",
             "Use get_pack for reference-system and bridge detail after selecting a family and, when needed, a country.",
             "Use identify_dataset_geography for neutral table samples; callers must not hard-code country or reference-system eligibility before that call.",
             "Use identify_reference_system before bulk conversion when geography identifiers are unknown or only informally declared.",
             "Use convert_reference for ZIP/ZCTA, tribal-area, NWS public forecast-zone, NWS fire weather-zone, admin-name, and named-geometry inputs.",
-            "Use loc_id_info with include_references=true for reverse lookup from an existing loc_id to overlapping or equivalent external references.",
+            "Use get_loc_id_info with include_references=true for reverse lookup from an existing loc_id to overlapping or equivalent external references.",
             "Use get_geometry only when geometry metadata, bbox, centroid, or polygon is needed.",
             "Use convert_reference for both side-chain-to-admin and admin-to-side-chain conversions.",
         ]
@@ -586,16 +580,16 @@ def tool_family_pack_detail(pack_id: str | None) -> dict:
         start_here = [
             "Call resolve_point first when you have coordinates; its compact stack is the normal answer.",
             "Take the returned deepest_resolved_loc_id or any level from the stack for filtering.",
-            "Only when more detail is requested, pass all stack loc_ids to loc_id_info; call get_geometry separately for shapes.",
+            "Only when more detail is requested, pass all stack loc_ids to get_loc_id_info; call get_geometry separately for shapes.",
         ]
         important_rules = [
-            "These are direct utility tools, not a get_data pack; bulk throughput belongs to resolve_points and resolve_deep_points.",
+            "These are direct utility tools, not a get_data pack; bulk throughput uses the points input on resolve_point or resolve_deep_point.",
             "Coordinates must be WGS84 decimal degrees.",
-            "Use resolve_point/resolve_deep_point for one coordinate. Use resolve_points/resolve_deep_points for arrays; split deep arrays by Admin 1 and pass one admin_1_loc_id per call.",
-            "A mixed-vintage point chain is context. loc_id_info hierarchy and resolve_loc_id_scope follow strict stored parentage within a coherent release.",
+            "Use resolve_point for one coordinate or a shallow array. Use resolve_deep_point for one coordinate or an array already split by Admin 1, with one shallow_loc_id per call.",
+            "A mixed-vintage point chain is context. get_loc_id_info hierarchy and resolve_loc_id_scope follow strict stored parentage within a coherent release.",
             "get_geometry returns bbox and centroid by default; request include_polygon only when you need the full geometry payload.",
             "Use convert_reference for ZIP/ZCTA, tribal-area, NWS public forecast-zone, or NWS fire weather-zone conversions in either direction.",
-            "Use loc_id_info for chain details and set include_references=true only for attached or overlapping reference systems.",
+            "Use get_loc_id_info for chain details and set include_references=true only for attached or overlapping reference systems.",
         ]
     elif preferred_tool == "get_geometry":
         first_arguments = {"loc_id": "USA-CA-037"}
@@ -609,7 +603,7 @@ def tool_family_pack_detail(pack_id: str | None) -> dict:
             "Use canonical loc_ids such as USA, CAN-BC, or USA-CA-037.",
             "BBox/centroid is the default response shape because full polygons can be large.",
             "Use get_geometry with include_polygon=false to check larger shape lists without reading polygon coordinates.",
-            "Use loc_id_info for hierarchy, lifecycle, provenance, or non-geometry references; get_geometry stays shape-focused.",
+            "Use get_loc_id_info for hierarchy, lifecycle, catalog coverage, provenance, or non-geometry references; get_geometry stays shape-focused.",
         ]
     else:
         first_arguments = {"loc_id": "USA-CA-037"}
@@ -661,7 +655,7 @@ def tool_family_pack_detail(pack_id: str | None) -> dict:
             },
             {
                 "question": "Which NWS fire weather zones overlap this county?",
-                "tool": "loc_id_info",
+                "tool": "get_loc_id_info",
                 "arguments": {
                     "loc_id": "USA-AK-282",
                     "include_references": True,

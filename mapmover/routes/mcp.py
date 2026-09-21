@@ -65,9 +65,7 @@ from mapmover.caller_identity import (
     request_caller_identity,
 )
 from mapmover.routes.disasters.related import (
-    get_disaster_link_chain_for_exact_event,
-    get_disaster_links_for_exact_event,
-    search_disaster_link_chains,
+    get_event_payload,
 )
 from mapmover.security import get_allowed_origins, get_client_ip, is_local_loopback_request, rate_limiter
 from mapmover.logging_analytics import hash_ip_for_analytics, log_api_query_event, logger
@@ -93,8 +91,8 @@ router = APIRouter()
 
 MCP_PACK_READ_TOOLS = {"get_tool_help", "get_catalog", "get_pack"}
 MCP_GEOMETRY_READ_TOOLS = {
-    "resolve_point", "resolve_points", "resolve_deep_point", "resolve_deep_points",
-    "loc_id_info", "identify_dataset_geography", "identify_reference_system",
+    "resolve_point", "resolve_deep_point",
+    "get_loc_id_info", "identify_dataset_geography", "identify_reference_system",
     "convert_reference", "compare_geographies", "get_geometry",
     "resolve_loc_id_scope", "estimate_geometry_package", "estimate_conversion_job",
     "get_job_status",
@@ -359,9 +357,7 @@ DATA_HELPER_CAPABILITIES: dict[str, str] = {
     "get_pack": "pack_detail_discovery",
     "get_live_earthquake_events": "live_earthquake_lookup",
     "get_live_volcano_events": "live_volcano_lookup",
-    "get_disaster_links_for_event": "disaster_links_for_event",
-    "get_disaster_link_chain": "disaster_link_chain",
-    "search_disaster_links": "disaster_link_search",
+    "get_event": "disaster_event_lookup",
 }
 
 
@@ -884,7 +880,7 @@ def _tool_effective_access(tool_name: str, *, country_scope: str | None = None) 
         from mapmover.runtime.geometry_catalog import geometry_bank_access_facts
 
         scopes = {str(country_scope).strip().upper()} if country_scope else None
-        point_tools = {"resolve_point", "resolve_points", "resolve_deep_point", "resolve_deep_points"}
+        point_tools = {"resolve_point", "resolve_deep_point"}
         families = {"admin_boundary"} if tool_name in point_tools else None
         permissions, publication_cleared = geometry_bank_access_facts(
             scopes=scopes,
@@ -1001,10 +997,10 @@ def _estimate_point_conversion(request: Request, payload: dict[str, Any]) -> dic
     The caller counts valid coordinate pairs locally and sends that count; the
     quote is the ceiling for exactly those points. Blank and invalid rows are
     never submitted, so they are never priced. The quote_id is built by the
-    same helper resolve_points uses at execution, so the run authorizes against
+    same helper resolve_point uses for a point array, so the run authorizes against
     this estimate unchanged. Capture then charges only resolved points.
     """
-    tool_name = "resolve_points"
+    tool_name = "resolve_point"
     try:
         point_count = int(payload.get("point_count"))
         row_count = int(payload.get("row_count") or point_count)
@@ -1437,8 +1433,8 @@ def get_server_description(pack_id: str | None = None) -> str:
             f"{PACK_SERVER_PROFILES[normalized]['description']} Safety: {AGENT_SAFETY_NOTICE} {coverage_prefix}"
             "The calling LLM translates the user's natural-language request into strict tool JSON; geometry execution tools do not accept prose unless a schema explicitly says they do. Call get_tool_help before an unfamiliar tool. On error, inspect error, warnings, guidance, and clarification; ask the user only when clarification.required is true. "
             "Start with free discovery: call get_catalog with catalog='geometry' to see each family and the countries where it exists. Then call get_pack for one family; add country_scope only when country-specific systems, versions, vintages, levels, and artifacts are needed. A listed family-country pair is the capability signal. "
-            "For one coordinate call resolve_point; for a point array call resolve_points. Both return compact chains through Admin 3 without opening deep partitions. Then call resolve_deep_point or resolve_deep_points with a returned shallow_loc_id and one family. family defaults to administrative; other shape-backed families use direct point lookup. "
-            "When the caller asks for details about that chain, pass its stack loc_ids to loc_id_info; use get_geometry only for shapes and compare_geographies only for overlap, topology, validity, or successor questions. Mixed-vintage point context is not strict parentage. "
+            "Call resolve_point with either one coordinate or a point array for compact chains through Admin 3 without opening deep partitions. Then call resolve_deep_point with one coordinate or a scoped point array, a returned shallow_loc_id, and one family. family defaults to administrative; other shape-backed families use direct point lookup. "
+            "When the caller asks for details about that chain, pass its stack loc_ids to get_loc_id_info; use get_geometry only for shapes and compare_geographies only for overlap, topology, validity, or successor questions. Mixed-vintage point context is not strict parentage. "
             "For a user dataset with unknown or informally declared geography keys, pass bounded scalar column samples to identify_dataset_geography; the caller may filter transport noise but must not choose the geography itself. Then pass its unambiguous geography_binding to the conversion-job tools. Use identify_reference_system only when one identifier column is already selected. For one known outside geography code or name, call convert_reference and omit to_system to return loc_id. For bulk geometry, call resolve_loc_id_scope only for one strict hierarchy, then estimate_geometry_package before create_geometry_export. "
             "Geometry export and conversion creates are synchronous operations with hosted safety limits (currently 250 selected geometries and 7,500 conversion rows by default) sized around a 10-20 second response budget. Direct local-runtime loopback calls bypass DaedalMap hosted item caps, rate tiers, and payment challenges; local machine resources and operator-configured runtime guards are the boundary. Call the estimate tool or get_tool_help for the effective access lane. This facade does not promise a durable queue that is not deployed."
         )
@@ -1709,7 +1705,7 @@ def _tool_definitions_cached(_epoch: int) -> list[dict[str, Any]]:
     if not claim:
         return definitions
     for definition in definitions:
-        if definition.get("name") in {"get_catalog", "resolve_point", "resolve_points", "resolve_deep_point", "resolve_deep_points"}:
+        if definition.get("name") in {"get_catalog", "resolve_point", "resolve_deep_point"}:
             definition["description"] = f"{definition.get('description', '').rstrip()} Current catalog: {claim}"
     return definitions
 
@@ -2162,15 +2158,17 @@ def _point_tool_contract_error(request_id: str, rpc_request_id: Any, *, code: st
 
 @_guard_mcp_execution("resolve_point")
 async def _execute_resolve_point_tool(request: Request, arguments: dict[str, Any], rpc_request_id: Any) -> Response:
-    """Execute the public Admin0-3 point contract."""
+    """Execute the one-or-many public Admin0-3 point contract."""
     payload = dict(arguments or {})
     request_id = str(payload.get("request_id") or rpc_request_id or "")
-    if "points" in payload or "batch_id" in payload:
+    has_batch = "points" in payload
+    has_single = "lat" in payload or "lon" in payload
+    if has_batch == has_single or (has_single and not {"lat", "lon"}.issubset(payload)):
         return _point_tool_contract_error(
             request_id,
             rpc_request_id,
-            code="single_point_required",
-            message="resolve_point accepts one lat/lon pair. Use resolve_points for a point array.",
+            code="point_selection_required",
+            message="resolve_point requires either one top-level lat/lon pair or a points array, but not both.",
         )
     legacy_fields = sorted(
         {"lookup_mode", "country_scope", "admin_1_scope", "country_hint", "bulk_preset"}
@@ -2200,54 +2198,19 @@ async def _execute_resolve_point_tool(request: Request, arguments: dict[str, Any
     )
 
 
-@_guard_mcp_execution("resolve_points")
-async def _execute_resolve_points_tool(request: Request, arguments: dict[str, Any], rpc_request_id: Any) -> Response:
-    """Execute the public Admin0-3 bulk point contract."""
-    payload = dict(arguments or {})
-    request_id = str(payload.get("request_id") or rpc_request_id or "")
-    if "points" not in payload or "lat" in payload or "lon" in payload:
-        return _point_tool_contract_error(
-            request_id,
-            rpc_request_id,
-            code="point_array_required",
-            message="resolve_points requires a points array and does not accept top-level lat/lon.",
-        )
-    legacy_fields = sorted(
-        {"lookup_mode", "country_scope", "admin_1_scope", "country_hint", "bulk_preset"}
-        .intersection(payload)
-    )
-    if legacy_fields:
-        return _point_tool_contract_error(
-            request_id,
-            rpc_request_id,
-            code="shallow_point_contract_violation",
-            message="resolve_points is shallow. Use resolve_deep_points with shallow_loc_id for Admin 4-6 or one explicit family lookup.",
-        )
-    target_admin_level = _point_lookup_target_admin_level(payload)
-    if target_admin_level is not None and target_admin_level > 3:
-        return _point_tool_contract_error(
-            request_id,
-            rpc_request_id,
-            code="shallow_admin_level_required",
-            message="resolve_points accepts only Admin 0-3 targets. Use resolve_deep_points for Admin 4-6.",
-        )
-    payload["lookup_mode"] = "standard"
-    return await _execute_point_lookup_tool(
-        request, payload, rpc_request_id, execution_tool_name="resolve_points"
-    )
-
-
 @_guard_mcp_execution("resolve_deep_point")
 async def _execute_resolve_deep_point_tool(request: Request, arguments: dict[str, Any], rpc_request_id: Any) -> Response:
-    """Execute the public Admin4-6 point contract within one Admin1 partition."""
+    """Execute the one-or-many Admin4-6 contract within one partition."""
     payload = dict(arguments or {})
     request_id = str(payload.get("request_id") or rpc_request_id or "")
-    if "points" in payload or "batch_id" in payload:
+    has_batch = "points" in payload
+    has_single = "lat" in payload or "lon" in payload
+    if has_batch == has_single or (has_single and not {"lat", "lon"}.issubset(payload)):
         return _point_tool_contract_error(
             request_id,
             rpc_request_id,
-            code="single_point_required",
-            message="resolve_deep_point accepts one lat/lon pair. Use resolve_deep_points for a point array.",
+            code="point_selection_required",
+            message="resolve_deep_point requires either one top-level lat/lon pair or a points array, but not both.",
         )
     shallow_loc_id = str(payload.pop("shallow_loc_id", "") or "").strip().upper()
     from mapmover.runtime.family_point_resolution import normalize_requested_family, shallow_scope
@@ -2286,57 +2249,6 @@ async def _execute_resolve_deep_point_tool(request: Request, arguments: dict[str
     payload["admin_1_scope"] = admin_1_loc_id
     return await _execute_point_lookup_tool(
         request, payload, rpc_request_id, execution_tool_name="resolve_deep_point"
-    )
-
-
-@_guard_mcp_execution("resolve_deep_points")
-async def _execute_resolve_deep_points_tool(request: Request, arguments: dict[str, Any], rpc_request_id: Any) -> Response:
-    """Execute the public Admin4-6 bulk contract within one Admin1 partition."""
-    payload = dict(arguments or {})
-    request_id = str(payload.get("request_id") or rpc_request_id or "")
-    if "points" not in payload or "lat" in payload or "lon" in payload:
-        return _point_tool_contract_error(
-            request_id,
-            rpc_request_id,
-            code="point_array_required",
-            message="resolve_deep_points requires a points array and does not accept top-level lat/lon.",
-        )
-    shallow_loc_id = str(payload.pop("shallow_loc_id", "") or "").strip().upper()
-    from mapmover.runtime.family_point_resolution import normalize_requested_family, shallow_scope
-
-    requested_family, family_error = normalize_requested_family(payload.pop("family", None))
-    if family_error is not None:
-        return _point_tool_contract_error(
-            request_id, rpc_request_id,
-            code=family_error["code"], message=family_error["message"],
-        )
-    country_scope, admin_1_loc_id, scope_error = shallow_scope(shallow_loc_id)
-    if scope_error is not None:
-        return _point_tool_contract_error(
-            request_id, rpc_request_id,
-            code=scope_error["code"], message=scope_error["message"],
-        )
-    target_admin_level = _point_lookup_target_admin_level(payload)
-    if target_admin_level is not None and target_admin_level <= 3:
-        return _point_tool_contract_error(
-            request_id,
-            rpc_request_id,
-            code="deep_admin_level_required",
-            message="resolve_deep_points accepts only Admin 4-6 targets. Use resolve_points for Admin 0-3.",
-        )
-    if requested_family != "administrative" and target_admin_level is not None:
-        return _point_tool_contract_error(
-            request_id, rpc_request_id,
-            code="target_admin_level_not_applicable",
-            message="target_admin_level applies only when family is administrative.",
-        )
-    payload["lookup_mode"] = "deep"
-    payload["family"] = requested_family
-    payload["shallow_loc_id"] = shallow_loc_id
-    payload["country_scope"] = country_scope
-    payload["admin_1_scope"] = admin_1_loc_id
-    return await _execute_point_lookup_tool(
-        request, payload, rpc_request_id, execution_tool_name="resolve_deep_points"
     )
 
 
@@ -2398,7 +2310,7 @@ async def _execute_point_lookup_tool(
 ) -> Response:
     started_at = time.perf_counter()
     payload = _ensure_request_id(arguments, execution_tool_name)
-    deep_lookup = execution_tool_name in {"resolve_deep_point", "resolve_deep_points"}
+    deep_lookup = execution_tool_name == "resolve_deep_point"
     requested_family = str(payload.pop("family", "administrative") or "administrative") if deep_lookup else "administrative"
     shallow_loc_id = str(payload.pop("shallow_loc_id", "") or "").strip() if deep_lookup else ""
     capability_id = "deep_point_lookup" if deep_lookup else "point_lookup"
@@ -3087,10 +2999,10 @@ def _parse_children_by_level(value: Any) -> Any:
     return value
 
 
-@_guard_mcp_execution("loc_id_info")
-async def _execute_loc_id_info_tool(request: Request, arguments: dict[str, Any], rpc_request_id: Any) -> Response:
+@_guard_mcp_execution("get_loc_id_info")
+async def _execute_get_loc_id_info_tool(request: Request, arguments: dict[str, Any], rpc_request_id: Any) -> Response:
     started_at = time.perf_counter()
-    payload = _ensure_request_id(arguments, "loc_id_info")
+    payload = _ensure_request_id(arguments, "get_loc_id_info")
     request_id = str(payload.get("request_id") or "")
     batch_id = str(payload.get("batch_id") or "").strip() or None
     if "loc_ids" in payload:
@@ -3100,7 +3012,7 @@ async def _execute_loc_id_info_tool(request: Request, arguments: dict[str, Any],
             _log_mcp_tool_usage_event(
                 request,
                 request_id=request_id or batch_id or "",
-                tool_name="loc_id_info",
+                tool_name="get_loc_id_info",
                 capability_id="loc_id_metadata",
                 decision="deny",
                 started_at=started_at,
@@ -3115,26 +3027,26 @@ async def _execute_loc_id_info_tool(request: Request, arguments: dict[str, Any],
                 rpc_request_id,
             )
         loc_ids = [str(value or "").strip() for value in raw_loc_ids if str(value or "").strip()]
-        limit = _tool_batch_item_limit("loc_id_info")
+        limit = _tool_batch_item_limit("get_loc_id_info")
         trusted_token, trusted_token_id = _trusted_artifact_access(request)
         if bool(payload.get("include_references")):
             references_limit = (
                 _parse_env_int_optional("MCP_TOOL_REFERENCES_BATCH_LIMIT_LOC_ID_INFO")
-                or int(tool_sub_limit("loc_id_info", "references").get("free_item_limit") or 25)
+                or int(tool_sub_limit("get_loc_id_info", "references").get("free_item_limit") or 25)
             )
             if len(loc_ids) > references_limit and trusted_token is None and not is_local_loopback_request(request):
                 error_payload = _batch_error_payload(
                     request_id=request_id,
                     batch_id=batch_id,
                     code="too_many_loc_ids_for_references",
-                    message=f"loc_id_info with include_references accepts at most {references_limit} loc_ids per call",
+                    message=f"get_loc_id_info with include_references accepts at most {references_limit} loc_ids per call",
                     limit=references_limit,
                     loc_id_count=len(loc_ids),
                 )
                 _log_mcp_tool_usage_event(
                     request,
                     request_id=request_id or batch_id or "",
-                    tool_name="loc_id_info",
+                    tool_name="get_loc_id_info",
                     capability_id="loc_id_metadata",
                     decision="deny",
                     started_at=started_at,
@@ -3158,14 +3070,14 @@ async def _execute_loc_id_info_tool(request: Request, arguments: dict[str, Any],
                 request_id=request_id,
                 batch_id=batch_id,
                 code="too_many_loc_ids",
-                message=f"loc_id_info accepts at most {limit} loc_ids per call",
+                message=f"get_loc_id_info accepts at most {limit} loc_ids per call",
                 limit=limit,
                 loc_id_count=len(loc_ids),
             )
             _log_mcp_tool_usage_event(
                 request,
                 request_id=request_id or batch_id or "",
-                tool_name="loc_id_info",
+                tool_name="get_loc_id_info",
                 capability_id="loc_id_metadata",
                 decision="deny",
                 started_at=started_at,
@@ -3181,8 +3093,8 @@ async def _execute_loc_id_info_tool(request: Request, arguments: dict[str, Any],
             )
         runtime_started = time.perf_counter()
         results = await run_mcp_blocking(
-            "loc_id_info",
-            _loc_id_info_items,
+            "get_loc_id_info",
+            _get_loc_id_info_items,
             loc_ids,
             payload,
         )
@@ -3199,7 +3111,7 @@ async def _execute_loc_id_info_tool(request: Request, arguments: dict[str, Any],
         _log_mcp_tool_usage_event(
             request,
             request_id=request_id or batch_id or "",
-            tool_name="loc_id_info",
+            tool_name="get_loc_id_info",
             capability_id="loc_id_metadata",
             decision="allow",
             started_at=started_at,
@@ -3235,7 +3147,7 @@ async def _execute_loc_id_info_tool(request: Request, arguments: dict[str, Any],
         _log_mcp_tool_usage_event(
             request,
             request_id=request_id,
-            tool_name="loc_id_info",
+            tool_name="get_loc_id_info",
             capability_id="loc_id_metadata",
             decision="deny",
             started_at=started_at,
@@ -3250,14 +3162,14 @@ async def _execute_loc_id_info_tool(request: Request, arguments: dict[str, Any],
             rpc_request_id,
         )
     runtime_started = time.perf_counter()
-    item = await run_mcp_blocking("loc_id_info", _loc_id_info_item, loc_id, payload)
+    item = await run_mcp_blocking("get_loc_id_info", _get_loc_id_info_item, loc_id, payload)
     result = {"request_id": request_id, **item}
     stages = {"metadata_fetch_ms": _elapsed_ms(runtime_started)}
     if result.get("error"):
         _log_mcp_tool_usage_event(
             request,
             request_id=request_id,
-            tool_name="loc_id_info",
+            tool_name="get_loc_id_info",
             capability_id="loc_id_metadata",
             decision="deny",
             started_at=started_at,
@@ -3278,7 +3190,7 @@ async def _execute_loc_id_info_tool(request: Request, arguments: dict[str, Any],
     _log_mcp_tool_usage_event(
         request,
         request_id=request_id,
-        tool_name="loc_id_info",
+        tool_name="get_loc_id_info",
         capability_id="loc_id_metadata",
         decision="allow",
         started_at=started_at,
@@ -3299,7 +3211,7 @@ async def _execute_loc_id_info_tool(request: Request, arguments: dict[str, Any],
     return _jsonrpc_response(_tool_result(result), rpc_request_id)
 
 
-def _loc_id_info_items(loc_ids: list[str], payload: dict[str, Any]) -> list[dict[str, Any]]:
+def _get_loc_id_info_items(loc_ids: list[str], payload: dict[str, Any]) -> list[dict[str, Any]]:
     from mapmover.geometry_handlers import get_location_infos
     from mapmover.runtime.reference_exchange import resolve_loc_id_inputs
 
@@ -3344,25 +3256,139 @@ def _loc_id_info_items(loc_ids: list[str], payload: dict[str, Any]) -> list[dict
     ) if missing_canonical_ids else []
     info_by_loc_id = dict(direct_info_by_loc_id)
     info_by_loc_id.update(zip(missing_canonical_ids, fallback_infos))
+    catalog_context_cache: dict[tuple[str, str, str], dict[str, Any]] = {}
     return [
-        _loc_id_info_item(
+        _get_loc_id_info_item(
             loc_id,
             payload,
             public_resolution=resolutions[loc_id],
             preloaded_info=info_by_loc_id.get(str(resolutions[loc_id].get("loc_id") or loc_id)),
             use_preloaded=True,
+            catalog_context_cache=catalog_context_cache,
         )
         for loc_id in requested
     ]
 
 
-def _loc_id_info_item(
+def _loc_id_catalog_context(loc_id: str, info: dict[str, Any]) -> dict[str, Any]:
+    """Return catalog-only availability hints without scanning data or shapes."""
+    iso3 = str(info.get("iso3") or str(loc_id).split("-", 1)[0] or "").strip().upper()
+    raw_admin_level = str(info.get("admin_level") or "").strip().lower()
+    admin_level = (
+        f"admin_{raw_admin_level}"
+        if raw_admin_level.isdigit()
+        else raw_admin_level.replace("admin ", "admin_").replace("admin-", "admin_")
+    )
+    data_packs: dict[str, dict[str, Any]] = {}
+    try:
+        from mapmover.data_loading import get_catalog_packs, load_catalog
+
+        catalog = load_catalog() or {}
+        pack_rows = {
+            str(pack.get("pack_id") or ""): pack
+            for pack in get_catalog_packs(catalog)
+            if str(pack.get("pack_id") or "")
+        }
+        for source in catalog.get("sources") or []:
+            if not isinstance(source, dict):
+                continue
+            pack_id = str(source.get("pack_id") or "").strip()
+            if not pack_id:
+                continue
+            coverage = source.get("geographic_coverage") if isinstance(source.get("geographic_coverage"), dict) else {}
+            countries = {
+                str(value or "").strip().upper()
+                for value in coverage.get("countries") or []
+                if str(value or "").strip()
+            }
+            common_missing = {
+                str(value or "").strip().upper()
+                for value in coverage.get("common_missing") or []
+                if str(value or "").strip()
+            }
+            uncommon = {
+                str(value or "").strip().upper()
+                for value in coverage.get("uncommonly_included") or []
+                if str(value or "").strip()
+            }
+            scope = str(source.get("scope") or "").strip().lower()
+            if countries and iso3 not in countries:
+                continue
+            if not countries:
+                source_country = str(source.get("country_code") or source.get("iso3") or scope).strip().upper()
+                if re.fullmatch(r"[A-Z]{3}", source_country) and source_country != iso3:
+                    continue
+                if iso3 in common_missing and iso3 not in uncommon:
+                    continue
+            levels = source.get("geographic_levels") if isinstance(source.get("geographic_levels"), list) else [source.get("geographic_level")]
+            levels = [*levels, *[
+                f"admin_{level}"
+                for level in coverage.get("admin_levels") or []
+                if str(level).strip()
+            ]]
+            row = data_packs.setdefault(pack_id, {
+                "pack_id": pack_id,
+                "geographic_levels": set(),
+                "matching_source_count": 0,
+            })
+            row["matching_source_count"] += 1
+            row["geographic_levels"].update(str(level) for level in levels if level)
+        for pack_id, row in data_packs.items():
+            pack = pack_rows.get(pack_id) or {}
+            row["title"] = pack.get("pack_name") or pack.get("title")
+            row["geographic_levels"] = sorted(row["geographic_levels"])
+            row["exact_grain_available"] = admin_level in {
+                str(level).strip().lower() for level in row["geographic_levels"]
+            } if admin_level else None
+            row["coverage_basis"] = "published_catalog_country_scope"
+            row["exact_rows_verified"] = False
+            row["next_call"] = {
+                "tool": "get_pack",
+                "arguments": {"catalog": "data", "pack_id": pack_id, "detail": "lite"},
+            }
+    except Exception:
+        data_packs = {}
+
+    geometry_families: list[dict[str, Any]] = []
+    if iso3:
+        try:
+            from mapmover.runtime.reference_exchange import geometry_catalog_discovery
+
+            discovery = geometry_catalog_discovery(detail="lite", country_scope=iso3)
+            for family in discovery.get("families") or []:
+                geometry_families.append({
+                    key: family.get(key)
+                    for key in ("pack_id", "label", "short_label", "countries", "release_units")
+                    if family.get(key) is not None
+                })
+        except Exception:
+            geometry_families = []
+
+    ordered_packs = sorted(data_packs.values(), key=lambda row: str(row.get("pack_id") or ""))
+    return {
+        "coverage_scope": iso3 or None,
+        "coverage_semantics": "Catalog candidates only; call get_pack/get_data to verify metrics and exact rows for this loc_id.",
+        "data_pack_count": len(ordered_packs),
+        "data_packs": ordered_packs,
+        "own_geometry_family": info.get("family"),
+        "available_geometry_family_count": len(geometry_families),
+        "available_geometry_families": geometry_families,
+        "next_calls": {
+            "data": {"tool": "get_catalog", "arguments": {"catalog": "data", "detail": "lite"}},
+            "geometry": {"tool": "get_geometry", "arguments": {"loc_id": loc_id, "include_polygon": False}},
+            "relationships": {"tool": "compare_geographies", "arguments": {"left_loc_id": loc_id, "right_loc_id": "<other loc_id>"}},
+        },
+    }
+
+
+def _get_loc_id_info_item(
     loc_id: str,
     payload: dict[str, Any],
     *,
     public_resolution: dict[str, Any] | None = None,
     preloaded_info: dict[str, Any] | None = None,
     use_preloaded: bool = False,
+    catalog_context_cache: dict[tuple[str, str, str], dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     requested_loc_id = str(loc_id or "").strip().upper()
     if public_resolution is None:
@@ -3432,6 +3458,17 @@ def _loc_id_info_item(
         "children_by_level": _parse_children_by_level(info.get("children_by_level")),
         "descendants_count": info.get("descendants_count"),
     }
+    context_key = (
+        str(result.get("iso3") or str(result["loc_id"]).split("-", 1)[0]).strip().upper(),
+        str(result.get("admin_level") or "").strip().lower(),
+        str(result.get("family") or "").strip().lower(),
+    )
+    if catalog_context_cache is not None:
+        if context_key not in catalog_context_cache:
+            catalog_context_cache[context_key] = _loc_id_catalog_context(str(result["loc_id"]), result)
+        result["availability"] = catalog_context_cache[context_key]
+    else:
+        result["availability"] = _loc_id_catalog_context(str(result["loc_id"]), result)
     try:
         from mapmover.runtime.reference_exchange import geometry_supersession_notice
 
@@ -4669,105 +4706,67 @@ async def _execute_live_volcano_tool(arguments: dict[str, Any], rpc_request_id: 
     return _jsonrpc_response(_tool_result(result), rpc_request_id)
 
 
-def _json_body_payload(response: Response) -> Any:
-    raw_body = getattr(response, "body", b"") or b""
-    if not raw_body:
-        return {}
-    if isinstance(raw_body, str):
-        return json.loads(raw_body)
-    return json.loads(raw_body.decode("utf-8"))
-
-
-async def _execute_disaster_links_for_event_tool(arguments: dict[str, Any], rpc_request_id: Any) -> Response:
-    payload = _ensure_request_id(arguments, "get_disaster_links_for_event")
+async def _execute_get_event_tool(arguments: dict[str, Any], rpc_request_id: Any) -> Response:
+    payload = _ensure_request_id(arguments, "get_event")
     event_id = str(payload.get("event_id") or "").strip()
     if not event_id:
         return _jsonrpc_response(
-            _tool_result(normalize_data_tool_error("get_disaster_links_for_event", {"request_id": payload.get("request_id"), "error": {"code": "invalid_event_id", "message": "event_id is required"}}, status_code=400), is_error=True),
+            _tool_result(
+                normalize_data_tool_error("get_event", {
+                    "request_id": payload.get("request_id"),
+                    "error": {"code": "invalid_event_id", "message": "event_id is required"},
+                }, status_code=400),
+                is_error=True,
+            ),
             rpc_request_id,
         )
     try:
-        response = await get_disaster_links_for_exact_event(
-            event_id=event_id,
-            pack_id=str(payload.get("pack_id") or "").strip() or None,
-            cross_type_only=bool(payload.get("cross_type_only", True)),
+        result = await run_mcp_blocking(
+            "get_event",
+            get_event_payload,
+            event_id,
+            pack_id=str(payload.get("pack_id") or "").strip().lower() or None,
+            include=payload.get("include") or [],
+            relationship_depth=int(payload.get("relationship_depth") or 1),
+            geometry_mode=str(payload.get("geometry_mode") or "current"),
+            limit=int(payload.get("limit") or 100),
         )
-        body = _json_body_payload(response)
+    except (ValueError, TypeError) as exc:
+        return _jsonrpc_response(
+            _tool_result(
+                normalize_data_tool_error("get_event", {
+                    "request_id": payload.get("request_id"),
+                    "error": {"code": "invalid_event_request", "message": str(exc)},
+                }, status_code=400),
+                is_error=True,
+            ),
+            rpc_request_id,
+        )
     except Exception as exc:
+        logger.exception("get_event failed for %s", event_id)
         return _jsonrpc_response(
-            _tool_result(normalize_data_tool_error("get_disaster_links_for_event", {"request_id": payload.get("request_id"), "error": {"code": "disaster_links_failed", "message": str(exc)}}, status_code=500), is_error=True),
+            _tool_result(
+                normalize_data_tool_error("get_event", {
+                    "request_id": payload.get("request_id"),
+                    "error": {"code": "event_lookup_failed", "message": str(exc)},
+                }, status_code=500),
+                is_error=True,
+            ),
             rpc_request_id,
         )
-    if response.status_code != 200:
-        if isinstance(body, dict):
-            body.setdefault("request_id", payload.get("request_id"))
+    if result is None:
         return _jsonrpc_response(
-            _tool_result(normalize_data_tool_error("get_disaster_links_for_event", body, status_code=response.status_code), is_error=True),
+            _tool_result(
+                normalize_data_tool_error("get_event", {
+                    "request_id": payload.get("request_id"),
+                    "error": {"code": "event_not_found", "message": f"Event '{event_id}' was not found."},
+                }, status_code=404),
+                is_error=True,
+            ),
             rpc_request_id,
         )
-    if isinstance(body, dict):
-        body.setdefault("request_id", payload.get("request_id"))
-    return _jsonrpc_response(_tool_result(body), rpc_request_id)
-
-
-async def _execute_disaster_link_chain_tool(arguments: dict[str, Any], rpc_request_id: Any) -> Response:
-    payload = _ensure_request_id(arguments, "get_disaster_link_chain")
-    event_id = str(payload.get("event_id") or "").strip()
-    if not event_id:
-        return _jsonrpc_response(
-            _tool_result(normalize_data_tool_error("get_disaster_link_chain", {"request_id": payload.get("request_id"), "error": {"code": "invalid_event_id", "message": "event_id is required"}}, status_code=400), is_error=True),
-            rpc_request_id,
-        )
-    try:
-        response = await get_disaster_link_chain_for_exact_event(
-            event_id=event_id,
-            pack_id=str(payload.get("pack_id") or "").strip() or None,
-            depth=int(payload.get("depth") or 1),
-            cross_type_only=bool(payload.get("cross_type_only", True)),
-        )
-        body = _json_body_payload(response)
-    except Exception as exc:
-        return _jsonrpc_response(
-            _tool_result(normalize_data_tool_error("get_disaster_link_chain", {"request_id": payload.get("request_id"), "error": {"code": "disaster_link_chain_failed", "message": str(exc)}}, status_code=500), is_error=True),
-            rpc_request_id,
-        )
-    if response.status_code != 200:
-        if isinstance(body, dict):
-            body.setdefault("request_id", payload.get("request_id"))
-        return _jsonrpc_response(
-            _tool_result(normalize_data_tool_error("get_disaster_link_chain", body, status_code=response.status_code), is_error=True),
-            rpc_request_id,
-        )
-    if isinstance(body, dict):
-        body.setdefault("request_id", payload.get("request_id"))
-    return _jsonrpc_response(_tool_result(body), rpc_request_id)
-
-
-async def _execute_search_disaster_links_tool(arguments: dict[str, Any], rpc_request_id: Any) -> Response:
-    payload = _ensure_request_id(arguments, "search_disaster_links")
-    try:
-        response = await search_disaster_link_chains(
-            start_event_type=str(payload.get("start_event_type") or "").strip() or None,
-            via_event_type=str(payload.get("via_event_type") or "").strip() or None,
-            end_event_type=str(payload.get("end_event_type") or "").strip() or None,
-            year_start=int(payload["year_start"]) if payload.get("year_start") is not None else None,
-            year_end=int(payload["year_end"]) if payload.get("year_end") is not None else None,
-            limit=int(payload.get("limit") or 10),
-        )
-        body = _json_body_payload(response)
-    except Exception as exc:
-        return _jsonrpc_response(
-            _tool_result(normalize_data_tool_error("search_disaster_links", {"request_id": payload.get("request_id"), "error": {"code": "disaster_links_search_failed", "message": str(exc)}}, status_code=500), is_error=True),
-            rpc_request_id,
-        )
-    if isinstance(body, dict):
-        body.setdefault("request_id", payload.get("request_id"))
-    if response.status_code != 200:
-        return _jsonrpc_response(
-            _tool_result(normalize_data_tool_error("search_disaster_links", body, status_code=response.status_code), is_error=True),
-            rpc_request_id,
-        )
-    return _jsonrpc_response(_tool_result(body), rpc_request_id)
+    result["request_id"] = payload.get("request_id")
+    return _jsonrpc_response(_tool_result(result), rpc_request_id)
 
 
 # Registry attribution: each MCP registry publishes a per-source tagged endpoint
@@ -5258,29 +5257,17 @@ async def mcp_endpoint(request: Request, pack_id: str | None = None):
             return rate_limit_response
         return await _execute_resolve_point_tool(request, arguments, request_id)
 
-    if tool_name == "resolve_points":
-        rate_limit_response = _live_tool_rate_limit_response(request, tool_name, request_id)
-        if rate_limit_response:
-            return rate_limit_response
-        return await _execute_resolve_points_tool(request, arguments, request_id)
-
     if tool_name == "resolve_deep_point":
         rate_limit_response = _live_tool_rate_limit_response(request, tool_name, request_id)
         if rate_limit_response:
             return rate_limit_response
         return await _execute_resolve_deep_point_tool(request, arguments, request_id)
 
-    if tool_name == "resolve_deep_points":
+    if tool_name == "get_loc_id_info":
         rate_limit_response = _live_tool_rate_limit_response(request, tool_name, request_id)
         if rate_limit_response:
             return rate_limit_response
-        return await _execute_resolve_deep_points_tool(request, arguments, request_id)
-
-    if tool_name == "loc_id_info":
-        rate_limit_response = _live_tool_rate_limit_response(request, tool_name, request_id)
-        if rate_limit_response:
-            return rate_limit_response
-        return await _execute_loc_id_info_tool(request, arguments, request_id)
+        return await _execute_get_loc_id_info_tool(request, arguments, request_id)
 
     if tool_name == "identify_reference_system":
         rate_limit_response = _live_tool_rate_limit_response(request, tool_name, request_id)
@@ -5325,29 +5312,22 @@ async def mcp_endpoint(request: Request, pack_id: str | None = None):
             return rate_limit_response
         return await _execute_geometry_job_runtime_tool(request, arguments, request_id, tool_name)
 
-    if tool_name in {"get_disaster_links_for_event", "get_disaster_link_chain", "search_disaster_links"}:
+    if tool_name == "get_event":
         rate_limit_response = _live_tool_rate_limit_response(request, tool_name, request_id)
         if rate_limit_response:
             return rate_limit_response
-        if tool_name == "get_disaster_links_for_event":
-            link_response = await _execute_disaster_links_for_event_tool(arguments, request_id)
-        elif tool_name == "get_disaster_link_chain":
-            link_response = await _execute_disaster_link_chain_tool(arguments, request_id)
-        else:
-            link_response = await _execute_search_disaster_links_tool(arguments, request_id)
+        event_response = await _execute_get_event_tool(arguments, request_id)
         return _log_passthrough_data_helper(
             request,
             tool_name=tool_name,
             started_at=helper_started_at,
-            response=link_response,
+            response=event_response,
         )
 
     if tool_name not in {
         "get_live_earthquake_events",
-        "get_disaster_link_chain",
-        "get_disaster_links_for_event",
+        "get_event",
         "get_live_volcano_events",
-        "search_disaster_links",
         "get_data",
     }:
         return _jsonrpc_error(request_id, -32601, f"Tool '{tool_name}' not found")

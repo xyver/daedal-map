@@ -81,6 +81,60 @@ class GeographyRelationshipRuntimeTests(unittest.TestCase):
         self.assertAlmostEqual(result["right_area_share"], 1 / 3, places=3)
         self.assertGreater(result["intersection_area_km2"], 0)
 
+    def test_admin_spine_containment_does_not_load_geometry(self) -> None:
+        geometry_fetcher = mock.Mock(side_effect=AssertionError("geometry should not be loaded"))
+        reference_fetcher = mock.Mock(side_effect=AssertionError("crosswalks should not be loaded"))
+
+        result = compare_geographies(
+            "USA-TX",
+            "USA",
+            geometry_fetcher=geometry_fetcher,
+            reference_fetcher=reference_fetcher,
+        )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["spatial_relation"], "within")
+        self.assertEqual(result["hierarchy_relation"], "left_descends_from_right")
+        self.assertEqual(result["common_ancestor_loc_id"], "USA")
+        self.assertFalse(result["geometry_loaded"])
+        geometry_fetcher.assert_not_called()
+        reference_fetcher.assert_not_called()
+
+    def test_cross_family_direct_crosswalk_avoids_geometry(self) -> None:
+        geometry_fetcher = mock.Mock(side_effect=AssertionError("geometry should not be loaded"))
+
+        def references(loc_id: str) -> dict:
+            if loc_id == "USA-Z-00601":
+                return {
+                    "references": [{
+                        "system": "admin_local",
+                        "value": "USA-PR-001",
+                        "role": "crosswalk_overlap",
+                        "match_share": 0.97,
+                        "relationship_vintage": "2020",
+                    }]
+                }
+            return {"references": []}
+
+        result = compare_geographies(
+            "USA-Z-00601",
+            "USA-PR-001",
+            resolution_fetcher=lambda loc_id: {
+                "ok": True,
+                "requested_loc_id": loc_id,
+                "loc_id": loc_id,
+                "resolved_from_public_alias": False,
+            },
+            geometry_fetcher=geometry_fetcher,
+            reference_fetcher=references,
+        )
+
+        self.assertEqual(result["spatial_relation"], "overlaps")
+        self.assertEqual(result["relationship_basis"], "published_crosswalk")
+        self.assertEqual(result["crosswalk_evidence"]["match_share"], 0.97)
+        self.assertFalse(result["geometry_loaded"])
+        geometry_fetcher.assert_not_called()
+
     def test_compare_geographies_batch_hydrates_unique_endpoints_once(self) -> None:
         geometries = {
             "LEFT": _feature("LEFT", Polygon([(0, 0), (2, 0), (2, 2), (0, 2)])),
@@ -98,8 +152,8 @@ class GeographyRelationshipRuntimeTests(unittest.TestCase):
         with (
             mock.patch("mapmover.runtime.reference_exchange.resolve_loc_id_input", side_effect=resolve) as resolve_mock,
             mock.patch(
-                "mapmover.runtime.reference_exchange.get_geometry_references",
-                return_value={"results": [geometries["LEFT"], geometries["RIGHT"]]},
+                "mapmover.runtime.reference_exchange.get_geometry_reference",
+                side_effect=lambda loc_id, **_kwargs: geometries[loc_id],
             ) as geometry_mock,
             mock.patch(
                 "mapmover.runtime.geography_relationships._identity_state",
@@ -118,7 +172,7 @@ class GeographyRelationshipRuntimeTests(unittest.TestCase):
 
         self.assertEqual([result["spatial_relation"] for result in results], ["overlaps", "overlaps"])
         self.assertEqual(resolve_mock.call_count, 2)
-        geometry_mock.assert_called_once_with(["LEFT", "RIGHT"], include_polygon=True, include_info=False)
+        self.assertEqual(geometry_mock.call_count, 2)
         self.assertEqual(identity_mock.call_count, 2)
 
     def test_invalid_historical_identity_does_not_reuse_current_geometry(self) -> None:

@@ -104,11 +104,11 @@ def geography_tools_section(app_origin: str) -> str:
 def geography_workflow_section() -> str:
     """Return question-first instructions for the current geography MCP roster."""
     return (
-        "1. Point to loc_id: use `resolve_point` for one coordinate or `resolve_points` for an array; both stop at Admin 3. For Admin 4-6, use `resolve_deep_point` for one coordinate or group bulk results by Admin 1 and call `resolve_deep_points` with one `admin_1_loc_id` per call.\n"
-        "2. What a loc_id is connected to: call `loc_id_info` with `include_references=true`; add `include_hierarchy=true` for its strict stored ancestry.\n"
-        "3. Dataset to loc_id: pass bounded, structurally filtered column samples to `identify_dataset_geography`; it selects the column, country, level, and system. For one already-selected identifier column, use `identify_reference_system`. Resolve a known outside code or name with `resolve_reference`, and use `convert_reference` only when another reference system is the desired output.\n"
+        "1. Point to loc_id: call `resolve_point` with one coordinate or a bounded array; it stops at Admin 3. For Admin 4-6, group results by shallow scope and call `resolve_deep_point` with one coordinate or array plus one `shallow_loc_id` per call.\n"
+        "2. What a loc_id is connected to: call `get_loc_id_info`; add `include_references=true` for exact attached crosswalks and `include_hierarchy=true` for strict stored ancestry.\n"
+        "3. Dataset to loc_id: pass bounded, structurally filtered column samples to `identify_dataset_geography`; it selects the column, country, level, and system. For one already-selected identifier column, use `identify_reference_system`. Resolve a known outside code or name with `convert_reference` and omit `to_system`; provide `to_system` only when another reference system is the desired output.\n"
         "4. Shape lookup: call `get_geometry` with its default `include_polygon=false` for availability, metadata, bbox, and centroid; set `include_polygon=true` only when shape coordinates are needed. If the requested record is historical, return it first; present any `supersession` prompt as a second question and do not fetch the successor until the caller chooses it.\n"
-        "5. Coverage discovery: call `read_geometry_catalog` with `view=capabilities` and `country_scope=<ISO3>`, or `list_reference_systems` with `country_scope=<ISO3>` for the canonical published crosswalk registry. Only callable crosswalks appear publicly; preserve all matches and weights. A catalog family alone does not promise a conversion path.\n"
+        "5. Coverage discovery: call `get_catalog(catalog='geometry', detail='lite')`, then `get_pack(catalog='geometry', pack_id='<family>', country_scope='<ISO3>')` for country systems, vintages, levels, and artifacts. A listed family-country pair is exchangeable through loc_id.\n"
         "6. Relationship between two loc_ids: call `compare_geographies`. For descendants under one parent and level, call `resolve_loc_id_scope`.\n"
         "7. Batch rule: use a bounded batch where supported; split deep work by Admin1 owner.\n"
         "8. If the right path is unclear: call `get_tool_help` with a topic, then with one exact tool name.\n"
@@ -126,7 +126,7 @@ def coverage_section(app_origin: str, site_origin: str) -> str:
         f"- Data: {DATA_PACK_COUNT_LABEL} maintained data packs across natural hazards, hazard risk, economic and business indicators, currency, population, and climate. "
         f"Call GET {app_origin}/api/v1/catalog for the live pack index and each pack's access lane.\n"
         f"- Geometry: {GEOMETRY_COVERAGE_LABEL}. "
-        f"Call `read_geometry_catalog` or GET {app_origin}/api/v1/geometry/catalog for current country and family coverage.\n"
+        f"Call `get_catalog(catalog='geometry')` or GET {app_origin}/api/v1/geometry/catalog for current country and family coverage.\n"
         f"- Downloads: [{site_origin}/downloadable/]({site_origin}/downloadable/) - programs, data packs, and geometry packages\n"
     )
 
@@ -168,10 +168,9 @@ def agent_ai_plugin_description_for_model(*, app_origin: str, docs_origin: str, 
         "join surface; postal, watershed, Indigenous land, forest, and other geography families "
         "retain distinct identities and connect through published crosswalks when one exists. "
         "Geography tools use loc_id as the durable identifier. Start with get_tool_help(topic='geometry'), "
-        "read_geometry_catalog for country and family coverage, or list_reference_systems for "
-        "usable crosswalks; catalog presence alone does not promise a conversion path. "
+        "then get_catalog(catalog='geometry') and get_pack for country and family coverage. "
         "Use identify_reference_system when an input column is unknown. "
-        "resolve_points, resolve_deep_points, loc_id_info, and get_geometry accept a bounded batch. "
+        "resolve_point, resolve_deep_point, get_loc_id_info, and get_geometry accept a bounded batch. "
         "request_id is optional but recommended for tracing and idempotency. "
         f"{free_vs_paid_sentence()}"
     )

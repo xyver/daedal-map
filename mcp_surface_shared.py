@@ -106,87 +106,39 @@ def build_tool_definitions() -> list[dict]:
             "annotations": {"readOnlyHint": True},
         },
         {
-            "name": "get_disaster_links_for_event",
-            "title": "Get Disaster Links For Event",
-            "description": "Free linked-disaster helper. Resolves one exact disaster event id into its published related-disaster links. Use this only when you already have an exact event id from a supported pack such as earthquakes, tsunamis, volcanoes, or wildfires.",
+            "name": "get_event",
+            "title": "Get Event",
+            "description": "Retrieve and traverse one exact disaster event. The lightweight default returns event identity and core attributes without heavy shape columns. Add relationships for cross-hazard event links, affected_places for event-to-loc_id coverage, observations for native tracks/progression/runups/sequences, or geometry for explicit shapes. Start with get_data to find an event_id; use get_pack to discover published relationship families.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "event_id": {"type": "string", "description": "Exact disaster event id from a supported pack row, such as 'NOAA-SIG-2' or 'USA-CA-FIRE-215'."},
-                    "pack_id": {"type": "string", "description": "Optional pack id hint when the event id is ambiguous. Supported exact-event link packs are earthquakes, tsunamis, volcanoes, and wildfires."},
-                    "cross_type_only": {"type": "boolean", "description": "When true, only return cross-hazard links. Default true."},
+                    "event_id": {"type": "string", "minLength": 1, "description": "Exact stable event_id returned by a disaster-pack get_data row."},
+                    "pack_id": {"type": "string", "description": "Optional disaster pack hint. Recommended when known to avoid probing unrelated event sources."},
+                    "include": {
+                        "type": "array",
+                        "uniqueItems": True,
+                        "items": {"type": "string", "enum": ["relationships", "affected_places", "observations", "geometry"]},
+                        "description": "Optional companion layers. Omit for the lightweight event summary. Geometry is never returned implicitly.",
+                    },
+                    "relationship_depth": {"type": "integer", "minimum": 1, "maximum": 2, "default": 1, "description": "Bounded cross-hazard traversal depth when relationships is included."},
+                    "geometry_mode": {"type": "string", "enum": ["current", "timeline"], "default": "current", "description": "current returns the representative/current shape; timeline returns bounded progression frames where supported."},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 500, "default": 100, "description": "Per-section ceiling for relationships, affected places, observations, or geometry frames."},
                     "request_id": {"type": "string", "description": "Optional caller-supplied request id for tracing."},
                 },
                 "required": ["event_id"],
-                "additionalProperties": False,
-            },
-            "annotations": {"readOnlyHint": True},
-        },
-        {
-            "name": "get_disaster_link_chain",
-            "title": "Get Disaster Link Chain",
-            "description": "Free linked-disaster helper. Expands one exact disaster event id into a bounded related-event chain. Use this only when you already have an exact event id from a supported pack such as earthquakes, tsunamis, volcanoes, or wildfires.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "event_id": {"type": "string", "description": "Exact disaster event id from a supported pack row, such as 'NOAA-SIG-2' or 'USA-CA-FIRE-215'."},
-                    "pack_id": {"type": "string", "description": "Optional pack id hint when the event id is ambiguous. Supported exact-event link packs are earthquakes, tsunamis, volcanoes, and wildfires."},
-                    "depth": {"type": "integer", "minimum": 1, "maximum": 2, "description": "Maximum link-chain depth to traverse. Default 1."},
-                    "cross_type_only": {"type": "boolean", "description": "When true, only return cross-hazard links. Default true."},
-                    "request_id": {"type": "string", "description": "Optional caller-supplied request id for tracing."},
-                },
-                "required": ["event_id"],
-                "additionalProperties": False,
-            },
-            "annotations": {"readOnlyHint": True},
-        },
-        {
-            "name": "search_disaster_links",
-            "title": "Search Disaster Links",
-            "description": "Free linked-disaster discovery helper. Searches published cross-disaster link families by event-type direction, optional via-event type, and optional year window. Use this when you want to discover whether a relationship family exists before you have an exact event id.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "start_event_type": {"type": "string", "description": "Optional starting event type such as earthquake, hurricane, volcano, wildfire, flood, tornado, or tsunami."},
-                    "via_event_type": {"type": "string", "description": "Optional intermediate event type for bounded chain discovery."},
-                    "end_event_type": {"type": "string", "description": "Optional ending event type such as tsunami, flood, tornado, or earthquake."},
-                    "year_start": {"type": "integer", "description": "Optional inclusive starting year filter."},
-                    "year_end": {"type": "integer", "description": "Optional inclusive ending year filter."},
-                    "limit": {"type": "integer", "minimum": 1, "maximum": 50, "description": "Maximum number of matching chains to return. Default 10."},
-                    "request_id": {"type": "string", "description": "Optional caller-supplied request id for tracing."},
-                },
                 "additionalProperties": False,
             },
             "annotations": {"readOnlyHint": True},
         },
         {
             "name": "resolve_point",
-            "title": "Resolve Point (Shallow)",
-            "description": "Compact first-pass reverse geocoding for one WGS84 coordinate. Returns an administrative loc_id chain through Admin 3 without opening deep partitions or side-family shape banks. Use its deepest shallow loc_id with resolve_deep_point for Admin 4-6 or one explicit family. For multiple coordinates use resolve_points.",
+            "title": "Resolve Point(s) (Shallow)",
+            "description": "Compact first-pass reverse geocoding for one WGS84 coordinate or a bounded point array. Returns administrative loc_id chains through Admin 3 without opening deep partitions or side-family shape banks. Use a returned shallow loc_id with resolve_deep_point for Admin 4-6 or one explicit family. Single and bulk requests share this contract; access limits are based on point count.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "lat": {"type": "number", "minimum": -90, "maximum": 90, "description": "Latitude in WGS84 decimal degrees."},
                     "lon": {"type": "number", "minimum": -180, "maximum": 180, "description": "Longitude in WGS84 decimal degrees."},
-                    "target_admin_level": {
-                        "anyOf": [{"type": "string"}, {"type": "integer"}],
-                        "description": "Optional exact requested level from Admin 0-3. Omit it to return the deepest available shallow level.",
-                    },
-                    "include_marine_context": {"type": "boolean", "description": "Include parallel Marine overlaps for land matches. Defaults to true; set false for fast administrative loc_id previews. Offshore Marine fallback still applies."},
-                    "request_id": {"type": "string", "description": "Optional caller-supplied request id for tracing."},
-                },
-                "required": ["lat", "lon"],
-                "additionalProperties": False,
-            },
-            "annotations": {"readOnlyHint": True},
-        },
-        {
-            "name": "resolve_points",
-            "title": "Resolve Points (Shallow Bulk)",
-            "description": "Bulk first-pass reverse geocoding through Admin 3. Accepts a bounded cross-country WGS84 point array and never opens deep partitions or side-family shape banks. Group results by shallow scope before calling resolve_deep_points once per scope and family.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
                     "points": {
                         "type": "array",
                         "minItems": 1,
@@ -201,47 +153,36 @@ def build_tool_definitions() -> list[dict]:
                             "required": ["lat", "lon"],
                             "additionalProperties": False,
                         },
+                        "description": "Bounded WGS84 point array. Use top-level lat/lon instead for one point.",
                     },
-                    "target_admin_level": {"anyOf": [{"type": "string"}, {"type": "integer"}], "description": "Optional exact Admin 0-3 level."},
-                    "include_marine_context": {"type": "boolean", "description": "Include parallel Marine overlaps. Defaults to true."},
-                    "batch_id": {"type": "string", "description": "Optional caller-supplied batch id echoed in the result."},
+                    "target_admin_level": {
+                        "anyOf": [{"type": "string"}, {"type": "integer"}],
+                        "description": "Optional exact requested level from Admin 0-3. Omit it to return the deepest available shallow level.",
+                    },
+                    "include_marine_context": {"type": "boolean", "description": "Include parallel Marine overlaps for land matches. Defaults to true; set false for fast administrative loc_id previews. Offshore Marine fallback still applies."},
+                    "batch_id": {"type": "string", "description": "Optional caller-supplied batch id echoed for point arrays."},
                     "request_id": {"type": "string", "description": "Optional caller-supplied request id for tracing."},
                 },
-                "required": ["points"],
+                "oneOf": [
+                    {"required": ["lat", "lon"], "not": {"required": ["points"]}},
+                    {"required": ["points"], "not": {"anyOf": [{"required": ["lat"]}, {"required": ["lon"]}]}},
+                ],
                 "additionalProperties": False,
             },
             "annotations": {"readOnlyHint": True},
         },
         {
             "name": "resolve_deep_point",
-            "title": "Resolve Point (Deep)",
-            "description": "Second-pass resolution for one WGS84 coordinate. Supply a shallow_loc_id returned by resolve_point and one canonical family from get_catalog(catalog='geometry'). family defaults to administrative; shape-backed families use direct bbox-to-exact-shape lookup without crosswalks. For multiple coordinates use resolve_deep_points.",
+            "title": "Resolve Point(s) (Deep)",
+            "description": "Second-pass resolution for one WGS84 coordinate or a bounded point array. Supply one shared shallow_loc_id returned by resolve_point and one canonical family from get_catalog(catalog='geometry'). family defaults to administrative; shape-backed families use direct bbox-to-exact-shape lookup without crosswalks. Single and bulk requests share this scoped contract.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "lat": {"type": "number", "minimum": -90, "maximum": 90, "description": "Latitude in WGS84 decimal degrees."},
                     "lon": {"type": "number", "minimum": -180, "maximum": 180, "description": "Longitude in WGS84 decimal degrees."},
-                    "shallow_loc_id": {"type": "string", "minLength": 5, "description": "The deepest canonical Admin 1-3 loc_id returned by resolve_point, such as USA-NY-061-009903."},
-                    "target_admin_level": {"anyOf": [{"type": "string"}, {"type": "integer"}], "description": "Optional exact Admin 4-6 level. Omit for the deepest available match."},
-                    "family": {"type": "string", "pattern": "^[a-z0-9_]+$", "default": "administrative", "description": "One family selector. Defaults to administrative; use marine for the direct Marine resolver, or a canonical country family such as postal_area, watershed, or land_management_region."},
-                    "request_id": {"type": "string", "description": "Optional caller-supplied request id for tracing."},
-                },
-                "required": ["lat", "lon", "shallow_loc_id"],
-                "additionalProperties": False,
-            },
-            "annotations": {"readOnlyHint": True},
-        },
-        {
-            "name": "resolve_deep_points",
-            "title": "Resolve Points (Deep Bulk)",
-            "description": "Bulk second-pass resolution for one family. Supply a bounded WGS84 point array, one shared shallow_loc_id scope, and one canonical family. family defaults to administrative; other shape-backed families use direct bbox candidates followed by exact containment without crosswalks.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
                     "points": {
                         "type": "array",
                         "minItems": 1,
-                        "maxItems": 100,
                         "items": {
                             "type": "object",
                             "properties": {
@@ -253,23 +194,27 @@ def build_tool_definitions() -> list[dict]:
                             "required": ["lat", "lon"],
                             "additionalProperties": False,
                         },
-                        "description": "Points already known to fall within the supplied shallow_loc_id scope. Maximum 100 per call during the initial technical rollout.",
+                        "description": "Points already known to fall within the supplied shallow_loc_id scope.",
                     },
-                    "shallow_loc_id": {"type": "string", "minLength": 5, "description": "A canonical Admin 1-3 loc_id returned by resolve_points. All coordinates in the call must belong to its scope."},
+                    "shallow_loc_id": {"type": "string", "minLength": 5, "description": "The deepest canonical Admin 1-3 loc_id returned by resolve_point, such as USA-NY-061-009903."},
                     "target_admin_level": {"anyOf": [{"type": "string"}, {"type": "integer"}], "description": "Optional exact Admin 4-6 level. Omit for the deepest available match."},
-                    "family": {"type": "string", "pattern": "^[a-z0-9_]+$", "default": "administrative", "description": "One canonical family ID for the entire batch."},
-                    "batch_id": {"type": "string", "description": "Optional caller-supplied batch id echoed in the result."},
+                    "family": {"type": "string", "pattern": "^[a-z0-9_]+$", "default": "administrative", "description": "One family selector. Defaults to administrative; use marine for the direct Marine resolver, or a canonical country family such as postal_area, watershed, or land_management_region."},
+                    "batch_id": {"type": "string", "description": "Optional caller-supplied batch id echoed for point arrays."},
                     "request_id": {"type": "string", "description": "Optional caller-supplied request id for tracing."},
                 },
-                "required": ["points", "shallow_loc_id"],
+                "required": ["shallow_loc_id"],
+                "oneOf": [
+                    {"required": ["lat", "lon"], "not": {"required": ["points"]}},
+                    {"required": ["points"], "not": {"anyOf": [{"required": ["lat"]}, {"required": ["lon"]}]}},
+                ],
                 "additionalProperties": False,
             },
             "annotations": {"readOnlyHint": True},
         },
         {
-            "name": "loc_id_info",
-            "title": "Get loc_id / Chain Details",
-            "description": "The drill-down tool for loc_ids returned by resolve_point and other geography calls. Pass one loc_id, or pass the point result's stack loc_ids together, to retrieve metadata, strict stored parentage, shape status, vintage/lifecycle fields, and child counts. Historical records are returned as requested; when an evidenced successor exists, supersession separately asks whether the caller wants it and never substitutes or fetches it automatically. Set include_hierarchy for the strict same-release ancestor chain and include_references for external or side-chain crosswalks. This is where detailed chain explanation belongs; resolve_point intentionally stays compact. For exact polygons use get_geometry, and for overlap or successor analysis use compare_geographies. No payment required.",
+            "name": "get_loc_id_info",
+            "title": "Get loc_id Information",
+            "description": "The navigation and enrichment tool for one loc_id or a bounded loc_ids array. Its lightweight default returns identity, strict stored parentage, shape status, lifecycle fields, candidate data-pack coverage, available geometry families, and executable next calls without scanning data rows or polygon coordinates. Set include_hierarchy for the strict same-release ancestor chain and include_references for exact external or cross-family connections. Historical records are returned as requested and successors are never substituted automatically. Use get_data for rows, get_geometry for polygons, and compare_geographies for pairwise relationships. No payment required.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -439,7 +384,7 @@ def build_tool_definitions() -> list[dict]:
         {
             "name": "compare_geographies",
             "title": "Compare Geographic Identities",
-            "description": "Detailed relationship tool for two geographic identities. Returns temporal validity, N-way successor context, topology, geodesic intersection area, and directional overlap shares when approved geometry exists. Use this after a compact point lookup when the caller asks whether two tiers/releases really contain or overlap one another. A point-chain seam is not proof of strict parentage. Use convert_reference first for names or outside identifiers. No payment required.",
+            "description": "Smart relationship tool for two geographic identities. It answers canonical Admin Spine containment and common ancestry directly from loc_id paths, then checks maintained crosswalk evidence between different families, and loads polygons only when those cheaper sources cannot answer the spatial question. Exact geometry fallback returns topology, geodesic intersection area, and directional overlap shares. Temporal validity and N-way successor context remain independent of the spatial evidence source. Use convert_reference first for names or outside identifiers. No payment required.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -483,7 +428,7 @@ def build_tool_definitions() -> list[dict]:
         {
             "name": "get_geometry",
             "title": "Get loc_id Geometry",
-            "description": "Availability check and bounded shape retrieval for exact loc_ids or one administrative scope. Exact selection accepts loc_id or loc_ids. Scope selection accepts parent_loc_id plus admin_level and uses the optimized Admin Spine layout: Admin 0-3 stays on one national bank, while deeper levels require an Admin 1 parent and stay on one deep partition. The default response is the fast preflight: it projects has_shape, shape metadata, centroid, and bounding box without reading polygon coordinates. Set include_polygon=true only when exact coordinates are needed. Independent geometry families are selected by exact loc_ids, not inferred as administrative descendants. Use loc_id_info for hierarchy or crosswalk details. Historical geometry is returned first and successors are never substituted automatically. No payment required.",
+            "description": "Availability check and bounded shape retrieval for exact loc_ids or one administrative scope. Exact selection accepts loc_id or loc_ids. Scope selection accepts parent_loc_id plus admin_level and uses the optimized Admin Spine layout: Admin 0-3 stays on one national bank, while deeper levels require an Admin 1 parent and stay on one deep partition. The default response is the fast preflight: it projects has_shape, shape metadata, centroid, and bounding box without reading polygon coordinates. Set include_polygon=true only when exact coordinates are needed. Independent geometry families are selected by exact loc_ids, not inferred as administrative descendants. Use get_loc_id_info for hierarchy, catalog coverage, or crosswalk details. Historical geometry is returned first and successors are never substituted automatically. No payment required.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -612,7 +557,7 @@ def build_tool_definitions() -> list[dict]:
         {
             "name": "estimate_conversion_job",
             "title": "Estimate loc_id Conversion Job",
-            "description": "Free dry-run quote for uploaded or pasted user data conversion. Checks a fixed representative sample of up to 32 supplied rows through the real conversion resolver, then estimates total resolvable rows, output bytes, errors, and charge units. row_count is the full dataset size and is not replaced by the sample size. Conversion execution validates every submitted row and reports structured failures for unmatched keys. For a coordinate file, set geography_binding.mode to coordinates and send point_count (valid coordinate pairs counted locally), row_count, and request_id instead of items: no point is resolved, the quote is the ceiling for exactly those points, and resolve_points called with the same request_id reuses its quote_id. Quotes are maximums; execution charges only successfully resolved rows or points.",
+            "description": "Free dry-run quote for uploaded or pasted user data conversion. Checks a fixed representative sample of up to 32 supplied rows through the real conversion resolver, then estimates total resolvable rows, output bytes, errors, and charge units. row_count is the full dataset size and is not replaced by the sample size. Conversion execution validates every submitted row and reports structured failures for unmatched keys. For a coordinate file, set geography_binding.mode to coordinates and send point_count (valid coordinate pairs counted locally), row_count, and request_id instead of items: no point is resolved, the quote is the ceiling for exactly those points, and resolve_point called with the same request_id reuses its quote_id. Quotes are maximums; execution charges only successfully resolved rows or points.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -643,7 +588,7 @@ def build_tool_definitions() -> list[dict]:
                     }, "required": ["value"], "additionalProperties": False}, "description": "Representative sample or full rows; the estimate resolves at most the first 32. Row-level fields may override top-level defaults."},
                     "row_count": {"type": "integer", "minimum": 0, "description": "Expected total row count when only a sample or artifact pointer is provided."},
                     "point_count": {"type": "integer", "minimum": 0, "description": "Coordinate mode only: rows with a valid latitude/longitude pair. The quote ceiling; blank or invalid rows are excluded and never charged."},
-                    "batch_id": {"type": "string", "description": "Coordinate mode only: batch id the resolve_points run will send."},
+                    "batch_id": {"type": "string", "description": "Coordinate mode only: batch id the resolve_point run will send."},
                     "target_admin_level": {"anyOf": [{"type": "string"}, {"type": "integer"}]},
                     "iso3": {"type": "string"},
                     "relationship_vintage": {"type": "string"},
@@ -776,7 +721,7 @@ def build_tool_definitions() -> list[dict]:
         {
             "name": "get_data",
             "title": "Get Data",
-            "description": "The single workhorse for published data packs inside the loc_id universe. After get_pack, pass its pack_id, exact metric ids, structured filters, sort, and row limit. filters.region_ids accepts canonical loc_ids; an administrative parent such as USA-TX matches descendant rows at the pack's published geography grain. Use resolution/onboarding tools before get_data when the input is coordinates, outside codes, names, or an unidentified user column. Pack metadata owns source routing, time grain, geography, access, and pack-specific rules; callers do not choose internal source_id values. Geometry tool families use their focused next_step tools instead of this row-query contract.",
+            "description": "The single workhorse for published data-pack rows inside the loc_id universe. After get_pack, pass its pack_id, exact metric ids, structured filters, sort, and row limit. filters.region_ids accepts canonical loc_ids; an administrative parent such as USA-TX matches descendant rows at the pack's published geography grain. Disaster event rows always include their stable event_id; pass that id to get_event for relationships, affected places, native observations, or explicit event geometry. Use resolution/onboarding tools before get_data when the input is coordinates, outside codes, names, or an unidentified user column. Pack metadata owns source routing, time grain, geography, access, and pack-specific rules; callers do not choose internal source_id values. Geometry tool families use their focused next_step tools instead of this row-query contract.",
             "inputSchema": {
                 "type": "object",
                 "properties": {

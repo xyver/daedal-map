@@ -345,6 +345,115 @@ def _spatial_relationship(left_geometry: Any, right_geometry: Any) -> dict[str, 
     }
 
 
+def _admin_spine_relationship(left_loc_id: str, right_loc_id: str) -> dict[str, Any] | None:
+    """Return relationship evidence encoded by canonical Admin Spine loc_ids.
+
+    Administrative loc_ids are hierarchical paths.  Prefix containment is
+    therefore authoritative and does not require loading either polygon.
+    Sibling paths still expose their common ancestor, but are not treated as a
+    complete spatial answer because adjacency and boundary contact need shapes.
+    """
+    left = canonicalize_loc_id(left_loc_id)
+    right = canonicalize_loc_id(right_loc_id)
+    admin_families = {"admin_0", "admin_local", "admin_geometry"}
+    if classify_loc_id_family(left) not in admin_families or classify_loc_id_family(right) not in admin_families:
+        return None
+
+    left_parts = left.split("-")
+    right_parts = right.split("-")
+    common_parts: list[str] = []
+    for left_part, right_part in zip(left_parts, right_parts):
+        if left_part != right_part:
+            break
+        common_parts.append(left_part)
+    common_ancestor = "-".join(common_parts) or None
+    evidence = {
+        "relationship_basis": "loc_id_admin_spine",
+        "geometry_loaded": False,
+        "common_ancestor_loc_id": common_ancestor,
+        "left_admin_path": ["-".join(left_parts[:index]) for index in range(1, len(left_parts) + 1)],
+        "right_admin_path": ["-".join(right_parts[:index]) for index in range(1, len(right_parts) + 1)],
+    }
+    if left == right:
+        return {
+            **evidence,
+            "decisive": True,
+            "hierarchy_relation": "same_identity",
+            "spatial_relation": "equals",
+            "intersects": True,
+            "left_inside_right": True,
+            "right_inside_left": True,
+        }
+    if len(left_parts) > len(right_parts) and left_parts[:len(right_parts)] == right_parts:
+        return {
+            **evidence,
+            "decisive": True,
+            "hierarchy_relation": "left_descends_from_right",
+            "spatial_relation": "within",
+            "intersects": True,
+            "left_inside_right": True,
+            "right_inside_left": False,
+        }
+    if len(right_parts) > len(left_parts) and right_parts[:len(left_parts)] == left_parts:
+        return {
+            **evidence,
+            "decisive": True,
+            "hierarchy_relation": "right_descends_from_left",
+            "spatial_relation": "contains",
+            "intersects": True,
+            "left_inside_right": False,
+            "right_inside_left": True,
+        }
+    return {
+        **evidence,
+        "decisive": False,
+        "hierarchy_relation": "shared_ancestor" if common_ancestor else "separate_admin_trees",
+    }
+
+
+def _direct_crosswalk_relationship(
+    left_loc_id: str,
+    right_loc_id: str,
+    *,
+    reference_fetcher: Callable[[str], dict[str, Any]],
+) -> dict[str, Any] | None:
+    """Find direct published crosswalk evidence before loading polygons."""
+    left = canonicalize_loc_id(left_loc_id)
+    right = canonicalize_loc_id(right_loc_id)
+    left_family = classify_loc_id_family(left)
+    right_family = classify_loc_id_family(right)
+    if not left_family or not right_family or left_family == right_family:
+        return None
+
+    for origin, target, direction in ((left, right, "left_to_right"), (right, left, "right_to_left")):
+        payload = reference_fetcher(origin)
+        for reference in payload.get("references") or []:
+            if canonicalize_loc_id(str(reference.get("value") or "")) != target:
+                continue
+            role = str(reference.get("role") or "crosswalk_relationship")
+            return {
+                "decisive": True,
+                "relationship_basis": "published_crosswalk",
+                "geometry_loaded": False,
+                "spatial_relation": "overlaps" if "overlap" in role else "crosswalk_related",
+                "intersects": True if "overlap" in role else None,
+                "crosswalk_evidence": {
+                    "direction": direction,
+                    "role": role,
+                    "system": reference.get("system"),
+                    "relationship_id": reference.get("relationship_id"),
+                    "relationship_vintage": reference.get("relationship_vintage"),
+                    "source_area_share": reference.get("source_area_share"),
+                    "target_area_share": reference.get("target_area_share"),
+                    "match_share": reference.get("match_share"),
+                    "is_primary": reference.get("is_primary"),
+                    "method": reference.get("method"),
+                    "authority": reference.get("authority"),
+                },
+            }
+    return None
+
+
 def compare_geographies(
     left_loc_id: str,
     right_loc_id: str,
@@ -356,8 +465,9 @@ def compare_geographies(
     geometry_fetcher: Callable[..., dict[str, Any]] | None = None,
     resolution_fetcher: Callable[[str], dict[str, Any]] | None = None,
     identity_fetcher: Callable[[str, date | None], dict[str, Any]] | None = None,
+    reference_fetcher: Callable[[str], dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """Compare two identities in time and, when available, exact geometry."""
+    """Compare identities using hierarchy, crosswalks, then exact geometry."""
     from .reference_exchange import resolve_loc_id_input
 
     resolution_fetcher = resolution_fetcher or resolve_loc_id_input
@@ -394,6 +504,47 @@ def compare_geographies(
         for identity in (left_identity, right_identity):
             identity.pop("direct_successors", None)
             identity.pop("present_day_descendants", None)
+
+    left_valid = left_identity.get("valid_at_requested_time")
+    right_valid = right_identity.get("valid_at_requested_time")
+    if left_valid is False or right_valid is False:
+        temporal_relation = "one_or_more_not_valid"
+    elif left_valid is True and right_valid is True:
+        temporal_relation = "coexistent"
+    else:
+        temporal_relation = "coexistence_unknown"
+
+    admin_relationship = _admin_spine_relationship(left_id, right_id)
+    if admin_relationship and admin_relationship.get("decisive"):
+        return {
+            "ok": True,
+            "left": left_identity,
+            "right": right_identity,
+            "temporal_relation": temporal_relation,
+            **{key: value for key, value in admin_relationship.items() if key != "decisive"},
+        }
+
+    if reference_fetcher is None:
+        from .reference_exchange import loc_id_references
+
+        reference_fetcher = loc_id_references
+    crosswalk_relationship = _direct_crosswalk_relationship(
+        left_id,
+        right_id,
+        reference_fetcher=reference_fetcher,
+    )
+    if crosswalk_relationship:
+        return {
+            "ok": True,
+            "left": left_identity,
+            "right": right_identity,
+            "temporal_relation": temporal_relation,
+            **{key: value for key, value in crosswalk_relationship.items() if key != "decisive"},
+            **({
+                "hierarchy_relation": admin_relationship.get("hierarchy_relation"),
+                "common_ancestor_loc_id": admin_relationship.get("common_ancestor_loc_id"),
+            } if admin_relationship else {}),
+        }
 
     if geometry_fetcher is None:
         from .reference_exchange import get_geometry_reference
@@ -434,6 +585,12 @@ def compare_geographies(
         "left": left_identity,
         "right": right_identity,
         "temporal_relation": temporal_relation,
+        "relationship_basis": "exact_geometry",
+        "geometry_loaded": True,
+        **({
+            "hierarchy_relation": admin_relationship.get("hierarchy_relation"),
+            "common_ancestor_loc_id": admin_relationship.get("common_ancestor_loc_id"),
+        } if admin_relationship else {}),
         **spatial,
         "geometry_sources": {
             "left": {key: left_geometry.get(key) for key in ("loc_id", "name", "family", "admin_level", "has_shape", "valid_from", "valid_to", "geometry_vintage", "bank_id")},
@@ -447,8 +604,8 @@ def compare_geographies(
 
 
 def compare_geographies_batch(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Compare many pairs after resolving and hydrating each unique endpoint once."""
-    from .reference_exchange import get_geometry_references, resolve_loc_id_input
+    """Compare many pairs with cached, lazy evidence lookups per endpoint."""
+    from .reference_exchange import get_geometry_reference, loc_id_references, resolve_loc_id_input
 
     requested_ids: list[str] = []
     seen_requested: set[str] = set()
@@ -460,29 +617,9 @@ def compare_geographies_batch(items: list[dict[str, Any]]) -> list[dict[str, Any
                 requested_ids.append(requested)
 
     resolutions = {requested: resolve_loc_id_input(requested) for requested in requested_ids}
-    canonical_ids: list[str] = []
-    seen_canonical: set[str] = set()
-    for resolution in resolutions.values():
-        canonical = canonicalize_loc_id(str(resolution.get("loc_id") or "")) if resolution.get("ok") else ""
-        if canonical and canonical not in seen_canonical:
-            seen_canonical.add(canonical)
-            canonical_ids.append(canonical)
-
-    geometry_results = (
-        get_geometry_references(canonical_ids, include_polygon=True, include_info=False).get("results") or []
-        if canonical_ids else []
-    )
     geometries: dict[str, dict[str, Any]] = {}
-    for result in geometry_results:
-        canonical = canonicalize_loc_id(str(result.get("loc_id") or ""))
-        if not canonical:
-            continue
-        prepared = dict(result)
-        if prepared.get("geometry"):
-            prepared["_decoded_geometry"] = make_valid(shape(prepared["geometry"]))
-        geometries[canonical] = prepared
-
     identity_cache: dict[tuple[str, date | None], dict[str, Any]] = {}
+    reference_cache: dict[str, dict[str, Any]] = {}
 
     def cached_resolution(loc_id: str) -> dict[str, Any]:
         canonical = canonicalize_loc_id(loc_id)
@@ -490,12 +627,18 @@ def compare_geographies_batch(items: list[dict[str, Any]]) -> list[dict[str, Any
 
     def cached_geometry(loc_id: str, **_kwargs: Any) -> dict[str, Any]:
         canonical = canonicalize_loc_id(loc_id)
-        return geometries.get(canonical) or {
-            "ok": False,
-            "loc_id": canonical,
-            "has_shape": False,
-            "error": "no geometry found",
-        }
+        if canonical not in geometries:
+            prepared = dict(get_geometry_reference(canonical, include_polygon=True))
+            if prepared.get("geometry"):
+                prepared["_decoded_geometry"] = make_valid(shape(prepared["geometry"]))
+            geometries[canonical] = prepared
+        return geometries[canonical]
+
+    def cached_references(loc_id: str) -> dict[str, Any]:
+        canonical = canonicalize_loc_id(loc_id)
+        if canonical not in reference_cache:
+            reference_cache[canonical] = loc_id_references(canonical, limit_per_system=100)
+        return reference_cache[canonical]
 
     def cached_identity(loc_id: str, when: date | None) -> dict[str, Any]:
         key = (canonicalize_loc_id(loc_id), when)
@@ -527,6 +670,7 @@ def compare_geographies_batch(items: list[dict[str, Any]]) -> list[dict[str, Any
                 geometry_fetcher=cached_geometry,
                 resolution_fetcher=cached_resolution,
                 identity_fetcher=cached_identity,
+                reference_fetcher=cached_references,
             ))
         except ValueError as exc:
             results.append({

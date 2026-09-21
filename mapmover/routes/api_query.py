@@ -1220,6 +1220,15 @@ async def execute_query_dataset_payload(req: Request, payload: dict[str, Any]) -
     select_columns += metric_columns
     if spec.time_field and not selected_dimensions:
         select_columns.insert(1, spec.time_field)
+    event_identity_columns: list[str] = []
+    if spec.query_mode == "single_source_events" and not selected_dimensions:
+        event_identity_columns = [
+            column for column in ("event_id", "source_event_id")
+            if column in available_columns
+        ]
+        for identity_column in reversed(event_identity_columns):
+            if identity_column not in select_columns:
+                select_columns.insert(0, identity_column)
     for sort_field, _sort_direction in sort_items:
         if sort_field not in select_columns:
             select_columns.append(sort_field)
@@ -1269,6 +1278,8 @@ async def execute_query_dataset_payload(req: Request, payload: dict[str, Any]) -
                 shaped["labels"] = {column: json_safe_value(row.get(column)) for column in label_columns}
         else:
             shaped["loc_id"] = json_safe_value(row.get(spec.location_field))
+            for identity_column in event_identity_columns:
+                shaped[identity_column] = json_safe_value(row.get(identity_column))
         if spec.time_field and not selected_dimensions:
             shaped[spec.time_field] = json_safe_value(format_query_time_value(row.get(spec.time_field)))
         non_null_metric_count = 0

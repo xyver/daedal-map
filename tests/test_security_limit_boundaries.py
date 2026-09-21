@@ -92,10 +92,10 @@ class ToolLimiterIdentityTests(unittest.TestCase):
             mock.patch("mapmover.routes.mcp._trusted_artifact_access", return_value=(None, None)),
             mock.patch("mapmover.routes.mcp.rate_limiter.check", return_value=(True, 0)) as limiter_mock,
         ):
-            response = _live_tool_rate_limit_response(request, "resolve_points", "rpc-1")
+            response = _live_tool_rate_limit_response(request, "resolve_point", "rpc-1")
         self.assertIsNone(response)
         key = limiter_mock.call_args.args[0]
-        self.assertEqual(key, "mcp-tool:resolve_points:plus:api_key:key-7")
+        self.assertEqual(key, "mcp-tool:resolve_point:plus:api_key:key-7")
 
 
 class RateLimiterDiagnosticsTests(unittest.TestCase):

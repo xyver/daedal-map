@@ -2080,7 +2080,7 @@ def resolve_points_to_locations(
                 # deliberately not filtered through the preceding row's strict
                 # parent_id: the latest available fine tier can be older than a
                 # newly published shallow tier. Strict parent traversal belongs
-                # to one pinned release and is exposed by loc_id_info/scope tools.
+                # to one pinned release and is exposed by get_loc_id_info/scope tools.
                 deep_matches = deep_index.match_points(grouped_items) if deep_index is not None else [None] * len(grouped_items)
                 for item, deep_spine_match in zip(grouped_items, deep_matches):
                     match_row = deep_spine_match.row if deep_spine_match is not None else None
@@ -2962,7 +2962,7 @@ def _build_metadata_based_location_info(
     *,
     include_memberships: bool = True,
 ) -> dict:
-    """Build loc_id_info without reading or materializing polygon payloads."""
+    """Build loc_id information without reading or materializing polygon payloads."""
     family = (
         classify_loc_id_family(loc_id)
         if props.get("admin_level") is not None
