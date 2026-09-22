@@ -271,6 +271,33 @@ class ReferenceExchangeRuntimeTests(unittest.TestCase):
         self.assertEqual(result["supersession"]["successor_loc_id"], "USA-CT-NEW")
         self.assertFalse(result["supersession"]["successor_included"])
 
+    def test_geometry_metadata_response_preserves_source_material_lineage(self) -> None:
+        row = {
+            "loc_id": "CAN-ON",
+            "admin_level": 1,
+            "name": "Ontario",
+            "has_polygon": True,
+            "bank_id": "can_admin1_statcan_2021",
+            "material_id": "can_admin1_statcan_2021",
+            "release_id": "can_geometry_1_3_4",
+            "source_id": "statistics_canada_boundary_files",
+            "source_vintage": "2021",
+        }
+        with mock.patch.object(
+            reference_exchange, "get_selection_geometry_metadata", return_value=[row],
+        ):
+            payload = get_geometry_references(
+                ["CAN-ON"], include_polygon=False, include_info=False,
+            )
+
+        self.assertEqual(payload["results"][0]["lineage"], {
+            "material_id": "can_admin1_statcan_2021",
+            "bank_id": "can_admin1_statcan_2021",
+            "release_id": "can_geometry_1_3_4",
+            "source_id": "statistics_canada_boundary_files",
+            "source_vintage": "2021",
+        })
+
     def test_geometry_polygon_does_not_include_successor_shape(self) -> None:
         requested = "USA-CT-OLD"
         feature = {

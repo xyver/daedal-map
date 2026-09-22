@@ -113,14 +113,24 @@ class AccessPolicySharedTests(unittest.TestCase):
         self.assertFalse(decision["settlement_required"])
 
     def test_geometry_access_facts_can_be_scoped_to_the_relevant_family(self) -> None:
-        from mapmover.runtime.geometry_catalog import geometry_bank_access_facts
+        from mapmover.runtime.geometry_catalog import (
+            geometry_bank_access_facts,
+            geometry_bank_id_map_for_metadata,
+            geometry_bank_ids_for_metadata,
+            geometry_bank_lineage,
+        )
 
         catalog = {
             "geometry_banks": [
                 {
                     "bank_id": "usa_admin",
+                    "geometry_path": "geometry/countries/USA/relationships/admin/shapes/admin.parquet",
+                    "package_manifest": "geometry/countries/USA/relationships/admin/manifest.json",
                     "scope": "USA",
                     "family": "admin_boundary",
+                    "material_id": "usa_admin",
+                    "release_id": "usa_geometry_1_3_3",
+                    "source_ids": ["us_census_tiger_line"],
                     "material_policy": {
                         "permission": "paid",
                         "hosted_access": {
@@ -170,7 +180,57 @@ class AccessPolicySharedTests(unittest.TestCase):
                 geometry_bank_access_facts(bank_ids={"usa_admin"}, surface="client_geometry"),
                 ({"paid"}, True),
             )
+            self.assertEqual(
+                geometry_bank_access_facts(
+                    bank_ids={"geometry/countries/USA/relationships/admin"},
+                    surface="client_geometry",
+                ),
+                ({"paid"}, True),
+            )
+            self.assertEqual(
+                geometry_bank_lineage("geometry/countries/USA/relationships/admin"),
+                {
+                    "source_ids": ["us_census_tiger_line"],
+                    "material_ids": ["usa_admin"],
+                    "bank_ids": ["usa_admin"],
+                    "release_ids": ["usa_geometry_1_3_3"],
+                    "source_id": "us_census_tiger_line",
+                    "material_id": "usa_admin",
+                    "bank_id": "usa_admin",
+                    "release_id": "usa_geometry_1_3_3",
+                },
+            )
             self.assertEqual(geometry_bank_access_facts(), ({"paid", "free"}, False))
+
+            catalog["geometry_banks"][0]["admin_level"] = 6
+            catalog["geometry_banks"][0]["geometry_path"] = (
+                "geometry/countries/USA/releases/geometry/usa_geometry_1_3_3/"
+                "runtime/admin_spine/deep/USA-*.parquet"
+            )
+            self.assertEqual(
+                geometry_bank_ids_for_metadata([{
+                    "loc_id": "USA-TX-201-EXAMPLE",
+                    "iso_a3": "USA",
+                    "admin_level": 6,
+                    "geometry_bank": (
+                        "geometry/countries/USA/releases/geometry/usa_geometry_1_3_3/"
+                        "runtime/admin_spine/deep/USA-TX.parquet"
+                    ),
+                }]),
+                {"usa_admin"},
+            )
+            self.assertEqual(
+                geometry_bank_id_map_for_metadata([{
+                    "loc_id": "USA-TX-201-EXAMPLE",
+                    "iso_a3": "USA",
+                    "admin_level": 6,
+                    "geometry_bank": (
+                        "geometry/countries/USA/releases/geometry/usa_geometry_1_3_3/"
+                        "runtime/admin_spine/deep/USA-TX.parquet"
+                    ),
+                }]),
+                {"USA-TX-201-EXAMPLE": "usa_admin"},
+            )
 
     def test_partition_surface_contract_is_scoped_and_fail_closed(self) -> None:
         from mapmover.runtime.geometry_catalog import geometry_bank_access_facts

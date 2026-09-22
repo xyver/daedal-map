@@ -176,6 +176,55 @@ def _reference_analytics_metadata(payload: dict[str, Any], result: dict[str, Any
     }
 
 
+def _geometry_lineage_analytics_metadata(result: dict[str, Any] | None) -> dict[str, Any]:
+    """Return bounded catalog identifiers used by a geometry response.
+
+    These are publication identities, not requested location identifiers or
+    returned row data. Keeping the summary bounded makes it suitable for the
+    existing analytics envelope while preserving exact source-level metering.
+    """
+    values: dict[str, set[str]] = {
+        "source_ids": set(),
+        "material_ids": set(),
+        "bank_ids": set(),
+        "release_ids": set(),
+        "crosswalk_ids": set(),
+    }
+    scalar_fields = {
+        "source_id": "source_ids",
+        "material_id": "material_ids",
+        "bank_id": "bank_ids",
+        "release_id": "release_ids",
+        "crosswalk_id": "crosswalk_ids",
+    }
+    list_fields = {"source_ids": "source_ids", "upstream_material_ids": "material_ids"}
+
+    def visit(value: Any, depth: int = 0) -> None:
+        if depth > 8:
+            return
+        if isinstance(value, dict):
+            for key, item in value.items():
+                bucket = scalar_fields.get(key)
+                if bucket and item not in (None, "") and len(values[bucket]) < 20:
+                    values[bucket].add(str(item).strip()[:160])
+                list_bucket = list_fields.get(key)
+                if list_bucket and isinstance(item, list):
+                    for member in item:
+                        if member not in (None, "") and len(values[list_bucket]) < 20:
+                            values[list_bucket].add(str(member).strip()[:160])
+                visit(item, depth + 1)
+        elif isinstance(value, list):
+            for item in value[:100]:
+                visit(item, depth + 1)
+
+    visit(result if isinstance(result, dict) else {})
+    summary = {key: sorted(items) for key, items in values.items() if items}
+    if summary:
+        summary["lineage_material_count"] = len(values["material_ids"] | values["bank_ids"])
+        summary["lineage_source_count"] = len(values["source_ids"])
+    return summary
+
+
 def _required_mcp_permission(tool_name: str) -> str:
     if tool_name in MCP_PACK_READ_TOOLS:
         return "packs:read"
@@ -1403,6 +1452,9 @@ def _log_mcp_tool_usage_event(
         **inherited_metadata,
         "surface": inherited_metadata.get("surface") or "agent_api_mcp",
         "mcp_tool_name": tool_name,
+        **_geometry_lineage_analytics_metadata(
+            response_payload if isinstance(response_payload, dict) else None
+        ),
         **(metadata or {}),
     }
     merged_metadata["access_lane"] = payment_rail
@@ -4349,11 +4401,10 @@ async def _execute_get_geometry_tool(request: Request, arguments: dict[str, Any]
         get_selection_geometry_metadata,
         loc_ids,
     )
-    access_bank_ids = {
-        str(row.get("bank_id") or "").strip()
-        for row in access_rows or []
-        if isinstance(row, dict) and str(row.get("bank_id") or "").strip()
-    }
+    from mapmover.runtime.geometry_catalog import geometry_bank_id_map_for_metadata
+
+    access_bank_by_loc_id = geometry_bank_id_map_for_metadata(access_rows or [])
+    access_bank_ids = set(access_bank_by_loc_id.values())
     commercial_context = None
     if access_bank_ids:
         effective_access = _geometry_material_effective_access(
@@ -4407,6 +4458,10 @@ async def _execute_get_geometry_tool(request: Request, arguments: dict[str, Any]
 
     items = result.get("results") or result.get("items") or []
     for item in items:
+        if isinstance(item, dict) and not item.get("bank_id"):
+            item["bank_id"] = access_bank_by_loc_id.get(
+                str(item.get("loc_id") or "").strip().upper()
+            )
         if isinstance(item, dict) and not item.get("ok"):
             item["error"] = _normalize_tool_error(
                 item.get("error"),
@@ -4849,6 +4904,7 @@ async def _execute_geometry_job_runtime_tool(request: Request, arguments: dict[s
             "job_status": status,
             "quote_id": result.get("quote_id") or payload.get("quote_id"),
             **(_reference_analytics_metadata(payload, result) if tool_name in {"estimate_conversion_job", "create_conversion_job"} else {}),
+            **_geometry_lineage_analytics_metadata(result),
             **_compute_metadata(
                 response_payload=result,
                 stages=stages,

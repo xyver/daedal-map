@@ -138,12 +138,14 @@ GEOMETRY_METADATA_COLUMNS.extend([
     "source_id",
     "source_system",
     "geometry_source",
+    "geometry_bank",
     "bank_id",
     "release_id",
     "geography_release_id",
     "lifecycle_status",
     "superseded_by",
     "successor_loc_id",
+    "lineage",
 ])
 
 
@@ -1646,6 +1648,19 @@ def _compact_point_stack_entry(row) -> dict:
     )
     if vintage is not None:
         entry["vintage"] = vintage
+    lineage = row.get("lineage") if isinstance(row.get("lineage"), dict) else {
+        "material_id": _geometry_metadata_value(row, "material_id", "bank_id"),
+        "bank_id": _geometry_metadata_value(row, "bank_id"),
+        "release_id": _geometry_metadata_value(row, "release_id"),
+        "source_id": _geometry_metadata_value(row, "source_id"),
+        "source_system": _geometry_metadata_value(row, "source_system"),
+        "source_vintage": _geometry_metadata_value(row, "source_vintage", "source_release"),
+        "geometry_source": _geometry_metadata_value(row, "geometry_source"),
+        "geometry_vintage": _geometry_metadata_value(row, "geometry_vintage"),
+    }
+    lineage = {key: value for key, value in lineage.items() if value not in (None, "", [])}
+    if lineage:
+        entry["lineage"] = lineage
     if row.get("identity_only"):
         entry["identity_only"] = True
     return entry
@@ -4132,7 +4147,7 @@ def _geometry_metadata_value(row, *keys):
 def _geometry_metadata_row(row) -> dict:
     """Return loc_id geometry metadata without polygon payload."""
     declared_has_polygon = _geometry_metadata_value(row, "has_polygon", "has_shape")
-    return {
+    item = {
         "loc_id": row.get("local_loc_id") or row.get("loc_id"),
         "source_loc_id": row.get("source_loc_id"),
         "name": row.get("name"),
@@ -4159,6 +4174,7 @@ def _geometry_metadata_row(row) -> dict:
         "source_id": row.get("source_id"),
         "source_system": row.get("source_system"),
         "geometry_source": row.get("geometry_source"),
+        "geometry_bank": row.get("geometry_bank"),
         "bank_id": row.get("bank_id"),
         "release_id": _geometry_metadata_value(row, "geography_release_id", "release_id"),
         "children_count": row.get("children_count"),
@@ -4168,6 +4184,10 @@ def _geometry_metadata_row(row) -> dict:
         "land_area": row.get("land_area"),
         "water_area": row.get("water_area"),
     }
+    lineage = row.get("lineage")
+    if isinstance(lineage, dict) and lineage:
+        item["lineage"] = lineage
+    return item
 
 
 def _reference_graph_shape_owned_ids(loc_ids: list[str]) -> set[str]:
@@ -4222,6 +4242,7 @@ def get_selection_geometry_metadata(loc_ids: list) -> list[dict]:
     query_metadata_columns = [
         "loc_id", "parent_id", "admin_level", "name",
         "source_id", "source_system", "source_vintage", "geometry_source",
+        "geometry_bank",
         "iso_a3", "has_polygon", "centroid_lon", "centroid_lat",
         "bbox_min_lon", "bbox_min_lat", "bbox_max_lon", "bbox_max_lat",
     ]

@@ -593,8 +593,8 @@ def compare_geographies(
         } if admin_relationship else {}),
         **spatial,
         "geometry_sources": {
-            "left": {key: left_geometry.get(key) for key in ("loc_id", "name", "family", "admin_level", "has_shape", "valid_from", "valid_to", "geometry_vintage", "bank_id")},
-            "right": {key: right_geometry.get(key) for key in ("loc_id", "name", "family", "admin_level", "has_shape", "valid_from", "valid_to", "geometry_vintage", "bank_id")},
+            "left": {key: left_geometry.get(key) for key in ("loc_id", "name", "family", "admin_level", "has_shape", "valid_from", "valid_to", "geometry_vintage", "bank_id", "lineage")},
+            "right": {key: right_geometry.get(key) for key in ("loc_id", "name", "family", "admin_level", "has_shape", "valid_from", "valid_to", "geometry_vintage", "bank_id", "lineage")},
         },
         "area_share_meaning": {
             "left_area_share": "fraction of the left geometry covered by the intersection",

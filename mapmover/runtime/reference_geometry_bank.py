@@ -22,6 +22,7 @@ from shapely.wkb import loads as load_wkb
 from ..duckdb_helpers import parquet_available, parquet_columns, path_to_uri, run_df, select_rows
 from ..paths import DATA_ROOT
 from .reference_graph import identities
+from .geometry_catalog import geometry_bank_lineage
 
 
 IDENTITY_VERSION_COLUMNS = ["loc_id", "geometry_partition", "shape_storage"]
@@ -209,6 +210,7 @@ def _normalized_row(
     min_lon, min_lat, max_lon, max_lat = geometry.bounds
     centroid = geometry.centroid
     bank = str(identity.get("geometry_bank") or "").strip()
+    lineage = geometry_bank_lineage(bank)
     return {
         # The graph identity is canonical. ``geometry_loc_id`` may point at an
         # immutable shape row retained under a retired identifier.
@@ -243,6 +245,7 @@ def _normalized_row(
         "geometry_vintage": identity.get("source_vintage") or row.get("source_release"),
         "geometry_source": identity.get("source_system"),
         "bank_id": bank,
+        "lineage": lineage,
     }
 
 

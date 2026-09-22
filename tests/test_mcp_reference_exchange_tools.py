@@ -19,6 +19,7 @@ from mapmover.runtime.reference_exchange import (
 )
 from mapmover.runtime.geometry_tool_jobs import estimate_conversion_job
 from mapmover.routes.mcp import (
+    _geometry_lineage_analytics_metadata,
     _jsonrpc_response,
     _loc_id_catalog_context,
     _tool_rate_limit_for_tier,
@@ -81,6 +82,36 @@ def _tool_call(client: TestClient, name: str, arguments: dict | None = None, *, 
 
 
 class McpReferenceExchangeToolsTests(unittest.TestCase):
+    def test_geometry_lineage_analytics_is_bounded_and_material_specific(self) -> None:
+        metadata = _geometry_lineage_analytics_metadata({
+            "items": [
+                {"lineage": {
+                    "source_ids": ["authority_a", "authority_b"],
+                    "material_id": "bank_a",
+                    "bank_id": "bank_a",
+                    "release_id": "country_geometry_1_2_3",
+                }},
+                {"crosswalk": {
+                    "crosswalk_id": "admin_to_watershed",
+                    "lineage": {
+                        "source_id": "authority_c",
+                        "material_id": "admin_to_watershed",
+                    },
+                }},
+            ],
+        })
+
+        self.assertEqual(
+            metadata["source_ids"], ["authority_a", "authority_b", "authority_c"],
+        )
+        self.assertEqual(metadata["bank_ids"], ["bank_a"])
+        self.assertEqual(
+            metadata["material_ids"], ["admin_to_watershed", "bank_a"],
+        )
+        self.assertEqual(metadata["crosswalk_ids"], ["admin_to_watershed"])
+        self.assertEqual(metadata["lineage_source_count"], 3)
+        self.assertEqual(metadata["lineage_material_count"], 2)
+
     def setUp(self) -> None:
         self._rate_limit_env = mock.patch.dict(
             "os.environ", {"MCP_LIVE_TOOL_RATE_LIMIT": "10000"}, clear=False

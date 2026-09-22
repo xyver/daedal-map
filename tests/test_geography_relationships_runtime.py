@@ -68,6 +68,8 @@ class GeographyRelationshipRuntimeTests(unittest.TestCase):
             "LEFT": _feature("LEFT", Polygon([(0, 0), (2, 0), (2, 2), (0, 2)])),
             "RIGHT": _feature("RIGHT", Polygon([(1, 0), (4, 0), (4, 2), (1, 2)])),
         }
+        geometries["LEFT"]["lineage"] = {"source_id": "left_authority"}
+        geometries["RIGHT"]["lineage"] = {"source_id": "right_authority"}
 
         result = compare_geographies(
             "LEFT",
@@ -80,6 +82,14 @@ class GeographyRelationshipRuntimeTests(unittest.TestCase):
         self.assertAlmostEqual(result["left_area_share"], 0.5, places=3)
         self.assertAlmostEqual(result["right_area_share"], 1 / 3, places=3)
         self.assertGreater(result["intersection_area_km2"], 0)
+        self.assertEqual(
+            result["geometry_sources"]["left"]["lineage"]["source_id"],
+            "left_authority",
+        )
+        self.assertEqual(
+            result["geometry_sources"]["right"]["lineage"]["source_id"],
+            "right_authority",
+        )
 
     def test_admin_spine_containment_does_not_load_geometry(self) -> None:
         geometry_fetcher = mock.Mock(side_effect=AssertionError("geometry should not be loaded"))

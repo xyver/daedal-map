@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import re
+from fnmatch import fnmatchcase
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -324,8 +325,23 @@ def geometry_bank_access_facts(
         bank_scope = str(bank.get("scope") or "").strip().upper()
         bank_family = str(bank.get("family") or "").strip().lower()
         bank_id = str(bank.get("bank_id") or bank.get("id") or "").strip()
-        if normalized_bank_ids and bank_id not in normalized_bank_ids:
-            continue
+        if normalized_bank_ids:
+            geometry_path = str(bank.get("geometry_path") or "").replace("\\", "/").strip("/")
+            package_manifest = str(bank.get("package_manifest") or "").replace("\\", "/").strip("/")
+            package_root = package_manifest.rsplit("/", 1)[0] if "/" in package_manifest else ""
+            aliases = {bank_id, geometry_path, package_root}
+            aliases.discard("")
+            matched = False
+            for requested in normalized_bank_ids:
+                normalized = requested.replace("\\", "/").strip("/")
+                if normalized in aliases or any(
+                    normalized and alias.startswith(normalized + "/")
+                    for alias in aliases
+                ):
+                    matched = True
+                    break
+            if not matched:
+                continue
         partition_contract = (
             bank.get("partition_surface_contract")
             if isinstance(bank.get("partition_surface_contract"), dict) else {}
@@ -355,6 +371,135 @@ def geometry_bank_access_facts(
         set(combined.get("permissions") or set()),
         bool((combined.get("surface_access") or {}).get(surface)),
     )
+
+
+def geometry_bank_id_map_for_metadata(rows: list[dict[str, Any]]) -> dict[str, str]:
+    """Resolve exact catalog bank ids by loc_id from geometry-row provenance.
+
+    Query-layout Parquet files intentionally store their immutable bank path,
+    while the catalog owns the source-granular bank id.  Resolve the path with
+    scope and admin level so a shared multi-level file does not broaden the
+    material decision to unrelated source records.
+    """
+    catalog = load_geometry_catalog() or {}
+    banks = catalog.get("geometry_banks") or []
+    if isinstance(banks, dict):
+        banks = list(banks.values())
+    banks = [bank for bank in banks if isinstance(bank, dict)]
+    known_ids = {
+        str(bank.get("bank_id") or bank.get("id") or "").strip()
+        for bank in banks
+    }
+    known_ids.discard("")
+    resolved: dict[str, str] = {}
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        loc_id = str(row.get("loc_id") or "").strip().upper()
+        if not loc_id:
+            continue
+        explicit_bank_id = str(row.get("bank_id") or "").strip()
+        reference = str(row.get("geometry_bank") or explicit_bank_id).replace("\\", "/").strip("/")
+        if explicit_bank_id and "/" not in explicit_bank_id and "\\" not in explicit_bank_id:
+            # The material gate will still fail closed if this declared id is
+            # absent from the catalog. Preserve it here so tests and older
+            # banks with a canonical id do not need path reconstruction.
+            resolved[loc_id] = explicit_bank_id
+            continue
+        if reference in known_ids:
+            resolved[loc_id] = reference
+            continue
+        scope = str(row.get("iso_a3") or (loc_id.split("-", 1)[0] if loc_id else "")).strip().upper()
+        try:
+            admin_level = int(row.get("admin_level"))
+        except (TypeError, ValueError):
+            admin_level = None
+        candidates: list[str] = []
+        for bank in banks:
+            bank_id = str(bank.get("bank_id") or bank.get("id") or "").strip()
+            bank_scope = str(bank.get("scope") or "").strip().upper()
+            if scope and bank_scope != scope:
+                continue
+            if admin_level is not None:
+                try:
+                    if int(bank.get("admin_level")) != admin_level:
+                        continue
+                except (TypeError, ValueError):
+                    continue
+            pattern = str(bank.get("geometry_path") or "").replace("\\", "/").strip("/")
+            if reference and pattern and not fnmatchcase(reference, pattern):
+                continue
+            if bank_id:
+                candidates.append(bank_id)
+        if len(candidates) == 1:
+            resolved[loc_id] = candidates[0]
+    return resolved
+
+
+def geometry_bank_ids_for_metadata(rows: list[dict[str, Any]]) -> set[str]:
+    """Return the exact source-granular catalog bank ids for metadata rows."""
+    return set(geometry_bank_id_map_for_metadata(rows).values())
+
+
+def geometry_bank_lineage(bank_reference: str | None) -> dict[str, Any]:
+    """Resolve a runtime bank id/path to catalog source/material lineage."""
+    requested = str(bank_reference or "").replace("\\", "/").strip("/")
+    if not requested:
+        return {}
+    catalog = load_geometry_catalog() or {}
+    banks = catalog.get("geometry_banks") or []
+    if isinstance(banks, dict):
+        banks = list(banks.values())
+    matches: list[dict[str, Any]] = []
+    for bank in banks if isinstance(banks, list) else []:
+        if not isinstance(bank, dict):
+            continue
+        geometry_path = str(bank.get("geometry_path") or "").replace("\\", "/").strip("/")
+        package_manifest = str(bank.get("package_manifest") or "").replace("\\", "/").strip("/")
+        package_root = package_manifest.rsplit("/", 1)[0] if "/" in package_manifest else ""
+        aliases = {
+            str(bank.get("bank_id") or "").strip(), geometry_path, package_root,
+        }
+        aliases.discard("")
+        if requested in aliases or any(
+            alias.startswith(requested + "/") for alias in aliases if requested
+        ):
+            matches.append(bank)
+    if not matches:
+        return {}
+    source_ids = sorted({
+        str(source_id).strip()
+        for bank in matches
+        for source_id in (
+            (bank.get("source_material_identity") or {}).get("source_ids")
+            or bank.get("source_ids") or []
+        )
+        if str(source_id).strip()
+    })
+    material_ids = sorted({
+        str(bank.get("material_id") or bank.get("bank_id") or "").strip()
+        for bank in matches
+        if str(bank.get("material_id") or bank.get("bank_id") or "").strip()
+    })
+    release_ids = sorted({
+        str(bank.get("release_id") or "").strip()
+        for bank in matches if str(bank.get("release_id") or "").strip()
+    })
+    lineage: dict[str, Any] = {
+        "source_ids": source_ids,
+        "material_ids": material_ids,
+        "bank_ids": sorted({
+            str(bank.get("bank_id")) for bank in matches if bank.get("bank_id")
+        }),
+        "release_ids": release_ids,
+    }
+    for plural, singular in (
+        ("source_ids", "source_id"), ("material_ids", "material_id"),
+        ("bank_ids", "bank_id"), ("release_ids", "release_id"),
+    ):
+        if len(lineage[plural]) == 1:
+            lineage[singular] = lineage[plural][0]
+    return {key: value for key, value in lineage.items() if value}
 
 
 def is_deprecated_geometry_loc_id(value: str | None) -> bool:

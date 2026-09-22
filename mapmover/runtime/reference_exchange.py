@@ -2148,6 +2148,7 @@ def resolve_reference(
                 "match_type": "canonical_crosswalk_identity",
                 "crosswalk_id": direct_record.get("crosswalk_id"),
                 "relationship_vintage": direct_record.get("relationship_vintage"),
+                "lineage": direct_record.get("source_material_identity"),
                 "matches": direct_matches,
                 "match_count": len(direct_matches),
             })
@@ -2796,6 +2797,7 @@ def convert_reference(
                 "crosswalk_id": direct_record.get("crosswalk_id"),
                 "relationship_vintage": direct_record.get("relationship_vintage"),
                 "cardinality": direct_record.get("cardinality"),
+                "lineage": direct_record.get("source_material_identity"),
             },
         })
     resolved = resolve_reference(
@@ -2909,6 +2911,7 @@ def convert_references_batch(requests: list[dict[str, Any]]) -> list[dict[str, A
                         "crosswalk_id": record.get("crosswalk_id"),
                         "relationship_vintage": record.get("relationship_vintage"),
                         "cardinality": record.get("cardinality"),
+                        "lineage": record.get("source_material_identity"),
                     },
                 })
                 continue
@@ -3054,6 +3057,25 @@ def _conversion_result_from_references(
     })
 
 
+def _geometry_lineage(record: dict[str, Any]) -> dict[str, Any]:
+    """Return bounded source/material lineage without changing legacy fields."""
+    explicit = record.get("lineage")
+    if isinstance(explicit, dict) and explicit:
+        return explicit
+    lineage = {
+        "material_id": record.get("material_id") or record.get("bank_id"),
+        "bank_id": record.get("bank_id"),
+        "release_id": record.get("release_id"),
+        "source_id": record.get("source_id"),
+        "source_ids": record.get("source_ids"),
+        "source_system": record.get("source_system"),
+        "source_vintage": record.get("source_vintage") or record.get("source_release"),
+        "geometry_source": record.get("geometry_source"),
+        "geometry_vintage": record.get("geometry_vintage"),
+    }
+    return {key: value for key, value in lineage.items() if value not in (None, "")}
+
+
 def _shape_geometry_reference(
     loc_id: str,
     feature: dict[str, Any] | None,
@@ -3084,6 +3106,7 @@ def _shape_geometry_reference(
         "valid_to": _first_populated(props, "valid_to", "valid_to_date"),
         "geometry_vintage": props.get("geometry_vintage"),
         "bank_id": props.get("bank_id"),
+        "lineage": _geometry_lineage(props),
     }
     if include_info:
         payload["info"] = get_location_info(canonical)
@@ -3121,6 +3144,7 @@ def _metadata_geometry_reference(
         "valid_to": row.get("valid_to"),
         "geometry_vintage": row.get("geometry_vintage"),
         "bank_id": row.get("bank_id"),
+        "lineage": _geometry_lineage(row),
     }
     if include_info:
         payload["info"] = get_location_info(canonical)
