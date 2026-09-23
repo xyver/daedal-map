@@ -90,13 +90,23 @@ def build_tool_definitions(*, include_paused: bool = False) -> list[dict]:
         {
             "name": "get_catalog",
             "title": "Get Catalog",
-            "description": "Free progressive discovery for data packs or geometry families. Geometry results list each family and its release units: ISO3 countries or global domains such as GLOBAL and MARINE. Existence is the loc_id capability signal. detail='full' adds bounded discovery fields, while detail='download' returns the complete raw catalog URL. Select one pack or family, then call get_pack.",
+            "description": "Free progressive discovery for data packs or geometry families. For data, loc_id plus time_range returns the confirmed place-and-time intersection and keeps unknown coverage separate. Geometry results list each family and its release units. detail='full' adds bounded discovery fields, while detail='download' returns the complete raw catalog URL. Select one pack or family, then call get_pack.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "catalog": {"type": "string", "enum": ["data", "geometry"], "default": "data", "description": "Catalog family. The geography facade defaults to geometry; other facades default to data."},
                     "detail": {"type": "string", "enum": ["lite", "full", "download"], "default": "lite", "description": "Use lite to select a pack, full for expanded metric/query inventories, or download for the complete raw catalog URL."},
                     "country_scope": {"type": "string", "description": "Optional ISO3 focus for catalog='geometry' with detail='lite'."},
+                    "loc_id": {"type": "string", "description": "Optional DaedalMap loc_id for catalog='data'. Combine with time_range to discover packs confirmed for both place and time. For place details without pack filtering, use get_loc_id_info."},
+                    "time_range": {
+                        "type": "object",
+                        "properties": {
+                            "start": {"anyOf": [{"type": "string"}, {"type": "integer"}]},
+                            "end": {"anyOf": [{"type": "string"}, {"type": "integer"}]},
+                        },
+                        "additionalProperties": False,
+                        "description": "Optional inclusive discovery window for catalog='data'. At least one bound is required.",
+                    },
                 },
                 "additionalProperties": False,
             },
@@ -228,8 +238,8 @@ def build_tool_definitions(*, include_paused: bool = False) -> list[dict]:
         },
         {
             "name": "get_loc_id_info",
-            "title": "Get loc_id Information",
-            "description": "The navigation and enrichment tool for one loc_id or a bounded loc_ids array. Its lightweight default returns identity, strict stored parentage, shape status, lifecycle fields, candidate data-pack coverage, available geometry families, and executable next calls without scanning data rows or polygon coordinates. Set include_hierarchy for the strict same-release ancestor chain and include_references for exact external or cross-family connections. Historical records are returned as requested and successors are never substituted automatically. Use get_data for rows, get_geometry for polygons, and compare_geographies for pairwise relationships. No payment required.",
+            "title": "Find Data and Geometry for a Place",
+            "description": "Answer what can be done with one loc_id or a bounded loc_ids array. The lightweight result summarizes candidate data packs and available geometry families for the place and attaches executable next calls, alongside identity, strict stored parentage, shape status, and lifecycle fields. Set include_hierarchy for the same-release ancestor chain and include_references for maintained external or cross-family connections. Historical records are returned as requested and successors are never substituted automatically. No payment required.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -399,7 +409,7 @@ def build_tool_definitions(*, include_paused: bool = False) -> list[dict]:
         {
             "name": "compare_geographies",
             "title": "Compare Geographic Identities",
-            "description": "Smart relationship tool for two geographic identities. It answers canonical Admin Spine containment and common ancestry directly from loc_id paths, then checks maintained crosswalk evidence between different families, and loads polygons only when those cheaper sources cannot answer the spatial question. Exact geometry fallback returns topology, geodesic intersection area, and directional overlap shares. Temporal validity and N-way successor context remain independent of the spatial evidence source. Use convert_reference first for names or outside identifiers. No payment required.",
+            "description": "Compare two geographic identities for the public guarantees implemented today: containment/common ancestry and temporal validity for the requested vintages. The response may include additional maintained evidence, but callers must not rely on deeper topology or relationship semantics as a stable contract until that review is complete. Use convert_reference first for names or outside identifiers. No payment required.",
             "inputSchema": {
                 "type": "object",
                 "properties": {

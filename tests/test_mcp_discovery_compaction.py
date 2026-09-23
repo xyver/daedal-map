@@ -9,6 +9,7 @@ from mcp_discovery_shared import (
     compact_catalog_payload,
     compact_pack_detail,
     data_access_workflow,
+    filter_data_catalog_payload,
     full_catalog_payload,
     mcp_full_pack_detail,
     pack_download_payload,
@@ -22,6 +23,52 @@ from mapmover.runtime.reference_exchange import (
 
 
 class MCPDiscoveryCompactionTests(unittest.TestCase):
+    def test_catalog_place_time_intersection_separates_unknown_coverage(self) -> None:
+        payload = {
+            "view": "lite",
+            "packs": [
+                {"pack_id": "usa_history", "coverage_contract": {"countries": ["USA"]}, "temporal_start": 2000, "temporal_end": 2024},
+                {"pack_id": "canada_history", "coverage_contract": {"countries": ["CAN"]}, "temporal_start": 2000, "temporal_end": 2024},
+                {"pack_id": "unknown", "coverage_contract": {}, "temporal_start": None, "temporal_end": None},
+            ],
+        }
+        result = filter_data_catalog_payload(
+            payload, loc_id="USA-CA", time_range={"start": 2010, "end": 2012}
+        )
+        self.assertEqual([row["pack_id"] for row in result["packs"]], ["usa_history"])
+        self.assertEqual([row["pack_id"] for row in result["uncertain_packs"]], ["unknown"])
+        self.assertEqual(result["excluded_count"], 1)
+        self.assertEqual(result["resolved_query"]["country_scope"], "USA")
+
+    def test_place_and_time_must_match_the_same_source_window(self) -> None:
+        payload = {
+            "packs": [{
+                "pack_id": "mixed",
+                "coverage_contract": {"countries": ["USA", "CAN"]},
+                "temporal_start": 1900,
+                "temporal_end": 2024,
+                "coverage_windows": [
+                    {
+                        "source_id": "old_usa",
+                        "coverage_contract": {"countries": ["USA"]},
+                        "temporal_start": 1900,
+                        "temporal_end": 1950,
+                    },
+                    {
+                        "source_id": "new_canada",
+                        "coverage_contract": {"countries": ["CAN"]},
+                        "temporal_start": 2000,
+                        "temporal_end": 2024,
+                    },
+                ],
+            }],
+        }
+        result = filter_data_catalog_payload(
+            payload, loc_id="USA-CA", time_range={"start": 2010, "end": 2012},
+        )
+        self.assertEqual(result["packs"], [])
+        self.assertEqual(result["excluded_count"], 1)
+
     def test_catalog_keeps_selection_fields_and_links_instead_of_nested_policy(self) -> None:
         source = {
             "catalog_version": "1.0",

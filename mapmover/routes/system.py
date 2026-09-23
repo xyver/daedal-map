@@ -1793,27 +1793,51 @@ def _mcp_remote_path(pack_id: str | None = None) -> str:
 
 def _mcp_pricing_payload(pack_id: str | None = None) -> dict:
     from mapmover.routes.mcp import _free_pack_ids
+    from tool_access_shared import (
+        hosted_commercial_policy,
+        tool_free_item_limit,
+        tool_meter,
+        tool_price_micro_usd,
+        tool_pricing,
+        tool_pricing_version,
+    )
 
     normalized = _normalize_mcp_facade_pack_id(pack_id)
     if normalized in _free_pack_ids():
         return {
             "model": "free",
             "notes": "No payment required for this MCP facade.",
+            **hosted_commercial_policy(),
         }
-    return {
-        "model": "per_row",
-        "base_price_usd": 0.01,
-        "base_rows_included": 100,
-        "per_row_usd": 0.0001,
-        # No money ceiling. The only cap is the per-tool item limit, so a larger
-        # request costs proportionally more rather than being served free above
-        # a fixed price. Per-tool rates live in tool_access_shared.TOOL_ACCESS_REGISTRY.
-        "max_items_per_call": "see per-tool item_limit in the tool catalog",
+    payload = {
+        "model": "tool_and_material_policy",
         "currency": "USDC",
         "network": "Base",
         "payment_protocol": "x402",
-        "notes": "The 402 challenge returns the exact price before payment.",
+        "notes": "Downloads and discovery are free. A metered hosted call returns its exact price before payment.",
+        **hosted_commercial_policy(),
     }
+    if normalized in {"geography", "reverse-geocoding", "boundaries"}:
+        from mapmover.routes.mcp import _facade_tools
+
+        rows = []
+        for definition in _facade_tools(normalized):
+            name = str(definition.get("name") or "").strip()
+            pricing = tool_pricing(name)
+            row = {
+                "tool": name,
+                "pricing": pricing,
+                "free_item_limit": tool_free_item_limit(name),
+            }
+            if pricing.startswith("paid") or pricing == "by_material":
+                row.update({
+                    "price": tool_price_micro_usd(name),
+                    "meter": tool_meter(name),
+                    "pricing_version": tool_pricing_version(name),
+                })
+            rows.append(row)
+        payload["tools"] = rows
+    return payload
 
 
 def _mcp_auth_notes() -> str:

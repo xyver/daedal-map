@@ -56,6 +56,33 @@ from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
 MICRO_USD_PER_DISPLAY_CREDIT = 10_000
 CREDIT_PRICE_QUANTUM_MICRO_USD = 1_000
+CREDIT_DEFINITION = "One DaedalMap credit equals one US cent ($0.01)."
+ENTERPRISE_CONTACT = "contact@daedalmap.com"
+
+
+def hosted_commercial_policy() -> dict:
+    """Public lane semantics shared by MCP cards, docs, and catalog renderers."""
+    return {
+        "credit_definition": {
+            "usd_per_credit": 0.01,
+            "micro_usd_per_credit": MICRO_USD_PER_DISPLAY_CREDIT,
+            "statement": CREDIT_DEFINITION,
+        },
+        "governance": {
+            "compute_cost_role": "floor",
+            "substitution_value_role": "ceiling",
+            "rule": "Price at or above measured delivery cost and at or below the value of the work replaced.",
+        },
+        "access_lanes": {
+            "downloads": "free",
+            "hosted_discovery": "free",
+            "hosted_execution": "metered only when the tool and material policy permit it",
+            "enterprise": {
+                "mode": "contract_or_invoice",
+                "contact": ENTERPRISE_CONTACT,
+            },
+        },
+    }
 
 
 def quantize_credit_price(amount_micro_usd: int) -> int:

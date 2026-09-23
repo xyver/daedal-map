@@ -380,11 +380,11 @@ PACK_REGISTRY: dict[str, dict] = {
             {"name": "identify_dataset_geography", "summary": "bounded table-column samples -> ranked geography column, country, level, and reference binding"},
             {"name": "identify_reference_system", "summary": "unknown or declared identifiers -> ranked reference systems and matching geometry banks"},
             {"name": "convert_reference", "summary": "one reference or reference batch -> loc_id by default, or any target system through loc_id"},
-            {"name": "compare_geographies", "summary": "two loc_ids -> temporal validity, successors, topology, intersection area, and directional overlap shares"},
+            {"name": "compare_geographies", "summary": "two loc_ids -> supported containment/common-ancestry and temporal-validity evidence"},
             {"name": "get_geometry", "summary": "loc_id, loc_ids, or admin scope -> available/missing shape preflight, metadata, and optional polygons"},
             {"name": "resolve_point", "summary": "one point or point array -> compact Admin 0-3 chains and Admin 1 routing keys"},
             {"name": "resolve_deep_point", "summary": "one point or scoped point array + one Admin 1 loc_id -> compact Admin 4-6 chains"},
-            {"name": "get_loc_id_info", "summary": "loc_id or loc_id array -> metadata, catalog coverage, geometry families, hierarchy, lifecycle, and references"},
+            {"name": "get_loc_id_info", "summary": "loc_id or loc_id array -> available data packs and geometry families, with executable next calls"},
         ),
     },
     "reverse-geocoding": {
@@ -437,8 +437,8 @@ PACK_REGISTRY: dict[str, dict] = {
         "routing": {"preferred_tool": "get_geometry"},
         "tool_summaries": (
             {"name": "get_geometry", "summary": "exact loc_ids or admin scope -> availability, shape metadata, and optional polygons"},
-            {"name": "compare_geographies", "summary": "two loc_ids -> exact spatial and temporal relationship"},
-            {"name": "get_loc_id_info", "summary": "loc_id or loc_id array -> metadata, catalog coverage, geometry families, hierarchy, lifecycle, and references"},
+            {"name": "compare_geographies", "summary": "two loc_ids -> supported containment/common-ancestry and temporal-validity evidence"},
+            {"name": "get_loc_id_info", "summary": "loc_id or loc_id array -> available data packs and geometry families, with executable next calls"},
         ),
     },
 }
@@ -519,6 +519,24 @@ def tool_family_catalog_entry(pack_id: str | None) -> dict:
             {"name": "get_tool_help", "pricing": "free", "summary": "usage contract and working example for any tool visible on this facade"}
         ],
     }
+
+
+def agent_data_workflow() -> tuple[dict, ...]:
+    """Registry-owned first-call flow used by generated human documentation."""
+    visible = {
+        str(tool)
+        for profile in PACK_REGISTRY.values()
+        for tool in profile.get("mcp_tool_allowlist") or ()
+    }
+    steps = (
+        ("get_catalog", "Choose one pack_id from its topic, geography, and time coverage."),
+        ("get_pack", "Choose exact metrics, dimensions, filters, geography, and time bounds."),
+        ("get_data", "Return the requested published data rows."),
+    )
+    missing = [name for name, _outcome in steps if name not in visible]
+    if missing:
+        raise ValueError(f"agent data workflow references hidden tools: {missing}")
+    return tuple({"tool": name, "outcome": outcome} for name, outcome in steps)
 
 
 def tool_family_pack_detail(pack_id: str | None) -> dict:

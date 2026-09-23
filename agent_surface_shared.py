@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from html import escape
+
 from pack_registry_shared import (
+    agent_data_workflow,
     pack_display_name,
     pack_mcp_server_profile,
     pack_registry_alias,
@@ -47,6 +50,33 @@ def free_pack_display_csv() -> str:
 
 def paid_pack_display_csv() -> str:
     return ", ".join(pack_label(pack_id) for pack_id in paid_pack_ids())
+
+
+def render_for_agents_registry_quickstart() -> str:
+    """Render the human quickstart from the same registries as MCP discovery."""
+    steps = "".join(
+        "<li>Call <code>{tool}</code>: {outcome}</li>".format(
+            tool=escape(str(step.get("tool") or "")),
+            outcome=escape(str(step.get("outcome") or "")),
+        )
+        for step in agent_data_workflow()
+    )
+    geography = tool_family_catalog_entry("geography")
+    tools = "".join(
+        "<li><code>{name}</code> — {summary}</li>".format(
+            name=escape(str(tool.get("name") or "")),
+            summary=escape(str(tool.get("summary") or "")),
+        )
+        for tool in geography.get("tools") or []
+    )
+    return (
+        "<h2>First successful flow</h2>"
+        f'<ol class="detail-list">{steps}</ol>'
+        "<p>Each successful row query returns <code>resolved_query</code>; copy it to rerun the resolved request deterministically.</p>"
+        "<h2>Choose your first geography job</h2>"
+        f'<ul class="detail-list">{tools}</ul>'
+        '<p><a class="docs-next-link" href="/docs/geometry-tools">Open the geography tool guide</a></p>'
+    )
 
 
 def current_pack_code_bullets() -> str:

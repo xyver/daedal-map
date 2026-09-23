@@ -9,6 +9,13 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any
 
+from catalog_coverage_shared import (
+    coverage_matches_country,
+    normalize_scope,
+    normalize_time_range,
+    temporal_intersects,
+)
+
 
 APP_ORIGIN = "https://app.daedalmap.com"
 DATA_CATALOG_DOWNLOAD_URL = f"{APP_ORIGIN}/api/v1/catalog/download"
@@ -79,6 +86,9 @@ def _compact_pack_row(pack: dict[str, Any]) -> dict[str, Any]:
             "data_types",
             "scopes",
             "geographic_levels",
+            "empty_geographic_levels_meaning",
+            "coverage_contract",
+            "coverage_windows",
             "temporal_start",
             "temporal_end",
             "canonical_available_through",
@@ -131,6 +141,108 @@ def compact_catalog_payload(payload: Any) -> Any:
             },
         }
     )
+    return result
+
+
+def filter_data_catalog_payload(
+    payload: Any,
+    *,
+    loc_id: str | None = None,
+    time_range: Any = None,
+) -> Any:
+    """Resolve a conservative place/time catalog intersection.
+
+    Confirmed matches stay in ``packs``. Packs whose authored coverage is not
+    precise enough to decide are returned separately instead of being silently
+    included as matches or discarded as misses.
+    """
+    if not isinstance(payload, dict):
+        return payload
+    requested_loc_id = str(loc_id or "").strip().upper() or None
+    country = requested_loc_id.split("-", 1)[0] if requested_loc_id else None
+    if country and normalize_scope(country) != country:
+        raise ValueError("loc_id must begin with an ISO3 country code")
+    requested_time = normalize_time_range(time_range)
+    if not requested_loc_id and requested_time is None:
+        result = dict(payload)
+        result["resolved_query"] = {
+            "catalog": "data", "loc_id": None, "country_scope": None,
+            "time_range": None, "filter_applied": False,
+        }
+        return result
+
+    matched: list[dict[str, Any]] = []
+    uncertain: list[dict[str, Any]] = []
+    excluded = 0
+    for raw in payload.get("packs") or []:
+        if not isinstance(raw, dict):
+            continue
+        row = dict(raw)
+        windows = row.get("coverage_windows")
+        windows = [window for window in windows or [] if isinstance(window, dict)]
+        if windows:
+            outcomes = []
+            for window in windows:
+                coverage = window.get("coverage_contract")
+                coverage = coverage if isinstance(coverage, dict) else {}
+                outcomes.append((
+                    coverage_matches_country(coverage, country),
+                    temporal_intersects(
+                        window.get("temporal_start"), window.get("temporal_end"), requested_time
+                    ),
+                ))
+            confirmed = any(place is True and time is True for place, time in outcomes)
+            possible = any(place is not False and time is not False for place, time in outcomes)
+            if confirmed:
+                place_match, time_match = True, True
+            elif possible:
+                place_match, time_match = None, None
+            else:
+                place_match, time_match = False, False
+        else:
+            coverage = row.get("coverage_contract")
+            coverage = coverage if isinstance(coverage, dict) else {}
+            place_match = coverage_matches_country(coverage, country)
+            time_match = temporal_intersects(
+                row.get("temporal_start"), row.get("temporal_end"), requested_time
+            )
+        row["catalog_match"] = {
+            "place": "match" if place_match is True else "unknown" if place_match is None else "no_match",
+            "time": "match" if time_match is True else "unknown" if time_match is None else "no_match",
+        }
+        if place_match is False or time_match is False:
+            excluded += 1
+        elif place_match is None or time_match is None:
+            uncertain.append(row)
+        else:
+            matched.append(row)
+
+    result = dict(payload)
+    detail = str(payload.get("view") or payload.get("detail") or "lite")
+    result.update({
+        "packs": matched,
+        "pack_count": len(matched),
+        "uncertain_packs": uncertain,
+        "uncertain_count": len(uncertain),
+        "excluded_count": excluded,
+        "result_status": "empty" if not matched else "partial" if uncertain else "complete",
+        "resolved_query": {
+            "catalog": "data",
+            "loc_id": requested_loc_id,
+            "country_scope": country,
+            "time_range": requested_time,
+            "filter_applied": True,
+            "unknown_coverage_policy": "returned_separately_not_counted_as_match",
+            "rerun": {
+                "tool": "get_catalog",
+                "arguments": {
+                    "catalog": "data", "detail": detail,
+                    **({"loc_id": requested_loc_id} if requested_loc_id else {}),
+                    **({"time_range": requested_time} if requested_time else {}),
+                },
+            },
+        },
+    })
     return result
 
 

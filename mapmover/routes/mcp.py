@@ -26,6 +26,7 @@ from mcp_discovery_shared import (
     catalog_download_payload,
     compact_catalog_payload,
     compact_pack_detail,
+    filter_data_catalog_payload,
     full_catalog_payload,
     mcp_full_pack_detail,
     pack_download_payload,
@@ -1497,6 +1498,7 @@ def _finish_data_helper(
     row_count: int = 1,
     is_error: bool = False,
     error_code: str | None = None,
+    analytics_metadata: dict[str, Any] | None = None,
 ) -> Response:
     """Log a free data-helper call to the product usage ledger, then return it.
 
@@ -1523,6 +1525,7 @@ def _finish_data_helper(
             "event": capability_id,
             "tool_mode": "single",
             "quantity": row_count,
+            **(analytics_metadata or {}),
         },
     )
     return _jsonrpc_response(_tool_result(payload, is_error=is_error), rpc_request_id)
@@ -1875,6 +1878,15 @@ def _ensure_request_id(arguments: dict[str, Any], tool_name: str) -> dict[str, A
     if not request_id:
         normalized["request_id"] = f"mcp-{tool_name}-{uuid.uuid4().hex[:12]}"
     return normalized
+
+
+def _resolved_query(tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+    """Return a stable, copyable representation of the executed tool call."""
+    resolved = {
+        key: value for key, value in arguments.items()
+        if key != "request_id" and value not in (None, "")
+    }
+    return {"tool": tool_name, "arguments": _json_safe(resolved)}
 
 
 @lru_cache(maxsize=2)
@@ -2276,6 +2288,11 @@ async def _execute_paid_tool(request: Request, tool_name: str, arguments: dict[s
         )
 
     if response.status_code == 200:
+        if isinstance(parsed_body, dict):
+            parsed_body = {
+                **parsed_body,
+                "resolved_query": _resolved_query(tool_name, payload),
+            }
         return _jsonrpc_response(_tool_result(parsed_body), rpc_request_id)
 
     return _jsonrpc_response(
@@ -3644,9 +3661,23 @@ def _get_loc_id_info_item(
     if catalog_context_cache is not None:
         if context_key not in catalog_context_cache:
             catalog_context_cache[context_key] = _loc_id_catalog_context(str(result["loc_id"]), result)
-        result["availability"] = catalog_context_cache[context_key]
+        availability = catalog_context_cache[context_key]
     else:
-        result["availability"] = _loc_id_catalog_context(str(result["loc_id"]), result)
+        availability = _loc_id_catalog_context(str(result["loc_id"]), result)
+    result["availability"] = availability
+    data_packs = availability.get("data_packs") or []
+    geometry_families = availability.get("available_geometry_families") or []
+    first_data_call = (data_packs[0].get("next_call") if data_packs else None)
+    recommended_next_call = first_data_call or availability.get("next_calls", {}).get("geometry")
+    result["job_summary"] = {
+        "question": "What maintained data and geometry can I use for this place?",
+        "data_pack_count": len(data_packs),
+        "data_pack_ids": [row.get("pack_id") for row in data_packs if row.get("pack_id")],
+        "geometry_family_count": len(geometry_families),
+        "geometry_family_ids": [row.get("pack_id") for row in geometry_families if row.get("pack_id")],
+        "recommended_next_call": recommended_next_call,
+        "coverage_warning": "Catalog candidates are not proof that an exact data row exists for this loc_id and time.",
+    }
     try:
         from mapmover.runtime.reference_exchange import geometry_supersession_notice
 
@@ -5436,12 +5467,16 @@ async def mcp_endpoint(request: Request, pack_id: str | None = None):
         catalog = str(arguments.get("catalog") or default_catalog).strip().lower()
         detail = str(arguments.get("detail") or "lite").strip().lower()
         country_scope = str(arguments.get("country_scope") or "").strip().upper()
+        loc_id = str(arguments.get("loc_id") or "").strip().upper()
+        time_range = arguments.get("time_range")
         if catalog not in {"data", "geometry"}:
             return _jsonrpc_error(request_id, -32602, "catalog must be 'data' or 'geometry'")
         if detail not in {"lite", "full", "download"}:
             return _jsonrpc_error(request_id, -32602, "detail must be 'lite', 'full', or 'download'")
         if country_scope and (catalog != "geometry" or detail == "download"):
             return _jsonrpc_error(request_id, -32602, "country_scope is only valid for catalog='geometry' with detail='lite' or 'full'")
+        if (loc_id or time_range not in (None, {}, "")) and (catalog != "data" or detail == "download"):
+            return _jsonrpc_error(request_id, -32602, "loc_id and time_range are only valid for catalog='data' with detail='lite' or 'full'")
         if detail == "download":
             payload = catalog_download_payload(catalog)
         elif catalog == "geometry":
@@ -5466,6 +5501,17 @@ async def mcp_endpoint(request: Request, pack_id: str | None = None):
             payload = _augment_catalog_with_tool_families(payload, normalized_pack_id)
             payload["catalog"] = "data"
             payload["detail"] = detail
+            try:
+                payload = filter_data_catalog_payload(
+                    payload,
+                    loc_id=loc_id or None,
+                    time_range=time_range,
+                )
+            except ValueError as exc:
+                return _jsonrpc_error(request_id, -32602, str(exc))
+        if isinstance(payload, dict) and "resolved_query" not in payload:
+            payload["resolved_query"] = _resolved_query(tool_name, arguments)
+        result_status = str(payload.get("result_status") or "") if isinstance(payload, dict) else ""
         return _finish_data_helper(
             request,
             tool_name=tool_name,
@@ -5473,6 +5519,11 @@ async def mcp_endpoint(request: Request, pack_id: str | None = None):
             payload=payload,
             rpc_request_id=request_id,
             row_count=_payload_row_count(payload),
+            analytics_metadata={
+                "resolved_query": payload.get("resolved_query") if isinstance(payload, dict) else None,
+                "catalog_result_status": result_status or None,
+                "catalog_empty_or_partial": result_status in {"empty", "partial"},
+            },
         )
 
     if tool_name == "get_pack":

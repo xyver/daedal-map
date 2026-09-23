@@ -101,10 +101,10 @@ TOOL_GUIDANCE: dict[str, dict[str, Any]] = {
         ["source and target systems", "bridge vintage", "relationship method", "artifact id"]
     ),
     "compare_geographies": _g(
-        ["You have two loc_ids and need spatial, temporal, containment, overlap, or successor evidence."],
-        ["Resolving names", "Choosing one successor when evidence is one-to-many"],
+        ["You have two loc_ids and need supported containment/common-ancestry or temporal-validity evidence."],
+        ["Resolving names", "Treating deeper topology, overlap, or successor fields as a stable public guarantee"],
         {"left_loc_id": "CAN-BC", "right_loc_id": "CAN"},
-        ["spatial_relation", "temporal_relation", "left_area_share", "right_area_share", "successors"],
+        ["spatial_relation", "temporal_relation", "containment", "common_ancestor"],
         ["get_loc_id_info", "get_geometry"],
         ["left.bank_id", "right.bank_id", "geometry vintages", "calculation method"]
     ),
@@ -261,7 +261,7 @@ def geometry_topic_help_payload(
             },
             {
                 "name": "relationships_and_time",
-                "steps": ["get_loc_id_info for identity/catalog coverage/hierarchy/lifecycle", "compare_geographies for pairwise hierarchy, crosswalk overlap, geometry, validity, or successors"],
+                "steps": ["get_loc_id_info for available data/geometry plus identity and hierarchy", "compare_geographies for supported pairwise containment/common ancestry and temporal validity"],
             },
         ],
         "available_tools": sorted(
