@@ -239,7 +239,7 @@ def build_tool_definitions(*, include_paused: bool = False) -> list[dict]:
         {
             "name": "get_loc_id_info",
             "title": "Find Data and Geometry for a Place",
-            "description": "Answer what can be done with one loc_id or a bounded loc_ids array. The lightweight result summarizes candidate data packs and available geometry families for the place and attaches executable next calls, alongside identity, strict stored parentage, shape status, and lifecycle fields. Set include_hierarchy for the same-release ancestor chain and include_references for maintained external or cross-family connections. Historical records are returned as requested and successors are never substituted automatically. No payment required.",
+            "description": "A navigation and enrichment tool that answers what can be done with one loc_id or a bounded loc_ids array. The lightweight result summarizes candidate data packs and available geometry families for the place and attaches executable next calls, alongside identity, strict stored parentage, shape status, and lifecycle fields. Set include_hierarchy for the same-release ancestor chain and include_references for maintained external or cross-family connections. Historical records are returned as requested and successors are never substituted automatically. No payment required.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
