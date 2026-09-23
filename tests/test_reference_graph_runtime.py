@@ -34,6 +34,33 @@ from mapmover.runtime import reference_graph
 
 
 class ReferenceGraphRuntimeTests(unittest.TestCase):
+    def test_discovery_index_allows_authoring_global_graph_absent_from_hosted_runtime(self) -> None:
+        manifest = {
+            "status": "PASS",
+            "source_graphs": {
+                "BRA": {"release_id": "bra_reference_graph_1_2_5"},
+                "__global__": {"release_id": "global_admin_exact_v1"},
+            },
+        }
+        bra_root = Path("geometry/countries/BRA/reference_graph")
+
+        def graph_json(path: Path):
+            return (
+                manifest
+                if path == reference_graph.DATA_ROOT / reference_graph.GLOBAL_DISCOVERY_MANIFEST
+                else {"release_id": "bra_reference_graph_1_2_5"}
+            )
+
+        reference_graph._global_discovery_index_current.cache_clear()
+        with (
+            mock.patch.object(reference_graph, "_graph_json", side_effect=graph_json),
+            mock.patch.object(reference_graph, "parquet_columns", return_value=("external_id",)),
+            mock.patch.object(reference_graph, "reference_graph_roots", return_value={"BRA": bra_root}),
+            mock.patch.object(reference_graph, "global_reference_graph_root", return_value=None),
+        ):
+            self.assertTrue(reference_graph._global_discovery_index_current(True))
+        reference_graph._global_discovery_index_current.cache_clear()
+
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)

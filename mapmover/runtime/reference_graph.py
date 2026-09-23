@@ -282,6 +282,13 @@ def _global_discovery_index_current(cloud_mode: bool) -> bool:
         str(key): str((value or {}).get("release_id") or "")
         for key, value in expected.items() if isinstance(value, dict)
     }
+    # The compact index may be built from the complete authoring graph while a
+    # hosted deployment intentionally serves only catalog-admitted country
+    # graphs. An unavailable global fallback does not make the country rows
+    # stale; every graph that is actually active must still match exactly, and
+    # extra/removed country scopes remain a hard mismatch.
+    if "__global__" not in current:
+        declared.pop("__global__", None)
     return bool(current) and declared == current
 
 
