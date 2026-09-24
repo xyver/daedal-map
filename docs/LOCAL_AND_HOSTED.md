@@ -92,9 +92,9 @@ GEOGRAPHY_REFERENCE_GRAPH_ROOT=geometry/countries/CAN/crosswalks/canada_referenc
 
 Run the normal local server and connect the MCP client to its
 `/mcp/geography` endpoint. No alternate geography server or tool contract is
-used. Call `read_geometry_catalog`; its `runtime_data_source` field identifies
-the selected graph and release, and `runtime_reference_families` lists the
-families available through the graph.
+used. Call `get_catalog` with `catalog="geometry"`, then call `get_pack` for the
+selected family and country to inspect the admitted systems, releases, and
+vintages before using the normal execution tools.
 
 `GEOGRAPHY_REFERENCE_GRAPH_ROOT` is a process-launch setting, not an MCP tool
 argument. A remote caller therefore cannot make a hosted server read an

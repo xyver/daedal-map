@@ -49,11 +49,11 @@ full published catalog directly at
 country runtime catalogs and unpublished lifecycle records remain in the
 private published lane.
 
-Use the direct catalog URLs for complete inventory reads. MCP `get_catalog` and
-`read_geometry_catalog` return compact selection views and point to those URLs
-when a caller asks for the whole catalog. Candidate, WIP, and audit/provenance
-records remain on private runtime surfaces and are never mirrored to the
-downloadable lane.
+Use the direct catalog URLs for complete inventory reads. MCP `get_catalog`
+returns compact selection views, `get_pack` drills into one selected data pack
+or geometry family, and their download detail points to the complete published
+metadata where applicable. Candidate, WIP, and audit/provenance records remain
+on private runtime surfaces and are never mirrored to the downloadable lane.
 
 ## API/MCP Versus Downloads
 

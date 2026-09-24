@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from pathlib import Path
 import unittest
 from unittest import mock
 
@@ -582,6 +583,28 @@ class BlindCallerHelpTests(unittest.TestCase):
             "tool": "get_tool_help",
             "arguments": {"tool_name": "get_data"},
         })
+
+    def test_public_readme_tool_table_matches_current_roster(self) -> None:
+        from mcp_surface_shared import PAUSED_PUBLIC_TOOL_NAMES, build_tool_definitions
+
+        readme = (Path(__file__).resolve().parents[1] / "README.md").read_text(encoding="utf-8")
+        tools_section = readme.split("## Tools", 1)[1].split("## The loc_id model", 1)[0]
+        current_names = {definition["name"] for definition in build_tool_definitions()}
+        for name in current_names:
+            with self.subTest(public_tool=name):
+                self.assertIn(f"`{name}`", tools_section)
+
+        retired_names = {
+            "read_geometry_catalog", "list_reference_systems", "resolve_points",
+            "resolve_deep_points", "resolve_reference", "loc_id_info",
+            "query_dataset", "get_earthquake_events", "get_volcanic_activity",
+            "get_tsunami_events", "get_fx_rates", "get_disaster_links_for_event",
+            "get_disaster_link_chain", "search_disaster_links",
+            *PAUSED_PUBLIC_TOOL_NAMES,
+        }
+        for name in retired_names - current_names:
+            with self.subTest(retired_tool=name):
+                self.assertNotIn(f"`{name}`", tools_section)
 
     def test_data_universe_has_formulaic_publication_contract(self) -> None:
         from jsonschema import Draft202012Validator

@@ -46,8 +46,8 @@ Any client that supports streamable HTTP MCP can use the same URL. Start with
 then `get_data` for data. Setup for other clients is in the
 [agent docs](https://www.daedalmap.com/docs/for-agents).
 
-Discovery and small geography lookups are free. Larger batches, exports, and
-some data packs are metered, and paid calls return an x402 payment challenge
+Discovery and small geography lookups are free. Larger point/reference batches
+and some data packs are metered, and paid calls return an x402 payment challenge
 before any charge. `get_catalog` reports the access lane for each pack.
 
 ## Tools
@@ -55,20 +55,22 @@ before any charge. `get_catalog` reports the access lane for each pack.
 | Job | Tools |
 |---|---|
 | Learn the model | `get_tool_help` with a topic or exact tool name |
-| Find what exists | `read_geometry_catalog`, `list_reference_systems`, `get_catalog`, `get_pack` |
-| Coordinates to places | `resolve_point`, `resolve_points`, `resolve_deep_point`, `resolve_deep_points` |
-| Identify a column of codes | `identify_dataset_geography`, `identify_reference_system` |
-| Translate codes between systems | `resolve_reference`, `convert_reference` |
-| Inspect and relate places | `loc_id_info`, `compare_geographies`, `resolve_loc_id_scope` |
-| Shapes and exports | `get_geometry`, `estimate_geometry_package`, `create_geometry_export` |
-| Convert your own rows | `estimate_conversion_job`, `create_conversion_job`, `get_job_status` |
+| Find what exists | `get_catalog`, then `get_pack` for one selected data pack or geometry family |
 | Query maintained data | `get_data` with a `pack_id`, exact metrics, and structured filters |
-| Live feeds | `get_live_earthquake_events`, `get_live_volcano_events` |
-| Cross-hazard links | `get_disaster_links_for_event`, `get_disaster_link_chain`, `search_disaster_links` |
+| Inspect one disaster event | `get_event` with an exact `event_id` returned by `get_data` |
+| Coordinates to places | `resolve_point`, then `resolve_deep_point` when Admin 4-6 or one deeper family is needed |
+| Identify a column of codes | `identify_dataset_geography`, `identify_reference_system` |
+| Translate codes between systems | `convert_reference` |
+| Inspect and relate places | `get_loc_id_info`, `compare_geographies` |
+| Retrieve shapes | `get_geometry` |
 
 Each tool takes strict JSON arguments. The calling model turns a user's
 question into those arguments, and the server returns typed errors with
 recovery guidance when a call is malformed.
+
+This table is the complete public roster, not a roadmap. Bulk export/job
+builders and direct upstream live-feed wrappers remain internal or paused and
+are intentionally absent from `tools/list`.
 
 ## The loc_id model
 

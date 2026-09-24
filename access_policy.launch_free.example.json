@@ -5,8 +5,8 @@
   "audience": "public",
   "packs": {},
   "tools": {
-    "resolve_points": {"audience": "public", "billing": "inherit"},
-    "resolve_points:gbr": {"billing": "free"}
+    "resolve_point": {"audience": "public", "billing": "inherit"},
+    "resolve_point:gbr": {"billing": "free"}
   },
   "rate_limits": {
     "surfaces": {
@@ -14,7 +14,7 @@
       "agent_api_paid": {"limit": 12, "window_seconds": 60}
     },
     "tools": {
-      "resolve_points": {
+      "resolve_point": {
         "free": {"limit": 10, "window_seconds": 60},
         "plus": {"limit": 120, "window_seconds": 60}
       }
