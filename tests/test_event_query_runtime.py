@@ -8,7 +8,12 @@ from unittest.mock import patch
 import pandas as pd
 from starlette.requests import Request
 
-from mapmover.api_query_runtime import ApiMetricSpec, ApiSourceSpec, execute_dataset_query
+from mapmover.api_query_runtime import (
+    ApiMetricSpec,
+    ApiSourceSpec,
+    execute_dataset_query,
+    resolve_pack_sources_for_metrics,
+)
 from mapmover.api_query_scope import format_year_end, format_year_start, parse_time_filter
 from mapmover.execution.event_execution import _build_single_event_message
 from mapmover.runtime.filter_primitives import partition_region_filter_codes
@@ -21,6 +26,59 @@ from mapmover.runtime.query_constraint_primitives import extract_query_constrain
 
 
 class EventQueryRuntimeTests(unittest.TestCase):
+    def test_pack_event_count_prefers_canonical_event_source_over_aggregate(self):
+        event_spec = ApiSourceSpec(
+            source_id="floods",
+            pack_id="floods",
+            parquet_name="events.parquet",
+            query_mode="single_source_events",
+            location_field="loc_id",
+            time_field="timestamp",
+            time_granularity="timestamp",
+            metrics={
+                "event_count": ApiMetricSpec(
+                    metric_id="event_count",
+                    column="event_count",
+                    description="Count matching events",
+                )
+            },
+            filterable_fields={"loc_id", "timestamp"},
+            sortable_fields={"loc_id", "timestamp", "event_count"},
+        )
+        aggregate_spec = ApiSourceSpec(
+            source_id="flood_aggregates",
+            pack_id="floods",
+            parquet_name="metrics.parquet",
+            query_mode="single_source",
+            location_field="loc_id",
+            time_field="year",
+            time_granularity="yearly",
+            metrics={
+                "event_count": ApiMetricSpec(
+                    metric_id="event_count",
+                    column="event_count",
+                    description="Annual event count",
+                )
+            },
+            filterable_fields={"loc_id", "year"},
+            sortable_fields={"loc_id", "year", "event_count"},
+        )
+        specs = {"floods": event_spec, "flood_aggregates": aggregate_spec}
+        with patch(
+            "mapmover.api_query_runtime._get_mcp_pack_source_ids",
+            return_value=["flood_aggregates", "floods", "noaa_storm_events_floods"],
+        ), patch(
+            "mapmover.api_query_runtime.get_api_source_spec",
+            side_effect=lambda source_id: specs.get(source_id, event_spec),
+        ), patch(
+            "mapmover.api_query_runtime.load_source_metadata",
+            return_value={"metrics": {}},
+        ):
+            resolved = resolve_pack_sources_for_metrics("floods", ["event_count"])
+
+        self.assertEqual(resolved["resolution"], "single_source")
+        self.assertEqual(resolved["selected_source_id"], "floods")
+
     def test_dataset_query_empty_in_filter_fails_closed(self):
         with tempfile.TemporaryDirectory() as tmp:
             parquet_path = Path(tmp) / "rows.parquet"

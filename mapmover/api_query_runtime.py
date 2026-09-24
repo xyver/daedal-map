@@ -1317,7 +1317,7 @@ def resolve_pack_sources_for_metrics(pack_id: str, metrics: list[str]) -> dict[s
             "unknown_metrics": unknown_metrics,
         }
 
-    source_scores: list[tuple[float, str]] = []
+    source_scores: list[tuple[int, float, str]] = []
     for source_id in candidate_sources:
         metadata = per_source_metadata.get(source_id) or {}
         metric_keys = per_source_metric_keys.get(source_id, set())
@@ -1331,17 +1331,35 @@ def resolve_pack_sources_for_metrics(pack_id: str, metrics: list[str]) -> dict[s
                 density = metric_info.get("density")
                 if isinstance(density, (int, float)):
                     score += float(density)
-        source_scores.append((score, source_id))
+        # ``event_count`` is synthetic on event sources and commonly also
+        # exists on yearly aggregate companions.  Density metadata cannot
+        # distinguish those lanes because the synthetic event metric is not in
+        # the raw metadata map.  Pack quick starts promise event-first routing,
+        # so prefer the canonical event source; callers that want yearly
+        # aggregates can still select that source explicitly.
+        spec = get_api_source_spec(source_id)
+        is_event_source = bool(
+            normalized_metrics == ["event_count"]
+            and spec is not None
+            and str(spec.query_mode or "").strip() == "single_source_events"
+        )
+        # Some packs have supplemental event sources alongside the canonical
+        # source (for example NOAA Storm Events beside the maintained Floods
+        # event archive).  When the canonical source id equals the pack id,
+        # keep that pack-default promise ahead of supplemental event lanes.
+        event_source_priority = 2 if is_event_source and source_id == normalized_pack_id else int(is_event_source)
+        source_scores.append((event_source_priority, score, source_id))
 
     if source_scores:
-        source_scores.sort(key=lambda item: (-item[0], item[1]))
+        source_scores.sort(key=lambda item: (-item[0], -item[1], item[2]))
+        selected_source_id = source_scores[0][2]
         return {
             "pack_id": normalized_pack_id,
             "requested_metrics": normalized_metrics,
             "resolution": "single_source",
-            "selected_source_id": source_scores[0][1],
-            "required_sources": [source_scores[0][1]],
-            "metrics_by_source": {source_scores[0][1]: normalized_metrics},
+            "selected_source_id": selected_source_id,
+            "required_sources": [selected_source_id],
+            "metrics_by_source": {selected_source_id: normalized_metrics},
             "unknown_metrics": [],
         }
 
