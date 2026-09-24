@@ -5185,6 +5185,7 @@ MCP_SOURCE_REGISTRIES = {
     "pulsemcp",
     "smithery",
     "mcpso",
+    "mcpservers",
     "mcpregistry",
     "nothumansearch",
     "mcpay",
