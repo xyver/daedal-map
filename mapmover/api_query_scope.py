@@ -61,6 +61,15 @@ def parse_temporal_filter_value(raw_value: Any) -> str:
     normalized = str(raw_value).strip()
     if not normalized:
         raise ValueError("blank")
+    # DuckDB accepts the value later as a bound TIMESTAMP parameter. Validate
+    # it here so malformed or partial strings become the public
+    # ``invalid_time_range`` contract instead of escaping as a conversion
+    # exception and turning the whole MCP request into an HTTP 500.
+    candidate = normalized[:-1] + "+00:00" if normalized.endswith("Z") else normalized
+    try:
+        datetime.fromisoformat(candidate)
+    except ValueError as exc:
+        raise ValueError("invalid_temporal_value") from exc
     return normalized
 
 

@@ -654,6 +654,26 @@ class EventQueryRuntimeTests(unittest.TestCase):
             ],
         )
 
+    def test_parse_time_filter_rejects_partial_or_malformed_temporal_values(self):
+        spec = ApiSourceSpec(
+            source_id="earthquakes_events",
+            pack_id="earthquakes",
+            parquet_name="events.parquet",
+            query_mode="single_source",
+            location_field="loc_id",
+            time_field="timestamp",
+            time_granularity="timestamp",
+            metrics={},
+            filterable_fields={"timestamp"},
+            sortable_fields={"timestamp"},
+        )
+
+        for invalid in ("2024-01", "2026\r-01\r-01", "2000:2024"):
+            with self.subTest(value=invalid), self.assertRaisesRegex(
+                ValueError, "invalid_temporal_value"
+            ):
+                parse_time_filter(spec, {"start": invalid, "end": "2024-12-31"})
+
     def test_single_event_message_formats_timestamp_in_utc(self):
         message = _build_single_event_message(
             "earthquake",

@@ -298,6 +298,8 @@ def normalize_data_tool_error(
     normalized["error"] = error
     normalized["reason"] = code
 
+    pack_id = str(normalized.get("pack_id") or "").strip()
+
     if status == 401:
         next_step = {"action": "sign_in", "url": "https://www.daedalmap.com/login"}
     elif status == 402:
@@ -306,6 +308,29 @@ def normalize_data_tool_error(
         next_step = {"action": "check_mcp_key_permissions", "url": "https://www.daedalmap.com/account?tab=agents"}
     elif status == 429:
         next_step = {"action": "retry_after_delay"}
+    elif code in {"metric_not_available", "multi_source_not_supported"} and pack_id:
+        if code == "multi_source_not_supported":
+            error["retry_hint"] = (
+                "Call get_pack with detail='full', then retry get_data with a metric subset "
+                "that belongs to one published source. get_data does not accept source_id."
+            )
+        next_step = {
+            "action": "inspect_pack_query_contract",
+            "tool": "get_pack",
+            "arguments": {"pack_id": pack_id, "detail": "full"},
+        }
+    elif code in {"unknown_source", "pack_not_found"}:
+        next_step = {
+            "action": "refresh_catalog",
+            "tool": "get_catalog",
+            "arguments": {"catalog": "data", "detail": "lite"},
+        }
+    elif code == "event_not_found" and pack_id:
+        next_step = {
+            "action": "find_current_event_id",
+            "tool": "get_pack",
+            "arguments": {"pack_id": pack_id, "detail": "lite"},
+        }
     else:
         next_step = {
             "action": "review_tool_contract",

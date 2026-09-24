@@ -413,6 +413,23 @@ DATA_HELPER_CAPABILITIES: dict[str, str] = {
     )
 }
 
+# These names were publicly discoverable before the compact get_data/get_event
+# surface shipped. They stay absent from tools/list, but a client with a cached
+# schema should receive a concrete migration path instead of a dead-end generic
+# "tool not found" response.
+RETIRED_DATA_TOOL_REPLACEMENTS: dict[str, dict[str, Any]] = {
+    "query_dataset": {"tool": "get_data"},
+    "get_fx_rates": {"tool": "get_data", "arguments": {"pack_id": "currency"}},
+    "get_earthquake_events": {"tool": "get_data", "arguments": {"pack_id": "earthquakes"}},
+    "get_volcanic_activity": {"tool": "get_data", "arguments": {"pack_id": "volcanoes"}},
+    "get_tsunami_events": {"tool": "get_data", "arguments": {"pack_id": "tsunamis"}},
+    "get_live_earthquake_events": {"tool": "get_data", "arguments": {"pack_id": "earthquakes"}},
+    "get_live_volcano_events": {"tool": "get_data", "arguments": {"pack_id": "volcanoes"}},
+    "get_disaster_links_for_event": {"tool": "get_event"},
+    "search_disaster_links": {"tool": "get_event"},
+    "get_disaster_link_chain": {"tool": "get_event"},
+}
+
 
 def _access_lane(trusted_token: str | None, *, paid: bool = False) -> str:
     """Canonical access lane for analytics. Trusted-artifact traffic is QA and
@@ -2295,6 +2312,8 @@ async def _execute_paid_tool(request: Request, tool_name: str, arguments: dict[s
             }
         return _jsonrpc_response(_tool_result(parsed_body), rpc_request_id)
 
+    if isinstance(parsed_body, dict) and payload.get("pack_id"):
+        parsed_body.setdefault("pack_id", payload["pack_id"])
     return _jsonrpc_response(
         _tool_result(normalize_data_tool_error(tool_name, parsed_body, status_code=response.status_code), is_error=True),
         rpc_request_id,
@@ -5106,6 +5125,7 @@ async def _execute_get_event_tool(
             _tool_result(
                 normalize_data_tool_error("get_event", {
                     "request_id": payload.get("request_id"),
+                    "pack_id": str(payload.get("pack_id") or "").strip().lower() or None,
                     "error": {"code": "event_not_found", "message": f"Event '{event_id}' was not found."},
                 }, status_code=404),
                 is_error=True,
@@ -5374,6 +5394,33 @@ async def mcp_endpoint(request: Request, pack_id: str | None = None):
     if arguments and not isinstance(arguments, dict):
         return _jsonrpc_error(request_id, -32602, "Tool arguments must be an object")
     if _tool_definition(tool_name) is None:
+        replacement = RETIRED_DATA_TOOL_REPLACEMENTS.get(tool_name)
+        if replacement:
+            replacement_tool = str(replacement["tool"])
+            replacement_arguments = dict(replacement.get("arguments") or {})
+            return _jsonrpc_error(
+                request_id,
+                -32601,
+                f"Tool '{tool_name}' was retired; use '{replacement_tool}' instead",
+                data={
+                    "error": {
+                        "code": "tool_retired",
+                        "message": f"Tool '{tool_name}' is no longer published.",
+                    },
+                    "replacement": {
+                        "tool": replacement_tool,
+                        "arguments": replacement_arguments,
+                    },
+                    "next_step": {
+                        "tool": "get_tool_help",
+                        "arguments": {"tool_name": replacement_tool},
+                    },
+                    "guidance": {
+                        "action": "refresh_tools_then_retry",
+                        "message": "Refresh tools/list, call get_tool_help for the replacement, then retry with its current schema.",
+                    },
+                },
+            )
         return _jsonrpc_error(request_id, -32601, f"Tool '{tool_name}' not found")
     if not _tool_allowed_for_facade(tool_name, normalized_pack_id):
         return _jsonrpc_error(request_id, -32601, f"Tool '{tool_name}' is not available on this MCP facade")

@@ -7,6 +7,81 @@ def _pack_id_description() -> str:
     return "Pack identifier from get_catalog. Newly catalog-admitted packs require no MCP schema change."
 
 
+def _data_filters_schema() -> dict:
+    scalar_or_list = {
+        "anyOf": [
+            {"type": ["string", "number", "integer", "boolean", "null"]},
+            {"type": "array", "items": {"type": ["string", "number", "integer", "boolean"]}},
+        ]
+    }
+    return {
+        "type": "object",
+        "properties": {
+            "region_ids": {
+                "type": "array",
+                "minItems": 1,
+                "uniqueItems": True,
+                "items": {"type": "string", "minLength": 1},
+                "description": "Canonical country or hierarchical loc_ids from get_pack, such as JPN or USA-TX.",
+            },
+            "time": {
+                "type": "object",
+                "properties": {
+                    "value": {"anyOf": [{"type": "string", "format": "date-time"}, {"type": "string", "format": "date"}, {"type": "integer"}]},
+                    "start": {"anyOf": [{"type": "string", "format": "date-time"}, {"type": "string", "format": "date"}, {"type": "integer"}]},
+                    "end": {"anyOf": [{"type": "string", "format": "date-time"}, {"type": "string", "format": "date"}, {"type": "integer"}]},
+                    "granularity": {"type": "string", "enum": ["daily", "weekly", "monthly", "yearly", "timestamp"]},
+                },
+                "anyOf": [
+                    {"required": ["value"]},
+                    {"required": ["start"]},
+                    {"required": ["end"]},
+                ],
+                "additionalProperties": False,
+                "description": "Inclusive ISO-8601 date/datetime or integer-year selection. Use YYYY-MM-DD, not partial YYYY-MM strings.",
+            },
+            "equals": {
+                "type": "object",
+                "additionalProperties": scalar_or_list,
+                "description": "Exact field/value filters using filterable fields published by get_pack.",
+            },
+            "compare": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "field": {"type": "string", "minLength": 1},
+                        "op": {"type": "string", "enum": ["=", "!=", ">", ">=", "<", "<="]},
+                        "value": {},
+                    },
+                    "required": ["field", "op", "value"],
+                    "additionalProperties": False,
+                },
+                "description": "Threshold filters using filterable fields or selected metric ids published by get_pack.",
+            },
+        },
+        # Pack-specific direct field filters remain legal, but the four shared
+        # shapes above are explicit so clients do not have to guess them.
+        "additionalProperties": scalar_or_list,
+    }
+
+
+def _data_sort_schema() -> dict:
+    item = {
+        "type": "object",
+        "properties": {
+            "field": {"type": "string", "minLength": 1},
+            "direction": {"type": "string", "enum": ["asc", "desc"]},
+        },
+        "required": ["field"],
+        "additionalProperties": False,
+    }
+    return {
+        "anyOf": [item, {"type": "array", "items": item}],
+        "description": "Sort by a sortable field from get_pack; direction defaults to asc.",
+    }
+
+
 def _query_props() -> dict:
     return {
         "request_id": {"type": "string", "description": "Optional caller-supplied request id for tracing and idempotency."},
@@ -751,12 +826,20 @@ def build_tool_definitions(*, include_paused: bool = False) -> list[dict]:
                 "type": "object",
                 "properties": {
                     "request_id": {"type": "string", "description": "Optional caller-supplied request id for tracing and idempotency."},
-                    "pack_id": {"type": "string", "description": _pack_id_description()},
-                    "metrics": {"type": "array", "items": {"type": "string"}, "description": "Metric ids to return. Use event_count for aggregate counts when supported."},
-                    "filters": {"type": "object", "description": "Structured filters including time, region_ids, and compare clauses."},
-                    "sort": {"anyOf": [{"type": "array"}, {"type": "object"}], "description": "Optional sort instructions for row-returning queries."},
+                    "pack_id": {"type": "string", "minLength": 1, "description": _pack_id_description()},
+                    "metrics": {"type": "array", "minItems": 1, "uniqueItems": True, "items": {"type": "string", "minLength": 1}, "description": "Exact metric ids from get_pack. Use event_count for aggregate counts only when get_pack publishes it."},
+                    "filters": _data_filters_schema(),
+                    "sort": _data_sort_schema(),
                     "limit": {"type": "integer", "minimum": 1, "maximum": 500, "description": "Maximum number of rows to return for the requested source or pack."},
-                    "output": {"type": "object", "description": "Optional output controls such as response format hints."},
+                    "output": {
+                        "type": "object",
+                        "properties": {
+                            "format": {"type": "string", "enum": ["rows"], "default": "rows"},
+                            "include_provenance": {"type": "boolean", "default": False},
+                        },
+                        "additionalProperties": False,
+                        "description": "Optional response controls. v1 supports rows only.",
+                    },
                 },
                 "required": ["pack_id", "metrics", "filters"],
                 "additionalProperties": False,

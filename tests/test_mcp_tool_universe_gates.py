@@ -564,6 +564,25 @@ class BlindCallerHelpTests(unittest.TestCase):
         self.assertEqual(validate_tool_guidance(names), [])
         self.assertEqual(validate_guidance_examples(definitions), [])
 
+    def test_cached_retired_data_tool_gets_replacement_and_help_path(self) -> None:
+        envelope = _tool_call_envelope(
+            self.client,
+            "get_volcanic_activity",
+            {"year_start": 2000, "year_end": 2024},
+        )
+
+        self.assertEqual(envelope["error"]["code"], -32601)
+        data = envelope["error"]["data"]
+        self.assertEqual(data["error"]["code"], "tool_retired")
+        self.assertEqual(data["replacement"], {
+            "tool": "get_data",
+            "arguments": {"pack_id": "volcanoes"},
+        })
+        self.assertEqual(data["next_step"], {
+            "tool": "get_tool_help",
+            "arguments": {"tool_name": "get_data"},
+        })
+
     def test_data_universe_has_formulaic_publication_contract(self) -> None:
         from jsonschema import Draft202012Validator
         from mcp_data_contract_shared import (
@@ -603,6 +622,19 @@ class BlindCallerHelpTests(unittest.TestCase):
             set(definitions["get_data"]["inputSchema"]["properties"]),
             canonical_fields,
         )
+        get_data_properties = definitions["get_data"]["inputSchema"]["properties"]
+        self.assertEqual(
+            set(get_data_properties["filters"]["properties"]),
+            {"region_ids", "time", "equals", "compare"},
+        )
+        self.assertEqual(
+            get_data_properties["filters"]["properties"]["compare"]["items"]["properties"]["op"]["enum"],
+            ["=", "!=", ">", ">=", "<", "<="],
+        )
+        self.assertEqual(
+            get_data_properties["output"]["properties"]["format"]["enum"],
+            ["rows"],
+        )
         for retired_name in {
             "query_dataset", "get_earthquake_events", "get_volcanic_activity",
             "get_tsunami_events", "get_fx_rates", *PAUSED_PUBLIC_TOOL_NAMES,
@@ -636,6 +668,25 @@ class BlindCallerHelpTests(unittest.TestCase):
         Draft202012Validator(definitions["get_data"]["outputSchema"]).validate(denial)
         self.assertEqual(denial["reason"], "payment_required")
         self.assertEqual(denial["next_step"]["action"], "choose_payment")
+
+        multi_source = normalize_data_tool_error(
+            "get_data",
+            {
+                "pack_id": "world_bank_wdi",
+                "error": {
+                    "code": "multi_source_not_supported",
+                    "message": "Metrics span multiple sources.",
+                    "retry_hint": "Query a source_id.",
+                },
+            },
+            status_code=400,
+        )
+        self.assertEqual(multi_source["next_step"], {
+            "action": "inspect_pack_query_contract",
+            "tool": "get_pack",
+            "arguments": {"pack_id": "world_bank_wdi", "detail": "full"},
+        })
+        self.assertIn("does not accept source_id", multi_source["error"]["retry_hint"])
 
     def test_geometry_get_info_advertises_cold_start_sequence(self) -> None:
         response = self.client.get("/mcp/geography")
