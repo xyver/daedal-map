@@ -1232,7 +1232,16 @@ def _get_mcp_pack_source_ids(pack_id: str) -> list[str]:
         if not is_mcp_distribution_source(source):
             continue
         source_id = str(source.get("source_id") or "").strip()
-        if source_id and get_api_source_spec(source_id) is not None:
+        if not source_id:
+            continue
+        try:
+            source_spec = get_api_source_spec(source_id)
+        except Exception:
+            # Pack discovery considers optional companion sources. A missing or
+            # unreadable companion artifact must not hide the usable canonical
+            # source for the whole pack.
+            continue
+        if source_spec is not None:
             source_ids.append(source_id)
     return sorted(set(source_ids))
 

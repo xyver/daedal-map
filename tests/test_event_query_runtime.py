@@ -11,6 +11,7 @@ from starlette.requests import Request
 from mapmover.api_query_runtime import (
     ApiMetricSpec,
     ApiSourceSpec,
+    _get_mcp_pack_source_ids,
     execute_dataset_query,
     resolve_pack_sources_for_metrics,
 )
@@ -26,6 +27,40 @@ from mapmover.runtime.query_constraint_primitives import extract_query_constrain
 
 
 class EventQueryRuntimeTests(unittest.TestCase):
+    def test_pack_source_discovery_skips_unreadable_optional_companion(self):
+        catalog = {
+            "sources": [
+                {"pack_id": "floods", "source_id": "flood_aggregates"},
+                {"pack_id": "floods", "source_id": "floods"},
+            ]
+        }
+        canonical_spec = ApiSourceSpec(
+            source_id="floods",
+            pack_id="floods",
+            parquet_name="events.parquet",
+            query_mode="single_source_events",
+            location_field="loc_id",
+            time_field="timestamp",
+            time_granularity="timestamp",
+            metrics={},
+            filterable_fields={"loc_id", "timestamp"},
+            sortable_fields={"loc_id", "timestamp"},
+        )
+
+        def source_spec(source_id):
+            if source_id == "flood_aggregates":
+                raise RuntimeError("optional aggregate artifact is unavailable")
+            return canonical_spec
+
+        with patch("mapmover.api_query_runtime.load_catalog", return_value=catalog), patch(
+            "mapmover.api_query_runtime.is_mcp_distribution_source", return_value=True
+        ), patch(
+            "mapmover.api_query_runtime.get_api_source_spec", side_effect=source_spec
+        ):
+            source_ids = _get_mcp_pack_source_ids("floods")
+
+        self.assertEqual(source_ids, ["floods"])
+
     def test_pack_event_count_prefers_canonical_event_source_over_aggregate(self):
         event_spec = ApiSourceSpec(
             source_id="floods",
