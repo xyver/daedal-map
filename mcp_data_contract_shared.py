@@ -1,8 +1,8 @@
 """Formulaic publication contract for the public data-tool universe.
 
-Geometry tools intentionally remain outside this module. They have richer,
-tool-specific result shapes and will adopt their own contract after this
-smaller data universe is proven.
+Geometry tools intentionally remain outside this module because their richer,
+tool-specific result shapes are owned by ``mcp_geometry_contract_shared``.
+Both universes share the same access, help, and typed-error conventions.
 """
 
 from __future__ import annotations

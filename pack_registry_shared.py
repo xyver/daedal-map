@@ -456,7 +456,7 @@ PACK_REGISTRY: dict[str, dict] = {
             "get_loc_id_info",
         ),
         "mcp_name": "com.daedalmap/geography",
-        "mcp_version": "1.4.0",
+        "mcp_version": "1.5.0",
         "mcp_title": "DaedalMap Geography Tools (loc_id)",
         "mcp_description": "Geography utilities built on the DaedalMap loc_id spine. Identify dataset geography, recognize and convert external references, resolve shallow or deep coordinate batches, inspect loc_ids, compare places, and retrieve bounded shapes. Future estimate/create/status workflows remain private until durable job delivery is ready.",
         "registry_meta": {
@@ -492,7 +492,7 @@ PACK_REGISTRY: dict[str, dict] = {
         "pricing": "mixed",
         "mcp_tool_allowlist": ("get_catalog", "get_pack", "resolve_point", "resolve_deep_point"),
         "mcp_name": "com.daedalmap/reverse-geocoding",
-        "mcp_version": "1.2.0",
+        "mcp_version": "1.3.0",
         "mcp_title": "DaedalMap Reverse Geocoding (coordinates to loc_id)",
         "mcp_description": "Two reverse-geocoding tools separate shallow from deep while each accepts one point or a bounded point array. resolve_point returns Admin 0-3; resolve_deep_point uses one returned Admin 1 loc_id to resolve Admin 4-6.",
         "registry_meta": {
@@ -522,7 +522,7 @@ PACK_REGISTRY: dict[str, dict] = {
             "get_loc_id_info",
         ),
         "mcp_name": "com.daedalmap/boundaries",
-        "mcp_version": "1.1.0",
+        "mcp_version": "1.2.0",
         "mcp_title": "DaedalMap Administrative Boundaries (loc_id to polygon)",
         "mcp_description": "Inspect loc_id identity and relationships, then retrieve bounded boundary metadata, bounding boxes, centroids, or polygons for exact loc_ids and supported administrative scopes.",
         "registry_meta": {

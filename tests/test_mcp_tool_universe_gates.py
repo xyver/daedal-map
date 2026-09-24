@@ -664,9 +664,28 @@ class BlindCallerHelpTests(unittest.TestCase):
         }:
             self.assertNotIn(retired_name, definitions)
 
-        # Geometry is the deliberately separate second universe.
-        self.assertNotIn("outputSchema", definitions["resolve_point"])
-        self.assertNotIn("com.daedalmap/access", definitions["resolve_point"].get("_meta") or {})
+        # Geometry is a separate universe with its own richer publication
+        # contract, but shares the access and help conventions.
+        from mcp_geometry_contract_shared import GEOMETRY_TOOL_IDS
+
+        for name in sorted(GEOMETRY_TOOL_IDS):
+            with self.subTest(geometry_tool=name):
+                schema = definitions[name].get("outputSchema") or {}
+                Draft202012Validator.check_schema(schema)
+                self.assertEqual(schema.get("type"), "object")
+                self.assertIn("error", schema.get("properties", {}))
+                access = (definitions[name].get("_meta") or {}).get("com.daedalmap/access") or {}
+                geometry_contract = (definitions[name].get("_meta") or {}).get("com.daedalmap/geometry-contract") or {}
+                self.assertEqual(access.get("capability_id"), tool_capability_id(name))
+                self.assertEqual(access.get("pricing"), tool_pricing(name))
+                self.assertEqual(access.get("help", {}).get("tool"), "get_tool_help")
+                self.assertEqual(geometry_contract.get("contract_version"), "1.0.0")
+                self.assertIn(geometry_contract.get("result_family"), {
+                    "point_resolution", "place_context", "geography_identification",
+                    "reference_conversion", "geography_relationship", "geometry",
+                })
+                self.assertEqual(definitions[name]["annotations"].get("destructiveHint"), False)
+                self.assertEqual(definitions[name]["annotations"].get("idempotentHint"), True)
 
         # Help is the free convention above both universes, not a data query.
         help_definition = definitions["get_tool_help"]
@@ -682,6 +701,37 @@ class BlindCallerHelpTests(unittest.TestCase):
         for name, payload in examples.items():
             with self.subTest(result=name):
                 Draft202012Validator(definitions[name]["outputSchema"]).validate(payload)
+
+        geometry_examples = {
+            "resolve_point": {"point": {"lat": 1.0, "lon": 2.0}, "stack": []},
+            "resolve_deep_point": {
+                "point": {"lat": 1.0, "lon": 2.0},
+                "family": "postal_area",
+                "family_result": {},
+            },
+            "get_loc_id_info": {"loc_id": "USA-CA", "name": "California"},
+            "identify_dataset_geography": {"ok": True, "status": "matched", "candidates": []},
+            "identify_reference_system": {"ok": True, "status": "matched", "candidates": []},
+            "convert_reference": {"ok": True, "results": []},
+            "compare_geographies": {"ok": True, "spatial_relation": "overlaps"},
+            "get_geometry": {
+                "ok": True,
+                "selection": "exact_loc_ids",
+                "items": [],
+            },
+        }
+        for name, payload in geometry_examples.items():
+            with self.subTest(geometry_result=name):
+                Draft202012Validator(definitions[name]["outputSchema"]).validate(payload)
+
+        geometry_denial = {
+            "request_id": "geometry-denial-1",
+            "error": {"code": "not_found", "message": "No matching geometry."},
+            "guidance": {"action": "review_tool_contract"},
+        }
+        for name in sorted(GEOMETRY_TOOL_IDS):
+            with self.subTest(geometry_denial=name):
+                Draft202012Validator(definitions[name]["outputSchema"]).validate(geometry_denial)
 
         denial = normalize_data_tool_error(
             "get_data",
@@ -722,6 +772,27 @@ class BlindCallerHelpTests(unittest.TestCase):
         self.assertIn("get_tool_help", payload["tools"])
         self.assertTrue(any("topic='geometry'" in step for step in payload["howToStart"]))
         self.assertTrue(any("get_tool_help" in step for step in payload["howToStart"]))
+
+    def test_geometry_facade_tools_list_publishes_every_output_schema(self) -> None:
+        from jsonschema import Draft202012Validator
+        from mcp_geometry_contract_shared import GEOMETRY_TOOL_IDS
+
+        response = self.client.post(
+            "/mcp/geography",
+            json={"jsonrpc": "2.0", "id": "geometry-schemas", "method": "tools/list", "params": {}},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        tools = {
+            tool["name"]: tool
+            for tool in response.json()["result"]["tools"]
+        }
+        self.assertEqual(len(tools), 11)
+        self.assertTrue(GEOMETRY_TOOL_IDS.issubset(tools))
+        for name, definition in tools.items():
+            with self.subTest(tool=name):
+                self.assertIn("outputSchema", definition)
+                Draft202012Validator.check_schema(definition["outputSchema"])
 
     def test_every_narrow_facade_exposes_the_free_help_tool(self) -> None:
         from pack_registry_shared import pack_tool_allowlists

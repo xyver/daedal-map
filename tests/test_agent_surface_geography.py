@@ -14,7 +14,7 @@ def test_llm_surfaces_cover_every_current_geography_tool() -> None:
     ]
     surfaces = (render_app_llms_txt(), render_site_llms_txt(), render_site_llms_full())
 
-    assert len(tool_names) == 17
+    assert len(tool_names) == 11
     assert "identify_dataset_geography" in tool_names
     for surface in surfaces:
         for tool_name in tool_names:
@@ -41,5 +41,6 @@ def test_geography_workflow_is_question_first_and_bounded() -> None:
     assert "What a loc_id is connected to" in workflow
     assert "Shape lookup" in workflow
     assert "bounded batch" in workflow
-    assert "Advanced builder foundation, not the normal entry path" in workflow
-    assert "Durable uploads, saved projects, and custom downloadable artifacts" in workflow
+    assert "not part of the public MCP roster" in workflow
+    assert "Advanced builder foundation" not in workflow
+    assert "Durable uploads, saved projects, and custom downloadable artifacts" not in workflow

@@ -275,7 +275,7 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         )
 
         self.assertEqual(envelope["result"]["serverInfo"]["name"], "com.daedalmap/geography")
-        self.assertEqual(envelope["result"]["serverInfo"]["version"], "1.4.0")
+        self.assertEqual(envelope["result"]["serverInfo"]["version"], "1.5.0")
 
     def test_browser_mcp_metadata_is_bounded_and_reaches_usage_analytics(self) -> None:
         with mock.patch("mapmover.routes.mcp.log_api_query_event") as analytics_mock:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from mcp_data_contract_shared import decorate_data_tool_definition, decorate_shared_help_definition
 from mcp_discovery_shared import data_access_workflow
+from mcp_geometry_contract_shared import decorate_geometry_tool_definition
 
 def _pack_id_description() -> str:
     return "Pack identifier from get_catalog. Newly catalog-admitted packs require no MCP schema change."
@@ -848,7 +849,9 @@ def build_tool_definitions(*, include_paused: bool = False) -> list[dict]:
         },
     ]
     return [
-        decorate_shared_help_definition(decorate_data_tool_definition(definition))
+        decorate_shared_help_definition(
+            decorate_geometry_tool_definition(decorate_data_tool_definition(definition))
+        )
         for definition in definitions
         if include_paused or str(definition.get("name") or "") not in PAUSED_PUBLIC_TOOL_NAMES
     ]
