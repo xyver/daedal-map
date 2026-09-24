@@ -320,26 +320,6 @@ PACK_REGISTRY: dict[str, dict] = {
             "preferred_tool": "get_data",
         },
     },
-    "worldpop": {
-        "display_name": "WorldPop",
-        "pricing": "paid_x402_base_usdc",
-        "mcp_tool_allowlist": ("get_catalog", "get_pack", "get_data"),
-        "mcp_name": "com.daedalmap/population",
-        "mcp_title": "DaedalMap Population Estimates",
-        "mcp_description": "Global population estimates from WorldPop, 2000-2030, at country and sub-national admin levels. Source: WorldPop (CC-BY 4.0). Paid via x402 on Base mainnet USDC. Small queries stay cheap; very broad scans cost more or need narrower filters. Call unpaid first to see the exact price before committing.",
-        "registry_meta": {
-            "categories": ["demographic", "data", "geospatial"],
-            "highlights": [
-                "WorldPop population estimates across multiple admin levels",
-                "Paid MCP access for country and sub-national population queries",
-                "Country and regional lookups tied to DaedalMap loc_id geography",
-            ],
-        },
-        "registry_search_alias": "population",
-        "routing": {
-            "preferred_tool": "get_data",
-        },
-    },
     "geography": {
         "display_name": "Geography Tools",
         "kind": "tool_family",

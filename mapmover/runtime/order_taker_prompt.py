@@ -558,9 +558,9 @@ RESPONSE TYPES (return JSON with "type" field):
 1a. LAYERED DATA ORDER - User wants multiple compatible layers together:
 ```json
 {{"type": "order", "items": [
-  {{"pack_id": "wildfires", "metric": "event_count", "region": "usa-ca", "year_start": 2004, "year_end": 2024}},
-  {{"pack_id": "worldpop", "metric": "population", "region": "usa-ca", "year": 2024}}
-], "summary": "Wildfire exposure and population in California"}}
+  {{"pack_id": "wildfires", "metric": "event_count", "region": "usa", "year_start": 2004, "year_end": 2024}},
+  {{"pack_id": "world_bank_wdi", "metric": "SP.POP.TOTL", "region": "usa", "year": 2024}}
+], "summary": "Wildfire exposure and population in the United States"}}
 ```
 Use this pattern for side-by-side disaster + population/economics/risk
 questions when the layers can share region/time framing, even if there is not a
