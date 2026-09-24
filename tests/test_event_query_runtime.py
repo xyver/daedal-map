@@ -72,7 +72,11 @@ class EventQueryRuntimeTests(unittest.TestCase):
             side_effect=lambda source_id: specs.get(source_id, event_spec),
         ), patch(
             "mapmover.api_query_runtime.load_source_metadata",
-            return_value={"metrics": {}},
+            side_effect=lambda source_id: (
+                (_ for _ in ()).throw(FileNotFoundError(source_id))
+                if source_id == "noaa_storm_events_floods"
+                else {"metrics": {}}
+            ),
         ):
             resolved = resolve_pack_sources_for_metrics("floods", ["event_count"])
 

@@ -1288,7 +1288,14 @@ def resolve_pack_sources_for_metrics(pack_id: str, metrics: list[str]) -> dict[s
     per_source_metric_keys: dict[str, set[str]] = {}
     metric_to_sources: dict[str, list[str]] = {}
     for source_id in candidate_sources:
-        metadata = load_source_metadata(source_id) or {}
+        # Pack routing must not fail because an optional companion source has
+        # no separately readable metadata object in the deployed artifact
+        # lane. The normalized runtime spec is sufficient for capability
+        # selection; source metadata only contributes a density tie-breaker.
+        try:
+            metadata = load_source_metadata(source_id) or {}
+        except Exception:
+            metadata = {}
         per_source_metadata[source_id] = metadata
         # Use the resolved source spec's metrics, which include synthetic metrics
         # such as event_count injected for event sources. Reading raw
