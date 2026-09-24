@@ -38,7 +38,7 @@ import time
 from pathlib import Path
 from copy import deepcopy
 
-from .catalog_surface import catalog_product_surface, get_catalog_surface_override
+from .catalog_surface import catalog_product_surface, catalog_surface_scope, get_catalog_surface_override
 from .catalog_cache_policy import (
     CONTROL_CATALOG_CACHE_TTL_SECONDS,
     CONTROL_CATALOG_MISS_TTL_SECONDS,
@@ -93,6 +93,12 @@ RETIRED_PACK_SOURCE_IDS = {
 PACK_MCP_ROUTING_HINTS: dict[str, dict[str, str]] = pack_routing_hints()
 
 
+def _load_agent_api_catalog() -> dict:
+    """Read the published catalog through its explicit API admission gate."""
+    with catalog_surface_scope("api"):
+        return load_catalog()
+
+
 def _pack_is_paid(pack_id: str | None) -> bool:
     from .api_query_commercial import pack_requires_commercial_access
 
@@ -102,7 +108,7 @@ def _pack_is_paid(pack_id: str | None) -> bool:
 def _effective_pack_pricing_sets() -> tuple[list[str], list[str]]:
     pack_ids = sorted(
         str(pack.get("pack_id") or "").strip()
-        for pack in get_catalog_packs(load_catalog())
+        for pack in get_catalog_packs(_load_agent_api_catalog())
         if str(pack.get("pack_id") or "").strip()
     )
     paid = [pack_id for pack_id in pack_ids if _pack_is_paid(pack_id)]
@@ -113,7 +119,7 @@ def _effective_pack_pricing_sets() -> tuple[list[str], list[str]]:
 def _merge_api_catalog_with_published(payload: dict | None) -> dict:
     """Keep Agent Catalog prose, but let catalog.json own pack admission/facts."""
     generated = deepcopy(payload) if isinstance(payload, dict) else {}
-    published = get_catalog_packs(load_catalog())
+    published = get_catalog_packs(_load_agent_api_catalog())
     generated_by_id = {
         str(pack.get("pack_id") or "").strip(): pack
         for pack in (generated.get("packs") or [])
@@ -397,7 +403,7 @@ def load_api_pack_detail(pack_id: str) -> dict | None:
         return None
 
     payload = _load_json_from_runtime_or_s3(f"packs/{pack_id}.json", use_agent_prefix=True)
-    live_catalog = load_catalog() or {}
+    live_catalog = _load_agent_api_catalog() or {}
     live_pack = get_pack_metadata(pack_id, live_catalog)
     if live_pack is None:
         _api_pack_missing_time[pack_id] = now

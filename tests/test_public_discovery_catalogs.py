@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 from app import app, _classify_route_surface, _rate_limit_config_for_surface
 from tool_access_shared import tool_pricing_version
 from mapmover.runtime import geometry_catalog
+from mapmover import data_loading
 
 
 class PublicDiscoveryCatalogTests(unittest.TestCase):
@@ -57,6 +58,34 @@ class PublicDiscoveryCatalogTests(unittest.TestCase):
         self.assertEqual(agent.status_code, 200)
         self.assertEqual(agent.json()["packs"][0]["pack_id"], "demo")
         self.assertEqual(legacy_agent.json(), agent.json())
+
+    def test_agent_catalog_uses_api_admission_not_explore_admission(self) -> None:
+        raw_catalog = {
+            "packs": [
+                {"pack_id": "api_only", "source_ids": ["api_source"], "catalog_surfaces": ["api", "mcp"]},
+                {"pack_id": "explore_only", "source_ids": ["explore_source"], "catalog_surfaces": ["explore"]},
+            ],
+            "sources": [
+                {"source_id": "api_source", "pack_id": "api_only", "catalog_surfaces": ["api", "mcp"]},
+                {"source_id": "explore_source", "pack_id": "explore_only", "catalog_surfaces": ["explore"]},
+            ],
+        }
+        generated = {
+            "packs": [
+                {"pack_id": "api_only", "quick_start": {"first_query_template": {}}},
+                {"pack_id": "explore_only", "quick_start": {"first_query_template": {}}},
+            ]
+        }
+        with mock.patch.object(data_loading, "load_catalog") as load_catalog:
+            load_catalog.side_effect = lambda: data_loading.build_active_catalog(
+                raw_catalog,
+                catalog_surface=data_loading.catalog_product_surface(
+                    data_loading.get_catalog_surface_override()
+                ),
+            )
+            merged = data_loading._merge_api_catalog_with_published(generated)
+
+        self.assertEqual([pack["pack_id"] for pack in merged["packs"]], ["api_only"])
 
     def test_full_catalog_downloads_serve_warmed_published_objects(self) -> None:
         data_catalog = {"sources": [{"source_id": "demo"}], "marker": "raw-data"}

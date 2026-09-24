@@ -783,21 +783,36 @@ class TrustedArtifactBypassTests(unittest.TestCase):
             },
             "get_loc_id_info": {"loc_ids": [f"USA-{i}" for i in range(200)]},
         }
-        for tool, arguments in cases.items():
-            with self.subTest(tool=tool):
-                with mock.patch.dict("os.environ", env, clear=False):
+        # This is a cap/admission test, not a 600-item reference-graph
+        # integration test. Stub the accepted work so no long-lived MCP worker
+        # remains after pytest has already reported its result.
+        with (
+            mock.patch(
+                "mapmover.routes.mcp._convert_reference_items",
+                return_value=[{"ok": True}],
+            ),
+            mock.patch(
+                "mapmover.routes.mcp._compare_geographies_items",
+                return_value=[{"ok": True}],
+            ),
+            mock.patch(
+                "mapmover.routes.mcp._get_loc_id_info_items",
+                return_value=[{"ok": True}],
+            ),
+        ):
+            for tool, arguments in cases.items():
+                with self.subTest(tool=tool), mock.patch.dict("os.environ", env, clear=False):
                     envelope = _tool_call_envelope(
                         self.client, tool, arguments, headers=self._headers()
                     )
-                result = envelope["result"]
-                structured = result.get("structuredContent") or {}
-                error_code = str((structured.get("error") or {}).get("code") or "")
-                # The call may still fail on data grounds, but never on the cap.
-                self.assertNotIn(
-                    error_code,
-                    {"too_many_items", "too_many_loc_ids", "too_many_loc_ids_for_references"},
-                    f"{tool} still enforced its item cap against a trusted artifact token",
-                )
+                    result = envelope["result"]
+                    structured = result.get("structuredContent") or {}
+                    error_code = str((structured.get("error") or {}).get("code") or "")
+                    self.assertNotIn(
+                        error_code,
+                        {"too_many_items", "too_many_loc_ids", "too_many_loc_ids_for_references"},
+                        f"{tool} still enforced its item cap against a trusted artifact token",
+                    )
 
     def test_trusted_token_bypasses_per_tool_call_rate_limit(self) -> None:
         env = {"ARTIFACT_ACCESS_TOKENS": f"qa={self.token}"}

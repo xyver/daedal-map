@@ -16,7 +16,13 @@ Run everything except them:
 
 from __future__ import annotations
 
+import os
 import pytest
+
+# Public-runtime tests must never inherit a developer machine's private
+# control-plane token and enqueue real HTTP telemetry. Individual telemetry
+# unit tests call the sink directly with their own patched environment.
+os.environ["QA_DISABLE_RUNTIME_ANALYTICS"] = "1"
 
 KNOWN_GAP_MARKERS = ("spine_gap", "fixture_drift")
 
