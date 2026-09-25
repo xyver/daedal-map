@@ -165,8 +165,8 @@ def build_tool_definitions(*, include_paused: bool = False) -> list[dict]:
         },
         {
             "name": "get_catalog",
-            "title": "Get Catalog",
-            "description": "Free progressive discovery for data packs or geometry families. For data, loc_id plus time_range returns the confirmed place-and-time intersection and keeps unknown coverage separate. Geometry results list each family and its release units. detail='full' adds bounded discovery fields, while detail='download' returns the complete raw catalog URL. Select one pack or family, then call get_pack.",
+            "title": "List Available Packs and Geometry Families",
+            "description": "Broad directory discovery only: use this before selecting a pack or geometry family. It lists available data packs or geometry families and supports optional coverage filtering; it does not inspect one known loc_id or return one entry's full contract. For data, loc_id plus time_range filters the directory to confirmed place-and-time coverage while keeping unknown coverage separate. Geometry results list families and release units. After choosing one result, call get_pack with that exact pack_id.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -190,8 +190,8 @@ def build_tool_definitions(*, include_paused: bool = False) -> list[dict]:
         },
         {
             "name": "get_pack",
-            "title": "Get Pack",
-            "description": "Free progressive metadata for one selected data pack or geometry family. A family-level geometry request returns the countries and global domains where it exists. Add country_scope for a country or release_unit for a global domain to inspect systems, releases, vintages, levels, and artifacts. Existence is the loc_id capability signal. Use next_step to retrieve data, convert identifiers, or retrieve shapes.",
+            "title": "Inspect One Selected Pack or Geometry Family",
+            "description": "Single-entry contract lookup only: use this after get_catalog and supply one exact pack_id. It returns that selected data pack's query fields and access metadata, or that selected geometry family's countries and global domains. Add country_scope or release_unit to inspect its systems, releases, vintages, levels, and artifacts. It does not list the whole catalog, inspect a place, or retrieve rows or shapes; follow next_step to the appropriate execution tool.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -314,8 +314,8 @@ def build_tool_definitions(*, include_paused: bool = False) -> list[dict]:
         },
         {
             "name": "get_loc_id_info",
-            "title": "Find Data and Geometry for a Place",
-            "description": "A navigation and enrichment tool that answers what can be done with one loc_id or a bounded loc_ids array. The lightweight result summarizes candidate data packs and available geometry families for the place and attaches executable next calls, alongside identity, strict stored parentage, shape status, and lifecycle fields. Set include_hierarchy for the same-release ancestor chain and include_references for maintained external or cross-family connections. Historical records are returned as requested and successors are never substituted automatically. No payment required.",
+            "title": "Inspect Known loc_id Identities",
+            "description": "Known-place navigation and enrichment tool: use only when you already have one canonical loc_id or a bounded loc_ids array. It returns identity, strict stored parentage, lifecycle, shape status, and place-specific data-pack and geometry-family availability with executable next calls. It does not list the global catalog and does not return polygon coordinates; use get_catalog to browse everything or get_geometry for shapes. Set include_hierarchy for same-release ancestors and include_references for maintained external or cross-family connections. Historical records are never replaced automatically. No payment required.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -341,8 +341,8 @@ def build_tool_definitions(*, include_paused: bool = False) -> list[dict]:
         },
         {
             "name": "identify_dataset_geography",
-            "title": "Identify Dataset Geography",
-            "description": "Free dataset-orchestration utility. Accepts bounded samples from plausible scalar columns and determines which column contains geography, then identifies its maintained reference system, country, and administrative level. The caller performs only structural parsing and sampling; it must not assign geographic meaning in advance. Returns up to three reviewable bindings at 60% confidence or better, plus a coordinate fallback when present; only an unambiguous result at 80% or better is recommended automatically. No geometry is loaded and no full dataset is retained. No payment required.",
+            "title": "Choose Geography Columns From a Dataset",
+            "description": "Multi-column dataset classifier: use when you do not yet know which column or latitude/longitude pair represents geography. Pass bounded samples from several named scalar columns; it selects the plausible geography column(s), then proposes a country, level, and maintained reference-system binding. It does not validate a preselected identifier column value-by-value; after selecting a code column, use identify_reference_system when explicit verification is needed. Returns up to three reviewable bindings and recommends only an unambiguous high-confidence result. No geometry is loaded and no full dataset is retained. No payment required.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -381,8 +381,8 @@ def build_tool_definitions(*, include_paused: bool = False) -> list[dict]:
         },
         {
             "name": "identify_reference_system",
-            "title": "Identify Geographic Reference System",
-            "description": "Free geography utility. Checks a bounded sample of identifiers plus optional dataset/column context against maintained reference indexes and geometry banks. LLM clients must extract identifier values from the user's natural-language request and pass them as strings; do not put the prose question in the arguments, and preserve leading zeros. Use it when a caller is unsure which system or level their keys belong to. It returns one to three interpretations with confidence and preserves ambiguity until the user confirms one by retrying with expected.system. A caller who already knows the system can provide expected on the first call and receive a verified geography_binding directly. It does not convert the full dataset or return polygons. No payment required.",
+            "title": "Identify One Identifier Column's Reference System",
+            "description": "Single-column code-system classifier: use after an identifier column has already been selected, or to inspect one bounded set of like geography codes. Pass only identifier strings from that one field so leading zeros are preserved. It determines or verifies the system, country, level, vintage, and compatible geometry bank; it does not choose among dataset columns, convert the full dataset, or return polygons. Use identify_dataset_geography instead when column selection is still unknown. Ambiguous results remain unselected until the caller retries with expected.system; a known system can be verified by supplying expected on the first call. No payment required.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -528,8 +528,8 @@ def build_tool_definitions(*, include_paused: bool = False) -> list[dict]:
         },
         {
             "name": "get_geometry",
-            "title": "Get loc_id Geometry",
-            "description": "Availability check and bounded shape retrieval for exact loc_ids or one administrative scope. Exact selection accepts loc_id or loc_ids. Scope selection accepts parent_loc_id plus admin_level and uses the optimized Admin Spine layout: Admin 0-3 stays on one national bank, while deeper levels require an Admin 1 parent and stay on one deep partition. The default response is the fast preflight: it projects has_shape, shape metadata, centroid, and bounding box without reading polygon coordinates. Set include_polygon=true only when exact coordinates are needed. Independent geometry families are selected by exact loc_ids, not inferred as administrative descendants. Use get_loc_id_info for hierarchy, catalog coverage, or crosswalk details. Historical geometry is returned first and successors are never substituted automatically. No payment required.",
+            "title": "Retrieve Shapes for Known loc_ids",
+            "description": "Shape availability and bounded coordinate retrieval only: use when you already have exact loc_ids, or one administrative parent_loc_id plus target admin_level. The default fast preflight returns has_shape, shape metadata, centroid, and bounding box; set include_polygon=true only for GeoJSON coordinates. Use get_loc_id_info for hierarchy, identity, catalog coverage, or crosswalk facts; get_geometry does not return those place details. Administrative scope queries stay within the optimized Admin Spine layout, while independent geometry families require exact loc_ids. Historical geometry is returned first and successors are never substituted automatically. No payment required.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
