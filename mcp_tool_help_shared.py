@@ -55,7 +55,7 @@ TOOL_GUIDANCE: dict[str, dict[str, Any]] = {
         ["get_data", "convert_reference", "get_geometry", "get_tool_help"], ["source metadata", "release/freshness fields"]
     ),
     "resolve_point": _g(
-        ["You have one WGS84 coordinate or a bounded point array and need first-pass administrative loc_id chains through Admin 3."],
+        ["You have one WGS84 coordinate or a bounded point array and need the deepest available first-pass administrative loc_id chain (global baseline through Admin 2; adopted country banks may reach Admin 3)."],
         ["Resolving names or outside codes", "Returning polygons", "Resolving Admin 4-6"],
         {"lat": 49.2827, "lon": -123.1207},
         ["deepest_resolved_loc_id", "stack", "resolution_mode", "available_deeper_admin_levels"],
@@ -189,7 +189,7 @@ def geometry_topic_help_payload(
             },
             {
                 "request": "multiple administrative points",
-                "rule": "Use resolve_point with points=[...] for a cross-country batch; it performs global Admin 0 discovery and then opens only each discovered country's Admin 0-3 bank.",
+                "rule": "Use resolve_point with points=[...] for a cross-country batch; it performs global Admin 0 discovery and then opens only each discovered country's adopted Admin 0-3 bank or bounded global Admin 0-2 baseline shard.",
             },
             {
                 "request": "points at a partitioned deep level",
@@ -430,7 +430,7 @@ def tool_help_payload(
         }
         access["bulk_shape"] = {
             "threshold": shared_limit,
-            "shallow_tool": "resolve_point: one point or a cross-country point array; Admin0 discovery is followed by Admin0-3 country banks only",
+            "shallow_tool": "resolve_point: one point or a cross-country point array; Admin0 discovery is followed by an adopted Admin0-3 country bank or the bounded global Admin0-2 baseline shard",
             "deep_tool": "resolve_deep_point: one point or point array plus one shallow_loc_id and one family; family defaults to administrative",
             "payment_policy": "free within the interactive safety ceiling",
         }

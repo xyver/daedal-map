@@ -234,7 +234,7 @@ def build_tool_definitions(*, include_paused: bool = False) -> list[dict]:
         {
             "name": "resolve_point",
             "title": "Resolve Point(s) (Shallow)",
-            "description": "Compact first-pass reverse geocoding for one WGS84 coordinate or a bounded point array. Returns administrative loc_id chains through Admin 3 without opening deep partitions or side-family shape banks. Use a returned shallow loc_id with resolve_deep_point for Admin 4-6 or one explicit family. Single and bulk requests share this contract; access limits are based on point count.",
+            "description": "Compact first-pass reverse geocoding for one WGS84 coordinate or a bounded point array. Returns the deepest available administrative loc_id chain: the global baseline reaches Admin 2, while adopted country query banks may reach Admin 3. It does not open deep partitions or side-family shape banks. Use a returned shallow loc_id with resolve_deep_point for Admin 4-6 or one explicit family. Single and bulk requests share this contract; access limits are based on point count.",
             "inputSchema": {
                 "type": "object",
                 "properties": {

@@ -731,15 +731,24 @@ class GeometryPointResolutionRuntimeTests(unittest.TestCase):
         self.assertFalse(result["deeper_available"])
         self.assertEqual(result["available_deeper_admin_levels"], [])
 
-    def test_standard_mode_does_not_open_legacy_country_files(self):
+    def test_standard_mode_uses_global_baseline_through_admin2(self):
         import pandas as pd
 
         country = pd.Series({"loc_id": "NZL", "name": "New Zealand", "admin_level": 0})
+        admin1_df = pd.DataFrame([{
+            "loc_id": "NZL-AUK", "parent_id": "NZL", "name": "Auckland", "admin_level": 1,
+            "geometry": '{"type":"Polygon","coordinates":[[[174,-37],[174,-36],[176,-36],[176,-37],[174,-37]]]}',
+        }])
+        admin2_df = pd.DataFrame([{
+            "loc_id": "NZL-AUK-001", "parent_id": "NZL-AUK", "name": "Central", "admin_level": 2,
+            "geometry": '{"type":"Polygon","coordinates":[[[174,-37],[174,-36],[176,-36],[176,-37],[174,-37]]]}',
+        }])
         with (
             patch("mapmover.geometry_handlers.load_global_admin0_identities", return_value={"NZL": country}),
             patch("mapmover.geometry_handlers.resolve_admin_spine_query_points", return_value=None),
-            patch("mapmover.geometry_handlers.load_country_parquet_viewport") as legacy_viewport,
+            patch("mapmover.geometry_handlers.load_country_parquet_viewport", side_effect=[admin1_df, admin2_df]) as legacy_viewport,
             patch("mapmover.geometry_handlers.load_country_parquet") as legacy_full,
+            patch("mapmover.geometry_handlers.load_subcounty_geometry") as deep_load,
         ):
             result = resolve_points_to_locations(
                 [{"lon": 174.76, "lat": -36.85}],
@@ -748,11 +757,14 @@ class GeometryPointResolutionRuntimeTests(unittest.TestCase):
                 shallow_banks_only=True,
             )[0]
 
-        legacy_viewport.assert_not_called()
+        self.assertEqual(legacy_viewport.call_count, 2)
         legacy_full.assert_not_called()
+        deep_load.assert_not_called()
         self.assertNotIn("error", result)
-        self.assertEqual(result["matched"]["loc_id"], "NZL")
-        self.assertEqual(result["query_layout"], "global_admin0_only")
+        self.assertEqual(result["matched"]["loc_id"], "NZL-AUK-001")
+        self.assertEqual(result["matched"]["admin_level"], 2)
+        self.assertEqual([row["loc_id"] for row in result["stack"]], ["NZL", "NZL-AUK", "NZL-AUK-001"])
+        self.assertEqual(result["query_layout"], "global_admin0_2_baseline")
 
     def test_resolve_points_to_locations_batches_country_admin_reads(self):
         import pandas as pd

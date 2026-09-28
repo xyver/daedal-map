@@ -1950,46 +1950,6 @@ def resolve_points_to_locations(
                 results[item["index"]]["geojson"] = get_selection_geometries([selected.get("loc_id")])
         _add_timing_ms(timing_ms, f"{iso3}_query_layout_ms", stage_started)
         country_items = unresolved_items
-        if shallow_banks_only and country_items:
-            for item in country_items:
-                country_match = item["country_match"]
-                country_name = country_match.get("name") or iso3
-                country_row = {
-                    "loc_id": iso3,
-                    "name": country_name,
-                    "admin_level": 0,
-                }
-                result = {
-                    "point": {"lon": float(item["lon"]), "lat": float(item["lat"])},
-                    "country": {"loc_id": iso3, "name": country_name},
-                    "matched": {
-                        "loc_id": iso3,
-                        "name": country_name,
-                        "admin_level": 0,
-                        "country_name": country_name,
-                        "iso3": iso3,
-                    },
-                    "stack": [_compact_point_stack_entry(country_row)],
-                    "resolution_mode": "latest_available_per_depth",
-                    "target_admin_level": (
-                        f"admin_{requested_target_admin_level}"
-                        if requested_target_admin_level is not None
-                        else f"up_to_admin_{io_admin_level}"
-                    ),
-                    "deeper_available": False,
-                    "available_deeper_admin_levels": [],
-                    "query_layout": "global_admin0_only",
-                }
-                if requested_target_admin_level not in {None, 0}:
-                    result["error"] = {
-                        "code": "target_admin_level_unavailable",
-                        "message": (
-                            f"{iso3} has no admitted Admin 0-3 query bank for an exact "
-                            f"Admin {requested_target_admin_level} lookup."
-                        ),
-                    }
-                results[item["index"]] = result
-            continue
         if not country_items:
             continue
 
@@ -2052,7 +2012,14 @@ def resolve_points_to_locations(
         _add_timing_ms(timing_ms, f"{iso3}_admin_match_ms", stage_started)
 
         stage_started = time.perf_counter()
-        supported_deep_levels = get_country_supported_deep_admin_levels(iso3)
+        # Standard resolution may fall back to the global per-country baseline
+        # when a country has no adopted Admin 0-3 query bank.  That baseline is
+        # deliberately bounded to Admin 1-2 here: it restores useful worldwide
+        # resolution without opening any country-owned Admin 3-6 partitions.
+        supported_deep_levels = (
+            [] if shallow_banks_only
+            else get_country_supported_deep_admin_levels(iso3)
+        )
         for item in country_items:
             item["supported_deep_levels"] = supported_deep_levels
             max_available_admin_level = max(
@@ -2179,6 +2146,11 @@ def resolve_points_to_locations(
                 ),
                 "deeper_available": bool(available_deeper_levels),
                 "available_deeper_admin_levels": available_deeper_levels,
+                "query_layout": (
+                    "global_admin0_2_baseline"
+                    if shallow_banks_only
+                    else "legacy_country_admin"
+                ),
             }
             if include_geometry:
                 result["geojson"] = get_selection_geometries([deepest_loc_id])
