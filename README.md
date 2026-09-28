@@ -14,7 +14,7 @@ or this repository, which is the open runtime behind all of them.
 
 [Website](https://www.daedalmap.com) |
 [App](https://app.daedalmap.com) |
-[Agent docs](https://www.daedalmap.com/docs/for-agents) |
+[Agent docs](https://www.daedalmap.com/devs) |
 [Geometry](https://www.daedalmap.com/geometry) |
 [Data packs](https://www.daedalmap.com/packs) |
 [Downloads](https://www.daedalmap.com/downloadable/) |
@@ -44,7 +44,7 @@ codex mcp add daedalmap --url https://app.daedalmap.com/mcp
 Any client that supports streamable HTTP MCP can use the same URL. Start with
 `get_tool_help` with `topic='geometry'` for geography jobs, or `get_catalog`, then `get_pack`,
 then `get_data` for data. Setup for other clients is in the
-[agent docs](https://www.daedalmap.com/docs/for-agents).
+[agent docs](https://www.daedalmap.com/devs).
 
 All geography tools are free within their published safety limits. Some data
 packs remain metered, and paid data calls return an x402 payment challenge before

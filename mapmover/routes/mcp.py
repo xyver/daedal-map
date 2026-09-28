@@ -2166,7 +2166,7 @@ def _read_resource(uri: str, pack_id: str | None = None) -> dict[str, Any] | Non
                     "packs_url_template": f"{app_url}/api/v1/packs/{{pack_id}}",
                     "query_url": f"{app_url}/api/v1/query/dataset",
                     "mcp_url": f"{app_url}/mcp",
-                    "docs_url": f"{site_url}/docs/for-agents",
+                    "docs_url": f"{site_url}/agents",
                     "current_access_model": _catalog_access_profiles(normalized_pack_id),
                 },
                 indent=2,
@@ -2210,7 +2210,7 @@ def _read_resource(uri: str, pack_id: str | None = None) -> dict[str, Any] | Non
                 "## Reference\n\n"
                 f"Free packs: {', '.join(sorted(_free_pack_ids()))}\n"
                 f"Paid packs: {', '.join(sorted(_paid_pack_ids()))} (account credit or x402)\n"
-                f"Full docs: {site_url}/docs/for-agents\n"
+                f"Full docs: {site_url}/agents\n"
                 f"Catalog endpoint: {app_url}/api/v1/catalog\n"
             ),
         )
@@ -2272,7 +2272,7 @@ def _read_resource(uri: str, pack_id: str | None = None) -> dict[str, Any] | Non
             (
                 "# Canonical Public Links\n\n"
                 f"- Site docs index: {site_url}/docs\n"
-                f"- For Agents: {site_url}/docs/for-agents\n"
+                f"- For AI agents: {site_url}/agents\n"
                 f"- Agent Examples: {site_url}/docs/agent-examples\n"
                 f"- loc_id Guide: {site_url}/docs/loc-id\n"
                 f"- MCP endpoint: {app_url}/mcp\n"

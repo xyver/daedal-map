@@ -1952,7 +1952,7 @@ def _build_mcp_server_card_payload(pack_id: str | None = None) -> dict:
             "description": get_server_description(normalized),
         },
         "websiteUrl": _public_site_url(),
-        "documentationUrl": _docs_url("/docs/for-agents"),
+        "documentationUrl": _docs_url("/agents"),
         "transport": "streamable-http",
         "authentication": {
             "type": "none",
@@ -1967,7 +1967,7 @@ def _build_mcp_server_card_payload(pack_id: str | None = None) -> dict:
 
 def _build_apis_json_payload() -> dict:
     app_url = _public_app_url()
-    docs_url = _docs_url("/docs/for-agents")
+    docs_url = _docs_url("/agents")
     return {
         "name": "DaedalMap API",
         "description": (

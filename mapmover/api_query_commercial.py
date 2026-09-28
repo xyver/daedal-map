@@ -174,7 +174,7 @@ def commercial_access_response(
     def discovery_payload(pricing: dict[str, Any] | None = None) -> dict[str, Any]:
         site_url = str(SITE_URL or "https://daedalmap.com").rstrip("/")
         payload: dict[str, Any] = {
-            "docs_url": f"{site_url}/docs/for-agents",
+            "docs_url": f"{site_url}/agents",
             "examples_url": f"{site_url}/docs/agent-examples",
             "catalog_url": "https://app.daedalmap.com/api/v1/catalog",
             "guide_url": "https://app.daedalmap.com/api/v1/guide",
