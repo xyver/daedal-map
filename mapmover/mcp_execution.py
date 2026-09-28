@@ -31,6 +31,13 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+def _env_float(name: str, default: float) -> float:
+    try:
+        return max(0.0, float(str(os.environ.get(name, default)).strip()))
+    except (TypeError, ValueError):
+        return default
+
+
 class MCPExecutionCapacityError(RuntimeError):
     """Raised when every isolated MCP worker is still occupied."""
 
@@ -45,6 +52,7 @@ _MAX_WORKERS = _env_int("MCP_EXECUTION_MAX_WORKERS", 2)
 # geography smoke while retaining the bounded worker pool and fail-fast
 # capacity guard; timed-out work still holds its slot until it really exits.
 _DEFAULT_TIMEOUT_SECONDS = _env_int("MCP_EXECUTION_TIMEOUT_SECONDS", 120)
+_CAPACITY_WAIT_SECONDS = _env_float("MCP_EXECUTION_CAPACITY_WAIT_SECONDS", 2.0)
 _EXECUTOR = ThreadPoolExecutor(max_workers=_MAX_WORKERS, thread_name_prefix="mcp-tool")
 _CAPACITY = threading.BoundedSemaphore(_MAX_WORKERS)
 _STATE_LOCK = threading.Lock()
@@ -74,6 +82,7 @@ async def run_mcp_blocking(
     /,
     *args: Any,
     timeout_seconds: float | None = None,
+    capacity_wait_seconds: float | None = None,
     cancellation_event: threading.Event | None = None,
     **kwargs: Any,
 ) -> T:
@@ -84,10 +93,18 @@ async def run_mcp_blocking(
     that the first caller abandoned.
     """
 
-    if not _CAPACITY.acquire(blocking=False):
-        raise MCPExecutionCapacityError(
-            f"MCP execution capacity is busy; retry {tool_name} shortly"
-        )
+    wait_budget = max(
+        0.0,
+        float(_CAPACITY_WAIT_SECONDS if capacity_wait_seconds is None else capacity_wait_seconds),
+    )
+    deadline = asyncio.get_running_loop().time() + wait_budget
+    while not _CAPACITY.acquire(blocking=False):
+        remaining = deadline - asyncio.get_running_loop().time()
+        if remaining <= 0:
+            raise MCPExecutionCapacityError(
+                f"MCP execution capacity is busy; retry {tool_name} shortly"
+            )
+        await asyncio.sleep(min(0.025, remaining))
     _increment_active_workers()
 
     try:
