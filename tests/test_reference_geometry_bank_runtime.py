@@ -1,6 +1,7 @@
 import json
 import tempfile
 import unittest
+from datetime import date
 from pathlib import Path
 from unittest.mock import patch
 
@@ -134,6 +135,43 @@ class ReferenceGeometryBankRuntimeTests(unittest.TestCase):
         self.assertEqual(frame.iloc[0]["family"], "place_or_municipality")
         self.assertEqual(frame.iloc[0]["subtype"], "designated_place")
         self.assertEqual(frame.iloc[0]["geometry"]["type"], "Polygon")
+
+    def test_dated_temporal_frame_filters_other_frames_and_unions_parts(self):
+        loc_id = "DEU-TEST-HISTORY"
+        selected_identity = {
+            "loc_id": loc_id, "geometry_loc_id": loc_id,
+            "geometry_bank": "geometry/countries/DEU/relationships/history",
+            "has_shape": True, "family": "deu_history", "geography_family": "admin_3",
+            "name": "Historical district", "frame_id": "DEU-TEST-HISTORY@1950",
+            "valid_from": "1950-01-01", "valid_to": "1960-01-01",
+        }
+        version_rows = pd.DataFrame([{
+            "loc_id": loc_id, "geometry_partition": "shapes/history.parquet",
+            "shape_storage": "normalized_temporal_source_bank",
+        }])
+        shape_rows = pd.DataFrame([
+            {"loc_id": loc_id, "frame_id": "DEU-TEST-HISTORY@1940",
+             "frame_part_id": "old#1", "geometry": box(0, 0, 1, 1).wkb},
+            {"loc_id": loc_id, "frame_id": "DEU-TEST-HISTORY@1950",
+             "frame_part_id": "selected#1", "geometry": box(0, 0, 1, 1).wkb},
+            {"loc_id": loc_id, "frame_id": "DEU-TEST-HISTORY@1950",
+             "frame_part_id": "selected#2", "geometry": box(2, 0, 3, 1).wkb},
+        ])
+
+        with (
+            patch("mapmover.runtime.reference_geometry_bank.identity_at", return_value=selected_identity),
+            patch("mapmover.runtime.reference_geometry_bank._safe_bank_root", return_value=Path("history-bank")),
+            patch("mapmover.runtime.reference_geometry_bank.select_rows", return_value=version_rows),
+            patch("mapmover.runtime.reference_geometry_bank._safe_partition_path", return_value=Path("history.parquet")),
+            patch("mapmover.runtime.reference_geometry_bank._read_shape_partition", return_value=shape_rows),
+            patch("mapmover.runtime.reference_geometry_bank._geoparquet_crs", return_value=None),
+        ):
+            frame = load_reference_graph_geometry([loc_id], as_of=date(1955, 1, 1))
+
+        self.assertEqual(len(frame), 1)
+        self.assertEqual(frame.iloc[0]["frame_id"], "DEU-TEST-HISTORY@1950")
+        self.assertEqual(frame.iloc[0]["frame_part_count"], 2)
+        self.assertEqual(frame.iloc[0]["geometry"]["type"], "MultiPolygon")
 
     def test_projected_geoparquet_shape_is_normalized_to_wgs84(self):
         loc_id = "CAN-HEALTH-PROJECTED"

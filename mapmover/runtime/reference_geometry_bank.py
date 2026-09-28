@@ -8,6 +8,7 @@ returns the same normalized frame consumed by the existing geometry tools.
 from __future__ import annotations
 
 import json
+from datetime import date
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Iterable
@@ -16,12 +17,12 @@ import pandas as pd
 from pyproj import CRS, Transformer
 from pyproj.exceptions import ProjError
 from shapely.geometry import mapping, shape
-from shapely.ops import transform as transform_geometry
+from shapely.ops import transform as transform_geometry, unary_union
 from shapely.wkb import loads as load_wkb
 
 from ..duckdb_helpers import parquet_available, parquet_columns, path_to_uri, run_df, select_rows
 from ..paths import DATA_ROOT
-from .reference_graph import identities
+from .reference_graph import identities, identity_at
 from .geometry_catalog import geometry_bank_lineage
 
 
@@ -103,7 +104,8 @@ def _read_shape_partition(path: Path, loc_ids: list[str]) -> pd.DataFrame:
     ordinary = [
         column for column in (
             "loc_id", "name", "name_en", "name_fr", "family", "subtype",
-            "source_id", "source_release", "area_square_km",
+            "source_id", "source_release", "area_square_km", "frame_id",
+            "frame_part_id", "valid_from", "valid_to", "validity_status",
         ) if column in available
     ]
     if _geoparquet_crs(str(path.resolve())) is not None:
@@ -246,19 +248,53 @@ def _normalized_row(
         "geometry_source": identity.get("source_system"),
         "bank_id": bank,
         "lineage": lineage,
+        "frame_id": row.get("frame_id") or identity.get("frame_id"),
+        "frame_part_id": row.get("frame_part_id"),
+        "valid_from": row.get("valid_from") or identity.get("valid_from"),
+        "valid_to": row.get("valid_to") or identity.get("valid_to"),
+        "validity_status": row.get("validity_status"),
     }
+
+
+def _merge_frame_parts(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Return one rendered geometry per logical loc/frame selection."""
+    grouped: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for row in rows:
+        key = (str(row.get("loc_id") or ""), str(row.get("frame_id") or ""))
+        grouped.setdefault(key, []).append(row)
+    merged: list[dict[str, Any]] = []
+    for parts in grouped.values():
+        item = dict(parts[0])
+        item["frame_part_count"] = len(parts)
+        if len(parts) > 1:
+            geometry = unary_union([shape(part["geometry"]) for part in parts])
+            min_lon, min_lat, max_lon, max_lat = geometry.bounds
+            centroid = geometry.centroid
+            item.update({
+                "geometry": mapping(geometry),
+                "centroid_lon": float(centroid.x), "centroid_lat": float(centroid.y),
+                "bbox_min_lon": float(min_lon), "bbox_min_lat": float(min_lat),
+                "bbox_max_lon": float(max_lon), "bbox_max_lat": float(max_lat),
+                "frame_part_id": None,
+            })
+        merged.append(item)
+    return merged
 
 
 def load_reference_graph_geometry(
     loc_ids: Iterable[str],
     *,
     columns: list[str] | None = None,
+    as_of: date | None = None,
 ) -> pd.DataFrame:
     """Load shapes for graph identities whose bank owns a shape partition."""
     requested = list(dict.fromkeys(str(item).strip() for item in loc_ids if str(item).strip()))
     if not requested:
         return pd.DataFrame(columns=columns or [])
-    identity_rows = identities(requested)
+    identity_rows = (
+        [row for loc_id in requested if (row := identity_at(loc_id, as_of)) is not None]
+        if as_of is not None else identities(requested)
+    )
     by_id = {
         str(row.get("loc_id")): row
         for row in identity_rows
@@ -287,6 +323,9 @@ def load_reference_graph_geometry(
             source_crs = _geoparquet_crs(str(bank_root.resolve()))
             for row in shape_rows.to_dict("records"):
                 for identity_row in identities_by_geometry_id.get(str(row.get("loc_id")), []):
+                    selected_frame = str(identity_row.get("frame_id") or "")
+                    if selected_frame and str(row.get("frame_id") or "") != selected_frame:
+                        continue
                     item = _normalized_row(row, identity_row, source_crs=source_crs)
                     if item is not None:
                         normalized.append(item)
@@ -298,6 +337,9 @@ def load_reference_graph_geometry(
                 source_crs = _geoparquet_crs(str(partition.resolve()))
                 for row in shape_rows.to_dict("records"):
                     for identity_row in identities_by_geometry_id.get(str(row.get("loc_id")), []):
+                        selected_frame = str(identity_row.get("frame_id") or "")
+                        if selected_frame and str(row.get("frame_id") or "") != selected_frame:
+                            continue
                         item = _normalized_row(row, identity_row, source_crs=source_crs)
                         if item is not None:
                             normalized.append(item)
@@ -320,11 +362,14 @@ def load_reference_graph_geometry(
             source_crs = _geoparquet_crs(str(partition.resolve()))
             for row in shape_rows.to_dict("records"):
                 for identity_row in identities_by_geometry_id.get(str(row.get("loc_id")), []):
+                    selected_frame = str(identity_row.get("frame_id") or "")
+                    if selected_frame and str(row.get("frame_id") or "") != selected_frame:
+                        continue
                     item = _normalized_row(row, identity_row, source_crs=source_crs)
                     if item is not None:
                         normalized.append(item)
 
-    frame = pd.DataFrame(normalized)
+    frame = pd.DataFrame(_merge_frame_parts(normalized))
     if frame.empty:
         return pd.DataFrame(columns=columns or [])
     if columns:

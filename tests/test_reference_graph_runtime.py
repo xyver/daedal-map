@@ -241,6 +241,23 @@ class ReferenceGraphRuntimeTests(unittest.TestCase):
         self.assertEqual(identities(["TST-A-001"])[0]["name"], "Current Area")
         self.assertEqual(identity_at("TST-A-001", date(2025, 6, 1))["name"], "Earlier Area")
 
+    def test_dated_identity_outranks_shared_undated_spine_row(self) -> None:
+        current = pd.read_parquet(self.root / "identities.parquet")
+        base = current.loc[current.loc_id.eq("TST-A-001")].iloc[0].to_dict()
+        undated = {**base, "name": "Undated spine", "valid_from": "", "valid_to": ""}
+        historical = {
+            **base, "name": "Historical frame", "frame_id": "TST-A-001@1990",
+            "valid_from": "1990-01-01", "valid_to": "2000-01-01",
+        }
+        pd.DataFrame([undated, historical]).to_parquet(
+            self.root / "identities.parquet", index=False,
+        )
+
+        selected = identity_at("TST-A-001", date(1995, 6, 1))
+
+        self.assertEqual(selected["name"], "Historical frame")
+        self.assertEqual(selected["frame_id"], "TST-A-001@1990")
+
     def test_preferred_public_loc_id_resolves_and_is_discoverable(self) -> None:
         resolved = resolve_public_loc_id("tst-public-a")
         self.assertTrue(resolved["ok"])

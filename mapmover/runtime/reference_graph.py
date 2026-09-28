@@ -61,7 +61,7 @@ GLOBAL_DISCOVERY_MANIFEST = Path("geometry/global/reference_discovery/manifest.j
 #: stable; ``union_by_name`` fills a missing one with NULL.
 IDENTITY_COLUMNS = (
     "loc_id", "family", "geography_family", "native_id", "name", "parent_loc_id", "admin_level",
-    "namespace_release", "valid_from", "valid_to", "has_shape", "geometry_bank",
+    "namespace_release", "valid_from", "valid_to", "frame_id", "has_shape", "geometry_bank",
     "geometry_status", "source_system", "source_vintage", "geometry_loc_id",
     "source_loc_id", "sibling_level", "sibling_anchor_loc_id",
     "smallest_full_container_loc_id", "crosses_sibling_boundaries_at_or_above_anchor",
@@ -690,40 +690,51 @@ def identity_at(loc_id: str, as_of: date | None = None) -> dict[str, Any] | None
         return identity(loc_id)
     if not reference_graph_available():
         return None
-    root = active_reference_graph_root()
     connection = _connection()
     try:
-        cursor = connection.execute(
-            f"""SELECT * FROM (
-                    SELECT {_identity_columns()}
-                    FROM read_parquet({_table_source('identity_versions')}, union_by_name=True)
-                ) AS candidates
-                WHERE loc_id = ?
-                  AND (valid_from IS NULL OR valid_from = '' OR CAST(valid_from AS DATE) <= ?)
-                  AND (valid_to IS NULL OR valid_to = '' OR CAST(valid_to AS DATE) > ?)
-                ORDER BY {IDENTITY_RECENCY_ORDER}
-                LIMIT 1""",
-            [str(loc_id), as_of, as_of],
-        )
-        row = cursor.fetchone()
-        if row is None:
-            # Preserve the identity and its declared window even when the
-            # requested date falls outside it, so callers can report a typed
-            # temporal mismatch instead of treating the loc_id as unknown.
+        # Country authority wins over the global fallback. Within that graph,
+        # an explicit temporal version outranks an undated current-spine row;
+        # otherwise the latter would mask every historical frame for an ID
+        # shared with the current admin spine.
+        for root in graph_roots_for_loc_id(loc_id):
+            partition_paths = (
+                _route_paths(root, IDENTITY_ROUTE_INDEX, "loc_id", [str(loc_id)])
+                or _partition_paths(root, "identity_versions")
+            )
+            source = _table_source_for_roots(
+                "identity_versions", [root], loc_ids=[str(loc_id)],
+            )
+            if not source:
+                continue
+            selected = _identity_columns_for_roots([root], partition_paths)
             cursor = connection.execute(
                 f"""SELECT * FROM (
-                        SELECT {_identity_columns()}
-                        FROM read_parquet({_table_source('identity_versions')}, union_by_name=True)
+                        SELECT {selected}
+                        FROM read_parquet({source}, union_by_name=True)
                     ) AS candidates
                     WHERE loc_id = ?
-                    ORDER BY {IDENTITY_RECENCY_ORDER}
+                    ORDER BY
+                      CASE
+                        WHEN (NULLIF(CAST(valid_from AS VARCHAR), '') IS NOT NULL
+                              OR NULLIF(CAST(valid_to AS VARCHAR), '') IS NOT NULL)
+                         AND (TRY_CAST(NULLIF(CAST(valid_from AS VARCHAR), '') AS DATE) IS NULL
+                              OR TRY_CAST(NULLIF(CAST(valid_from AS VARCHAR), '') AS DATE) <= ?)
+                         AND (TRY_CAST(NULLIF(CAST(valid_to AS VARCHAR), '') AS DATE) IS NULL
+                              OR TRY_CAST(NULLIF(CAST(valid_to AS VARCHAR), '') AS DATE) > ?)
+                          THEN 0
+                        WHEN (NULLIF(CAST(valid_from AS VARCHAR), '') IS NOT NULL
+                              OR NULLIF(CAST(valid_to AS VARCHAR), '') IS NOT NULL)
+                          THEN 1
+                        ELSE 2
+                      END,
+                      {IDENTITY_RECENCY_ORDER}
                     LIMIT 1""",
-                [str(loc_id)],
+                [str(loc_id), as_of, as_of],
             )
             row = cursor.fetchone()
-        if row is None:
-            return None
-        return dict(zip([item[0] for item in cursor.description], row))
+            if row is not None:
+                return dict(zip([item[0] for item in cursor.description], row))
+        return None
     finally:
         connection.close()
 
