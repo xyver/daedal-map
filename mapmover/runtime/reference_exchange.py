@@ -61,6 +61,8 @@ ADMIN_SYSTEM = "admin_boundary"
 FAMILY_DEFAULT_SYSTEMS = {
     "marine_jurisdiction": "marine_eez",
 }
+US_ZCTA_GEOID_SYSTEM = "usa.census.2020.zcta5.geoid"
+PUBLIC_ZIP_ALIASES = frozenset({"zcta", "zip", "zip_code", "zipcode", "postal_code"})
 
 SYSTEM_ALIASES = {
     "loc_id": LOC_ID_SYSTEM,
@@ -100,6 +102,9 @@ SYSTEM_ALIASES = {
     "census_geoid": "us_census_geoid",
     "census_2020_geoid": "us_census_geoid",
     "us_census_2020_geoid": "us_census_geoid",
+    "fips": "us_census_geoid",
+    "us_fips": "us_census_geoid",
+    "census_fips": "us_census_geoid",
     **external_system_aliases(),
 }
 
@@ -2068,6 +2073,16 @@ def resolve_reference(
         if identities is not None:
             return _clean_json(_global_admin0_identity_result(text, identities.get(normalized)))
     if system == ADMIN_SYSTEM:
+        # Numeric US administrative identifiers are Census/FIPS GEOIDs, not
+        # postal text.  Only accept this interpretation when the maintained
+        # geometry exists; otherwise preserve the general admin-text path.
+        country = str(country_hint or iso3 or "").strip().upper()
+        if country == "USA" and text.isdigit() and len(text) in {2, 5, 11, 12, 15}:
+            census_result = resolve_reference(from_system="us_census_geoid", value=text, iso3="USA")
+            if census_result.get("ok") and census_result.get("geometry_available"):
+                census_result["from_system"] = system
+                census_result["match_type"] = "fips_exact_identifier_crosswalk"
+                return _clean_json(census_result)
         return _clean_json(_admin_text_result(text, country_hint=country_hint or iso3, admin_level_hint=admin_level_hint, request_system=system))
     if system == "historical_country":
         historical = resolve_historical_country_reference(text, as_of=as_of)
@@ -2735,6 +2750,18 @@ def convert_reference(
     """Convert a value from one reference system to another through ``loc_id``."""
     source = _normalize_system(from_system)
     target = _normalize_system(to_system)
+    requested_source = str(from_system or "").strip().lower().replace("-", "_").replace(" ", "_")
+    if requested_source in PUBLIC_ZIP_ALIASES and target in {LOC_ID_SYSTEM, "admin_local", "admin_geometry"}:
+        resolved = resolve_reference(
+            from_system=US_ZCTA_GEOID_SYSTEM,
+            value=value,
+            iso3=iso3,
+            limit=limit,
+        )
+        loc_id = resolved.get("resolved_loc_id")
+        if not loc_id:
+            return _clean_json({"ok": False, "from": resolved, "to_system": target, "error": "source reference did not resolve to loc_id"})
+        return _clean_json({"ok": True, "from": resolved, "to_system": target, "results": [{"system": target, "value": loc_id}]})
     target_adapter = get_external_adapter(target)
     if source in {LOC_ID_SYSTEM, "admin_local", "admin_geometry"} and target_adapter:
         # A typed external bridge is already a loc_id <-> external-id index.
@@ -2861,7 +2888,11 @@ def convert_references_batch(requests: list[dict[str, Any]]) -> list[dict[str, A
     catalog_by_country: dict[str, list[dict[str, Any]]] = {}
     for index, request in enumerate(requests):
         from_system = _normalize_system(request.get("from_system"))
-        target = _normalize_system(request.get("to_system"))
+        target = _normalize_system(request.get("to_system") or LOC_ID_SYSTEM)
+        requested_source = str(request.get("from_system") or "").strip().lower().replace("-", "_").replace(" ", "_")
+        if requested_source in PUBLIC_ZIP_ALIASES and target in {LOC_ID_SYSTEM, "admin_local", "admin_geometry"}:
+            results[index] = convert_reference(**request)
+            continue
         iso3 = str(request.get("iso3") or "USA").strip().upper()
         if iso3 not in catalog_by_country:
             catalog_by_country[iso3] = _catalog_crosswalks(country_scope=iso3)
@@ -2922,7 +2953,7 @@ def convert_references_batch(requests: list[dict[str, Any]]) -> list[dict[str, A
     reverse_groups: dict[tuple[Any, ...], list[tuple[int, dict[str, Any], dict[str, Any], str]]] = {}
     external_reverse_groups: dict[tuple[Any, ...], list[tuple[int, dict[str, Any], dict[str, Any], str]]] = {}
     for index, request, resolved in zip(source_indexes, (requests[i] for i in source_indexes), resolved_sources):
-        target = _normalize_system(request.get("to_system"))
+        target = _normalize_system(request.get("to_system") or LOC_ID_SYSTEM)
         loc_id = str(resolved.get("resolved_loc_id") or "").strip()
         if not loc_id:
             results[index] = _clean_json({

@@ -26,6 +26,34 @@ from mapmover.runtime.external_reference_adapters import ExternalReferenceEdge
 
 
 class ReferenceExchangeRuntimeTests(unittest.TestCase):
+    def test_fips_alias_resolves_through_census_geoid(self) -> None:
+        payload = resolve_reference(from_system="fips", value="51059", iso3="USA")
+
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["from_system"], "us_census_geoid")
+        self.assertEqual(payload["resolved_loc_id"], "USA-VA-059")
+
+    def test_numeric_admin_boundary_uses_existing_fips_identity(self) -> None:
+        payload = resolve_reference(from_system="admin_boundary", value="51059", iso3="USA")
+
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["from_system"], "admin_boundary")
+        self.assertEqual(payload["resolved_loc_id"], "USA-VA-059")
+        self.assertEqual(payload["match_type"], "fips_exact_identifier_crosswalk")
+
+    def test_zip_alias_resolves_to_canonical_postal_identity(self) -> None:
+        payload = convert_reference(from_system="zip", value="22030", iso3="USA")
+
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["from"]["from_system"], "usa.census.2020.zcta5.geoid")
+        self.assertEqual(payload["from"]["resolved_loc_id"], "USA-VA-059-492000-POSTAL-22030")
+        self.assertEqual(payload["results"][0]["value"], "USA-VA-059-492000-POSTAL-22030")
+
+        batched = reference_exchange.convert_references_batch([
+            {"from_system": "zip", "value": "22030", "iso3": "USA"},
+        ])
+        self.assertEqual(batched[0]["results"][0]["value"], "USA-VA-059-492000-POSTAL-22030")
+
     def test_external_reference_batch_queries_shared_partition_once(self) -> None:
         first = "11111111-1111-1111-1111-111111111111"
         second = "22222222-2222-2222-2222-222222222222"

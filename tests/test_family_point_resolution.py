@@ -5,12 +5,49 @@ import pandas as pd
 from shapely.geometry import Polygon, mapping
 
 from mapmover.runtime.family_point_resolution import (
+    family_artifacts,
     normalize_requested_family,
     resolve_family_points,
 )
 
 
 class FamilyPointResolutionTests(unittest.TestCase):
+    def test_manifest_source_family_names_route_to_canonical_catalog_families(self):
+        manifest = {"artifacts": [
+            {"family": "named_geographical_feature", "role": "query_exact_predicate_index", "path": "named.index.parquet", "rows": 2},
+            {"family": "named_geographical_feature", "role": "query_exact_geometry", "path": "named.parquet"},
+            {"family": "map_grid", "role": "query_exact_predicate_index", "path": "grid.index.parquet", "rows": 3},
+            {"family": "map_grid", "role": "query_exact_geometry", "path": "grid.parquet"},
+        ]}
+        with (
+            patch("mapmover.runtime.family_point_resolution.representation_manifest", return_value=manifest),
+            patch("mapmover.runtime.family_point_resolution.load_geometry_catalog", return_value={}),
+        ):
+            artifacts = family_artifacts("CAN")
+
+        self.assertNotIn("named_geographical_feature", artifacts)
+        self.assertNotIn("map_grid", artifacts)
+        self.assertEqual(artifacts["named_feature"]["shape_count"], 2)
+        self.assertEqual(artifacts["reference_grid"]["shape_count"], 3)
+
+    def test_published_catalog_banks_fallback_when_download_manifest_is_absent(self):
+        catalog = {"geometry_banks": [{
+            "scope": "CAN",
+            "family": "postal_area",
+            "geometry_path": "geometry/countries/CAN/relationships/postal/shapes/postal_area.parquet",
+            "bank_role": "graph_ready_sidechain",
+            "material_policy": {"hosted_access": {"publication_ready": True, "paid_allowed": True}},
+            "row_count": 10,
+        }]}
+        with (
+            patch("mapmover.runtime.family_point_resolution.representation_manifest", return_value={}),
+            patch("mapmover.runtime.family_point_resolution.load_geometry_catalog", return_value=catalog),
+        ):
+            artifacts = family_artifacts("CAN")
+
+        self.assertEqual(artifacts["postal_area"]["predicate_paths"], [catalog["geometry_banks"][0]["geometry_path"]])
+        self.assertEqual(artifacts["postal_area"]["exact_paths"], [catalog["geometry_banks"][0]["geometry_path"]])
+
     def test_family_input_requires_canonical_ids(self):
         family, error = normalize_requested_family("postal_area")
         self.assertEqual(family, "postal_area")

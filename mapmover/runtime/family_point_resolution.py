@@ -30,6 +30,14 @@ from .reference_graph import identity
 PREDICATE_ROLE = "query_exact_predicate_index"
 EXACT_ROLE = "query_exact_geometry"
 
+# Representation manifests retain a few publisher-facing family labels that
+# predate the public geometry catalog.  Route those physical labels through
+# the catalog's canonical family ids at the manifest boundary.
+MANIFEST_FAMILY_ALIASES = {
+    "map_grid": "reference_grid",
+    "named_geographical_feature": "named_feature",
+}
+
 
 def normalize_requested_family(value: Any) -> tuple[str, dict[str, str] | None]:
     """Validate one public canonical family without legacy aliasing."""
@@ -110,7 +118,8 @@ def family_artifacts(country: str) -> dict[str, dict[str, Any]]:
     for artifact in representation_manifest(country).get("artifacts") or []:
         if not isinstance(artifact, dict):
             continue
-        family = str(artifact.get("family") or "").strip()
+        physical_family = str(artifact.get("family") or "").strip()
+        family = MANIFEST_FAMILY_ALIASES.get(physical_family, physical_family)
         role = str(artifact.get("role") or "").strip()
         path = str(artifact.get("path") or "").strip()
         if not family or not path or role not in {PREDICATE_ROLE, EXACT_ROLE}:
@@ -123,6 +132,50 @@ def family_artifacts(country: str) -> dict[str, dict[str, Any]]:
                 card["shape_count"] += int(artifact.get("rows") or 0)
             except (TypeError, ValueError):
                 pass
+
+    # Hosted publication deliberately excludes ``downloadable_inputs`` build
+    # state.  Every admitted exact family bank already carries the same bbox
+    # columns as the compact predicate derivative, so it is a valid (if less
+    # compact) predicate source when the representation manifest is absent.
+    # This keeps family lookup available from the published catalog closure
+    # instead of making a downloadable-package sidecar a runtime dependency.
+    manifest_backed = {
+        family for family, card in grouped.items()
+        if card["predicate_paths"] and card["exact_paths"]
+    }
+    fallback_families: set[str] = set()
+    catalog = load_geometry_catalog()
+    for bank in catalog.get("geometry_banks") or []:
+        if not isinstance(bank, dict):
+            continue
+        if str(bank.get("scope") or "").strip().upper() != country:
+            continue
+        hosted_access = ((bank.get("material_policy") or {}).get("hosted_access") or {})
+        if (
+            str(bank.get("bank_role") or "") != "graph_ready_sidechain"
+            or hosted_access.get("publication_ready") is not True
+            or hosted_access.get("paid_allowed") is not True
+        ):
+            continue
+        physical_family = str(bank.get("family") or "").strip()
+        family = MANIFEST_FAMILY_ALIASES.get(physical_family, physical_family)
+        path = str(bank.get("geometry_path") or "").strip().replace("\\", "/")
+        if not family or family.startswith("admin_") or not path.lower().endswith(".parquet"):
+            continue
+        if family in manifest_backed:
+            continue
+        if family not in fallback_families:
+            grouped[family] = {"predicate_paths": [], "exact_paths": [], "shape_count": 0}
+            fallback_families.add(family)
+        card = grouped[family]
+        if path not in card["predicate_paths"]:
+            card["predicate_paths"].append(path)
+        if path not in card["exact_paths"]:
+            card["exact_paths"].append(path)
+        try:
+            card["shape_count"] += int(bank.get("row_count") or 0)
+        except (TypeError, ValueError):
+            pass
     return grouped
 
 

@@ -1871,9 +1871,9 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         )
 
         self.assertTrue(payload["ok"])
-        self.assertEqual(payload["from"]["normalized_input"], "USA-Z-00601")
-        self.assertEqual(payload["from"]["resolved_loc_id"], "USA-PR-001")
-        self.assertEqual(payload["from"]["match_type"], "crosswalk_overlap")
+        self.assertEqual(payload["from"]["normalized_input"], "00601")
+        self.assertEqual(payload["from"]["resolved_loc_id"], "USA-PR-001-POSTAL-00601")
+        self.assertEqual(payload["from"]["match_type"], "reference_graph_alias")
 
     def test_convert_reference_selects_historical_identity_as_of_date(self) -> None:
         payload = _tool_call(
@@ -1909,7 +1909,10 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         self.assertEqual(payload["item_count"], 2)
         self.assertEqual(payload["results"][0]["row_index"], 1)
         self.assertTrue(payload["results"][0]["ok"])
-        self.assertEqual(payload["results"][0]["from"]["resolved_loc_id"], "USA-PR-001")
+        self.assertEqual(
+            payload["results"][0]["from"]["resolved_loc_id"],
+            "USA-PR-001-POSTAL-00601",
+        )
         self.assertEqual(payload["converted_count"], 1)
         self.assertEqual(payload["unconverted_count"], 1)
         # The real analytics rows carry compute.input_count/output_count and
