@@ -1809,14 +1809,6 @@ def _mcp_pricing_payload(pack_id: str | None = None) -> dict:
             "notes": "No payment required for this MCP facade.",
             **hosted_commercial_policy(),
         }
-    payload = {
-        "model": "tool_and_material_policy",
-        "currency": "USDC",
-        "network": "Base",
-        "payment_protocol": "x402",
-        "notes": "Downloads and discovery are free. A metered hosted call returns its exact price before payment.",
-        **hosted_commercial_policy(),
-    }
     if normalized in {"geography", "reverse-geocoding", "boundaries"}:
         from mapmover.routes.mcp import _facade_tools
 
@@ -1836,7 +1828,25 @@ def _mcp_pricing_payload(pack_id: str | None = None) -> dict:
                     "pricing_version": tool_pricing_version(name),
                 })
             rows.append(row)
-        payload["tools"] = rows
+        if rows and all(row["pricing"] == "free" for row in rows):
+            return {
+                "model": "free",
+                "notes": "No payment required; published per-call safety ceilings apply.",
+                "access_lanes": {
+                    "downloads": "free",
+                    "hosted_discovery": "free",
+                    "hosted_execution": "free within published per-call safety ceilings",
+                },
+                "tools": rows,
+            }
+    payload = {
+        "model": "tool_and_material_policy",
+        "currency": "USDC",
+        "network": "Base",
+        "payment_protocol": "x402",
+        "notes": "Downloads and discovery are free. A metered hosted call returns its exact price before payment.",
+        **hosted_commercial_policy(),
+    }
     return payload
 
 
@@ -1855,8 +1865,8 @@ def _mcp_server_card_auth_notes(pack_id: str | None) -> str:
     normalized = _normalize_mcp_facade_pack_id(pack_id)
     if normalized in {"geography", "reverse-geocoding", "boundaries"}:
         return (
-            "No API key required. Discovery and included calls are free; "
-            "metered hosted throughput returns an x402 price challenge before payment."
+            "No API key or payment required. Discovery and execution are free "
+            "within the published per-call safety ceilings."
         )
     if normalized:
         if _pack_is_paid(normalized):

@@ -148,6 +148,17 @@ class PublicDiscoveryCatalogTests(unittest.TestCase):
                 self.assertEqual(payload["metadata"]["tool_count"], len(expected))
                 self.assertNotIn("query_dataset", actual)
                 self.assertEqual(payload["resources"][0]["name"], "geometry_catalog")
+                self.assertEqual(payload["pricing"]["model"], "free")
+                self.assertEqual(
+                    payload["pricing"]["access_lanes"]["hosted_execution"],
+                    "free within published per-call safety ceilings",
+                )
+                self.assertNotIn("payment_protocol", payload["pricing"])
+                self.assertNotIn("currency", payload["pricing"])
+                self.assertTrue(
+                    all(row["pricing"] == "free" for row in payload["pricing"]["tools"])
+                )
+                self.assertIn("No API key or payment required", payload["authentication"]["notes"])
 
         geography = self.client.get(
             "/.well-known/mcp/geography/server-card.json"
