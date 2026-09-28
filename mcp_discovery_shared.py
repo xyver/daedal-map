@@ -10,10 +10,9 @@ from copy import deepcopy
 from typing import Any
 
 from catalog_coverage_shared import (
-    coverage_matches_country,
     normalize_scope,
     normalize_time_range,
-    temporal_intersects,
+    resolve_pack_coverage_match,
 )
 
 
@@ -178,34 +177,7 @@ def filter_data_catalog_payload(
         if not isinstance(raw, dict):
             continue
         row = dict(raw)
-        windows = row.get("coverage_windows")
-        windows = [window for window in windows or [] if isinstance(window, dict)]
-        if windows:
-            outcomes = []
-            for window in windows:
-                coverage = window.get("coverage_contract")
-                coverage = coverage if isinstance(coverage, dict) else {}
-                outcomes.append((
-                    coverage_matches_country(coverage, country),
-                    temporal_intersects(
-                        window.get("temporal_start"), window.get("temporal_end"), requested_time
-                    ),
-                ))
-            confirmed = any(place is True and time is True for place, time in outcomes)
-            possible = any(place is not False and time is not False for place, time in outcomes)
-            if confirmed:
-                place_match, time_match = True, True
-            elif possible:
-                place_match, time_match = None, None
-            else:
-                place_match, time_match = False, False
-        else:
-            coverage = row.get("coverage_contract")
-            coverage = coverage if isinstance(coverage, dict) else {}
-            place_match = coverage_matches_country(coverage, country)
-            time_match = temporal_intersects(
-                row.get("temporal_start"), row.get("temporal_end"), requested_time
-            )
+        place_match, time_match = resolve_pack_coverage_match(row, country, requested_time)
         row["catalog_match"] = {
             "place": "match" if place_match is True else "unknown" if place_match is None else "no_match",
             "time": "match" if time_match is True else "unknown" if time_match is None else "no_match",

@@ -12,6 +12,7 @@ from typing import Any, Iterable
 
 
 ISO3 = re.compile(r"^[A-Z]{3}$")
+_BARE_YEAR = re.compile(r"-?\d{1,4}")
 RESERVED_SCOPES = {"global", "marine", "unknown"}
 
 
@@ -184,11 +185,75 @@ def temporal_intersects(start: Any, end: Any, requested: dict[str, Any] | None) 
         return None
     requested_start = _time_value(requested.get("start"))
     requested_end = _time_value(requested.get("end"))
-    if available_end is not None and requested_start is not None and _time_key(available_end) < _time_key(requested_start):
+    if available_end is not None and requested_start is not None and _time_before(available_end, requested_start):
         return False
-    if available_start is not None and requested_end is not None and _time_key(available_start) > _time_key(requested_end):
+    if available_start is not None and requested_end is not None and _time_before(requested_end, available_start):
         return False
     return True
+
+
+def _time_before(left: str, right: str) -> bool:
+    """True when ``left`` ends before ``right`` begins.
+
+    A bare year is a whole-year span, not an instant at 1 January: when either
+    side is a bare year, compare at year granularity so ``end=1950`` keeps a
+    source starting 1950-01-03 and a source ending ``2024`` keeps a request
+    starting 2024-06-01.
+    """
+    if _BARE_YEAR.fullmatch(left) or _BARE_YEAR.fullmatch(right):
+        return _time_key(left)[0] < _time_key(right)[0]
+    return _time_key(left) < _time_key(right)
+
+
+def source_coverage_window(entry: dict[str, Any]) -> dict[str, Any]:
+    """One source's coupled place/time coverage, read from a catalog source row."""
+    temporal = entry.get("temporal_coverage")
+    temporal = temporal if isinstance(temporal, dict) else {}
+    return {
+        "source_id": entry.get("source_id"),
+        "coverage_contract": coverage_contract(entry),
+        "temporal_start": temporal.get("start"),
+        "temporal_end": temporal.get("end"),
+    }
+
+
+def coverage_windows(entries: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Keep place and time coupled at source granularity for intersection queries."""
+    return [source_coverage_window(entry) for entry in entries]
+
+
+def resolve_pack_coverage_match(
+    pack: dict[str, Any],
+    country: str | None,
+    requested_time: dict[str, Any] | None,
+) -> tuple[bool | None, bool | None]:
+    """Return (place_match, time_match) for one pack: True, False, or None (unknown).
+
+    A pack is confirmed when any one source window matches both place and time,
+    so a USA-only early source cannot lend its years to a later global source.
+    Packs without windows fall back to their pack-level coverage fields.
+    """
+    windows = [window for window in pack.get("coverage_windows") or [] if isinstance(window, dict)]
+    if windows:
+        outcomes = []
+        for window in windows:
+            coverage = window.get("coverage_contract")
+            coverage = coverage if isinstance(coverage, dict) else {}
+            outcomes.append((
+                coverage_matches_country(coverage, country),
+                temporal_intersects(window.get("temporal_start"), window.get("temporal_end"), requested_time),
+            ))
+        if any(place is True and time is True for place, time in outcomes):
+            return True, True
+        if any(place is not False and time is not False for place, time in outcomes):
+            return None, None
+        return False, False
+    coverage = pack.get("coverage_contract")
+    coverage = coverage if isinstance(coverage, dict) else {}
+    return (
+        coverage_matches_country(coverage, country),
+        temporal_intersects(pack.get("temporal_start"), pack.get("temporal_end"), requested_time),
+    )
 
 
 def _time_value(value: Any) -> str | None:
