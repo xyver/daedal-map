@@ -26,7 +26,7 @@ from mapmover.routes.mcp import (
     _tool_effective_access,
 )
 from mapmover.security import get_client_ip
-from tool_access_shared import tool_effective_item_limit, tool_payment_required_payload, tool_quote
+from tool_access_shared import tool_effective_item_limit, tool_is_paid_bulk, tool_payment_required_payload, tool_quote
 from mapmover.routes.system import _require_admin, _require_local_or_admin
 from mapmover.geometry_handlers import (
     clear_cache as clear_geometry_cache,
@@ -579,6 +579,24 @@ async def resolve_points_json_endpoint(req: Request):
             status_code=400,
         )
     if len(points) > paid_limit and trusted_token is None:
+        if not tool_is_paid_bulk("resolve_point"):
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "error": {
+                        "code": "interactive_limit_exceeded",
+                        "message": f"resolve_point accepts at most {limit} points per hosted request",
+                    },
+                    "point_count": len(points),
+                    "limit": limit,
+                    "payment_required": False,
+                    "guidance": {
+                        "action": "split_request",
+                        "message": "Split the input into requests within the published free safety ceiling.",
+                    },
+                },
+                status_code=413,
+            )
         payload = _point_lookup_quote_payload(
             request_id=str(body.get("request_id") or body.get("batch_id") or ""),
             batch_id=str(body.get("batch_id") or "").strip() or None,

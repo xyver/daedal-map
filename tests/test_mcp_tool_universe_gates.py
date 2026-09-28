@@ -801,7 +801,7 @@ class BlindCallerHelpTests(unittest.TestCase):
             with self.subTest(facade=facade):
                 self.assertIn("get_tool_help", tools)
 
-    def test_help_reports_enforced_point_limits_and_paid_throughput(self) -> None:
+    def test_help_reports_free_point_limit_without_payment_tiers(self) -> None:
         envelope = _tool_call_envelope(
             self.client,
             "get_tool_help",
@@ -810,10 +810,13 @@ class BlindCallerHelpTests(unittest.TestCase):
         )
         payload = envelope["result"]["structuredContent"]
         self.assertTrue(payload["ok"])
-        self.assertEqual(payload["access"]["pricing"], "paid_bulk_x402_base_usdc")
-        self.assertEqual(payload["access"]["limits"]["free_item_limit"], 100)
-        self.assertEqual(payload["access"]["limits"]["account_item_limit"], 1000)
-        self.assertEqual(payload["access"]["limits"]["paid_item_limit"], 10000)
+        self.assertEqual(payload["access"]["pricing"], "free")
+        self.assertEqual(payload["access"]["limits"]["free_item_limit"], 10000)
+        self.assertNotIn("account_item_limit", payload["access"]["limits"])
+        self.assertNotIn("paid_item_limit", payload["access"]["limits"])
+        for tier in payload["access"]["caller_tiers"].values():
+            self.assertEqual(tier["included_items"], 10000)
+            self.assertEqual(tier["above_limit"], "interactive_limit_exceeded")
         self.assertTrue(payload["examples"])
         self.assertEqual(payload["interaction_contract"]["natural_language_owner"], "calling_client_llm")
         self.assertEqual(payload["interaction_contract"]["execution_input"], "strict_json_schema")
@@ -867,6 +870,11 @@ class TrustedArtifactBypassTests(unittest.TestCase):
         return {"authorization": f"Bearer {self.token}"}
 
     def test_capped_tools_reject_oversized_batches_without_a_token(self) -> None:
+        env = {
+            "MCP_TOOL_BATCH_LIMIT_CONVERT_REFERENCE": "100",
+            "MCP_TOOL_BATCH_LIMIT_COMPARE_GEOGRAPHIES": "100",
+            "MCP_TOOL_BATCH_LIMIT_GET_LOC_ID_INFO": "100",
+        }
         cases = {
             "convert_reference": {
                 "from_system": "zip",
@@ -879,7 +887,7 @@ class TrustedArtifactBypassTests(unittest.TestCase):
             "get_loc_id_info": {"loc_ids": [f"USA-{i}" for i in range(200)]},
         }
         for tool, arguments in cases.items():
-            with self.subTest(tool=tool):
+            with self.subTest(tool=tool), mock.patch.dict("os.environ", env, clear=False):
                 with mock.patch("mapmover.routes.mcp.rate_limiter.check", return_value=(True, 0)):
                     envelope = _tool_call_envelope(self.client, tool, arguments)
                 result = envelope["result"]
@@ -916,7 +924,12 @@ class TrustedArtifactBypassTests(unittest.TestCase):
         event_lookup.assert_not_called()
 
     def test_trusted_token_lifts_the_cap_on_every_capped_tool(self) -> None:
-        env = {"ARTIFACT_ACCESS_TOKENS": f"qa={self.token}"}
+        env = {
+            "ARTIFACT_ACCESS_TOKENS": f"qa={self.token}",
+            "MCP_TOOL_BATCH_LIMIT_CONVERT_REFERENCE": "100",
+            "MCP_TOOL_BATCH_LIMIT_COMPARE_GEOGRAPHIES": "100",
+            "MCP_TOOL_BATCH_LIMIT_GET_LOC_ID_INFO": "100",
+        }
         cases = {
             "convert_reference": {
                 "from_system": "zip",
@@ -1104,7 +1117,7 @@ class PaidBulkLicensingTests(unittest.TestCase):
             "mapmover.runtime.geometry_catalog.geometry_bank_access_facts",
             return_value=({"paid", "free"}, True),
         ):
-            self.assertFalse(mcp_module._tool_paid_bulk_enforced("resolve_point"))
+            self.assertFalse(mcp_module._tool_paid_bulk_enforced("create_geometry_export"))
 
     def test_paid_bulk_allowed_when_every_bank_permits_paid(self) -> None:
         import mapmover.routes.mcp as mcp_module
@@ -1113,7 +1126,7 @@ class PaidBulkLicensingTests(unittest.TestCase):
             "mapmover.runtime.geometry_catalog.geometry_bank_access_facts",
             return_value=({"paid"}, True),
         ):
-            self.assertTrue(mcp_module._tool_paid_bulk_enforced("resolve_point"))
+            self.assertTrue(mcp_module._tool_paid_bulk_enforced("create_geometry_export"))
 
     def test_conversion_billing_does_not_inherit_geometry_redistribution_terms(self) -> None:
         """Identity-only conversion may meter work without returning source geometry."""
@@ -1138,7 +1151,7 @@ class PaidBulkLicensingTests(unittest.TestCase):
     def test_free_tools_never_enforce_paid_bulk(self) -> None:
         import mapmover.routes.mcp as mcp_module
 
-        for tool in ("get_geometry", "get_catalog", "get_pack"):
+        for tool in ("resolve_point", "convert_reference", "get_geometry", "get_catalog", "get_pack"):
             with self.subTest(tool=tool):
                 self.assertFalse(mcp_module._tool_paid_bulk_enforced(tool))
 

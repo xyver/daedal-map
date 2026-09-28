@@ -442,7 +442,7 @@ PACK_REGISTRY: dict[str, dict] = {
     "geography": {
         "display_name": "Geography Tools",
         "kind": "tool_family",
-        "pricing": "mixed",
+        "pricing": "free",
         "mcp_tool_allowlist": (
             "get_catalog",
             "get_pack",
@@ -456,7 +456,7 @@ PACK_REGISTRY: dict[str, dict] = {
             "get_loc_id_info",
         ),
         "mcp_name": "com.daedalmap/geography",
-        "mcp_version": "1.5.0",
+        "mcp_version": "1.6.0",
         "mcp_title": "DaedalMap Geography Tools (loc_id)",
         "mcp_description": "Geography utilities built on the DaedalMap loc_id spine. Identify dataset geography, recognize and convert external references, resolve shallow or deep coordinate batches, inspect loc_ids, compare places, and retrieve bounded shapes. Future estimate/create/status workflows remain private until durable job delivery is ready.",
         "registry_meta": {
@@ -489,10 +489,10 @@ PACK_REGISTRY: dict[str, dict] = {
     "reverse-geocoding": {
         "display_name": "Reverse Geocoding",
         "kind": "tool_family_alias",
-        "pricing": "mixed",
+        "pricing": "free",
         "mcp_tool_allowlist": ("get_catalog", "get_pack", "resolve_point", "resolve_deep_point"),
         "mcp_name": "com.daedalmap/reverse-geocoding",
-        "mcp_version": "1.3.0",
+        "mcp_version": "1.4.0",
         "mcp_title": "DaedalMap Reverse Geocoding (coordinates to loc_id)",
         "mcp_description": "Two reverse-geocoding tools separate shallow from deep while each accepts one point or a bounded point array. resolve_point returns Admin 0-3; resolve_deep_point uses one returned Admin 1 loc_id to resolve Admin 4-6.",
         "registry_meta": {
@@ -501,7 +501,7 @@ PACK_REGISTRY: dict[str, dict] = {
                 "Latitude/longitude to the complete latest-available administrative chain",
                 "Small point batches in one MCP call for table cleanup",
                 "Small chain rows with loc_id, name, level, and available vintage",
-                "The first 100 points per call are free; larger hosted batches use paid throughput",
+                "Bounded coordinate batches are free; per-call safety ceilings keep the hosted service responsive",
             ],
         },
         "routing": {"preferred_tool": "resolve_point"},
@@ -522,7 +522,7 @@ PACK_REGISTRY: dict[str, dict] = {
             "get_loc_id_info",
         ),
         "mcp_name": "com.daedalmap/boundaries",
-        "mcp_version": "1.2.0",
+        "mcp_version": "1.3.0",
         "mcp_title": "DaedalMap Administrative Boundaries (loc_id to polygon)",
         "mcp_description": "Inspect loc_id identity and relationships, then retrieve bounded boundary metadata, bounding boxes, centroids, or polygons for exact loc_ids and supported administrative scopes.",
         "registry_meta": {
