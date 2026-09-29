@@ -11,6 +11,7 @@ from fastapi import Request
 from fastapi.responses import JSONResponse, Response
 
 from access_policy_shared import resolve_effective_access
+from pack_registry_shared import pack_profile
 from mapmover.paths import SITE_URL
 from mapmover.artifact_access import (
     artifact_token_records,
@@ -73,10 +74,11 @@ def pack_effective_access(
     material_policy = pack.get("material_policy") if isinstance(pack.get("material_policy"), dict) else {}
     hosted_access = material_policy.get("hosted_access") if isinstance(material_policy.get("hosted_access"), dict) else {}
     catalog_permission = str(material_policy.get("permission") or hosted_access.get("maximum_lane") or "").strip().lower()
-    # Hosted retrieval is metered by default. The material permission remains
-    # the legal ceiling: free-only material forces a free lane and blocked or
-    # unpublished material never becomes callable merely because it has a price.
-    authored_pricing = "by_pack"
+    # The registry owns the product's authored free/paid classification. The
+    # material permission is a separate legal ceiling: free-only material can
+    # force a paid product onto a free lane, but paid-eligible material must not
+    # turn a product authored as free into a metered one.
+    authored_pricing = str(pack_profile(normalized).get("pricing") or "free")
     permissions = ({catalog_permission} if catalog_permission else set()) if license_permissions is None else license_permissions
     publication_cleared = bool(hosted_access.get("publication_ready", False))
     return resolve_effective_access(
@@ -100,8 +102,8 @@ def pack_requires_commercial_access(
 ) -> bool:
     """Return the effective settlement requirement for one hosted pack.
 
-    Hosted retrieval is priced by default. ``catalog.json`` supplies the
-    material ceiling that may force the request free or block publication;
+    The shared pack registry owns authored pricing. ``catalog.json`` supplies
+    the material ceiling that may force the request free or block publication;
     temporary operator overrides remain separate access-policy decisions.
     """
     normalized = str(pack_id or "").strip().lower()

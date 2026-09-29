@@ -110,6 +110,46 @@ def resolve_country_display_release(iso3: str) -> dict[str, Any] | None:
     }
 
 
+@lru_cache(maxsize=256)
+def resolve_country_exact_release(iso3: str) -> dict[str, Any] | None:
+    """Resolve the active Admin0--3 exact bank from contained release controls."""
+    country = str(iso3 or "").strip().upper()
+    if not re.fullmatch(r"[A-Z]{3}", country):
+        return None
+    index = _read_active_json(f"geometry/countries/{country}/index.json")
+    index_unit = (index.get("release_unit") or {}) if isinstance(index, dict) else {}
+    if not isinstance(index, dict) or str(index_unit.get("id") or "").upper() != country:
+        return None
+    manifest_path = str(
+        (((index.get("current") or {}).get("manifest") or {}).get("path") or "")
+    ).replace("\\", "/")
+    if not re.fullmatch(
+        rf"geometry/countries/{country}/releases/\d+\.\d+\.\d+/manifest\.json",
+        manifest_path,
+    ):
+        return None
+    manifest = _read_active_json(manifest_path)
+    manifest_unit = (manifest.get("release_unit") or {}) if isinstance(manifest, dict) else {}
+    if not isinstance(manifest, dict) or str(manifest_unit.get("id") or "").upper() != country:
+        return None
+    exact_prefix = str((manifest.get("runtime") or {}).get("exact") or "").replace("\\", "/")
+    expected_prefix = f"geometry/countries/{country}/admin_spine/exact/"
+    if not exact_prefix.startswith(expected_prefix) or not exact_prefix.endswith("/"):
+        return None
+    relative = exact_prefix + "admin_0_3.parquet"
+    for object_record in manifest.get("objects") or []:
+        if relative in [str(value).replace("\\", "/") for value in object_record.get("source_paths") or []]:
+            return {
+                "country": country,
+                "release_id": exact_prefix.rstrip("/").rsplit("/", 1)[-1],
+                "pointer": index,
+                "manifest": manifest,
+                "path": GEOMETRY_DIR.parent / relative,
+                "relative_path": relative,
+            }
+    return None
+
+
 def resolve_country_display_geometry_sources(
     iso3: str,
     *,
@@ -163,7 +203,16 @@ def resolve_country_geometry_source(iso3: str, *, admin_level: int | None = None
         }
 
     country_root = COUNTRY_GEOMETRY_DIR / iso3
-    authority_spine_file = country_root / "admin_spine" / "admin_0_3.parquet"
+    exact_release = (
+        resolve_country_exact_release(iso3)
+        if admin_level is None or 0 <= admin_level <= 3
+        else None
+    )
+    authority_spine_file = (
+        exact_release["path"]
+        if exact_release
+        else country_root / "admin_spine" / "admin_0_3.parquet"
+    )
     country_geom_file = country_root / "geometry.parquet"
     global_geom_file = GEOMETRY_DIR / f"{iso3}.parquet"
     crosswalk = load_country_crosswalk(iso3)

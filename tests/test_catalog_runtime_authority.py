@@ -142,13 +142,27 @@ def test_pack_access_reads_material_policy_from_normal_catalog() -> None:
     published = {"packs": [_published_pack("paid_pack", "paid")], "sources": []}
     with (
         mock.patch.object(data_loading, "load_catalog", return_value=published),
+        mock.patch.object(api_query_commercial, "pack_profile", return_value={"pricing": "paid_x402_base_usdc"}),
         mock.patch.object(api_query_commercial, "resolve_effective_access", side_effect=lambda **kwargs: kwargs),
     ):
         result = api_query_commercial.pack_effective_access("paid_pack")
 
-    assert result["authored_pricing"] == "by_pack"
+    assert result["authored_pricing"] == "paid_x402_base_usdc"
     assert result["license_permissions"] == {"paid"}
     assert result["publication_cleared"] is True
+
+
+def test_pack_access_keeps_free_registry_pricing_with_paid_eligible_material() -> None:
+    published = {"packs": [_published_pack("free_pack", "paid")], "sources": []}
+    with (
+        mock.patch.object(data_loading, "load_catalog", return_value=published),
+        mock.patch.object(api_query_commercial, "pack_profile", return_value={"pricing": "free"}),
+        mock.patch.object(api_query_commercial, "resolve_effective_access", side_effect=lambda **kwargs: kwargs),
+    ):
+        result = api_query_commercial.pack_effective_access("free_pack")
+
+    assert result["authored_pricing"] == "free"
+    assert result["license_permissions"] == {"paid"}
 
 
 def test_mcp_catalog_refresh_helper_clears_derived_views() -> None:
