@@ -454,21 +454,15 @@ PACK_RESOURCE_COMMON_URIS = {
 
 
 def _free_pack_ids() -> frozenset[str]:
-    pack_ids = {
-        str(pack.get("pack_id") or "").strip().lower()
-        for pack in (load_api_catalog() or {}).get("packs") or []
-        if isinstance(pack, dict) and str(pack.get("pack_id") or "").strip()
-    }
-    return frozenset(pack_id for pack_id in pack_ids if not pack_requires_commercial_access(pack_id))
+    from pack_registry_shared import free_pack_ids
+
+    return frozenset(free_pack_ids())
 
 
 def _paid_pack_ids() -> frozenset[str]:
-    pack_ids = {
-        str(pack.get("pack_id") or "").strip().lower()
-        for pack in (load_api_catalog() or {}).get("packs") or []
-        if isinstance(pack, dict) and str(pack.get("pack_id") or "").strip()
-    }
-    return frozenset(pack_id for pack_id in pack_ids if pack_requires_commercial_access(pack_id))
+    from pack_registry_shared import paid_pack_ids
+
+    return frozenset(paid_pack_ids())
 
 
 def _catalog_access_profiles(pack_id: str | None = None) -> dict[str, str]:

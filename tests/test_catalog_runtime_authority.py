@@ -178,6 +178,16 @@ def test_discovery_pack_pricing_is_one_registry_switch(pricing: str, expected: b
         assert data_loading._pack_is_paid("toggle_pack") is expected
 
 
+def test_mcp_pack_pricing_lists_come_from_registry_not_material_catalog() -> None:
+    with (
+        mock.patch("pack_registry_shared.free_pack_ids", return_value=("free_pack",)),
+        mock.patch("pack_registry_shared.paid_pack_ids", return_value=("paid_pack",)),
+        mock.patch.object(mcp, "load_api_catalog", return_value={"packs": []}),
+    ):
+        assert mcp._free_pack_ids() == frozenset({"free_pack"})
+        assert mcp._paid_pack_ids() == frozenset({"paid_pack"})
+
+
 def test_mcp_catalog_refresh_helper_clears_derived_views() -> None:
     with mock.patch.object(mcp, "load_api_catalog", return_value={"packs": []}):
         mcp._facade_tools(None)
