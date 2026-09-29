@@ -513,7 +513,7 @@ PACK_REGISTRY: dict[str, dict] = {
     "boundaries": {
         "display_name": "Boundaries",
         "kind": "tool_family_alias",
-        "pricing": "free",
+        "pricing": "mixed",
         "mcp_tool_allowlist": (
             "get_catalog",
             "get_pack",
