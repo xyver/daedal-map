@@ -81,6 +81,36 @@ def test_embedded_legacy_path_resolves_by_release_hash() -> None:
     ) == "geometry/countries/USA/reference/example/1.3.2/aliases.parquet"
 
 
+def test_exact_declared_path_wins_when_projection_has_same_basename() -> None:
+    digest = "a" * 64
+    release_owned = "geometry/countries/AUS/releases/geometry/aus_geometry_1_2_5/runtime/admin_spine/admin_0_3.parquet"
+    stable_projection = "geometry/countries/AUS/admin_spine/exact/aus_geometry_1_2_5/admin_0_3.parquet"
+    paths = released_artifact_paths_by_hash({
+        "objects": [{
+            "sha256": digest,
+            "source_paths": [stable_projection, release_owned],
+        }],
+    })
+
+    assert released_artifact_path(release_owned, digest, paths) == release_owned
+
+
+def test_legacy_basename_still_fails_closed_when_multiple_paths_match() -> None:
+    digest = "a" * 64
+    paths = released_artifact_paths_by_hash({
+        "objects": [{
+            "sha256": digest,
+            "source_paths": [
+                "geometry/countries/AUS/releases/geometry/v1/runtime/admin_0_3.parquet",
+                "geometry/countries/AUS/admin_spine/exact/v1/admin_0_3.parquet",
+            ],
+        }],
+    })
+
+    with pytest.raises(ValueError, match="ambiguous active paths"):
+        released_artifact_path("legacy/admin_0_3.parquet", digest, paths)
+
+
 def test_unknown_hash_fails_closed_without_source_path_fallback() -> None:
     original = "geometry/countries/USA/relationships/old/aliases.parquet"
     with pytest.raises(ValueError, match="absent from the active manifest"):

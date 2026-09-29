@@ -70,6 +70,7 @@ SYSTEM_ALIASES = {
     "daedalmap": LOC_ID_SYSTEM,
     "daedalmap_loc_id": LOC_ID_SYSTEM,
     "admin": ADMIN_SYSTEM,
+    "admin_name": ADMIN_SYSTEM,
     "admin_geometry": ADMIN_SYSTEM,
     "administrative_boundary": ADMIN_SYSTEM,
     "administrative_boundaries": ADMIN_SYSTEM,

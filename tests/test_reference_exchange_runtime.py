@@ -41,6 +41,28 @@ class ReferenceExchangeRuntimeTests(unittest.TestCase):
         self.assertEqual(payload["resolved_loc_id"], "USA-VA-059")
         self.assertEqual(payload["match_type"], "fips_exact_identifier_crosswalk")
 
+    def test_admin_name_alias_uses_admin_text_resolution(self) -> None:
+        with mock.patch.object(reference_exchange, "_admin_text_result", return_value={
+            "ok": True,
+            "from_system": "admin_boundary",
+            "resolved_loc_id": "USA-VA-059",
+        }) as resolver:
+            payload = resolve_reference(
+                from_system="admin_name",
+                value="Fairfax County",
+                country_hint="USA",
+                admin_level_hint=2,
+            )
+
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["from_system"], "admin_boundary")
+        resolver.assert_called_once_with(
+            "Fairfax County",
+            country_hint="USA",
+            admin_level_hint=2,
+            request_system="admin_boundary",
+        )
+
     def test_zip_alias_resolves_to_canonical_postal_identity(self) -> None:
         payload = convert_reference(from_system="zip", value="22030", iso3="USA")
 

@@ -111,6 +111,12 @@ def released_artifact_path(
     candidates = paths_by_hash.get(str(sha256 or "").strip().lower()) or ()
     if not candidates:
         raise ValueError(f"Released artifact hash is absent from the active manifest: {sha256}")
+    # A release manifest may intentionally retain both its release-owned path
+    # and a byte-identical stable runtime projection.  When the graph index
+    # already names one of those declared paths, that exact path is the
+    # unambiguous authority; basename matching is only a migration fallback.
+    if original in candidates:
+        return original
     if len(candidates) == 1:
         return candidates[0]
     basename = original.rsplit("/", 1)[-1]
