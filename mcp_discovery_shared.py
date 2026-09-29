@@ -86,8 +86,6 @@ def _compact_pack_row(pack: dict[str, Any]) -> dict[str, Any]:
             "scopes",
             "geographic_levels",
             "empty_geographic_levels_meaning",
-            "coverage_contract",
-            "coverage_windows",
             "temporal_start",
             "temporal_end",
             "canonical_available_through",
@@ -140,6 +138,18 @@ def compact_catalog_payload(payload: Any) -> Any:
             },
         }
     )
+    uncertain = [
+        _compact_pack_row(item)
+        for item in payload.get("uncertain_packs") or []
+        if isinstance(item, dict)
+    ]
+    if uncertain or "uncertain_packs" in payload:
+        result["uncertain_packs"] = uncertain
+        result["uncertain_count"] = len(uncertain)
+    result.update(_copy_present(
+        payload,
+        ("excluded_count", "result_status", "resolved_query"),
+    ))
     return result
 
 
@@ -148,6 +158,7 @@ def filter_data_catalog_payload(
     *,
     loc_id: str | None = None,
     time_range: Any = None,
+    detail: str | None = None,
 ) -> Any:
     """Resolve a conservative place/time catalog intersection.
 
@@ -190,7 +201,7 @@ def filter_data_catalog_payload(
             matched.append(row)
 
     result = dict(payload)
-    detail = str(payload.get("view") or payload.get("detail") or "lite")
+    selected_detail = str(detail or payload.get("view") or payload.get("detail") or "lite")
     result.update({
         "packs": matched,
         "pack_count": len(matched),
@@ -208,7 +219,7 @@ def filter_data_catalog_payload(
             "rerun": {
                 "tool": "get_catalog",
                 "arguments": {
-                    "catalog": "data", "detail": detail,
+                    "catalog": "data", "detail": selected_detail,
                     **({"loc_id": requested_loc_id} if requested_loc_id else {}),
                     **({"time_range": requested_time} if requested_time else {}),
                 },
@@ -222,25 +233,29 @@ def full_catalog_payload(payload: Any, pack_details: dict[str, Any]) -> Any:
     """Return all pack cards plus their metric ids, without raw policy records."""
     if not isinstance(payload, dict):
         return payload
-    packs = []
-    for item in payload.get("packs") or []:
-        if not isinstance(item, dict):
-            continue
-        row = _compact_pack_row(item)
-        pack_id = str(row.get("pack_id") or "")
-        detail = pack_details.get(pack_id)
-        if isinstance(detail, dict):
-            metrics = detail.get("metrics")
-            if isinstance(metrics, dict):
-                row["metrics"] = list(metrics)
-            elif isinstance(metrics, list):
-                row["metrics"] = [
-                    value.get("metric_id") or value.get("id") or value
-                    if isinstance(value, dict) else value
-                    for value in metrics
-                ]
-            row.update(_copy_present(detail, ("query_dimensions", "supported_query_shapes")))
-        packs.append(row)
+    def project(items: Any) -> list[dict[str, Any]]:
+        projected = []
+        for item in items or []:
+            if not isinstance(item, dict):
+                continue
+            row = _compact_pack_row(item)
+            pack_id = str(row.get("pack_id") or "")
+            detail = pack_details.get(pack_id)
+            if isinstance(detail, dict):
+                metrics = detail.get("metrics")
+                if isinstance(metrics, dict):
+                    row["metrics"] = list(metrics)
+                elif isinstance(metrics, list):
+                    row["metrics"] = [
+                        value.get("metric_id") or value.get("id") or value
+                        if isinstance(value, dict) else value
+                        for value in metrics
+                    ]
+                row.update(_copy_present(detail, ("query_dimensions", "supported_query_shapes")))
+            projected.append(row)
+        return projected
+
+    packs = project(payload.get("packs"))
     result = _copy_present(payload, ("catalog_version", "schema_version", "generated_at", "source_mode"))
     result.update({
         "catalog": "data",
@@ -250,6 +265,14 @@ def full_catalog_payload(payload: Any, pack_details: dict[str, Any]) -> Any:
         "next_step": data_access_workflow()["steps"][1],
         "download": catalog_download_payload("data"),
     })
+    uncertain = project(payload.get("uncertain_packs"))
+    if uncertain or "uncertain_packs" in payload:
+        result["uncertain_packs"] = uncertain
+        result["uncertain_count"] = len(uncertain)
+    result.update(_copy_present(
+        payload,
+        ("excluded_count", "result_status", "resolved_query"),
+    ))
     return result
 
 

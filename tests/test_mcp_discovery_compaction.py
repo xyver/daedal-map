@@ -91,6 +91,38 @@ class MCPDiscoveryCompactionTests(unittest.TestCase):
         self.assertNotIn("upstream_sources", result["packs"][0])
         self.assertLess(len(json.dumps(result)), len(json.dumps(source)) // 5)
 
+    def test_catalog_lite_does_not_repeat_source_coverage_windows(self) -> None:
+        source = {
+            "packs": [{
+                "pack_id": "demo",
+                "title": "Demo",
+                "coverage_contract": {"countries": ["USA"]},
+                "coverage_windows": [{"source_id": f"source-{index}", "countries": ["USA"]} for index in range(100)],
+            }],
+        }
+
+        result = compact_catalog_payload(source)
+
+        self.assertNotIn("coverage_contract", result["packs"][0])
+        self.assertNotIn("coverage_windows", result["packs"][0])
+        self.assertLess(len(json.dumps(result)), 2_000)
+
+    def test_filtered_catalog_projects_uncertain_rows_after_matching(self) -> None:
+        source = {
+            "packs": [
+                {"pack_id": "matched", "coverage_contract": {"countries": ["USA"]}},
+                {"pack_id": "unknown", "coverage_contract": {}},
+            ],
+        }
+
+        filtered = filter_data_catalog_payload(source, loc_id="USA-CA")
+        result = compact_catalog_payload(filtered)
+
+        self.assertEqual([row["pack_id"] for row in result["packs"]], ["matched"])
+        self.assertEqual([row["pack_id"] for row in result["uncertain_packs"]], ["unknown"])
+        self.assertNotIn("coverage_contract", result["uncertain_packs"][0])
+        self.assertTrue(result["resolved_query"]["filter_applied"])
+
     def test_pack_lite_retains_routing_and_points_to_full_detail(self) -> None:
         source = {
             "pack_id": "demo",

@@ -5530,10 +5530,23 @@ async def mcp_endpoint(request: Request, pack_id: str | None = None):
         else:
             payload = load_api_catalog() or {"packs": []}
             payload = _filter_catalog_payload_for_facade(payload, normalized_pack_id)
+            try:
+                payload = filter_data_catalog_payload(
+                    payload,
+                    loc_id=loc_id or None,
+                    time_range=time_range,
+                    detail=detail,
+                )
+            except ValueError as exc:
+                return _jsonrpc_error(request_id, -32602, str(exc))
             if detail == "full":
+                detail_rows = [
+                    *(payload.get("packs") or []),
+                    *(payload.get("uncertain_packs") or []),
+                ]
                 pack_details = {
                     str(item.get("pack_id") or ""): load_api_pack_detail(str(item.get("pack_id") or ""))
-                    for item in payload.get("packs") or []
+                    for item in detail_rows
                     if isinstance(item, dict) and item.get("pack_id")
                 }
                 payload = full_catalog_payload(payload, pack_details)
@@ -5542,14 +5555,6 @@ async def mcp_endpoint(request: Request, pack_id: str | None = None):
             payload = _augment_catalog_with_tool_families(payload, normalized_pack_id)
             payload["catalog"] = "data"
             payload["detail"] = detail
-            try:
-                payload = filter_data_catalog_payload(
-                    payload,
-                    loc_id=loc_id or None,
-                    time_range=time_range,
-                )
-            except ValueError as exc:
-                return _jsonrpc_error(request_id, -32602, str(exc))
         if isinstance(payload, dict) and "resolved_query" not in payload:
             payload["resolved_query"] = _resolved_query(tool_name, arguments)
         result_status = str(payload.get("result_status") or "") if isinstance(payload, dict) else ""
