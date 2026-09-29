@@ -898,7 +898,14 @@ def resolve_admin_text_to_loc_id(
             result["deepest_resolved_family"] = family
         return result
 
-    standardizer = _get_name_standardizer()
+    standardizer: NameStandardizer | None = None
+
+    def get_standardizer() -> NameStandardizer:
+        nonlocal standardizer
+        if standardizer is None:
+            standardizer = _get_name_standardizer()
+        return standardizer
+
     country = str(country_hint or "").strip().upper() or None
 
     explicit_text_level = _explicit_admin_level_from_text(value)
@@ -914,10 +921,27 @@ def resolve_admin_text_to_loc_id(
         level_order = [0]
 
     for admin_level in level_order:
-        resolved = standardizer.get_loc_id_from_name(value, country=country, admin_level=admin_level)
+        fallback_entry = None
+        # Country-scoped exact identities are cheaper and more authoritative
+        # than booting the general name standardizer. The maintained USA
+        # Admin0-2 slice is already a required Railway prewarm task.
+        if country and admin_level in {1, 2, 3} and is_cloud_mode():
+            fallback_entry = _resolve_country_geometry_name(
+                value,
+                country_hint=country,
+                admin_level=int(admin_level),
+            )
+        resolved = (
+            None
+            if fallback_entry is not None
+            else get_standardizer().get_loc_id_from_name(
+                value, country=country, admin_level=admin_level,
+            )
+        )
         if not resolved:
-            fallback_entry = None
-            if admin_level == 0:
+            if fallback_entry is not None:
+                pass
+            elif admin_level == 0:
                 fallback_entry = _resolve_country_name_from_global_geometry(value)
             elif country and admin_level in {1, 2}:
                 fallback_entry = _resolve_country_geometry_name(
@@ -935,7 +959,7 @@ def resolve_admin_text_to_loc_id(
                     value,
                     country=country,
                     matched_level=fallback_entry.get("admin_level"),
-                    standardizer=standardizer,
+                    standardizer=get_standardizer(),
                 )
             if preferred_loc_id != fallback_loc_id:
                 fallback_entry = _build_match_entry(
@@ -961,7 +985,7 @@ def resolve_admin_text_to_loc_id(
                 value,
                 country=country,
                 matched_level=admin_level,
-                standardizer=standardizer,
+                standardizer=get_standardizer(),
             )
         resolved_level = infer_admin_level_from_loc_id(local_loc_id)
         key = _level_key(resolved_level)

@@ -149,6 +149,7 @@ class LocIdResolutionRuntimeTests(unittest.TestCase):
         self.assertEqual(resolved["deepest_resolved_loc_id"], "USA-VA-059")
         identity_rows.assert_called_once_with("USA", 2)
         generic_geometry.assert_not_called()
+        get_standardizer.assert_not_called()
 
     def test_direct_admin_name_checks_country_sublevels_without_explicit_hint(self):
         with patch(
