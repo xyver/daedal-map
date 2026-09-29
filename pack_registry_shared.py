@@ -49,7 +49,7 @@ PACK_REGISTRY: dict[str, dict] = {
         "mcp_prompt_allowlist": ("largest_earthquake_in_range", "count_disaster_events"),
         "mcp_name": "com.daedalmap/earthquakes",
         "mcp_title": "DaedalMap Earthquake Data",
-        "mcp_description": "Historical earthquake events from 2150 BC to present. Paid via x402 on Base mainnet USDC. Small queries stay cheap; very broad scans cost more or need narrower filters. Call unpaid first to see the exact price before committing.",
+        "mcp_description": "Historical earthquake events from 2150 BC to present. Paid per call from account credit. Small queries stay cheap; very broad scans cost more or need narrower filters. Call unpaid first to see the exact price before committing.",
         "registry_meta": {
             "categories": ["hazard", "geospatial", "data"],
             "highlights": [
@@ -89,7 +89,7 @@ PACK_REGISTRY: dict[str, dict] = {
         "mcp_prompt_allowlist": ("count_disaster_events",),
         "mcp_name": "com.daedalmap/hurricanes",
         "mcp_title": "DaedalMap Hurricane and Tropical Cyclone Data",
-        "mcp_description": "Global tropical cyclone tracks from IBTrACS, 1842-present. Wind, pressure, and paths. Paid via x402 on Base mainnet USDC. Small queries stay cheap; very broad scans cost more or need narrower filters. Call unpaid first to see the exact price before committing.",
+        "mcp_description": "Global tropical cyclone tracks from IBTrACS, 1842-present. Wind, pressure, and paths. Paid per call from account credit. Small queries stay cheap; very broad scans cost more or need narrower filters. Call unpaid first to see the exact price before committing.",
         "registry_meta": {
             "categories": ["hazard", "geospatial", "data"],
             "highlights": [
@@ -109,7 +109,7 @@ PACK_REGISTRY: dict[str, dict] = {
         "mcp_prompt_allowlist": ("count_disaster_events",),
         "mcp_name": "com.daedalmap/tornadoes",
         "mcp_title": "DaedalMap Tornado Events",
-        "mcp_description": "United States tornado events from 1950 to present from the NOAA Storm Prediction Center, including track paths, EF/Fujita intensity ratings, casualties, and damage estimates. Paid via x402 on Base mainnet USDC. Small queries stay cheap; very broad scans cost more or need narrower filters. Call unpaid first to see the exact price before committing.",
+        "mcp_description": "United States tornado events from 1950 to present from the NOAA Storm Prediction Center, including track paths, EF/Fujita intensity ratings, casualties, and damage estimates. Paid per call from account credit. Small queries stay cheap; very broad scans cost more or need narrower filters. Call unpaid first to see the exact price before committing.",
         "registry_meta": {
             "categories": ["hazard", "geospatial", "data"],
             "highlights": [
@@ -129,7 +129,7 @@ PACK_REGISTRY: dict[str, dict] = {
         "mcp_prompt_allowlist": ("count_disaster_events",),
         "mcp_name": "com.daedalmap/tsunamis",
         "mcp_title": "DaedalMap Tsunami Data",
-        "mcp_description": "Historical tsunami events from 2000 BC to present. Paid via x402 on Base mainnet USDC. Small queries stay cheap; very broad scans cost more or need narrower filters. Call unpaid first to see the exact price before committing.",
+        "mcp_description": "Historical tsunami events from 2000 BC to present. Paid per call from account credit. Small queries stay cheap; very broad scans cost more or need narrower filters. Call unpaid first to see the exact price before committing.",
         "registry_meta": {
             "categories": ["hazard", "geospatial", "data"],
             "highlights": [
@@ -149,7 +149,7 @@ PACK_REGISTRY: dict[str, dict] = {
         "mcp_prompt_allowlist": ("count_disaster_events",),
         "mcp_name": "com.daedalmap/wildfires",
         "mcp_title": "DaedalMap Wildfire Events",
-        "mcp_description": "Global, U.S., and Canada wildfire event and aggregate data, including burned area, duration, and source-aware regional routing. Paid via x402 on Base mainnet USDC. Start with an unpaid call to inspect the exact price before committing.",
+        "mcp_description": "Global, U.S., and Canada wildfire event and aggregate data, including burned area, duration, and source-aware regional routing. Paid per call from account credit. Start with an unpaid call to inspect the exact price before committing.",
         "registry_meta": {
             "categories": ["hazard", "geospatial", "data"],
             "highlights": [
@@ -426,7 +426,7 @@ PACK_REGISTRY: dict[str, dict] = {
         "mcp_tool_allowlist": ("get_catalog", "get_pack", "get_data"),
         "mcp_name": "com.daedalmap/world_factbook",
         "mcp_title": "DaedalMap CIA World Factbook",
-        "mcp_description": "CIA World Factbook country indicators for infrastructure, energy, demographics, and economy. Paid via x402 on Base mainnet USDC. Small queries stay cheap; very broad scans cost more or need narrower filters. Call unpaid first to see the exact price before committing.",
+        "mcp_description": "CIA World Factbook country indicators for infrastructure, energy, demographics, and economy. Paid per call from account credit. Small queries stay cheap; very broad scans cost more or need narrower filters. Call unpaid first to see the exact price before committing.",
         "registry_meta": {
             "categories": ["economic", "data", "geospatial"],
             "highlights": [

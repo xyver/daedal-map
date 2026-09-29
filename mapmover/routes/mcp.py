@@ -274,7 +274,6 @@ def _commercial_denial_details(decision: str, payload: dict[str, Any]) -> dict[s
                     "credential_header": "X-API-Key",
                     "manage_url": "https://www.daedalmap.com/account?tab=agents",
                 },
-                "x402": {"endpoint": "/mcp/x402"},
             }
             if payload.get("payment_choice_required") else None
         ),
@@ -287,11 +286,11 @@ def _apply_mcp_payment_mode(request: Request, payload: dict[str, Any]) -> dict[s
     routed = dict(payload or {})
     if mode == "smart":
         routed["payment_choice_required"] = True
-        routed["message"] = "Choose account credit or x402 for this paid MCP call."
+        routed["message"] = "This MCP call is paid. Retry on /mcp/account with an X-API-Key to spend account credit."
     elif mode == "account":
         routed.pop("challenge", None)
         routed["account_credit_required"] = True
-        routed["message"] = "This account cannot cover the quoted MCP call. Add credit or use /mcp/x402 explicitly."
+        routed["message"] = "This account cannot cover the quoted MCP call. Add account credit and retry."
     return routed
 
 
@@ -2187,8 +2186,8 @@ def _read_resource(uri: str, pack_id: str | None = None) -> dict[str, Any] | Non
                 'FX example: {"pack_id": "currency", "metrics": ["local_per_usd"], "filters": {"region_ids": ["JPN"], "time": {"start": "2024-01-01", "end": "2024-12-31", "granularity": "monthly"}}}\n\n'
                 "## Step 3: Understand pack-priced data\n\n"
                 "get_data applies the selected pack's free or paid access policy.\n"
-                "Use /mcp/account with an X-API-Key to spend account credit, or /mcp/x402 for direct x402 payment on Base.\n"
-                "If you call the smart /mcp endpoint without either credential, the tool returns the exact quote and both choices before any charge.\n"
+                "Use /mcp/account with an X-API-Key to spend account credit. New accounts start with free credit.\n"
+                "If you call the smart /mcp endpoint without a key, the tool returns the exact quote and how to pay before any charge.\n"
                 "Small queries stay cheap; very broad scans cost more or need narrower filters.\n"
                 "Requests too broad for live API access return narrowing suggestions instead of a payment challenge.\n\n"
                 "## Canonical first, live second\n\n"
@@ -2199,7 +2198,7 @@ def _read_resource(uri: str, pack_id: str | None = None) -> dict[str, Any] | Non
                 "Call prompts/list to get complete example tool calls for every supported query shape.\n\n"
                 "## Reference\n\n"
                 f"Free packs: {', '.join(sorted(_free_pack_ids()))}\n"
-                f"Paid packs: {', '.join(sorted(_paid_pack_ids()))} (account credit or x402)\n"
+                f"Paid packs: {', '.join(sorted(_paid_pack_ids()))} (account credit)\n"
                 f"Full docs: {site_url}/agents\n"
                 f"Catalog endpoint: {app_url}/api/v1/catalog\n"
             ),
@@ -2215,10 +2214,10 @@ def _read_resource(uri: str, pack_id: str | None = None) -> dict[str, Any] | Non
                 "## Free: monthly USD/JPY rate for 2024\n\n"
                 "Tool: get_data\n"
                 '{"pack_id": "currency", "filters": {"region_ids": ["JPN"], "time": {"start": "2024-01-01", "end": "2024-12-31", "granularity": "monthly"}}, "metrics": ["local_per_usd"]}\n\n'
-                "## Paid: largest earthquake in Turkey in 2023 (account credit or x402)\n\n"
+                "## Paid: largest earthquake in Turkey in 2023 (account credit)\n\n"
                 "Tool: get_data\n"
                 '{"pack_id": "earthquakes", "metrics": ["magnitude", "timestamp", "place", "depth_km"], "filters": {"time": {"start": "2023-01-01", "end": "2023-12-31"}, "region_ids": ["TUR"]}, "sort": [{"field": "magnitude", "direction": "desc"}], "limit": 1}\n\n'
-                "## Paid: count tsunamis above 5m wave height since 1950 (account credit or x402)\n\n"
+                "## Paid: count tsunamis above 5m wave height since 1950 (account credit)\n\n"
                 "Tool: get_data\n"
                 '{"pack_id": "tsunamis", "metrics": ["event_count"], "filters": {"time": {"start": 2000, "end": 2024}, "region_ids": ["JPN", "IDN", "IHO1953-240001002"], "compare": [{"field": "max_water_height_m", "op": ">=", "value": 5}]}}\n\n'
                 "## Filter reference\n\n"
@@ -2247,7 +2246,7 @@ def _read_resource(uri: str, pack_id: str | None = None) -> dict[str, Any] | Non
                 "# Access Model\n\n"
                 "Live hosted pack access split:\n"
                 + "".join(
-                    f"- {pid}: {'free' if access == 'free' else 'paid via account credit or x402'}\n"
+                    f"- {pid}: {'free' if access == 'free' else 'paid via account credit'}\n"
                     for pid, access in profiles.items()
                 )
                 + "\nDiscovery endpoints are always free:\n"

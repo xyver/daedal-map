@@ -1811,10 +1811,9 @@ def _mcp_pricing_payload(pack_id: str | None = None) -> dict:
         }
     payload = {
         "model": "tool_and_material_policy",
-        "currency": "USDC",
-        "network": "Base",
-        "payment_protocol": "x402",
-        "notes": "Downloads and discovery are free. A metered hosted call returns its exact price before payment.",
+        "currency": "USD",
+        "payment": "account_credit",
+        "notes": "Downloads and discovery are free. A metered hosted call returns its exact price before payment; pay with account credit through an X-API-Key on /mcp/account.",
         **hosted_commercial_policy(),
     }
     if normalized in {"geography", "reverse-geocoding", "boundaries"}:
@@ -1847,7 +1846,7 @@ def _mcp_auth_notes() -> str:
     paid = ", ".join(sorted(_paid_pack_ids()))
     return (
         f"No API key required. {free} are free lanes. "
-        f"{paid} use x402 on Base mainnet with USDC. Free discovery endpoints require no payment."
+        f"{paid} are paid per call from account credit with an X-API-Key on /mcp/account. Free discovery endpoints require no payment."
     )
 
 
@@ -1856,13 +1855,13 @@ def _mcp_server_card_auth_notes(pack_id: str | None) -> str:
     if normalized in {"geography", "reverse-geocoding", "boundaries"}:
         return (
             "No API key required. Discovery and included calls are free; "
-            "metered hosted throughput returns an x402 price challenge before payment."
+            "metered hosted throughput returns its price before payment and is paid from account credit on /mcp/account."
         )
     if normalized:
         if _pack_is_paid(normalized):
             return (
-                "No API key required for discovery. Data execution uses x402 on "
-                "Base mainnet with USDC and returns the exact price before payment."
+                "No API key required for discovery. Paid data calls return the exact "
+                "price first and are paid from account credit on /mcp/account."
             )
         return "No API key or payment required for this MCP facade."
     return _mcp_auth_notes()
@@ -1962,13 +1961,13 @@ def _build_apis_json_payload() -> dict:
         "name": "DaedalMap API",
         "description": (
             "Agent-ready geographic data intelligence API. Historical datasets for earthquakes, "
-            "volcanic activity, tsunamis, and foreign exchange rates. Mixed free and x402-paid "
+            "volcanic activity, tsunamis, and foreign exchange rates. Mixed free and paid "
             "structured access with free discovery."
         ),
         "url": app_url,
         "version": "1.0",
         "contact": {"url": docs_url},
-        "tags": ["geospatial", "hazard", "earthquakes", "volcanoes", "tsunamis", "fx", "x402", "mcp"],
+        "tags": ["geospatial", "hazard", "earthquakes", "volcanoes", "tsunamis", "fx", "mcp"],
         "apis": [
             {
                 "name": "DaedalMap Agent API",
@@ -1976,14 +1975,13 @@ def _build_apis_json_payload() -> dict:
                 "humanUrl": docs_url,
                 "baseUrl": f"{app_url}/api/v1",
                 "version": "v1",
-                "tags": ["geospatial", "hazard", "economics", "x402", "agent"],
+                "tags": ["geospatial", "hazard", "economics", "agent"],
                 "contact": {"url": docs_url},
                 "properties": [
                     {"type": "x-discovery", "url": f"{app_url}/api/v1/guide"},
                     {"type": "x-catalog", "url": f"{app_url}/api/v1/catalog"},
                     {"type": "x-pack-docs", "url": f"{app_url}/api/v1/packs/{{pack_id}}"},
                     {"type": "x-mcp-server-card", "url": f"{app_url}/.well-known/mcp/server-card.json"},
-                    {"type": "x-payment-protocol", "value": "x402", "network": "Base", "currency": "USDC"},
                 ],
             },
             {
@@ -1992,7 +1990,7 @@ def _build_apis_json_payload() -> dict:
                 "humanUrl": docs_url,
                 "baseUrl": f"{app_url}/mcp",
                 "version": "1.0",
-                "tags": ["mcp", "geospatial", "hazard", "x402"],
+                "tags": ["mcp", "geospatial", "hazard"],
                 "properties": [
                     {"type": "x-mcp-transport", "value": "streamable-http"},
                     {"type": "x-mcp-registry", "value": "com.daedalmap/county-map"},

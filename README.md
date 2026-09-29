@@ -47,8 +47,9 @@ then `get_data` for data. Setup for other clients is in the
 [agent docs](https://www.daedalmap.com/devs).
 
 Discovery and small geography lookups are free. Larger point/reference batches
-and some data packs are metered, and paid calls return an x402 payment challenge
-before any charge. `get_catalog` reports the access lane for each pack.
+and some data packs are metered: a paid call returns its exact price before any
+charge and is paid from account credit with an API key. `get_catalog` reports
+the access lane for each pack.
 
 ## Tools
 

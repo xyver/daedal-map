@@ -769,7 +769,7 @@ def tool_payment_required_payload(
     """Build the shared REST/MCP challenge envelope for a hosted tool."""
     quote = {
         **tool_quote(tool_name, item_count, free_limit=free_limit),
-        "payment_rails": ["account_credit", "x402"],
+        "payment_rails": ["account_credit"],
         "status": "quote_only",
     }
     return {
@@ -778,7 +778,7 @@ def tool_payment_required_payload(
         "payment_required": True,
         "quote": quote,
         "limits": {"free_batch_limit": free_limit, "paid_batch_limit": paid_limit},
-        "retry_hint": "Fund account credits or satisfy the x402 payment challenge, then retry the same request.",
+        "retry_hint": "Retry the same request with an account API key that holds enough credit.",
         "error": {
             "code": "payment_required",
             "message": f"{item_count} items exceeds the free preview limit of {free_limit}.",

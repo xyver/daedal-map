@@ -94,7 +94,7 @@ class McpAccountScopeTests(unittest.TestCase):
         })
         self.assertEqual(detail["code"], "payment_choice_required")
         self.assertEqual(detail["payment_options"]["account"]["endpoint"], "/mcp/account")
-        self.assertEqual(detail["payment_options"]["x402"]["endpoint"], "/mcp/x402")
+        self.assertNotIn("x402", detail["payment_options"])
 
     def test_dataset_402_uses_the_same_route_choice(self):
         request = self._request_for_mode("smart")
@@ -125,7 +125,7 @@ class McpAccountScopeTests(unittest.TestCase):
         self.assertTrue(result["isError"])
         self.assertEqual(result["structuredContent"]["error"]["code"], "payment_choice_required")
         self.assertEqual(result["structuredContent"]["payment_options"]["account"]["endpoint"], "/mcp/account")
-        self.assertEqual(result["structuredContent"]["payment_options"]["x402"]["endpoint"], "/mcp/x402")
+        self.assertNotIn("x402", result["structuredContent"]["payment_options"])
 
     @staticmethod
     def _request_for_mode(mode: str) -> Request:

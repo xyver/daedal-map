@@ -167,7 +167,7 @@ def pack_sentence() -> str:
 def free_vs_paid_sentence() -> str:
     return (
         f"Free packs: {free_pack_csv()}. "
-        f"Paid packs via x402 on Base USDC: {paid_pack_csv()}."
+        f"Paid packs, charged per call from account credit: {paid_pack_csv()}."
     )
 
 
@@ -308,9 +308,9 @@ def render_site_llms_txt(*, app_origin: str = "https://app.daedalmap.com", site_
         "- MCP discovery first is valid: read `server.json`, then call `tools/list`, then follow `get_catalog` -> `get_pack` -> `get_data`\n"
         "- Free discovery first: `guide`, `catalog`, and pack detail\n"
         "- `request_id` is optional but recommended for tracing and idempotency\n"
-        "- Paid execution second: unpaid request to `POST /api/v1/query/dataset` returns `402`, then a payment-aware client retries\n"
+        "- Paid execution second: an unpaid request to `POST /api/v1/query/dataset` returns `402` with the exact price before any charge\n"
         "- MCP is a wrapper over the same underlying hosted discovery and paid execution lanes\n"
-        "- Paid MCP calls on `/mcp` return `payment_choice_required`; pay with account credit on `/mcp/account` (`X-API-Key`) or x402 (Base mainnet USDC) on `/mcp/x402`\n\n"
+        "- Paid MCP calls on `/mcp` return `payment_choice_required`; pay with account credit on `/mcp/account` (`X-API-Key`)\n\n"
         "## Related docs\n\n"
         f"- [For AI agents]({site_origin}/agents)\n"
         f"- [Developer guide]({site_origin}/devs)\n"
@@ -418,8 +418,7 @@ def render_site_llms_full(*, app_origin: str = "https://app.daedalmap.com", site
         "## Current access behavior\n\n"
         f"- {free_pack_display_csv()} are free lanes\n"
         f"- {paid_pack_display_csv()} are challenge-first via HTTP `402`\n"
-        "- The current live hosted payment rail is x402 exact on Base mainnet\n"
-        "- The currently challenged asset is Base mainnet USDC\n"
+        "- Paid calls are charged from account credit through a scoped API key; new accounts start with free credit\n"
         "- Requests above the live source maximum reject before payment instead of charging\n\n"
         "## Current proven hosted examples\n\n"
         "- Free proof:\n"

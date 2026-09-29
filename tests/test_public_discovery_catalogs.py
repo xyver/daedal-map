@@ -442,7 +442,7 @@ class PublicDiscoveryCatalogTests(unittest.TestCase):
         self.assertEqual(body["quote"]["capability_id"], "point_lookup")
         self.assertEqual(body["quote"]["pricing_version"], f"{tool_pricing_version('resolve_point')}+credit-q1000")
         self.assertIsInstance(body["quote"]["amount_usdc_base_units"], int)
-        self.assertEqual(body["quote"]["payment_rails"], ["account_credit", "x402"])
+        self.assertEqual(body["quote"]["payment_rails"], ["account_credit"])
         analytics = analytics_mock.call_args.kwargs
         self.assertEqual(analytics["decision"], "challenge")
         self.assertEqual(analytics["source_id"], "resolve_point")
