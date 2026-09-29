@@ -24,9 +24,8 @@ class StdioToolHelpTests(unittest.TestCase):
         envelope = self._call("resolve_point")
         payload = envelope["result"]["structuredContent"]
         self.assertFalse(envelope["result"]["isError"])
-        self.assertEqual(payload["access"]["pricing"], "free")
-        self.assertEqual(payload["access"]["limits"]["free_item_limit"], 10000)
-        self.assertNotIn("paid_item_limit", payload["access"]["limits"])
+        self.assertEqual(payload["access"]["limits"]["free_item_limit"], 100)
+        self.assertEqual(payload["access"]["limits"]["paid_item_limit"], 10000)
         self.assertIn("/mcp/geography", payload["available_on_facades"])
 
     def test_geometry_topic_help_executes_without_runtime_data(self) -> None:

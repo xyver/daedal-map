@@ -422,17 +422,15 @@ def tool_help_payload(
         access["hosted_rate_limits"] = access.pop("rate_limits")
         access["above_free_limit"] = "local_machine_resources"
     if name == "resolve_point" and not local_installed:
-        shared_limit = limits.get("free_item_limit")
         access["caller_tiers"] = {
-            "anonymous": {"included_items": shared_limit, "above_limit": "interactive_limit_exceeded"},
-            "verified_account": {"included_items": shared_limit, "above_limit": "interactive_limit_exceeded"},
-            "paid_plan": {"included_items": shared_limit, "above_limit": "interactive_limit_exceeded"},
+            "anonymous": {"included_items": limits.get("free_item_limit"), "above_limit": "payment_required"},
+            "verified_account": {"included_items": limits.get("account_item_limit"), "above_limit": "payment_required"},
+            "paid_plan": {"included_items": limits.get("paid_item_limit"), "above_limit": "interactive_limit_exceeded"},
         }
         access["bulk_shape"] = {
-            "threshold": shared_limit,
+            "threshold": limits.get("free_item_limit"),
             "shallow_tool": "resolve_point: one point or a cross-country point array; Admin0 discovery is followed by an adopted Admin0-3 country bank or the bounded global Admin0-2 baseline shard",
             "deep_tool": "resolve_deep_point: one point or point array plus one shallow_loc_id and one family; family defaults to administrative",
-            "payment_policy": "free within the interactive safety ceiling",
         }
     elif name == "resolve_deep_point" and not local_installed:
         shared_limit = limits.get("free_item_limit")
@@ -444,7 +442,7 @@ def tool_help_payload(
         access["bulk_shape"] = {
             "partition_scope": "exactly one admin_1_loc_id per call",
             "maximum_items": limits.get("free_item_limit"),
-            "payment_policy": "free within the interactive safety ceiling",
+            "payment_policy": "free within the per-call ceiling",
         }
     return {
         "ok": True,

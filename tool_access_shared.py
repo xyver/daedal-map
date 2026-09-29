@@ -1,8 +1,8 @@
 """Authored source of truth for per-tool access gates.
 
 This is the tool-level twin of ``pack_registry_shared.PACK_REGISTRY``. Pack
-pricing answers "is this dataset paid?"; this answers which execution lane and
-per-call ceiling apply to a tool.
+pricing answers "is this dataset paid?"; this answers "how much of this tool can
+one caller use for free, and what does paying buy?".
 
 Three product rules this file encodes:
 
@@ -33,16 +33,15 @@ To change a per-call item limit: edit ``free_item_limit`` /
 To change the default hosted tool-call rates: edit
 ``HOSTED_TOOL_RATE_LIMIT_DEFAULTS`` here. A tool may override those defaults
 with its own ``rate_limits`` entry in ``TOOL_ACCESS_REGISTRY``.
-To change the conversion-job price: edit ``IDENTIFIER_RATE_USD_PER_100`` below
-and bump the affected ``pricing_version``.
+To change a conversion lane's price: edit ``IDENTIFIER_RATE_USD_PER_100`` or
+``POINT_RATE_USD_PER_100`` below and bump the affected ``pricing_version``s.
 To change any other price: edit the authored ``price`` here, set the canonical micro-USD
 environment override, or activate a revisioned dashboard pricing override.
-To swap a tool between free and paid: change ``pricing`` here, remove obsolete
-price/meter/tier fields, and follow the publishing checklist below.
+To swap a tool between free and paid: change ``pricing`` here, and nothing else.
 
 Env vars still override at runtime for incident response and load testing:
-``MCP_TOOL_BATCH_LIMIT_<TOOL_NAME>`` first, then any explicitly retained legacy
-name listed for that tool, then the value authored here.
+``MCP_TOOL_BATCH_LIMIT_<TOOL_NAME>`` first, then the legacy compatibility names
+listed per tool, then the value authored here.
 
 Full free<->paid checklist (enforcement, advertised pricing, license, public
 docs, catalog surfaces):
@@ -95,12 +94,13 @@ def quantize_credit_price(amount_micro_usd: int) -> int:
     return max(quantum, ((amount + quantum // 2) // quantum) * quantum)
 
 
-# Explicit conversion-tool prices start with ``paid``. Dataset tools use
-# ``by_pack`` and let each pack's material policy decide whether a hosted call
-# is metered, forced free, or blocked.
+# Explicit conversion-tool prices start with ``paid``. Material-backed tools
+# use ``by_pack`` / ``by_material`` and let the catalog's legal policy decide
+# whether the hosted call is metered, forced free, or blocked.
 PRICING_FREE = "free"
 PRICING_PAID_BULK = "paid_bulk_x402_base_usdc"
 PRICING_BY_PACK = "by_pack"
+PRICING_BY_MATERIAL = "by_material"
 
 # Tool families. "geography" is the geometry/loc_id utility family; "discovery"
 # is the free catalog/helper surface; "dataset" tools price through the pack
@@ -110,7 +110,9 @@ FAMILY_DISCOVERY = "discovery"
 FAMILY_DATASET = "dataset"
 
 
-# Named job rate, in USD per 100 successfully resolved items.
+# Named conversion rates, in USD per 100 successfully resolved items. These
+# are the two levers for the loc_id conversion lanes; every tool below reads
+# one of them, so changing a rate here reprices every tool in that lane.
 #
 # Documented rate card and decision history:
 # county-map-private/docs/future/API/agent_api_monetization_plan.md, "Tool
@@ -118,8 +120,13 @@ FAMILY_DATASET = "dataset"
 # (MCP_TOOL_PRICE_*_<TOOL>, legacy_price_env names, and the Access & Payment
 # dashboard) win over these values without a code change.
 #
-# Custom conversion jobs perform an index join from external codes to loc_id.
+# Identifier lane: external code to loc_id (convert_reference,
+# create_conversion_job). This is an index join, not a
+# spatial computation.
 IDENTIFIER_RATE_USD_PER_100 = 0.05
+# Point lane: coordinate to loc_id chain (resolve_point). Point-in-polygon
+# work reads geometry, so it is priced above the identifier join.
+POINT_RATE_USD_PER_100 = 0.10
 # Hosted retrieval is a managed-service fee, not a different data product.
 # These two levers price material-aware MCP calls while downloads and local
 # execution remain outside this gate.
@@ -163,10 +170,21 @@ TOOL_ACCESS_REGISTRY: dict[str, dict] = {
     "resolve_point": {
         "family": FAMILY_GEOGRAPHY,
         "capability_id": "point_lookup",
-        "pricing": PRICING_FREE,
+        "pricing": PRICING_PAID_BULK,
         "item_field": "points",
-        "free_item_limit": 10000,
-        "notes": "Hosted point resolution is free within the bounded interactive safety ceiling.",
+        "free_item_limit": 100,
+        "account_item_limit": 1000,
+        "paid_item_limit": 10000,
+        "legacy_limit_env": ("POINT_LOOKUP_BATCH_LIMIT",),
+        "legacy_paid_limit_env": ("POINT_LOOKUP_PAID_BATCH_LIMIT",),
+        "price": {"base_usd": PAID_CALL_BASE_USD, "per_unit_usd": POINT_RATE_USD_PER_100 / 100},
+        "pricing_version": "geography-tools-2026-09-18.1",
+        "meter": {"unit": "resolved_point", "items_per_charge_unit": 1},
+        "legacy_price_env": {
+            "base_usd": ("POINT_LOOKUP_PAID_BASE_USD",),
+            "per_unit_usd": ("POINT_LOOKUP_PAID_PER_POINT_USD",),
+        },
+        "notes": "One coordinate stays free; point arrays use the authored bulk lanes.",
     },
     "resolve_deep_point": {
         "family": FAMILY_GEOGRAPHY,
@@ -174,14 +192,22 @@ TOOL_ACCESS_REGISTRY: dict[str, dict] = {
         "pricing": PRICING_FREE,
         "item_field": "points",
         "free_item_limit": 100,
-        "notes": "Bounded to one Admin1 partition and 100 points per call.",
+        "paid_item_limit": 100,
+        "notes": "Initial technical rollout is bounded to one Admin1 partition and 100 points; payment policy comes later.",
     },
     "get_geometry": {
         "family": FAMILY_GEOGRAPHY,
         "capability_id": "geometry_lookup",
-        "pricing": PRICING_FREE,
+        "pricing": PRICING_BY_MATERIAL,
+        "price": {
+            "base_usd": HOSTED_RETRIEVAL_BASE_USD,
+            "per_unit_usd": HOSTED_RETRIEVAL_RATE_USD_PER_100 / 100,
+        },
+        "pricing_version": "hosted-retrieval-2026-09-21.1",
+        "meter": {"unit": "geometry_result", "items_per_charge_unit": 1},
         "item_field": "loc_ids",
-        "free_item_limit": 25000,
+        "free_item_limit": 1000,
+        "paid_item_limit": 25000,
         # Polygons are payload-heavy, so they carry their own centrally
         # authored cap instead of an inline route default.
         "sub_limits": {
@@ -190,13 +216,16 @@ TOOL_ACCESS_REGISTRY: dict[str, dict] = {
                 "limit_env": "MCP_TOOL_POLYGON_BATCH_LIMIT_GET_GEOMETRY",
             },
         },
+        "legacy_limit_env": ("GEOMETRY_GET_BATCH_LIMIT",),
     },
     "get_loc_id_info": {
         "family": FAMILY_GEOGRAPHY,
         "capability_id": "loc_id_metadata",
         "pricing": PRICING_FREE,
         "item_field": "loc_ids",
-        "free_item_limit": 2500,
+        "free_item_limit": 100,
+        "paid_item_limit": 2500,
+        "legacy_limit_env": ("LOC_ID_INFO_BATCH_LIMIT",),
         # include_references fans out across bridge artifacts, so it is capped
         # lower than plain metadata enrichment.
         "sub_limits": {
@@ -212,7 +241,9 @@ TOOL_ACCESS_REGISTRY: dict[str, dict] = {
         "capability_id": "reference_system_identification",
         "pricing": PRICING_FREE,
         "item_field": "identifiers",
-        "free_item_limit": 2500,
+        "free_item_limit": 100,
+        "paid_item_limit": 2500,
+        "legacy_limit_env": ("REFERENCE_IDENTIFY_BATCH_LIMIT",),
     },
     "identify_dataset_geography": {
         "family": FAMILY_GEOGRAPHY,
@@ -220,20 +251,28 @@ TOOL_ACCESS_REGISTRY: dict[str, dict] = {
         "pricing": PRICING_FREE,
         "item_field": "columns",
         "free_item_limit": 64,
+        "paid_item_limit": 64,
     },
     "convert_reference": {
         "family": FAMILY_GEOGRAPHY,
         "capability_id": "reference_conversion",
-        "pricing": PRICING_FREE,
+        "price": {"base_usd": PAID_CALL_BASE_USD, "per_unit_usd": IDENTIFIER_RATE_USD_PER_100 / 100},
+        "pricing_version": "geography-tools-2026-09-18.1",
+        "meter": {"unit": "converted_reference", "items_per_charge_unit": 1},
+        "pricing": PRICING_PAID_BULK,
         "item_field": "items",
-        "free_item_limit": 2500,
+        "free_item_limit": 100,
+        "account_item_limit": 1000,
+        "paid_item_limit": 2500,
+        "legacy_limit_env": ("REFERENCE_CONVERT_BATCH_LIMIT",),
     },
     "compare_geographies": {
         "family": FAMILY_GEOGRAPHY,
         "capability_id": "geography_comparison",
         "pricing": PRICING_FREE,
         "item_field": "items",
-        "free_item_limit": 2500,
+        "free_item_limit": 100,
+        "paid_item_limit": 2500,
     },
     "resolve_loc_id_scope": {
         "family": FAMILY_GEOGRAPHY,
@@ -396,8 +435,6 @@ def tool_account_item_limit(tool_name: str) -> int | None:
     Authored ``account_item_limit`` wins; otherwise the free limit scaled by
     ``ACCOUNT_ITEM_LIMIT_MULTIPLIER``, clamped to the paid limit.
     """
-    if not tool_is_paid_bulk(tool_name):
-        return tool_free_item_limit(tool_name)
     authored = tool_profile(tool_name).get("account_item_limit")
     if isinstance(authored, int):
         return int(authored)
@@ -655,8 +692,6 @@ def tool_effective_item_limit(tool_name: str, *, lane: str = "free", default: in
     compatibility.
     """
     normalized_lane = str(lane or "free").strip().lower()
-    if normalized_lane in {"account", "paid"} and not tool_is_paid_bulk(tool_name):
-        normalized_lane = "free"
     suffix = "".join(ch if ch.isalnum() else "_" for ch in str(tool_name or "").upper()).strip("_")
     if normalized_lane == "paid":
         env_names = (f"MCP_TOOL_PAID_BATCH_LIMIT_{suffix}", *tuple(tool_profile(tool_name).get("legacy_paid_limit_env") or ()))

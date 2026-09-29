@@ -818,13 +818,7 @@ async def _authorize_paid_batch_tool(
     request_id: str,
 ) -> tuple[dict[str, Any] | None, dict[str, Any] | None, int, int]:
     free_limit = _tool_batch_item_limit(tool_name)
-    # A stale paid-limit environment variable must not recreate a commercial
-    # tier after a tool has been authored free in the shared registry.
-    paid_limit = (
-        _tool_paid_batch_limit(tool_name, free_limit)
-        if tool_is_paid_bulk(tool_name)
-        else free_limit
-    )
+    paid_limit = _tool_paid_batch_limit(tool_name, free_limit)
     trusted_token, _trusted_token_id = _trusted_artifact_access(request)
     local_request = is_local_loopback_request(request)
     if item_count > paid_limit and trusted_token is None and not local_request:
@@ -1007,10 +1001,6 @@ async def _authorize_material_tool(
             },
             "reason_codes": effective_access.get("reason_codes") or [],
         }
-    # Material policy may block redistribution, but it cannot invent a payment
-    # lane for a tool whose published access contract is authored free.
-    if tool_name == "get_geometry" and not tool_is_paid_bulk(tool_name):
-        return None, None
     if not effective_access.get("settlement_required"):
         return None, None
     if not commercial_access_enabled():
@@ -2567,15 +2557,10 @@ async def _execute_point_lookup_tool(
             )
             return _jsonrpc_response(_tool_result(error_payload, is_error=True), rpc_request_id)
         limit = _tool_batch_item_limit(execution_tool_name)
-        authored_paid_bulk = tool_is_paid_bulk(execution_tool_name)
-        # Ignore stale paid-tier overrides after a tool is authored free. They
-        # may remain in a deployment during migration, but cannot restore a
-        # payment lane that the published registry no longer declares.
-        paid_limit = (
-            _tool_paid_batch_limit(execution_tool_name, limit)
-            if authored_paid_bulk
-            else limit
-        )
+        # The authored interactive ceiling also defines the verified-account
+        # allowance. Licensing decides whether anonymous overage may be sold;
+        # it must not silently collapse an account's included entitlement.
+        paid_limit = _tool_paid_batch_limit(execution_tool_name, limit)
         trusted_token, trusted_token_id = _trusted_artifact_access(request)
         caller_identity = request_caller_identity(
             request, ip_hash=hash_ip_for_analytics(get_client_ip(request))
@@ -2597,15 +2582,13 @@ async def _execute_point_lookup_tool(
             error_payload = {"request_id": request_id, "batch_id": batch_id, "error": mode_error}
             return _jsonrpc_response(_tool_result(error_payload, is_error=True), rpc_request_id)
         tool_access = _tool_effective_access(execution_tool_name, country_scope=country_scope)
-        paid_bulk = bool(authored_paid_bulk and tool_access.get("settlement_required"))
+        paid_bulk = bool(tool_access.get("settlement_required"))
         launch_free_bulk = bool(
-            authored_paid_bulk
-            and tool_access.get("allow")
-            and tool_access.get("access_lane") == "launch_free"
+            tool_access.get("allow") and tool_access.get("access_lane") == "launch_free"
         )
         included_limit = (
             paid_limit
-            if not authored_paid_bulk or launch_free_bulk
+            if launch_free_bulk
             else _caller_included_item_limit(execution_tool_name, caller_identity, free_limit=limit, paid_limit=paid_limit)
         )
         shape_error = _point_bulk_shape_error(

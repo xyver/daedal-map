@@ -442,7 +442,7 @@ PACK_REGISTRY: dict[str, dict] = {
     "geography": {
         "display_name": "Geography Tools",
         "kind": "tool_family",
-        "pricing": "free",
+        "pricing": "mixed",
         "mcp_tool_allowlist": (
             "get_catalog",
             "get_pack",
@@ -489,7 +489,7 @@ PACK_REGISTRY: dict[str, dict] = {
     "reverse-geocoding": {
         "display_name": "Reverse Geocoding",
         "kind": "tool_family_alias",
-        "pricing": "free",
+        "pricing": "mixed",
         "mcp_tool_allowlist": ("get_catalog", "get_pack", "resolve_point", "resolve_deep_point"),
         "mcp_name": "com.daedalmap/reverse-geocoding",
         "mcp_version": "1.4.1",
@@ -501,7 +501,7 @@ PACK_REGISTRY: dict[str, dict] = {
                 "Latitude/longitude to the complete latest-available administrative chain",
                 "Small point batches in one MCP call for table cleanup",
                 "Small chain rows with loc_id, name, level, and available vintage",
-                "Bounded coordinate batches are free; per-call safety ceilings keep the hosted service responsive",
+                "The first 100 points per call are free; larger hosted batches use paid throughput",
             ],
         },
         "routing": {"preferred_tool": "resolve_point"},

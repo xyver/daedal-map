@@ -46,9 +46,9 @@ Any client that supports streamable HTTP MCP can use the same URL. Start with
 then `get_data` for data. Setup for other clients is in the
 [agent docs](https://www.daedalmap.com/devs).
 
-All geography tools are free within their published safety limits. Some data
-packs remain metered, and paid data calls return an x402 payment challenge before
-any charge. `get_catalog` reports the access lane for each pack.
+Discovery and small geography lookups are free. Larger point/reference batches
+and some data packs are metered, and paid calls return an x402 payment challenge
+before any charge. `get_catalog` reports the access lane for each pack.
 
 ## Tools
 

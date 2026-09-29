@@ -9,6 +9,7 @@ from unittest import mock
 from fastapi.testclient import TestClient
 
 from app import app, _classify_route_surface, _rate_limit_config_for_surface
+from tool_access_shared import tool_pricing_version
 from mapmover.runtime import geometry_catalog
 from mapmover import data_loading
 
@@ -148,23 +149,12 @@ class PublicDiscoveryCatalogTests(unittest.TestCase):
                 self.assertEqual(payload["metadata"]["tool_count"], len(expected))
                 self.assertNotIn("query_dataset", actual)
                 self.assertEqual(payload["resources"][0]["name"], "geometry_catalog")
-                self.assertEqual(payload["pricing"]["model"], "free")
-                self.assertEqual(
-                    payload["pricing"]["access_lanes"]["hosted_execution"],
-                    "free within published per-call safety ceilings",
-                )
-                self.assertNotIn("payment_protocol", payload["pricing"])
-                self.assertNotIn("currency", payload["pricing"])
-                self.assertTrue(
-                    all(row["pricing"] == "free" for row in payload["pricing"]["tools"])
-                )
-                self.assertIn("No API key or payment required", payload["authentication"]["notes"])
 
         geography = self.client.get(
             "/.well-known/mcp/geography/server-card.json"
         ).json()
         paid_by_name = {tool["name"]: tool["paid"] for tool in geography["tools"]}
-        self.assertFalse(paid_by_name["resolve_point"])
+        self.assertTrue(paid_by_name["resolve_point"])
         self.assertFalse(paid_by_name["get_geometry"])
         self.assertFalse(paid_by_name["get_catalog"])
 
@@ -438,48 +428,30 @@ class PublicDiscoveryCatalogTests(unittest.TestCase):
         self.assertIsNone(metadata["identity_role"])
         self.assertIsNone(metadata["session_id"])
 
-    def test_point_lookup_batch_endpoint_executes_inside_new_free_limit(self) -> None:
-        resolved = [{"deepest_resolved_loc_id": "USA-CA-037"} for _ in range(101)]
-        with (
-            mock.patch("mapmover.routes.geometry.resolve_points_to_locations", return_value=resolved),
-            mock.patch("mapmover.routes.geometry._commercial_access_decision", new=mock.AsyncMock()) as verifier_mock,
-            mock.patch("mapmover.routes.geometry.log_api_query_event") as analytics_mock,
-        ):
+    def test_point_lookup_batch_endpoint_challenges_over_free_limit(self) -> None:
+        with mock.patch("mapmover.routes.geometry.log_api_query_event") as analytics_mock:
             response = self.client.post(
                 "/api/v1/resolve/points",
                 json={"source": "try_dataset", "batch_id": "too-many", "country_scope": "USA", "target_admin_level": "admin_2", "points": [{"lon": 0, "lat": 0} for _ in range(101)]},
             )
 
-        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.status_code, 402)
         body = response.json()
-        self.assertEqual(body["resolved_count"], 101)
-        self.assertNotIn("payment_required", body)
-        verifier_mock.assert_not_awaited()
+        self.assertTrue(body["payment_required"])
+        self.assertEqual(body["limits"]["free_batch_limit"], 100)
+        self.assertEqual(body["quote"]["capability_id"], "point_lookup")
+        self.assertEqual(body["quote"]["pricing_version"], f"{tool_pricing_version('resolve_point')}+credit-q1000")
+        self.assertIsInstance(body["quote"]["amount_usdc_base_units"], int)
+        self.assertEqual(body["quote"]["payment_rails"], ["account_credit", "x402"])
         analytics = analytics_mock.call_args.kwargs
-        self.assertEqual(analytics["decision"], "allow")
+        self.assertEqual(analytics["decision"], "challenge")
         self.assertEqual(analytics["source_id"], "resolve_point")
         self.assertEqual(analytics["capability_id"], "point_lookup_batch")
+        self.assertEqual(analytics["error_code"], "payment_required")
         self.assertEqual(analytics["row_count"], 101)
         self.assertEqual(analytics["metadata"]["surface"], "test_data")
 
-    def test_point_lookup_batch_over_safety_ceiling_is_not_a_payment_challenge(self) -> None:
-        with (
-            mock.patch.dict("os.environ", {"MCP_TOOL_BATCH_LIMIT_RESOLVE_POINT": "2"}, clear=False),
-            mock.patch("mapmover.routes.geometry._commercial_access_decision", new=mock.AsyncMock()) as verifier_mock,
-        ):
-            response = self.client.post(
-                "/api/v1/resolve/points",
-                json={"points": [{"lon": 0, "lat": 0} for _ in range(3)]},
-            )
-
-        self.assertEqual(response.status_code, 413)
-        body = response.json()
-        self.assertEqual(body["error"]["code"], "interactive_limit_exceeded")
-        self.assertFalse(body["payment_required"])
-        self.assertNotIn("quote", body)
-        verifier_mock.assert_not_awaited()
-
-    def test_free_rest_point_batch_ignores_forced_metered_policy(self) -> None:
+    def test_paid_rest_point_batch_executes_and_settles_distinct_successes(self) -> None:
         allow = (
             "allow",
             {
@@ -495,7 +467,7 @@ class PublicDiscoveryCatalogTests(unittest.TestCase):
                     "mapmover.routes.geometry._tool_effective_access",
                     return_value={"allow": True, "settlement_required": True, "access_lane": "metered"},
                 ),
-                mock.patch("mapmover.routes.geometry._commercial_access_decision", new=mock.AsyncMock(return_value=allow)) as verifier_mock,
+                mock.patch("mapmover.routes.geometry._commercial_access_decision", new=mock.AsyncMock(return_value=allow)),
                 mock.patch("mapmover.routes.geometry.resolve_points_to_locations", return_value=resolved),
                 mock.patch(
                     "mapmover.routes.geometry.settle_commercial_access",
@@ -516,9 +488,9 @@ class PublicDiscoveryCatalogTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         body = response.json()
         self.assertEqual(body["resolved_count"], 101)
-        self.assertNotIn("meter_receipt", body)
-        verifier_mock.assert_not_awaited()
-        settle_mock.assert_not_called()
+        self.assertEqual(body["meter_receipt"]["distinct_items_resolved"], 1)
+        self.assertEqual(settle_mock.call_args.kwargs["actual_pricing"]["amount_usdc_base_units"], 0)
+        self.assertEqual(settle_mock.call_args.kwargs["meter_receipt"]["successful_items"], 101)
 
     def test_point_lookup_verified_account_gets_included_bulk(self) -> None:
         def fake_resolve(points, include_geometry=False, **_kwargs):
