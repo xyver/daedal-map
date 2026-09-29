@@ -2852,7 +2852,9 @@ async def _execute_point_lookup_tool(
                     max_admin_level=max_admin_level,
                     country_scope=country_scope,
                     admin_1_scope=admin_1_scope,
-                    include_marine_context=False if deep_lookup else payload.get("include_marine_context") is not False,
+                    include_marine_context=(
+                        False if deep_lookup else payload.get("include_marine_context") is True
+                    ),
                     shallow_banks_only=lookup_mode == "standard",
                 )
             except (MCPExecutionCapacityError, MCPExecutionTimeoutError):
@@ -3105,7 +3107,9 @@ async def _execute_point_lookup_tool(
                 max_admin_level=max_admin_level,
                 country_scope=country_scope,
                 admin_1_scope=admin_1_scope,
-                include_marine_context=False if deep_lookup else payload.get("include_marine_context") is not False,
+                include_marine_context=(
+                    False if deep_lookup else payload.get("include_marine_context") is True
+                ),
                 shallow_banks_only=lookup_mode == "standard",
             )
             raw = raw_results[0] if raw_results else {"error": "point did not resolve", "point": {"lon": lon, "lat": lat}}

@@ -645,7 +645,24 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         self.assertIsNone(resolver.call_args.kwargs["target_admin_level"])
         self.assertEqual(resolver.call_args.kwargs["max_admin_level"], 3)
         self.assertIsNone(resolver.call_args.kwargs["country_scope"])
+        self.assertFalse(resolver.call_args.kwargs["include_marine_context"])
         self.assertTrue(resolver.call_args.kwargs["shallow_banks_only"])
+
+    def test_shallow_point_marine_context_is_explicit_opt_in(self) -> None:
+        with (
+            mock.patch(
+                "mapmover.geometry_handlers.resolve_points_to_locations",
+                return_value=[{"matched": {"loc_id": "CAN-BC", "admin_level": 1}, "stack": []}],
+            ) as resolver,
+            mock.patch("mapmover.routes.mcp.log_api_query_event"),
+        ):
+            _tool_call(
+                self.client,
+                "resolve_point",
+                {"lat": 49.2827, "lon": -123.1207, "include_marine_context": True},
+            )
+
+        self.assertTrue(resolver.call_args.kwargs["include_marine_context"])
 
     def test_deep_points_derive_admin_1_partition_from_shallow_loc_id(self) -> None:
         def fake_resolve(points, include_geometry=False, **_kwargs):
@@ -1135,6 +1152,9 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         self.assertIn("points", tools["resolve_point"]["inputSchema"]["properties"])
         self.assertIn("lat", tools["resolve_point"]["inputSchema"]["properties"])
         self.assertIn("lon", tools["resolve_point"]["inputSchema"]["properties"])
+        self.assertFalse(
+            tools["resolve_point"]["inputSchema"]["properties"]["include_marine_context"]["default"]
+        )
         self.assertNotIn("lookup_mode", tools["resolve_point"]["inputSchema"]["properties"])
         self.assertNotIn("country_scope", tools["resolve_point"]["inputSchema"]["properties"])
         self.assertIn("shallow_loc_id", tools["resolve_deep_point"]["inputSchema"]["properties"])

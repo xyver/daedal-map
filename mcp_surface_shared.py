@@ -260,7 +260,7 @@ def build_tool_definitions(*, include_paused: bool = False) -> list[dict]:
                         "anyOf": [{"type": "string"}, {"type": "integer"}],
                         "description": "Optional exact requested level from Admin 0-3. Omit it to return the deepest available shallow level.",
                     },
-                    "include_marine_context": {"type": "boolean", "description": "Include parallel Marine overlaps for land matches. Defaults to true; set false for fast administrative loc_id previews. Offshore Marine fallback still applies."},
+                    "include_marine_context": {"type": "boolean", "default": False, "description": "Opt in to parallel Marine overlaps for land matches. Defaults to false so ordinary administrative resolution stays lightweight. Offshore Marine fallback still applies."},
                     "batch_id": {"type": "string", "description": "Optional caller-supplied batch id echoed for point arrays."},
                     "request_id": {"type": "string", "description": "Optional caller-supplied request id for tracing."},
                 },
