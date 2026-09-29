@@ -125,6 +125,31 @@ class LocIdResolutionRuntimeTests(unittest.TestCase):
         self.assertEqual(resolved["deepest_resolved_admin_level"], "admin_2")
         self.assertEqual(resolved["matches"]["admin_2"]["method"], "geometry_name_lookup")
 
+    def test_hosted_admin_name_uses_exact_spine_identity_lane(self):
+        with patch(
+            "mapmover.runtime.loc_id_resolution._get_name_standardizer"
+        ) as get_standardizer, patch(
+            "mapmover.runtime.loc_id_resolution.is_cloud_mode",
+            return_value=True,
+        ), patch(
+            "mapmover.runtime.loc_id_resolution.shallow_identity_level_rows",
+            return_value=pd.DataFrame([{
+                "loc_id": "USA-VA-059",
+                "admin_level": 2,
+                "name": "Fairfax County",
+            }]),
+        ) as identity_rows, patch(
+            "mapmover.runtime.loc_id_resolution.load_country_parquet"
+        ) as generic_geometry:
+            get_standardizer.return_value.get_loc_id_from_name.return_value = None
+            resolved = resolve_admin_text_to_loc_id(
+                "Fairfax County", country_hint="USA", admin_level_hint=2,
+            )
+
+        self.assertEqual(resolved["deepest_resolved_loc_id"], "USA-VA-059")
+        identity_rows.assert_called_once_with("USA", 2)
+        generic_geometry.assert_not_called()
+
     def test_direct_admin_name_checks_country_sublevels_without_explicit_hint(self):
         with patch(
             "mapmover.runtime.loc_id_resolution._get_name_standardizer"

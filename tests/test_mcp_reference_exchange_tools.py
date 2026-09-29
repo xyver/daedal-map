@@ -1554,6 +1554,23 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         self.assertEqual(payload["next_step"]["tool"], "get_pack")
         self.assertEqual(payload["next_step"]["arguments"]["country_scope"], "<ISO3 from countries>")
 
+    def test_get_pack_geometry_download_links_selected_family_and_raw_catalog(self) -> None:
+        payload = _tool_call(
+            self.client,
+            "get_pack",
+            {"catalog": "geometry", "pack_id": "postal_area", "detail": "download"},
+        )
+
+        self.assertEqual(
+            payload["download_url"],
+            "https://app.daedalmap.com/api/v1/packs/postal_area/download",
+        )
+        self.assertEqual(
+            payload["catalog_download_url"],
+            "https://app.daedalmap.com/api/v1/geometry/catalog/download",
+        )
+        self.assertNotIn("geometry_banks", payload)
+
     def test_convert_reference_defaults_to_loc_id(self) -> None:
         payload = _tool_call(
             self.client,

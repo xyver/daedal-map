@@ -149,6 +149,43 @@ def cached_shallow_identity_rows(
     return selected.sort_values("_requested_order").drop(columns=["_requested_order"]).reset_index(drop=True)
 
 
+def shallow_identity_level_rows(iso3: str, admin_level: int) -> pd.DataFrame | None:
+    """Read one shallow identity level without loading polygon WKB.
+
+    Name resolution needs only the catalog-selected exact spine's identity
+    columns. Keeping this read beside point resolution ensures hosted callers
+    use the same admitted release and avoids routing a metadata lookup through
+    the heavier generic geometry loader.
+    """
+    country = str(iso3 or "").strip().upper()
+    level = int(admin_level)
+    if level < 0 or level > 3 or not layout_available(country):
+        return None
+
+    with _SHALLOW_IDENTITY_CACHE_LOCK:
+        eligible = [
+            (maximum_level, frame)
+            for (cached_country, maximum_level), frame in _SHALLOW_IDENTITY_CACHE.items()
+            if cached_country == country and maximum_level >= level
+        ]
+        if eligible:
+            frame = min(eligible, key=lambda item: item[0])[1]
+            columns = [name for name in ("loc_id", "admin_level", "name") if name in frame.columns]
+            return frame.loc[frame["admin_level"] == level, columns].copy().reset_index(drop=True)
+
+    connection = _connection()
+    try:
+        return connection.execute(
+            "SELECT loc_id, admin_level, name FROM read_parquet(?) "
+            "WHERE admin_level = ? ORDER BY loc_id",
+            [path_to_uri(layout_root(country) / "admin_0_3.parquet"), level],
+        ).fetchdf()
+    except Exception:
+        return None
+    finally:
+        connection.close()
+
+
 def _layout_manifest(iso3: str) -> dict[str, Any]:
     root = layout_root(iso3)
     return _layout_manifest_at_root(str(root), is_cloud_mode())

@@ -22,6 +22,7 @@ from mcp_surface_shared import build_mcp_instructions, build_tool_definitions
 from mcp_data_contract_shared import normalize_data_tool_error
 from mcp_tool_help_shared import topic_help_payload, tool_help_payload
 from mcp_discovery_shared import (
+    APP_ORIGIN,
     CATALOG_DOWNLOADS,
     catalog_download_payload,
     compact_catalog_payload,
@@ -5633,9 +5634,10 @@ async def mcp_endpoint(request: Request, pack_id: str | None = None):
                     "country_scope": country_scope or None,
                     "release_unit": release_unit or None,
                     "detail": "download",
-                    "download_url": CATALOG_DOWNLOADS["geometry"]["download_url"],
+                    "download_url": f"{APP_ORIGIN}/api/v1/packs/{family_payload['pack_id']}/download",
+                    "catalog_download_url": CATALOG_DOWNLOADS["geometry"]["download_url"],
                     "media_type": "application/json",
-                    "usage": "Download the complete geometry catalog and select this family and country from it.",
+                    "usage": "Download this family's complete public metadata, or use catalog_download_url for the complete raw geometry catalog.",
                     "next_step": family_payload.get("next_step"),
                 }
             else:

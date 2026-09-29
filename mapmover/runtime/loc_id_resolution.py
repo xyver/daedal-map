@@ -6,6 +6,7 @@ from typing import Any
 
 import pandas as pd
 
+from ..duckdb_helpers import is_cloud_mode
 from ..geometry_handlers import (
     get_selection_geometries,
     load_country_parquet,
@@ -17,6 +18,7 @@ from ..name_standardizer import NameStandardizer
 from ..paths import GEOMETRY_DIR
 from ..reference.usa.location_lookup import by_zip as usa_zip_lookup
 from .admin_hierarchy import get_parent_loc_id, infer_admin_level_from_loc_id
+from .admin_spine_query import shallow_identity_level_rows
 from .country_geography import get_country_location_aliases
 from .geography_reference import (
     canonicalize_loc_id,
@@ -325,7 +327,19 @@ def _resolve_country_geometry_name(
     country_hint: str,
     admin_level: int,
 ) -> dict[str, Any] | None:
-    df = load_country_parquet(str(country_hint or "").strip().upper(), admin_level=admin_level)
+    country = str(country_hint or "").strip().upper()
+    # Hosted point resolution already selects and queries the admitted exact
+    # Admin0-3 spine. Reuse that same lightweight identity lane for names;
+    # loading through the generic geometry path made this lookup depend on a
+    # second cloud-accessibility probe and could return no frame even while
+    # point resolution for the country was healthy.
+    df = (
+        shallow_identity_level_rows(country, admin_level)
+        if is_cloud_mode() and 0 <= int(admin_level) <= 3
+        else None
+    )
+    if df is None:
+        df = load_country_parquet(country, admin_level=admin_level)
     if df is None or df.empty:
         return None
 

@@ -69,6 +69,39 @@ def test_cloud_point_candidates_use_object_store_uri() -> None:
     assert connection.parameters[0] == "s3://bucket/published/layout.parquet"
 
 
+def test_shallow_identity_level_rows_uses_catalog_selected_exact_spine() -> None:
+    expected = pd.DataFrame([{
+        "loc_id": "USA-VA-059", "admin_level": 2, "name": "Fairfax County",
+    }])
+
+    class Connection:
+        def execute(self, sql, parameters):
+            self.sql = sql
+            self.parameters = parameters
+            return self
+
+        def fetchdf(self):
+            return expected
+
+        def close(self):
+            self.closed = True
+
+    connection = Connection()
+    with (
+        patch.object(admin_spine_query, "layout_available", return_value=True),
+        patch.object(admin_spine_query, "layout_root", return_value=Path("exact/usa")),
+        patch.object(admin_spine_query, "path_to_uri", return_value="s3://bucket/exact/usa/admin_0_3.parquet"),
+        patch.object(admin_spine_query, "_connection", return_value=connection),
+    ):
+        admin_spine_query.clear_admin_spine_query_cache()
+        frame = admin_spine_query.shallow_identity_level_rows("usa", 2)
+
+    assert frame.equals(expected)
+    assert "SELECT loc_id, admin_level, name" in connection.sql
+    assert connection.parameters == ["s3://bucket/exact/usa/admin_0_3.parquet", 2]
+    assert connection.closed is True
+
+
 def test_batch_point_candidates_filter_against_points_not_shared_envelope() -> None:
     class Connection:
         def execute(self, sql, parameters):
