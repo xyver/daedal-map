@@ -3,9 +3,9 @@ from pathlib import Path
 from unittest.mock import patch
 
 from mapmover.runtime.geometry_loader import (
+    resolve_country_admin_spine_source,
     resolve_country_display_geometry_sources,
     resolve_country_display_release,
-    resolve_country_exact_release,
     resolve_country_geometry_source,
 )
 
@@ -13,48 +13,25 @@ from mapmover.runtime.geometry_loader import (
 class GeometryLoaderRuntimeTests(unittest.TestCase):
     def tearDown(self) -> None:
         resolve_country_display_release.cache_clear()
-        resolve_country_exact_release.cache_clear()
 
-    def test_exact_release_follows_country_index_and_manifest_runtime_root(self):
-        index = {
-            "release_unit": {"id": "USA", "kind": "country"},
-            "current": {"manifest": {
-                "path": "geometry/countries/USA/releases/1.0.0/manifest.json",
-            }},
-        }
-        relative = (
+    def test_admin_spine_source_uses_shared_catalog_layout_root(self):
+        root = Path("geometry/countries/USA/admin_spine/exact/usa_geometry_1_0_0")
+        with patch("mapmover.runtime.admin_spine_query.layout_root", return_value=root):
+            source = resolve_country_admin_spine_source("usa")
+
+        self.assertEqual(root / "admin_0_3.parquet", source)
+
+    def test_geometry_source_prefers_active_exact_release_projection(self):
+        exact = Path(
             "geometry/countries/USA/admin_spine/exact/"
             "usa_geometry_1_0_0/admin_0_3.parquet"
         )
-        manifest = {
-            "release_unit": {"id": "USA", "kind": "country"},
-            "runtime": {
-                "exact": "geometry/countries/USA/admin_spine/exact/usa_geometry_1_0_0/",
-            },
-            "objects": [{"source_paths": [relative]}],
-        }
         with patch(
-            "mapmover.runtime.geometry_loader._read_active_json",
-            side_effect=[index, manifest],
-        ):
-            release = resolve_country_exact_release("usa")
-
-        self.assertEqual("usa_geometry_1_0_0", release["release_id"])
-        self.assertEqual(relative, release["relative_path"])
-
-    def test_geometry_source_prefers_active_exact_release_projection(self):
-        exact = {
-            "path": Path(
-                "geometry/countries/USA/admin_spine/exact/"
-                "usa_geometry_1_0_0/admin_0_3.parquet"
-            ),
-        }
-        with patch(
-            "mapmover.runtime.geometry_loader.resolve_country_exact_release",
+            "mapmover.runtime.geometry_loader.resolve_country_admin_spine_source",
             return_value=exact,
         ), patch(
             "mapmover.runtime.geometry_loader.parquet_accessible",
-            side_effect=lambda path: path == exact["path"],
+            side_effect=lambda path: path == exact,
         ), patch(
             "mapmover.runtime.geometry_loader.load_country_crosswalk",
             return_value=None,
@@ -62,7 +39,7 @@ class GeometryLoaderRuntimeTests(unittest.TestCase):
             resolved = resolve_country_geometry_source("USA", admin_level=2)
 
         self.assertEqual("authority_spine", resolved["source_kind"])
-        self.assertEqual(exact["path"], resolved["parquet_file"])
+        self.assertEqual(exact, resolved["parquet_file"])
 
     def test_display_release_follows_country_index_and_semver_manifest(self):
         index = {
@@ -129,8 +106,8 @@ class GeometryLoaderRuntimeTests(unittest.TestCase):
 
     def test_prefers_shared_authority_spine_for_admin2(self):
         with patch(
-            "mapmover.runtime.geometry_loader.resolve_country_exact_release",
-            return_value=None,
+            "mapmover.runtime.geometry_loader.resolve_country_admin_spine_source",
+            return_value=Path("geometry/countries/USA/admin_spine/admin_0_3.parquet"),
         ), patch(
             "mapmover.runtime.geometry_loader.parquet_accessible",
             side_effect=lambda path: str(path).endswith(
@@ -152,8 +129,8 @@ class GeometryLoaderRuntimeTests(unittest.TestCase):
 
     def test_prefers_shared_authority_spine_for_unfiltered_country_load(self):
         with patch(
-            "mapmover.runtime.geometry_loader.resolve_country_exact_release",
-            return_value=None,
+            "mapmover.runtime.geometry_loader.resolve_country_admin_spine_source",
+            return_value=Path("geometry/countries/CAN/admin_spine/admin_0_3.parquet"),
         ), patch(
             "mapmover.runtime.geometry_loader.parquet_accessible",
             side_effect=lambda path: str(path).endswith(

@@ -44,7 +44,7 @@ from .catalog_cache_policy import (
     CONTROL_CATALOG_MISS_TTL_SECONDS,
 )
 from .pack_state import build_active_catalog
-from pack_registry_shared import pack_routing_hints
+from pack_registry_shared import pack_profile, pack_routing_hints
 from .paths import CATALOG_PATH, COUNTRIES_DIR, DATA_ROOT, GEOMETRY_DIR, WIP_CATALOG_PATH
 from .duckdb_helpers import select_rows
 from .request_risk_gate import block_gate, safe_gate
@@ -100,9 +100,8 @@ def _load_agent_api_catalog() -> dict:
 
 
 def _pack_is_paid(pack_id: str | None) -> bool:
-    from .api_query_commercial import pack_requires_commercial_access
-
-    return pack_requires_commercial_access(pack_id)
+    pricing = str(pack_profile(pack_id).get("pricing") or "free").strip().lower()
+    return pricing.startswith("paid")
 
 
 def _effective_pack_pricing_sets() -> tuple[list[str], list[str]]:

@@ -165,6 +165,19 @@ def test_pack_access_keeps_free_registry_pricing_with_paid_eligible_material() -
     assert result["license_permissions"] == {"paid"}
 
 
+@pytest.mark.parametrize(
+    ("pricing", "expected"),
+    [
+        ("free", False),
+        ("paid_x402_base_usdc", True),
+        ("mixed", False),
+    ],
+)
+def test_discovery_pack_pricing_is_one_registry_switch(pricing: str, expected: bool) -> None:
+    with mock.patch.object(data_loading, "pack_profile", return_value={"pricing": pricing}):
+        assert data_loading._pack_is_paid("toggle_pack") is expected
+
+
 def test_mcp_catalog_refresh_helper_clears_derived_views() -> None:
     with mock.patch.object(mcp, "load_api_catalog", return_value={"packs": []}):
         mcp._facade_tools(None)
