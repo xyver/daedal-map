@@ -217,6 +217,7 @@ def clear_reference_graph_cache() -> None:
     _missing_graph_files.cache_clear()
     _discover_roots.cache_clear()
     _global_discovery_index_current.cache_clear()
+    _country_discovery_index_current.cache_clear()
     _country_release_paths.cache_clear()
     _partition_source_map.cache_clear()
 
@@ -290,6 +291,25 @@ def _global_discovery_index_current(cloud_mode: bool) -> bool:
     if "__global__" not in current:
         declared.pop("__global__", None)
     return bool(current) and declared == current
+
+
+@lru_cache(maxsize=64)
+def _country_discovery_index_current(country: str, cloud_mode: bool, root_text: str) -> bool:
+    """A country slice stays valid when another country's graph changes."""
+    manifest = _graph_json(DATA_ROOT / GLOBAL_DISCOVERY_MANIFEST) or {}
+    if str(manifest.get("status") or "").upper() != "PASS":
+        return False
+    expected = (manifest.get("source_graphs") or {}).get(country) or {}
+    release_id = str(expected.get("release_id") or "")
+    if not release_id or release_id != str(
+        (_graph_json(Path(root_text) / "manifest.json") or {}).get("release_id") or ""
+    ):
+        return False
+    index_path = DATA_ROOT / GLOBAL_DISCOVERY_RELATIVE
+    try:
+        return bool(parquet_columns(index_path)) if cloud_mode else index_path.is_file()
+    except Exception:
+        return False
 
 
 def global_reference_graph_root() -> Path | None:
@@ -1129,7 +1149,13 @@ def identify_aliases(
         # but still reads them sequentially instead of constructing one huge
         # read_parquet list.
         discovery = DATA_ROOT / GLOBAL_DISCOVERY_RELATIVE
-        if not country and _global_discovery_index_current(is_cloud_mode()):
+        if country in roots_by_country:
+            use_discovery_index = _country_discovery_index_current(
+                country, is_cloud_mode(), str(roots_by_country[country]),
+            )
+        else:
+            use_discovery_index = not country and _global_discovery_index_current(is_cloud_mode())
+        if use_discovery_index:
             paths = [discovery]
         else:
             paths = []
@@ -1148,12 +1174,15 @@ def identify_aliases(
             if not is_cloud_mode() and not path.is_file():
                 continue
             parameters = [path_to_uri(path), *requested]
+            scope_filter = " AND country_scope = ?" if use_discovery_index and country else ""
+            if scope_filter:
+                parameters.append(country)
             if reference_system:
                 parameters.append(str(reference_system))
             parameters.append(maximum)
             cursor = connection.execute(
                 f"""SELECT * FROM read_parquet(?)
-                    WHERE external_id IN ({placeholders}){system_filter}
+                    WHERE external_id IN ({placeholders}){scope_filter}{system_filter}
                     ORDER BY reference_system, external_id, loc_id LIMIT ?""",
                 parameters,
             )

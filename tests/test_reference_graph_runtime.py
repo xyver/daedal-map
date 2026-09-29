@@ -203,13 +203,55 @@ class ReferenceGraphRuntimeTests(unittest.TestCase):
                 self.connection.close()
 
         with (
-            mock.patch.object(reference_graph, "_global_discovery_index_current", return_value=False),
+            mock.patch.object(reference_graph, "_country_discovery_index_current", return_value=False),
             mock.patch.object(reference_graph, "_connection", side_effect=RecordingConnection),
         ):
             rows = identify_aliases(["001", "002"], iso3="TST")
 
         self.assertEqual({row["external_id"] for row in rows}, {"001", "002"})
         self.assertEqual(opened, [str(self.root / "aliases.parquet"), str(second)])
+
+    def test_country_alias_identification_uses_current_discovery_index(self) -> None:
+        data_root = self.root / "data"
+        discovery = data_root / reference_graph.GLOBAL_DISCOVERY_RELATIVE
+        discovery.parent.mkdir(parents=True)
+        (data_root / reference_graph.GLOBAL_DISCOVERY_MANIFEST).write_text(json.dumps({
+            "status": "PASS",
+            "source_graphs": {
+                "TST": {"release_id": "test_candidate"},
+                "OTH": {"release_id": "other_old_release"},
+            },
+        }), encoding="utf-8")
+        pd.DataFrame([
+            {"external_id": "001", "reference_system": "test.code", "loc_id": "TST-A-001", "alias_type": "official_code", "country_scope": "TST"},
+            {"external_id": "001", "reference_system": "test.code", "loc_id": "OTH-A-001", "alias_type": "official_code", "country_scope": "OTH"},
+            {"external_id": "001", "reference_system": "test.code", "loc_id": "GLB-A-001", "alias_type": "official_code", "country_scope": ""},
+        ]).to_parquet(discovery, index=False)
+        opened: list[str] = []
+        real_connection = reference_graph._connection
+
+        class RecordingConnection:
+            def __init__(self):
+                self.connection = real_connection()
+
+            def execute(self, statement, parameters=None):
+                opened.append(str(parameters[0]))
+                return self.connection.execute(statement, parameters or [])
+
+            def close(self):
+                self.connection.close()
+
+        with (
+            mock.patch.object(reference_graph, "DATA_ROOT", data_root),
+            mock.patch.object(reference_graph, "_connection", side_effect=RecordingConnection),
+        ):
+            reference_graph._country_discovery_index_current.cache_clear()
+            self.assertTrue(reference_graph._country_discovery_index_current("TST", False, str(self.root)))
+            rows = identify_aliases(["001"], iso3="TST", reference_system="test.code")
+            reference_graph._country_discovery_index_current.cache_clear()
+
+        self.assertEqual([row["loc_id"] for row in rows], ["TST-A-001"])
+        self.assertEqual(opened, [str(discovery)])
 
     def test_alias_identification_honors_cancellation_between_files(self) -> None:
         with self.assertRaisesRegex(RuntimeError, "cancelled"):
