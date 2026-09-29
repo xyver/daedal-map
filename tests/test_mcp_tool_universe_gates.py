@@ -565,6 +565,33 @@ class BlindCallerHelpTests(unittest.TestCase):
         self.assertEqual(validate_tool_guidance(names), [])
         self.assertEqual(validate_guidance_examples(definitions), [])
 
+    def test_geometry_tools_list_meets_blind_caller_bar(self) -> None:
+        from mcp_geometry_contract_shared import GEOMETRY_TOOL_IDS
+        from mcp_surface_shared import build_tool_definitions
+        from tool_access_shared import tool_pricing
+
+        definitions = {
+            str(tool.get("name") or ""): tool
+            for tool in build_tool_definitions()
+        }
+        for name in sorted(GEOMETRY_TOOL_IDS):
+            with self.subTest(tool=name):
+                definition = definitions[name]
+                guidance = (definition.get("_meta") or {}).get("com.daedalmap/blind-caller") or {}
+                access = (definition.get("_meta") or {}).get("com.daedalmap/access") or {}
+                self.assertTrue(guidance.get("question_answered"))
+                self.assertTrue(guidance.get("does_not_do"))
+                self.assertTrue(guidance.get("wrong_input_first_call"))
+                self.assertTrue(guidance.get("next_tools"))
+                self.assertEqual(guidance.get("full_help", {}).get("tool"), "get_tool_help")
+                self.assertIn("free", access.get("limits", {}))
+                self.assertTrue(access.get("above_free_limit"))
+                self.assertEqual(access.get("pricing"), tool_pricing(name))
+
+        convert_description = definitions["convert_reference"]["description"].lower()
+        self.assertNotIn("no payment required", convert_description)
+        self.assertIn("requires payment", convert_description)
+
     def test_cached_retired_data_tool_gets_replacement_and_help_path(self) -> None:
         envelope = _tool_call_envelope(
             self.client,

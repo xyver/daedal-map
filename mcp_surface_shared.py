@@ -431,7 +431,7 @@ def build_tool_definitions(*, include_paused: bool = False) -> list[dict]:
         {
             "name": "convert_reference",
             "title": "Convert Geographic Reference",
-            "description": "The single geographic reference converter. Converts one reference, or a bounded list, through DaedalMap loc_id: X -> loc_id -> Y. Omit to_system to enter the loc_id universe; provide it for any-to-any conversion. Use get_pack first when the family or country-specific system is unknown. No payment required.",
+            "description": "The single geographic reference converter. Converts one reference, or a bounded list, through DaedalMap loc_id: X -> loc_id -> Y. Omit to_system to enter the loc_id universe; provide it for any-to-any conversion. Use get_pack first when the family or country-specific system is unknown. The tools/list access metadata states the current free, account, and paid item allowances; exceeding an included allowance requires payment and exceeding the paid ceiling returns a typed cap error.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -529,7 +529,7 @@ def build_tool_definitions(*, include_paused: bool = False) -> list[dict]:
         {
             "name": "get_geometry",
             "title": "Retrieve Shapes for Known loc_ids",
-            "description": "Shape availability and bounded coordinate retrieval only: use when you already have exact loc_ids, or one administrative parent_loc_id plus target admin_level. The default fast preflight returns has_shape, shape metadata, centroid, and bounding box; set include_polygon=true only for GeoJSON coordinates. Use get_loc_id_info for hierarchy, identity, catalog coverage, or crosswalk facts; get_geometry does not return those place details. Administrative scope queries stay within the optimized Admin Spine layout, while independent geometry families require exact loc_ids. Historical geometry is returned first and successors are never substituted automatically. No payment required.",
+            "description": "Shape availability and bounded coordinate retrieval only: use when you already have exact loc_ids, or one administrative parent_loc_id plus target admin_level. The default fast preflight returns has_shape, shape metadata, centroid, and bounding box; set include_polygon=true only for GeoJSON coordinates. Use get_loc_id_info for hierarchy, identity, catalog coverage, or crosswalk facts; get_geometry does not return those place details. Administrative scope queries stay within the optimized Admin Spine layout, while independent geometry families require exact loc_ids. Historical geometry is returned first and successors are never substituted automatically. Access is selected-material dependent: tools/list metadata gives the lane ceilings, while the chosen geometry bank decides whether payment is required.",
             "inputSchema": {
                 "type": "object",
                 "properties": {

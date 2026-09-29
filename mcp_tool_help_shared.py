@@ -131,6 +131,57 @@ TOOL_GUIDANCE: dict[str, dict[str, Any]] = {
     ),
 }
 
+
+# A tools/list caller must be able to recover when the value in hand belongs
+# to a different geography workflow. Keep these redirects beside the richer
+# help guidance so the published definition and get_tool_help cannot drift.
+GEOMETRY_WRONG_INPUT_FIRST_CALL: dict[str, list[dict[str, str]]] = {
+    "resolve_point": [
+        {"when": "outside identifier or place name", "tool": "convert_reference"},
+        {"when": "unknown dataset columns", "tool": "identify_dataset_geography"},
+    ],
+    "resolve_deep_point": [
+        {"when": "coordinate without a shallow loc_id", "tool": "resolve_point"},
+    ],
+    "get_loc_id_info": [
+        {"when": "coordinate", "tool": "resolve_point"},
+        {"when": "outside identifier or place name", "tool": "convert_reference"},
+    ],
+    "identify_dataset_geography": [
+        {"when": "one already-selected identifier column", "tool": "identify_reference_system"},
+    ],
+    "identify_reference_system": [
+        {"when": "dataset whose geography column is unknown", "tool": "identify_dataset_geography"},
+    ],
+    "convert_reference": [
+        {"when": "coordinate", "tool": "resolve_point"},
+        {"when": "dataset whose geography column is unknown", "tool": "identify_dataset_geography"},
+        {"when": "unknown country family or reference system", "tool": "get_pack"},
+    ],
+    "compare_geographies": [
+        {"when": "outside identifiers or names", "tool": "convert_reference"},
+    ],
+    "get_geometry": [
+        {"when": "coordinate", "tool": "resolve_point"},
+        {"when": "outside identifier or place name", "tool": "convert_reference"},
+        {"when": "loc_id identity or hierarchy details", "tool": "get_loc_id_info"},
+    ],
+}
+
+
+def blind_caller_publication_guidance(tool_name: str) -> dict[str, Any]:
+    """Compact semantic routing fields suitable for tools/list metadata."""
+    name = str(tool_name or "").strip()
+    guidance = TOOL_GUIDANCE.get(name) or {}
+    use_when = list(guidance.get("use_when") or ())
+    return {
+        "question_answered": use_when[0] if use_when else "",
+        "does_not_do": list(guidance.get("do_not_use_for") or ()),
+        "wrong_input_first_call": deepcopy(GEOMETRY_WRONG_INPUT_FIRST_CALL.get(name) or []),
+        "next_tools": list(guidance.get("recommended_next_calls") or ()),
+        "full_help": {"tool": "get_tool_help", "arguments": {"tool_name": name}},
+    }
+
 def geometry_topic_help_payload(
     question: str | None = None,
     *,

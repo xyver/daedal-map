@@ -10,6 +10,7 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any
 
+from mcp_tool_help_shared import blind_caller_publication_guidance
 from tool_access_shared import (
     tool_account_item_limit,
     tool_capability_id,
@@ -252,12 +253,20 @@ def geometry_tool_publication_meta(tool_name: str) -> dict[str, Any] | None:
         "account": tool_account_item_limit(name),
         "paid": tool_paid_item_limit(name),
     }
+    pricing = tool_pricing(name)
+    if pricing.startswith("paid"):
+        above_free_limit = "payment_required; requests above the paid limit return a typed cap error"
+    elif pricing == "by_material":
+        above_free_limit = "the selected material policy decides whether payment is required; requests above its lane limit return a typed cap error"
+    else:
+        above_free_limit = "typed cap error; split or narrow the request"
     access = {
         "contract_version": "1.0.0",
         "capability_id": tool_capability_id(name),
         "family": tool_family(name),
-        "pricing": tool_pricing(name),
+        "pricing": pricing,
         "limits": {key: value for key, value in limits.items() if value is not None},
+        "above_free_limit": above_free_limit,
         "meter": tool_meter(name),
         "pricing_version": tool_pricing_version(name),
         "price_micro_usd": tool_price_micro_usd(name),
@@ -265,6 +274,7 @@ def geometry_tool_publication_meta(tool_name: str) -> dict[str, Any] | None:
     }
     return {
         "com.daedalmap/access": access,
+        "com.daedalmap/blind-caller": blind_caller_publication_guidance(name),
         "com.daedalmap/geometry-contract": {
             "contract_version": "1.0.0",
             "input_family": input_families[name],
