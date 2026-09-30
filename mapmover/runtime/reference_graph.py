@@ -1,8 +1,8 @@
 """Read the integrated geographic reference graph selected for this runtime.
 
 Hosted deployments use their configured published data tree. Local processes
-may point ``GEOGRAPHY_REFERENCE_GRAPH_ROOT`` at an unpublished candidate under
-``DATA_ROOT`` without changing MCP contracts or uploading local data.
+may point ``GEOGRAPHY_REFERENCE_GRAPH_ROOT`` at one unpublished candidate or
+a JSON array of candidate roots for a country batch without uploading data.
 """
 
 from __future__ import annotations
@@ -150,6 +150,29 @@ def _missing_graph_files(
 def _discover_roots(data_root_text: str, override: str, cloud_mode: bool) -> tuple[tuple[str, str], ...]:
     data_root = Path(data_root_text)
     if override:
+        if override.startswith("["):
+            if cloud_mode:
+                raise ValueError("multi-country graph override is local-only")
+            values = json.loads(override)
+            if not isinstance(values, list) or not values or any(
+                not isinstance(value, str) or not value.strip() for value in values
+            ):
+                raise ValueError("candidate graph override must be a nonempty path array")
+            selected: list[tuple[str, str]] = []
+            seen: set[str] = set()
+            for value in values:
+                path = Path(value)
+                resolved = path.resolve() if path.is_absolute() else (data_root / path).resolve()
+                if data_root.resolve() not in resolved.parents:
+                    raise ValueError("candidate graph root escaped DATA_ROOT")
+                if _missing_graph_files(str(resolved), cloud_mode):
+                    raise ValueError(f"candidate graph root is incomplete: {resolved}")
+                country = _country_for_root(resolved)
+                if not country or country in seen:
+                    raise ValueError("candidate graph roots have missing or duplicate countries")
+                seen.add(country)
+                selected.append((country, str(resolved)))
+            return tuple(sorted(selected))
         path = Path(override)
         resolved = path.resolve() if path.is_absolute() else (data_root / path).resolve()
         country = _country_for_root(resolved)

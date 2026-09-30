@@ -34,6 +34,28 @@ from mapmover.runtime import reference_graph
 
 
 class ReferenceGraphRuntimeTests(unittest.TestCase):
+    def test_local_override_selects_two_candidate_graphs_without_catalog_promotion(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            data_root = Path(directory)
+            roots = []
+            for country in ("GBR", "MEX"):
+                root = data_root / "geometry" / "countries" / country / "reference_graph"
+                root.mkdir(parents=True)
+                (root / "manifest.json").write_text(json.dumps({
+                    "country": country, "status": "PASS", "release_id": f"{country.lower()}_candidate",
+                }), encoding="utf-8")
+                for name in ("identity_partitions.parquet", "endpoint_families.parquet"):
+                    (root / name).write_bytes(b"test")
+                roots.append(root)
+            selected = reference_graph._discover_roots(
+                str(data_root), json.dumps([str(root) for root in roots]), False,
+            )
+            self.assertEqual([country for country, _ in selected], ["GBR", "MEX"])
+            with self.assertRaisesRegex(ValueError, "duplicate countries"):
+                reference_graph._discover_roots(
+                    str(data_root), json.dumps([str(roots[0]), str(roots[0])]), False,
+                )
+
     def test_discovery_index_allows_authoring_global_graph_absent_from_hosted_runtime(self) -> None:
         manifest = {
             "status": "PASS",
