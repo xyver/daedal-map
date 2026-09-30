@@ -19,10 +19,8 @@ export function getExploreDefaultOverlayIds() {
     // this list is intentionally broad: it keeps the tray populated even when
     // the anonymous overlay tree is empty but pack defaults are available.
     'economy',
-    'currency',
     'worldpop',
     'nri',
-    'distributed_manufacturing',
     'cejst',
     'usa_industrial_activity',
     'usa_opportunity_zones',

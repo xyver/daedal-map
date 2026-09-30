@@ -867,7 +867,7 @@ class BlindCallerHelpTests(unittest.TestCase):
             self.client,
             "get_tool_help",
             {"tool_name": "resolve_point"},
-            path="/mcp/currency",
+            path="/mcp/earthquakes",
         )
         payload = envelope["result"]["structuredContent"]
         self.assertFalse(payload["ok"])

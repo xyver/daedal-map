@@ -22,26 +22,6 @@ from tool_access_shared import (
 # import it safely.
 
 PACK_REGISTRY: dict[str, dict] = {
-    "currency": {
-        "display_name": "currency",
-        "pricing": "free",
-        "mcp_tool_allowlist": ("get_catalog", "get_pack", "get_data"),
-        "mcp_prompt_allowlist": ("fx_history_for_country",),
-        "mcp_name": "com.daedalmap/currency",
-        "mcp_title": "DaedalMap Historical FX Rates",
-        "mcp_description": "Historical daily FX rates for 100+ currencies normalized to USD, from 1940 to present. Free - no payment required. Supports daily, weekly, and monthly granularity.",
-        "registry_meta": {
-            "categories": ["economics", "data", "geospatial"],
-            "highlights": [
-                "Historical foreign exchange rate comparisons",
-                "Country-level FX lookups tied to DaedalMap loc_id geography",
-                "Free structured MCP access for historical currency data",
-            ],
-        },
-        "routing": {
-            "preferred_tool": "get_data",
-        },
-    },
     "earthquakes": {
         "display_name": "earthquakes",
         "pricing": "paid_x402_base_usdc",
@@ -194,46 +174,6 @@ PACK_REGISTRY: dict[str, dict] = {
             "highlights": [
                 "Curated World Development Indicators across seven category sources",
                 "Free MCP access for economic, health, education, and environment metrics",
-                "Country-level lookups tied to DaedalMap loc_id geography",
-            ],
-        },
-        "routing": {
-            "preferred_tool": "get_data",
-        },
-    },
-    "distributed_manufacturing": {
-        "display_name": "Distributed Manufacturing",
-        "pricing": "free",
-        "mcp_tool_allowlist": ("get_catalog", "get_pack", "get_data"),
-        "mcp_name": "com.daedalmap/distributed-manufacturing",
-        "mcp_title": "DaedalMap Distributed Manufacturing Locations",
-        "mcp_description": "Global fab lab, makerspace, hackerspace, Precious Plastic, and Prusa World location data normalized to the DaedalMap loc_id spine. Free.",
-        "registry_search_alias": "distributed-manufacturing",
-        "registry_meta": {
-            "categories": ["manufacturing", "geospatial", "data"],
-            "highlights": [
-                "Global registry of open manufacturing and maker facilities",
-                "Free MCP access for country and facility-type location queries",
-                "Point locations tied to DaedalMap loc_id geography",
-            ],
-        },
-        "routing": {
-            "preferred_tool": "get_data",
-        },
-    },
-    "owid": {
-        "display_name": "Our World in Data",
-        "pricing": "free",
-        "mcp_tool_allowlist": ("get_catalog", "get_pack", "get_data"),
-        "mcp_name": "com.daedalmap/our-world-in-data",
-        "mcp_title": "DaedalMap Our World in Data",
-        "mcp_description": "Our World in Data as curated country-year panels across twelve topic sources: CO2 and greenhouse gases, emissions by sector, energy, health and mortality, population, food and agriculture, education, poverty and inequality, water and sanitation, labor and gender, land and biodiversity, and governance - normalized to the DaedalMap loc_id spine with tiered metrics. Free.",
-        "registry_search_alias": "our-world-in-data",
-        "registry_meta": {
-            "categories": ["development", "environment", "health", "data", "geospatial"],
-            "highlights": [
-                "Curated Our World in Data country-year panels across twelve topic sources",
-                "Free MCP access for emissions, energy, health, population, and poverty metrics",
                 "Country-level lookups tied to DaedalMap loc_id geography",
             ],
         },
