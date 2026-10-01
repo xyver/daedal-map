@@ -6,6 +6,7 @@ from unittest import mock
 
 from mapmover.memory_diagnostics import (
     _proc_kib, bounded_size, loaded_dataframe_cache_memory, loaded_owner_memory,
+    process_memory_snapshot, traced_allocation_top,
 )
 
 
@@ -72,3 +73,23 @@ class MemoryDiagnosticsTests(unittest.TestCase):
         self.assertEqual(report['query_results']['expired_bytes'], 200)
         self.assertEqual(report['query_results']['permanent_bytes'], 300)
         self.assertEqual(report['geometry']['bytes'], 400)
+
+    def test_trace_detail_does_not_start_tracing(self):
+        with mock.patch('mapmover.memory_diagnostics.tracemalloc.is_tracing', return_value=False), mock.patch(
+            'mapmover.memory_diagnostics.tracemalloc.start'
+        ) as start:
+            report = traced_allocation_top()
+        self.assertFalse(report['enabled'])
+        start.assert_not_called()
+
+    def test_process_snapshot_reads_loaded_arrow_pool_without_importing_arrow(self):
+        pool = SimpleNamespace(backend_name='mimalloc', bytes_allocated=lambda: 123,
+                               max_memory=lambda: 456)
+        arrow = SimpleNamespace(default_memory_pool=lambda: pool)
+        with mock.patch.dict(sys.modules, {'pyarrow': arrow}), mock.patch(
+            'mapmover.memory_diagnostics.tracemalloc.is_tracing', return_value=True
+        ), mock.patch('mapmover.memory_diagnostics.tracemalloc.get_traced_memory', return_value=(10, 20)):
+            report = process_memory_snapshot()
+        self.assertEqual(report['arrow_memory_pool']['allocated_bytes'], 123)
+        self.assertEqual(report['arrow_memory_pool']['backend'], 'mimalloc')
+        self.assertEqual(report['python_tracemalloc']['current_bytes'], 10)

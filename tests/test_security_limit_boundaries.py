@@ -104,12 +104,26 @@ class RateLimiterDiagnosticsTests(unittest.TestCase):
         limiter.check("private-user-key", limit=5, window_seconds=60)
         limiter.check("private-user-key", limit=5, window_seconds=60)
         limiter.check("another-key", limit=5, window_seconds=60)
-        self.assertEqual(limiter.stats(), {
+        stats = limiter.stats()
+        self.assertEqual({key: stats[key] for key in (
+            "bucket_count", "nonempty_bucket_count", "event_count", "largest_bucket_events"
+        )}, {
             "bucket_count": 2,
             "nonempty_bucket_count": 2,
             "event_count": 3,
             "largest_bucket_events": 2,
         })
+        self.assertGreater(stats["tracked_storage_bytes_shallow"], 0)
+
+    def test_expired_caller_buckets_are_removed_without_resetting_live_limits(self) -> None:
+        limiter = SlidingWindowRateLimiter()
+        with mock.patch("mapmover.security.time.time", return_value=100.0):
+            self.assertEqual(limiter.check("stale", limit=1, window_seconds=30), (True, 0))
+            self.assertEqual(limiter.check("live", limit=1, window_seconds=120), (True, 0))
+        with mock.patch("mapmover.security.time.time", return_value=161.0):
+            self.assertEqual(limiter.check("new", limit=1, window_seconds=30), (True, 0))
+            self.assertEqual(limiter.check("live", limit=1, window_seconds=120)[0], False)
+        self.assertEqual(limiter.stats()["bucket_count"], 2)
 
 
 if __name__ == "__main__":

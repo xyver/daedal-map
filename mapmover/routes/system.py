@@ -5355,7 +5355,7 @@ async def debug_memory(req: Request):
     import time
     from mapmover.duckdb_helpers import _CACHE, _CACHE_LOCK, DEFAULT_CACHE_TTL
     from mapmover.geometry_handlers import _country_parquet_cache, _country_parquet_cache_lock
-    from mapmover.memory_diagnostics import loaded_dataframe_cache_memory, process_memory_snapshot
+    from mapmover.memory_diagnostics import loaded_dataframe_cache_memory, process_memory_snapshot, traced_allocation_top
     from mapmover.runtime.published_artifacts import artifact_cache_status
 
     now = time.monotonic()
@@ -5429,6 +5429,11 @@ async def debug_memory(req: Request):
         "process_memory": process_memory_snapshot(),
         "runtime_owner_estimates": runtime_owner_estimates,
         "query_pool_memory": query_pool_memory,
+        "rate_limiter": rate_limiter.stats(),
+        "traced_allocations": (
+            traced_allocation_top() if req.query_params.get("inspect_traces") == "1"
+            else {"sampled": False, "note": "Use inspect_traces=1 on a process launched with tracing enabled."}
+        ),
     }
 
 

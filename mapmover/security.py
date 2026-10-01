@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import ipaddress
 import threading
+import sys
 import time
 from collections import defaultdict, deque
 from urllib.parse import urlparse
@@ -204,6 +205,8 @@ class SlidingWindowRateLimiter:
 
     def __init__(self):
         self._events: dict[str, Deque[float]] = defaultdict(deque)
+        self._expires_at: dict[str, float] = {}
+        self._next_cleanup_at = 0.0
         self._lock = threading.Lock()
 
     def check(self, key: str, limit: int, window_seconds: int) -> tuple[bool, int]:
@@ -211,7 +214,15 @@ class SlidingWindowRateLimiter:
         cutoff = now - window_seconds
 
         with self._lock:
-            bucket = self._events[key]
+            if now >= self._next_cleanup_at:
+                for stale_key, expires_at in list(self._expires_at.items()):
+                    if expires_at <= now:
+                        self._events.pop(stale_key, None)
+                        del self._expires_at[stale_key]
+                self._next_cleanup_at = now + 60
+            bucket = self._events.get(key)
+            if bucket is None:
+                bucket = deque()
             while bucket and bucket[0] <= cutoff:
                 bucket.popleft()
 
@@ -220,17 +231,27 @@ class SlidingWindowRateLimiter:
                 return False, retry_after
 
             bucket.append(now)
+            self._events[key] = bucket
+            self._expires_at[key] = now + window_seconds
             return True, 0
 
     def stats(self) -> dict[str, int]:
-        """Return cardinality only; limiter identities are intentionally omitted."""
+        """Return aggregate shallow storage, never limiter identities."""
         with self._lock:
             sizes = [len(bucket) for bucket in self._events.values()]
+            storage_bytes = sys.getsizeof(self._events) + sys.getsizeof(self._expires_at)
+            for key, bucket in self._events.items():
+                # sys.getsizeof(deque) includes its backing blocks. Float event
+                # objects and identity strings are separately owned here.
+                storage_bytes += sys.getsizeof(key) + sys.getsizeof(bucket)
+                storage_bytes += sum(sys.getsizeof(event) for event in bucket)
+            storage_bytes += sum(sys.getsizeof(expiry) for expiry in self._expires_at.values())
         return {
             "bucket_count": len(sizes),
             "nonempty_bucket_count": sum(1 for size in sizes if size),
             "event_count": sum(sizes),
             "largest_bucket_events": max(sizes, default=0),
+            "tracked_storage_bytes_shallow": storage_bytes,
         }
 
 

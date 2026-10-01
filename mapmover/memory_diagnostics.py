@@ -6,6 +6,7 @@ from pathlib import Path
 import sys
 import time
 import hashlib
+import tracemalloc
 
 OWNERS = (
     ('ops_state', 'mapmover.ops_orchestrator_runtime', '_LIVE_STATE_CACHE'),
@@ -113,6 +114,29 @@ def process_memory_snapshot() -> dict:
         },
         'glibc_allocator': glibc_allocator_snapshot(),
     }
+    if tracemalloc.is_tracing():
+        current, peak = tracemalloc.get_traced_memory()
+        result['python_tracemalloc'] = {
+            'enabled': True, 'current_bytes': current, 'peak_bytes': peak,
+            'note': 'Only allocations traced after tracing started; native library allocations may be absent.',
+        }
+    else:
+        result['python_tracemalloc'] = {'enabled': False}
+    arrow = sys.modules.get('pyarrow')
+    if arrow is not None and hasattr(arrow, 'default_memory_pool'):
+        try:
+            pool = arrow.default_memory_pool()
+            max_memory = pool.max_memory()
+            result['arrow_memory_pool'] = {
+                'loaded': True, 'backend': pool.backend_name,
+                'allocated_bytes': int(pool.bytes_allocated()),
+                'max_allocated_bytes': None if max_memory is None else int(max_memory),
+                'note': 'Arrow default pool only; excludes other pools and allocator-retained pages.',
+            }
+        except (AttributeError, RuntimeError, TypeError, ValueError) as exc:
+            result['arrow_memory_pool'] = {'loaded': True, 'error': type(exc).__name__}
+    else:
+        result['arrow_memory_pool'] = {'loaded': False}
     try:
         result['status_kib'] = _proc_kib('/proc/self/status', _STATUS_FIELDS)
     except (OSError, ValueError) as exc:
@@ -132,6 +156,22 @@ def process_memory_snapshot() -> dict:
     except (OSError, ValueError) as exc:
         result['cgroup_events_error'] = str(exc)
     return result
+
+
+def traced_allocation_top(*, limit=15) -> dict:
+    """Read existing tracing state; never turn tracing on in a live process."""
+    if not tracemalloc.is_tracing():
+        return {'enabled': False, 'instruction': 'Start the process with PYTHONTRACEMALLOC=10 for a diagnostic instance.'}
+    snapshot = tracemalloc.take_snapshot()
+    rows = []
+    for stat in snapshot.statistics('lineno')[:limit]:
+        frame = stat.traceback[0]
+        rows.append({'file': frame.filename, 'line': frame.lineno,
+                     'size_bytes': stat.size, 'block_count': stat.count})
+    current, peak = tracemalloc.get_traced_memory()
+    return {'enabled': True, 'current_bytes': current, 'peak_bytes': peak,
+            'top_allocations': rows,
+            'note': 'Traced Python allocations only. Do not sum with RSS, Arrow pool, or glibc totals.'}
 
 
 def loaded_dataframe_cache_memory() -> dict:

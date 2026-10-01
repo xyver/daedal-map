@@ -62,6 +62,8 @@ def sample_memory():
     row['smaps_rollup'] = process.get('smaps_rollup_kib', {})
     row['glibc_allocator'] = process.get('glibc_allocator', {})
     row['python_runtime'] = process.get('python_runtime', {})
+    row['python_tracemalloc'] = process.get('python_tracemalloc', {'enabled': False})
+    row['arrow_memory_pool'] = process.get('arrow_memory_pool', {'loaded': False})
     row['cgroup_current_bytes'] = process.get('cgroup_current_bytes')
     row['cgroup_peak_bytes'] = process.get('cgroup_peak_bytes')
     row['cgroup'] = process.get('cgroup_stat', {})
