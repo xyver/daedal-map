@@ -183,7 +183,7 @@ COMMON REQUESTS
 "Refresh feeds"
 
 START HERE
-Ask about earthquakes, alerts, storms, volcanoes, wildfires, tsunamis, aurora, or currency.
+Ask about earthquakes, alerts, storms, volcanoes, wildfires, tsunamis, or aurora.
 Or open account settings to change which feeds Ops watches.`;
   }
 
