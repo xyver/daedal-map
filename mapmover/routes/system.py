@@ -1738,11 +1738,22 @@ def prewarm_public_pack_catalog() -> None:
 
 
 def _current_agent_pack_ids() -> list[str]:
+    # Same authority as /api/v1/catalog. The app-visible pack list omits packs
+    # without an Explore surface (for example tsunamis and un_sdg), which made
+    # the server card and guide undercount the agent-ready packs.
+    from mapmover.data_loading import load_api_catalog
+
     pack_ids = {
         str(pack.get("pack_id") or "").strip()
-        for pack in _build_public_pack_list(mcp_only=True)
-        if str(pack.get("pack_id") or "").strip()
+        for pack in (load_api_catalog() or {}).get("packs", [])
+        if isinstance(pack, dict) and str(pack.get("pack_id") or "").strip()
     }
+    if not pack_ids:
+        pack_ids = {
+            str(pack.get("pack_id") or "").strip()
+            for pack in _build_public_pack_list(mcp_only=True)
+            if str(pack.get("pack_id") or "").strip()
+        }
     return sorted(pack_ids)
 
 
@@ -1926,7 +1937,7 @@ def _build_mcp_server_card_payload(pack_id: str | None = None) -> dict:
             },
         ]
     metadata = {
-        "loc_id_guide_url": _docs_url("/docs/loc-id"),
+        "loc_id_guide_url": _docs_url("/loc_id"),
         "examples_url": _docs_url("/docs/agent-examples"),
         "tool_count": len(tools),
     }
@@ -1994,7 +2005,7 @@ def _build_apis_json_payload() -> dict:
                 "properties": [
                     {"type": "x-mcp-transport", "value": "streamable-http"},
                     {"type": "x-mcp-registry", "value": "com.daedalmap/county-map"},
-                    {"type": "x-loc-id-guide", "url": _docs_url("/docs/loc-id")},
+                    {"type": "x-loc-id-guide", "url": _docs_url("/loc_id")},
                 ],
             },
         ],

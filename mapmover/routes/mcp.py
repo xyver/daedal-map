@@ -2228,7 +2228,7 @@ def _read_resource(uri: str, pack_id: str | None = None) -> dict[str, Any] | Non
             uri,
             (
                 "# loc_id Guide\n\n"
-                f"Read the full guide at {site_url}/docs/loc-id.\n\n"
+                f"Read the full guide at {site_url}/loc_id.\n\n"
                 "loc_id is the shared geographic key used across packs. Country and hierarchical regional ids are common, "
                 "but tsunami examples can also use geometry-backed named sea/ocean ids such as XSM."
             ),
@@ -2258,7 +2258,7 @@ def _read_resource(uri: str, pack_id: str | None = None) -> dict[str, Any] | Non
                 f"- Site docs index: {site_url}/docs\n"
                 f"- For AI agents: {site_url}/agents\n"
                 f"- Agent Examples: {site_url}/docs/agent-examples\n"
-                f"- loc_id Guide: {site_url}/docs/loc-id\n"
+                f"- loc_id Guide: {site_url}/loc_id\n"
                 f"- MCP endpoint: {app_url}/mcp\n"
                 f"- Guide endpoint: {app_url}/api/v1/guide\n"
                 f"- Catalog endpoint: {app_url}/api/v1/catalog\n"

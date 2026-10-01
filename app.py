@@ -38,7 +38,13 @@ from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
 from access_policy_shared import RUNTIME_POLICY_FILE_ENV, surface_rate_limit
-from agent_surface_shared import render_app_llms_txt
+from agent_surface_shared import (
+    DEFAULT_APP_ORIGIN,
+    render_app_llms_txt,
+    render_robots_txt,
+    render_security_txt,
+    set_pack_id_provider,
+)
 from mapmover import initialize_catalog, load_conversions, logger
 from mapmover.auth_context import get_authenticated_user, get_authenticated_user_async
 from mapmover.artifact_access import get_artifact_token_record
@@ -93,7 +99,6 @@ if sys.stderr.encoding != "utf-8":
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
 BASE_DIR = Path(__file__).resolve().parent
-SECURITY_TXT_PATH = BASE_DIR / "static" / "security.txt"
 
 # Dashboard-activated policy is runtime state, never generated catalog state.
 # An explicit JSON/file env still has higher precedence for emergency deploys.
@@ -402,6 +407,21 @@ async def lifespan(app: FastAPI):
         stop_memory_logging()
 
 
+def _api_catalog_pack_ids() -> list[str]:
+    # Machine-facing text follows the same prewarmed catalog that
+    # /api/v1/catalog serves; the code registry is only the fallback.
+    from mapmover.data_loading import load_api_catalog
+
+    return [
+        str(pack.get("pack_id") or "").strip()
+        for pack in (load_api_catalog() or {}).get("packs", [])
+        if isinstance(pack, dict) and str(pack.get("pack_id") or "").strip()
+    ]
+
+
+set_pack_id_provider(_api_catalog_pack_ids)
+
+
 app = FastAPI(
     title="County Map API",
     description="Geographic data exploration API",
@@ -707,17 +727,8 @@ app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="stat
 
 @app.get("/robots.txt", include_in_schema=False)
 async def robots_txt():
-    content = (
-        "User-agent: *\n"
-        "Allow: /\n\n"
-        "User-agent: GPTBot\n"
-        "Allow: /\n\n"
-        "User-agent: ClaudeBot\n"
-        "Allow: /\n\n"
-        "User-agent: GoogleBot\n"
-        "Allow: /\n"
-    )
-    return PlainTextResponse(content)
+    # The app host has no sitemap; human pages live on www.
+    return PlainTextResponse(render_robots_txt(llms_url=f"{DEFAULT_APP_ORIGIN}/llms.txt"))
 
 
 @app.get("/llms.txt", include_in_schema=False)
@@ -771,12 +782,12 @@ async def maps_key_config(request: Request):
 
 @app.get("/security.txt", include_in_schema=False)
 async def security_txt():
-    return FileResponse(SECURITY_TXT_PATH, media_type="text/plain; charset=utf-8")
+    return PlainTextResponse(render_security_txt(canonical_url=f"{DEFAULT_APP_ORIGIN}/.well-known/security.txt"))
 
 
 @app.get("/.well-known/security.txt", include_in_schema=False)
 async def well_known_security_txt():
-    return FileResponse(SECURITY_TXT_PATH, media_type="text/plain; charset=utf-8")
+    return PlainTextResponse(render_security_txt(canonical_url=f"{DEFAULT_APP_ORIGIN}/.well-known/security.txt"))
 
 
 @app.get("/.well-known/402index-verify.txt", include_in_schema=False)

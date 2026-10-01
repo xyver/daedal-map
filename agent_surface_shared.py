@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from html import escape
+from typing import Callable, Iterable
 
 from pack_registry_shared import (
     agent_data_workflow,
@@ -15,21 +17,56 @@ from pack_pricing_shared import FREE_PACK_IDS, PAID_PACK_IDS
 
 CURRENT_HOSTED_PACK_IDS: tuple[str, ...] = published_pack_ids()
 
+# Canonical public origins. The apex host 301s to www, so machine-facing files
+# always link www directly.
+DEFAULT_SITE_ORIGIN = "https://www.daedalmap.com"
+DEFAULT_APP_ORIGIN = "https://app.daedalmap.com"
+LOC_ID_GUIDE_PATH = "/loc_id"
+CONTACT_EMAIL = "contact@daedalmap.com"
+
+
+_PACK_ID_PROVIDER: Callable[[], Iterable[str]] | None = None
+
+
+def set_pack_id_provider(provider: Callable[[], Iterable[str]] | None) -> None:
+    """Register the host's published-catalog pack ids as the source of truth.
+
+    The website passes the same prewarmed catalog records that /packs and the
+    sitemap use; the app passes its prewarmed API catalog. Without a provider,
+    or when it returns nothing (catalog not loaded), the code registry is the
+    fallback so these files never render empty.
+    """
+    global _PACK_ID_PROVIDER
+    _PACK_ID_PROVIDER = provider
+
 
 def current_pack_ids() -> tuple[str, ...]:
+    if _PACK_ID_PROVIDER is not None:
+        try:
+            ids = tuple(dict.fromkeys(str(pid).strip() for pid in _PACK_ID_PROVIDER() if str(pid or "").strip()))
+        except Exception:
+            ids = ()
+        if ids:
+            return ids
     return CURRENT_HOSTED_PACK_IDS
 
 
+def facade_pack_ids() -> tuple[str, ...]:
+    """Published packs that also have an MCP facade in the registry."""
+    registered = set(CURRENT_HOSTED_PACK_IDS)
+    return tuple(pack_id for pack_id in current_pack_ids() if pack_id in registered)
+
+
 def free_pack_ids() -> tuple[str, ...]:
-    return tuple(pack_id for pack_id in CURRENT_HOSTED_PACK_IDS if pack_id in FREE_PACK_IDS)
+    return tuple(pack_id for pack_id in current_pack_ids() if pack_id in FREE_PACK_IDS)
 
 
 def paid_pack_ids() -> tuple[str, ...]:
-    return tuple(pack_id for pack_id in CURRENT_HOSTED_PACK_IDS if pack_id in PAID_PACK_IDS)
+    return tuple(pack_id for pack_id in current_pack_ids() if pack_id in PAID_PACK_IDS)
 
 
 def pack_count() -> int:
-    return len(CURRENT_HOSTED_PACK_IDS)
+    return len(current_pack_ids())
 
 
 def pack_label(pack_id: str) -> str:
@@ -79,14 +116,34 @@ def render_for_agents_registry_quickstart() -> str:
     )
 
 
+def example_free_pack_ids(limit: int = 4) -> tuple[str, ...]:
+    """Current free packs to name in examples; never a hand-written list."""
+    return free_pack_ids()[:limit]
+
+
+def example_paid_pack_ids(limit: int = 2) -> tuple[str, ...]:
+    return paid_pack_ids()[:limit]
+
+
+def example_facade_ids(limit: int = 6) -> tuple[str, ...]:
+    return facade_pack_ids()[:limit]
+
+
+def _code_list(items, *, prefix: str = "", conjunction: str = "or") -> str:
+    quoted = [f"`{prefix}{item}`" for item in items]
+    if len(quoted) <= 1:
+        return "".join(quoted)
+    return ", ".join(quoted[:-1]) + f", {conjunction} {quoted[-1]}"
+
+
 def current_pack_code_bullets() -> str:
-    return "\n".join(f"- `{pack_id}`" for pack_id in CURRENT_HOSTED_PACK_IDS)
+    return "\n".join(f"- `{pack_id}`" for pack_id in current_pack_ids())
 
 
 def facade_link_bullets(app_origin: str) -> str:
     lines: list[str] = []
     base = app_origin.rstrip("/")
-    for pack_id in CURRENT_HOSTED_PACK_IDS:
+    for pack_id in facade_pack_ids():
         line = f"- [{pack_id}]({base}/mcp/{pack_id})"
         alias = pack_registry_alias(pack_id)
         if alias:
@@ -97,13 +154,13 @@ def facade_link_bullets(app_origin: str) -> str:
 
 def facade_server_json_lines(app_origin: str) -> str:
     base = app_origin.rstrip("/")
-    return "\n".join(f"- `GET {base}/mcp/{pack_id}/server.json`" for pack_id in CURRENT_HOSTED_PACK_IDS)
+    return "\n".join(f"- `GET {base}/mcp/{pack_id}/server.json`" for pack_id in facade_pack_ids())
 
 
 def facade_transport_lines(app_origin: str) -> str:
     base = app_origin.rstrip("/")
     lines: list[str] = []
-    for pack_id in CURRENT_HOSTED_PACK_IDS:
+    for pack_id in facade_pack_ids():
         lines.append(f"- `GET {base}/mcp/{pack_id}`")
         lines.append(f"- `POST {base}/mcp/{pack_id}`")
     return "\n".join(lines)
@@ -145,14 +202,17 @@ def geography_workflow_section() -> str:
     )
 
 
-DATA_PACK_COUNT_LABEL = "20+"
 GEOMETRY_COVERAGE_LABEL = "global baseline plus 8+ deeper countries"
+
+
+def data_pack_count_label() -> str:
+    return str(pack_count())
 
 
 def coverage_section(app_origin: str, site_origin: str) -> str:
     return (
         "## Coverage\n\n"
-        f"- Data: {DATA_PACK_COUNT_LABEL} maintained data packs across natural hazards, hazard risk, economic and business indicators, currency, population, and climate. "
+        f"- Data: {data_pack_count_label()} maintained data packs across natural hazards, hazard risk, economic, business, and development indicators, population, and climate. "
         f"Call GET {app_origin}/api/v1/catalog for the live pack index and each pack's access lane.\n"
         f"- Geometry: {GEOMETRY_COVERAGE_LABEL}. "
         f"Call `get_catalog(catalog='geometry')` or GET {app_origin}/api/v1/geometry/catalog for current country and family coverage.\n"
@@ -161,7 +221,7 @@ def coverage_section(app_origin: str, site_origin: str) -> str:
 
 
 def pack_sentence() -> str:
-    return ", ".join(CURRENT_HOSTED_PACK_IDS)
+    return ", ".join(facade_pack_ids())
 
 
 def free_vs_paid_sentence() -> str:
@@ -176,7 +236,7 @@ def agent_ai_plugin_description_for_model(*, app_origin: str, docs_origin: str, 
         "Resolve geographic references to loc_id identities, inspect relationships, discover and "
         "retrieve reusable geometry, follow published crosswalks, and query maintained data across "
         "disasters (earthquakes, tsunamis, volcanoes, "
-        "hurricanes, tornadoes, floods), FX rates, UN SDG indicators, World Factbook country "
+        "hurricanes, tornadoes, floods), UN SDG indicators, World Factbook country "
         "profiles, and World Bank development indicators. "
         f"If your runtime supports remote MCP, start with {app_origin.rstrip('/')}/mcp"
     )
@@ -206,54 +266,54 @@ def agent_ai_plugin_description_for_model(*, app_origin: str, docs_origin: str, 
     return base
 
 
-def render_app_llms_txt() -> str:
+def render_app_llms_txt(*, app_origin: str = DEFAULT_APP_ORIGIN, site_origin: str = DEFAULT_SITE_ORIGIN) -> str:
     return (
         "# DaedalMap App\n\n"
         "This host is the human-facing app at app.daedalmap.com.\n"
         "If you are an agent, crawler, or developer bot, use the MCP server or agent docs instead of the app UI.\n\n"
         "## MCP first\n"
-        "- Remote MCP server: https://app.daedalmap.com/mcp\n"
-        "- MCP server metadata: https://app.daedalmap.com/mcp/server.json\n"
+        f"- Remote MCP server: {app_origin}/mcp\n"
+        f"- MCP server metadata: {app_origin}/mcp/server.json\n"
         "- Registry identity: com.daedalmap/county-map\n"
         "- Current transport: streamable HTTP\n"
         "- MCP wraps the same discovery and execution lane as the hosted API\n\n"
         "## Agent lane\n"
-        "- Start here for agents: https://daedalmap.com/agents\n"
-        "- Developer guide: https://daedalmap.com/devs\n"
-        "- Agent examples: https://daedalmap.com/docs/agent-examples\n"
-        "- loc_id guide: https://daedalmap.com/docs/loc-id\n"
-        "- Geometry tools: https://daedalmap.com/docs/geometry-tools\n"
-        "- Full machine-readable guide: https://daedalmap.com/llms-full.txt\n\n"
+        f"- Start here for agents: {site_origin}/agents\n"
+        f"- Developer guide: {site_origin}/devs\n"
+        f"- Agent examples: {site_origin}/docs/agent-examples\n"
+        f"- loc_id guide: {site_origin}{LOC_ID_GUIDE_PATH}\n"
+        f"- Geometry tools: {site_origin}/docs/geometry-tools\n"
+        f"- Full machine-readable guide: {site_origin}/llms-full.txt\n\n"
         "## Live machine-facing endpoints\n"
-        "- GET https://app.daedalmap.com/mcp/server.json\n"
-        "- GET https://app.daedalmap.com/mcp\n"
-        "- POST https://app.daedalmap.com/mcp\n"
-        "- GET https://app.daedalmap.com/api/v1/guide\n"
-        "- GET https://app.daedalmap.com/api/v1/catalog\n"
-        "- GET https://app.daedalmap.com/api/v1/packs/{pack_id}\n"
-        "- POST https://app.daedalmap.com/api/v1/query/dataset\n\n"
+        f"- GET {app_origin}/mcp/server.json\n"
+        f"- GET {app_origin}/mcp\n"
+        f"- POST {app_origin}/mcp\n"
+        f"- GET {app_origin}/api/v1/guide\n"
+        f"- GET {app_origin}/api/v1/catalog\n"
+        f"- GET {app_origin}/api/v1/packs/{{pack_id}}\n"
+        f"- POST {app_origin}/api/v1/query/dataset\n\n"
         "## Complete public catalog snapshots\n"
-        "- Data catalog: https://app.daedalmap.com/api/v1/catalog/download\n"
-        "- Geometry discovery: https://app.daedalmap.com/api/v1/geometry/catalog\n"
+        f"- Data catalog: {app_origin}/api/v1/catalog/download\n"
+        f"- Geometry discovery: {app_origin}/api/v1/geometry/catalog\n"
         "- Use the catalog endpoints instead of crawling underlying object paths.\n\n"
-        f"{coverage_section('https://app.daedalmap.com', 'https://www.daedalmap.com')}\n"
+        f"{coverage_section(app_origin, site_origin)}\n"
         "## Geography utility tools (free)\n"
         "Free geographic reference and geometry tools: resolve coordinates and codes, inspect loc_id identities and relationships, discover published coverage, retrieve boundaries, and follow available crosswalks without flattening distinct geography families.\n"
-        f"{geography_tools_section('https://app.daedalmap.com')}\n\n"
+        f"{geography_tools_section(app_origin)}\n\n"
         "### Choose the tool by question\n"
         f"{geography_workflow_section()}\n\n"
         "## App UI\n"
-        "- Human-facing app: https://app.daedalmap.com\n"
-        "- Website and docs: https://daedalmap.com\n"
-        "- Source coverage: https://daedalmap.com/docs/source-map\n"
-        "- Data packs: https://daedalmap.com/packs\n"
+        f"- Human-facing app: {app_origin}\n"
+        f"- Website and docs: {site_origin}\n"
+        f"- Source coverage: {site_origin}/docs/source-map\n"
+        f"- Data packs: {site_origin}/packs\n"
         "- GitHub (open runtime): https://github.com/xyver/daedal-map\n\n"
         "## Crawlers and bots\n"
         "Use the MCP server and agent API lane above. request_id is optional but recommended for tracing and idempotency. Keep requests narrow and respect rate limits; broad live scans may be rejected with guidance.\n"
     )
 
 
-def render_site_llms_txt(*, app_origin: str = "https://app.daedalmap.com", site_origin: str = "https://daedalmap.com") -> str:
+def render_site_llms_txt(*, app_origin: str = DEFAULT_APP_ORIGIN, site_origin: str = DEFAULT_SITE_ORIGIN) -> str:
     return (
         "# DaedalMap\n\n"
         "> If you are an agent, crawler, or developer bot, start with the agent lane, not the consumer app.\n\n"
@@ -287,7 +347,7 @@ def render_site_llms_txt(*, app_origin: str = "https://app.daedalmap.com", site_
         "- Bots and crawlers start at `/llms.txt`\n"
         "- MCP-capable clients should use `/mcp`\n"
         "- Direct HTTP clients should use `/api/v1/guide`, `/api/v1/catalog`, `/api/v1/packs/{pack_id}`, and `/api/v1/query/dataset`\n"
-        "- Narrow pack facades such as `/mcp/currency` and `/mcp/earthquakes` are for registry discoverability, not the main product entry point\n\n"
+        f"- Narrow pack facades such as {_code_list(example_facade_ids(2), prefix='/mcp/', conjunction='and')} are for registry discoverability, not the main product entry point\n\n"
         "## Live endpoints\n\n"
         f"- [GET /mcp/server.json]({app_origin}/mcp/server.json)\n"
         f"- [GET /mcp]({app_origin}/mcp)\n"
@@ -315,14 +375,14 @@ def render_site_llms_txt(*, app_origin: str = "https://app.daedalmap.com", site_
         f"- [For AI agents]({site_origin}/agents)\n"
         f"- [Developer guide]({site_origin}/devs)\n"
         f"- [Agent Examples]({site_origin}/docs/agent-examples)\n"
-        f"- [loc_id Guide]({site_origin}/docs/loc-id)\n"
+        f"- [loc_id Guide]({site_origin}{LOC_ID_GUIDE_PATH})\n"
         f"- [Geometry Family Definitions]({site_origin}/docs/geometry-families)\n"
         f"- [Geometry Tools]({site_origin}/docs/geometry-tools)\n"
         "- [GitHub (open runtime)](https://github.com/xyver/daedal-map)\n"
     )
 
 
-def render_site_llms_full(*, app_origin: str = "https://app.daedalmap.com", site_origin: str = "https://daedalmap.com") -> str:
+def render_site_llms_full(*, app_origin: str = DEFAULT_APP_ORIGIN, site_origin: str = DEFAULT_SITE_ORIGIN) -> str:
     return (
         "# DaedalMap Bot Surface\n\n"
         "This file is the expanded machine-oriented guide to the live hosted DaedalMap bot lane.\n"
@@ -337,7 +397,7 @@ def render_site_llms_full(*, app_origin: str = "https://app.daedalmap.com", site
         f"- [For AI agents]({site_origin}/agents) - canonical public listing for agent directories, MCP clients, current packs, and first-call flow\n"
         f"- [Developer guide]({site_origin}/devs) - client setup, API keys, and payment\n"
         f"- [Agent Examples]({site_origin}/docs/agent-examples)\n"
-        f"- [loc_id Guide]({site_origin}/docs/loc-id)\n"
+        f"- [loc_id Guide]({site_origin}{LOC_ID_GUIDE_PATH})\n"
         f"- [Geometry Tools]({site_origin}/docs/geometry-tools)\n"
         f"- [Geometry Family Definitions]({site_origin}/docs/geometry-families)\n\n"
         "## Publishing and directory layers\n\n"
@@ -345,7 +405,7 @@ def render_site_llms_full(*, app_origin: str = "https://app.daedalmap.com", site
         f"- Ultimate listing: `{site_origin}/agents`\n"
         f"- Machine-readable listing: `{site_origin}/llms.txt` and `{site_origin}/llms-full.txt`\n"
         f"- Umbrella MCP: `{app_origin}/mcp`\n"
-        f"- Individual MCP facades: pack-specific endpoints such as `{app_origin}/mcp/currency`\n\n"
+        f"- Individual MCP facades: pack-specific endpoints such as `{app_origin}/mcp/{example_facade_ids(1)[0]}`\n\n"
         "Use the ultimate listing for broad directories and GitHub awesome lists. Use\n"
         "the umbrella MCP when a directory requires a direct MCP endpoint. Use the\n"
         "individual MCP facades only where pack-specific search matters, such as the\n"
@@ -385,7 +445,7 @@ def render_site_llms_full(*, app_origin: str = "https://app.daedalmap.com", site
         f"{geography_workflow_section()}\n\n"
         "## Registry summary\n\n"
         "DaedalMap is a remote MCP server and hosted geographic reference, geometry, and data API for deterministic,\n"
-        f"geography-aware queries across {DATA_PACK_COUNT_LABEL} curated data packs, with geometry covering a {GEOMETRY_COVERAGE_LABEL}.\n"
+        f"geography-aware queries across {data_pack_count_label()} curated data packs, with geometry covering a {GEOMETRY_COVERAGE_LABEL}.\n"
         "Free discovery lives at `GET /api/v1/guide`, `GET /api/v1/catalog`, and\n"
         "`GET /api/v1/packs/{pack_id}`. Execution lives at `POST /api/v1/query/dataset`.\n"
         f"{free_pack_display_csv()} are free lanes. {paid_pack_display_csv()} challenge via HTTP `402`.\n"
@@ -394,7 +454,7 @@ def render_site_llms_full(*, app_origin: str = "https://app.daedalmap.com", site
         "registry-published packs.\n\n"
         "Short bot-facing positioning:\n\n"
         "- free loc_id resolution, reference identification, geometry discovery and retrieval, and published crosswalk tools\n"
-        "- remote MCP server for earthquake, tsunami, volcano, hurricane, flood, tornado, SDG, World Factbook, and FX data queries\n"
+        "- remote MCP server for earthquake, tsunami, volcano, hurricane, flood, tornado, SDG, World Factbook, and development-indicator data queries\n"
         "- free discovery plus mixed free and paid structured retrieval\n"
         "- deterministic outputs over a maintained geographic reference graph and reusable geometry library\n"
         f"- the umbrella MCP is the canonical live product; pack facades such as `{pack_sentence()}` are narrow official-registry entrypoints over the same shared backend\n"
@@ -407,11 +467,11 @@ def render_site_llms_full(*, app_origin: str = "https://app.daedalmap.com", site
         "- remote MCP\n\n"
         "## Expected first flow\n\n"
         "1. Read `GET /mcp/server.json`\n"
-        "2. Call `tools/list` on `POST /mcp` or on a narrow facade such as `POST /mcp/currency`, `POST /mcp/earthquakes`, `POST /mcp/floods`, `POST /mcp/tornadoes`, `POST /mcp/volcanoes`, `POST /mcp/tsunamis`, `POST /mcp/hurricanes`, `POST /mcp/un_sdg`, or `POST /mcp/world_factbook`\n"
+        f"2. Call `tools/list` on `POST /mcp` or on a narrow facade such as {_code_list(example_facade_ids(), prefix='POST /mcp/')}\n"
         "3. Read `GET /api/v1/catalog`\n"
         "4. Read one pack detail from `GET /api/v1/packs/{pack_id}`\n"
-        "5. Make one free request for `currency`, `floods`, `un_sdg`, or `volcanoes`\n"
-        "6. Make one unpaid request for `earthquakes` or `tornadoes`\n"
+        f"5. Make one free request for {_code_list(example_free_pack_ids())}\n"
+        f"6. Make one unpaid request for {_code_list(example_paid_pack_ids())}\n"
         "7. Expect HTTP `402` on the paid pack\n"
         "8. Retry with a payment-aware client and expect structured rows on success\n"
         "9. `request_id` is optional but recommended for tracing and idempotency\n\n"
@@ -422,7 +482,7 @@ def render_site_llms_full(*, app_origin: str = "https://app.daedalmap.com", site
         "- Requests above the live source maximum reject before payment instead of charging\n\n"
         "## Current proven hosted examples\n\n"
         "- Free proof:\n"
-        "  - `currency`\n"
+        f"  - `{example_free_pack_ids(1)[0]}`\n"
         "  - `limit = 3`\n"
         "  - returns rows directly\n"
         "- Paid minimal proof:\n"
@@ -448,7 +508,7 @@ def render_site_llms_full(*, app_origin: str = "https://app.daedalmap.com", site
         "It wraps the same discovery and paid execution lanes, with the same flagship packs, limits, and payment behavior.\n"
         f"If a client supports remote MCP, use `{app_origin}/mcp` as the first choice.\n"
         "If not, use the hosted HTTP API lane directly.\n"
-        f"For official-registry discoverability, narrow facades such as `{app_origin}/mcp/currency`, `{app_origin}/mcp/earthquakes`, `{app_origin}/mcp/floods`, `{app_origin}/mcp/tornadoes`, `{app_origin}/mcp/volcanoes`, `{app_origin}/mcp/tsunamis`, `{app_origin}/mcp/hurricanes`, `{app_origin}/mcp/un_sdg`, and `{app_origin}/mcp/world_factbook` can be listed as pack-specific entrypoints without changing the runtime architecture.\n\n"
+        f"For official-registry discoverability, narrow facades such as {_code_list(example_facade_ids(), prefix=app_origin + '/mcp/', conjunction='and')} can be listed as pack-specific entrypoints without changing the runtime architecture.\n\n"
         "## Supported clients\n\n"
         "Document directly:\n\n"
         "- Claude Code\n"
@@ -483,4 +543,51 @@ def render_site_llms_full(*, app_origin: str = "https://app.daedalmap.com", site
         f"- [{site_origin}/pricing]({site_origin}/pricing) - Pricing.\n"
         f"- [{app_origin}]({app_origin}) - Hosted app (Explore mode default surface).\n"
         "- [https://github.com/xyver/daedal-map](https://github.com/xyver/daedal-map) - Open engine source (self-host path, contributor pipeline).\n"
+    )
+
+
+AI_CRAWLER_USER_AGENTS: tuple[str, ...] = (
+    "GPTBot",
+    "OAI-SearchBot",
+    "ClaudeBot",
+    "Claude-SearchBot",
+    "PerplexityBot",
+    "Googlebot",
+    "Google-Extended",
+    "Bingbot",
+    "Applebot-Extended",
+    "Amazonbot",
+    "meta-externalagent",
+    "CCBot",
+)
+
+
+def render_robots_txt(*, sitemap_url: str | None = None, llms_url: str | None = None) -> str:
+    """robots.txt for every DaedalMap host: allow all crawlers and name the sitemap.
+
+    The explicit Allow groups document the AI and search crawlers we want; the
+    wildcard group already allows them. llms.txt is not a robots.txt directive,
+    so it is named only in a comment.
+    """
+    lines = ["User-agent: *", "Allow: /", ""]
+    for agent in AI_CRAWLER_USER_AGENTS:
+        lines += [f"User-agent: {agent}", "Allow: /", ""]
+    if sitemap_url:
+        lines += [f"Sitemap: {sitemap_url}", ""]
+    if llms_url:
+        lines += ["# LLM guide (llms.txt convention; not a robots.txt directive):", f"# {llms_url}", ""]
+    return "\n".join(lines)
+
+
+def render_security_txt(*, canonical_url: str, site_origin: str = DEFAULT_SITE_ORIGIN, now: datetime | None = None) -> str:
+    """RFC 9116 security.txt. Expires is always 180 days ahead, so it never lapses."""
+    current = now or datetime.now(timezone.utc)
+    expires = (current + timedelta(days=180)).replace(hour=0, minute=0, second=0, microsecond=0)
+    return (
+        f"Contact: mailto:{CONTACT_EMAIL}\n"
+        f"Contact: {site_origin}/support\n"
+        f"Expires: {expires.strftime('%Y-%m-%dT%H:%M:%SZ')}\n"
+        "Preferred-Languages: en\n"
+        f"Canonical: {canonical_url}\n"
+        f"Policy: {site_origin}/terms\n"
     )
