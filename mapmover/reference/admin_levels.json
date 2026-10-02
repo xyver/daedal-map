@@ -2,8 +2,8 @@
   "_description": "Country-specific names for administrative levels. First element is display name, rest are synonyms for query interpretation.",
   "_format": "ISO3 -> {admin_level: [display_name, synonym1, synonym2, ...]}",
   "_schema_version": "1.0.0",
-  "_last_updated": "2026-01",
-  "_note": "SUPERSEDED for display names. The geometry catalog carries each country's official spine level names (administrative family native_tier_names, from the country inventory). Several entries here predate the current spines (USA level 3-5, FRA, BRA). Kept only because geometry_handlers._get_level_names and /reference/admin-levels still read it; replace those readers with the catalog names, then keep this file for query synonyms only.",
+  "_last_updated": "2026-10",
+  "_note": "Display names (first element) for USA, CAN, MEX, GBR, DEU, FRA, BRA, and AUS match each released geometry spine (administrative family native_tier_names in the geometry catalog, checked against the national agencies 2026-10-02). Keep them in step with the catalog when a spine changes. Other countries are unverified query defaults. Read by geometry_handlers._get_level_names and /reference/admin-levels.",
 
   "_default": {
     "1": ["regions", "provinces", "states", "first-level divisions"],
@@ -18,29 +18,27 @@
   "USA": {
     "1": ["states and territories", "state", "commonwealth", "district", "territory"],
     "2": ["counties", "county", "parish", "borough", "census area", "independent city"],
-    "3": ["places", "cities", "towns", "municipalities", "CDPs", "townships", "county subdivisions"],
-    "4": ["census tracts", "tracts"],
-    "5": ["block groups"],
-    "6": ["blocks", "census blocks"]
+    "3": ["census tracts", "census tract", "tracts", "tract"],
+    "4": ["block groups", "block group", "census block groups", "BGs"],
+    "5": ["blocks", "block", "census blocks"]
   },
   "CAN": {
-    "1": ["provinces", "territories", "province", "territory"],
-    "2": ["districts", "counties", "census divisions", "regional districts", "regional municipalities"],
-    "3": ["municipalities", "cities", "towns", "villages", "census subdivisions", "reserves", "settlements"]
+    "1": ["provinces and territories", "provinces", "territories", "province", "territory"],
+    "2": ["census divisions", "census division", "CDs", "districts", "counties", "regional districts", "regional municipalities"],
+    "3": ["census subdivisions", "census subdivision", "CSDs", "municipalities", "cities", "towns", "villages", "reserves", "settlements"],
+    "4": ["dissemination areas", "dissemination area", "DAs"],
+    "5": ["dissemination blocks", "dissemination block", "DBs"]
   },
   "MEX": {
-    "1": ["states", "estados", "federal entities"],
-    "2": ["municipalities", "municipios"],
-    "3": ["localities", "localidades", "settlements"]
+    "1": ["states", "entidades federativas", "estados", "federal entities", "AGEE"],
+    "2": ["municipalities", "municipios", "demarcaciones territoriales", "alcaldias", "AGEM"]
   },
 
   "_comment_europe": "Europe",
   "GBR": {
-    "1": ["countries", "constituent countries", "home nations", "nations"],
-    "2": ["counties", "ceremonial counties", "preserved counties", "local government areas"],
-    "3": ["districts", "boroughs", "London boroughs", "metropolitan boroughs", "unitary authorities"],
-    "4": ["wards", "electoral wards", "divisions"],
-    "5": ["parishes", "civil parishes", "communities", "community councils"]
+    "1": ["constituent countries", "countries", "home nations", "nations"],
+    "2": ["local authority districts", "local authorities", "LADs", "council areas", "local government districts", "districts", "boroughs", "London boroughs", "metropolitan boroughs", "unitary authorities"],
+    "3": ["middle layer super output areas", "MSOAs", "intermediate zones", "district electoral areas", "DEAs"]
   },
   "IRL": {
     "1": ["provinces", "cuigi"],
@@ -50,15 +48,16 @@
   },
   "DEU": {
     "1": ["states", "Lander", "Bundeslander", "federal states"],
-    "2": ["districts", "Kreise", "Landkreise", "urban districts", "kreisfreie Stadte"],
-    "3": ["municipalities", "Gemeinden", "cities", "towns", "villages"]
+    "2": ["government regions", "Regierungsbezirke", "administrative regions"],
+    "3": ["districts", "Kreise", "Landkreise", "urban districts", "kreisfreie Stadte"],
+    "4": ["municipal associations", "Gemeindeverbande", "Amter", "Verbandsgemeinden", "Samtgemeinden"],
+    "5": ["municipalities", "Gemeinden", "cities", "towns", "villages"]
   },
   "FRA": {
-    "1": ["regions", "regions"],
+    "1": ["regions"],
     "2": ["departments", "departements", "overseas departments"],
     "3": ["arrondissements"],
-    "4": ["cantons"],
-    "5": ["communes", "municipalities", "cities", "villages"]
+    "4": ["communes", "municipalities", "cities", "villages"]
   },
   "ITA": {
     "1": ["regions", "regioni"],
@@ -292,10 +291,10 @@
 
   "_comment_south_america": "South America",
   "BRA": {
-    "1": ["states", "estados", "federal district"],
-    "2": ["mesoregions", "mesorregioes"],
-    "3": ["microregions", "microrregioes"],
-    "4": ["municipalities", "municipios"]
+    "1": ["states", "estados", "unidades da federacao", "federal district"],
+    "2": ["municipalities", "municipios"],
+    "3": ["districts", "distritos"],
+    "4": ["subdistricts", "subdistritos"]
   },
   "ARG": {
     "1": ["provinces", "provincias", "autonomous city"],
@@ -320,9 +319,12 @@
 
   "_comment_oceania": "Oceania",
   "AUS": {
-    "1": ["states", "territories"],
-    "2": ["councils", "local government areas", "LGAs", "shires"],
-    "3": ["suburbs", "localities", "towns"]
+    "1": ["states and territories", "states", "territories"],
+    "2": ["Statistical Areas Level 4", "SA4s", "SA4"],
+    "3": ["Statistical Areas Level 3", "SA3s", "SA3"],
+    "4": ["Statistical Areas Level 2", "SA2s", "SA2"],
+    "5": ["Statistical Areas Level 1", "SA1s", "SA1"],
+    "6": ["Mesh Blocks", "mesh blocks", "MBs"]
   },
   "NZL": {
     "1": ["regions"],
