@@ -861,26 +861,13 @@ function buildCategoriesFromTree(overlayTree) {
   }
 
   // Global indicator overlays - the shared choropleth (global.csv country fills, etc.).
-  // The toggle controls choropleth visibility, so dense global layers like the
-  // currency choropleth can be hidden to see point/area feeds underneath.
-  pushOverlayIfMissing(globalIndicatorOverlays, {
-    id: 'currency',
-    label: 'Currency',
-    description: 'Global currency choropleth',
-    default: false,
-    locked: false,
-    model: 'choropleth',
-    icon: '$',
-    hasYearFilter: false,
-    sourceIds: ['fx_usd_historical_monthly', 'fx_usd_latest'],
-    packIds: ['currency']
-  });
+  // Only published packs belong in this fallback list. Internal or draft packs
+  // (currency, worldpop, distributed_manufacturing) reach the tray only through
+  // the catalog overlay tree, so the WIP surface can still test them.
   const qaIndicatorOverlays = [
-    { id: 'worldpop', label: 'WorldPop', description: 'Population estimates and projections', icon: 'P', sourceIds: ['worldpop'], packIds: ['worldpop'] },
     { id: 'un_wpp', label: 'UN Population', description: 'UN World Population Prospects', icon: 'U', sourceIds: ['un_wpp'], packIds: ['un_wpp'] },
     { id: 'world_factbook', label: 'World Factbook', description: 'Country indicators from the World Factbook', icon: 'F', sourceIds: ['world_factbook', 'world_factbook_static'], packIds: ['world_factbook'] },
-    { id: 'world_bank_wdi', label: 'World Bank WDI', description: 'World Development Indicators', icon: 'W', sourceIds: ['world_bank_wdi'], packIds: ['world_bank_wdi'] },
-    { id: 'distributed_manufacturing', label: 'Distributed Manufacturing', description: 'Maker spaces and fabrication sites', icon: 'M', sourceIds: ['distributed_manufacturing'], packIds: ['distributed_manufacturing'] }
+    { id: 'world_bank_wdi', label: 'World Bank WDI', description: 'World Development Indicators', icon: 'W', sourceIds: ['world_bank_wdi'], packIds: ['world_bank_wdi'] }
   ];
   for (const overlay of qaIndicatorOverlays) {
     pushOverlayIfMissing(globalIndicatorOverlays, {
@@ -1369,8 +1356,7 @@ export const OverlaySelector = {
           expanded: false,
           alwaysVisible: true,
           overlays: [
-            { id: 'demographics', label: 'Demographics', description: 'Choropleth data', default: false, locked: false, model: 'choropleth', icon: 'D', hasYearFilter: false },
-            { id: 'currency', label: 'Currency', description: 'Global currency choropleth', default: true, locked: false, model: 'choropleth', icon: '$', hasYearFilter: false }
+            { id: 'demographics', label: 'Demographics', description: 'Choropleth data', default: false, locked: false, model: 'choropleth', icon: 'D', hasYearFilter: false }
           ]
         },
         {
