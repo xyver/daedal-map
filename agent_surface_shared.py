@@ -100,16 +100,31 @@ def render_for_agents_registry_quickstart() -> str:
     )
     geography = tool_family_catalog_entry("geography")
     tools = "".join(
-        "<li><code>{name}</code> — {summary}</li>".format(
+        "<li><code>{name}</code> - {summary}</li>".format(
             name=escape(str(tool.get("name") or "")),
             summary=escape(str(tool.get("summary") or "")),
         )
         for tool in geography.get("tools") or []
     )
+    data_tools = "".join(
+        "<li><code>{name}</code> - {summary}</li>".format(
+            name=escape(entry["name"]),
+            summary=escape(entry["description"].split(". ", 1)[0].rstrip(".") + "."),
+        )
+        for entry in data_tool_entries()
+    )
+    access_note = (
+        escape(DATA_TOOL_ACCESS_NOTE)
+        .replace("`get_catalog`", "<code>get_catalog</code>")
+        .replace("`get_pack`", "<code>get_pack</code>")
+    )
     return (
         "<h2>First successful flow</h2>"
         f'<ol class="detail-list">{steps}</ol>'
         "<p>Each successful row query returns <code>resolved_query</code>; copy it to rerun the resolved request deterministically.</p>"
+        "<h2>Data tools</h2>"
+        f'<ul class="detail-list">{data_tools}</ul>'
+        f"<p>{access_note}</p>"
         "<h2>Choose your first geography job</h2>"
         f'<ul class="detail-list">{tools}</ul>'
         '<p><a class="docs-next-link" href="/docs/geometry-tools">Open the geography tool guide</a></p>'
@@ -186,6 +201,37 @@ def geography_tools_section(app_origin: str) -> str:
             f"  - also reachable on the umbrella `{base}/mcp`; no payment required"
         )
     return "\n".join(blocks)
+
+
+def data_tool_entries() -> list[dict[str, str]]:
+    """Published data query and event drill-down tools, from the MCP data contract."""
+    from mcp_data_contract_shared import (
+        DATA_QUERY_TOOL_IDS,
+        DATA_RELATIONSHIP_TOOL_IDS,
+        DATA_TOOL_DESCRIPTIONS,
+    )
+    from mcp_surface_shared import build_tool_definitions
+
+    published = {str(definition.get("name") or "") for definition in build_tool_definitions()}
+    names = [*sorted(DATA_QUERY_TOOL_IDS), *sorted(DATA_RELATIONSHIP_TOOL_IDS)]
+    return [
+        {"name": name, "description": DATA_TOOL_DESCRIPTIONS[name]}
+        for name in names
+        if name in published
+    ]
+
+
+DATA_TOOL_ACCESS_NOTE = (
+    "Access is set per pack: `get_catalog` and `get_pack` report whether a pack is free or paid "
+    "before you query it."
+)
+
+
+def data_tools_section() -> str:
+    """Markdown block for the data query tools that follow get_catalog and get_pack."""
+    lines = [f"- `{entry['name']}` - {entry['description']}" for entry in data_tool_entries()]
+    lines.append(f"- {DATA_TOOL_ACCESS_NOTE}")
+    return "\n".join(lines)
 
 
 def geography_workflow_section() -> str:
@@ -302,6 +348,8 @@ def render_app_llms_txt(*, app_origin: str = DEFAULT_APP_ORIGIN, site_origin: st
         f"{geography_tools_section(app_origin)}\n\n"
         "### Choose the tool by question\n"
         f"{geography_workflow_section()}\n\n"
+        "## Data tools\n"
+        f"{data_tools_section()}\n\n"
         "## App UI\n"
         f"- Human-facing app: {app_origin}\n"
         f"- Website and docs: {site_origin}\n"
@@ -364,6 +412,8 @@ def render_site_llms_txt(*, app_origin: str = DEFAULT_APP_ORIGIN, site_origin: s
         f"{geography_tools_section(app_origin)}\n\n"
         "### Choose the tool by question\n\n"
         f"{geography_workflow_section()}\n\n"
+        "## Data tools\n\n"
+        f"{data_tools_section()}\n\n"
         "## Current live contract\n\n"
         "- MCP discovery first is valid: read `server.json`, then call `tools/list`, then follow `get_catalog` -> `get_pack` -> `get_data`\n"
         "- Free discovery first: `guide`, `catalog`, and pack detail\n"
@@ -443,6 +493,8 @@ def render_site_llms_full(*, app_origin: str = DEFAULT_APP_ORIGIN, site_origin: 
         f"{geography_tools_section(app_origin)}\n\n"
         "### Choose the tool by question\n\n"
         f"{geography_workflow_section()}\n\n"
+        "## Data tools\n\n"
+        f"{data_tools_section()}\n\n"
         "## Registry summary\n\n"
         "DaedalMap is a remote MCP server and hosted geographic reference, geometry, and data API for deterministic,\n"
         f"geography-aware queries across {data_pack_count_label()} curated data packs, with geometry covering a {GEOMETRY_COVERAGE_LABEL}.\n"
