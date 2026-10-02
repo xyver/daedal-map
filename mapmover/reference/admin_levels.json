@@ -3,7 +3,7 @@
   "_format": "ISO3 -> {admin_level: [display_name, synonym1, synonym2, ...]}",
   "_schema_version": "1.0.0",
   "_last_updated": "2026-01",
-  "_note": "Moved from conversions.json country_level_names section",
+  "_note": "SUPERSEDED for display names. The geometry catalog carries each country's official spine level names (administrative family native_tier_names, from the country inventory). Several entries here predate the current spines (USA level 3-5, FRA, BRA). Kept only because geometry_handlers._get_level_names and /reference/admin-levels still read it; replace those readers with the catalog names, then keep this file for query synonyms only.",
 
   "_default": {
     "1": ["regions", "provinces", "states", "first-level divisions"],
