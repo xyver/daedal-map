@@ -2947,7 +2947,7 @@ async def _execute_point_lookup_tool(
         result_payload = {
             "request_id": request_id,
             "batch_id": batch_id,
-            "limit": limit,
+            "limit": paid_limit if settlement_id else included_limit,
             "point_count": len(points),
             "resolved_count": resolved_count,
             "unresolved_count": unresolved_count,

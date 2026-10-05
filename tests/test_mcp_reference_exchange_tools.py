@@ -980,6 +980,7 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
             clear_access_policy_cache()
 
         self.assertEqual(payload["point_count"], 3)
+        self.assertEqual(payload["limit"], 4)
         self.assertIn("resolved_count", payload, payload)
         self.assertEqual(payload["resolved_count"], 3)
         verifier_mock.assert_not_called()
