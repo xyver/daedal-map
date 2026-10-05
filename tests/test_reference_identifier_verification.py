@@ -313,6 +313,33 @@ class GersResolutionTests(unittest.TestCase):
         self.assertEqual(selected["catalog"]["recommended_binding"]["country_scope"], "BRA")
         self.assertEqual(selected["catalog"]["recommended_binding"]["geo_level"], "admin_2")
 
+    def test_dataset_identification_binds_verified_zip_column(self) -> None:
+        payload = identify_dataset_geography([{
+            "name": "zip_code", "values": ["22031", "22032"], "nonempty_count": 2,
+        }])
+
+        self.assertEqual(payload["status"], "matched")
+        selected = payload["candidates"][0]
+        self.assertEqual(payload["recommended_candidate_id"], selected["id"])
+        self.assertEqual(selected["catalog"]["recommended_binding"]["system"], "overlay_zcta")
+        self.assertEqual(selected["catalog"]["recommended_binding"]["country_scope"], "USA")
+
+    def test_dataset_identification_does_not_bind_unknown_zip(self) -> None:
+        payload = identify_dataset_geography([{
+            "name": "zip_code", "values": ["99999"], "nonempty_count": 1,
+        }])
+
+        self.assertEqual(payload["status"], "unmatched")
+        self.assertIsNone(payload["recommended_candidate_id"])
+
+    def test_dataset_identification_keeps_county_geoid_distinct_from_zip(self) -> None:
+        payload = identify_dataset_geography([{
+            "name": "GEOID", "values": ["06037"], "nonempty_count": 1,
+        }])
+
+        self.assertEqual(payload["candidates"][0]["catalog"]["recommended_binding"]["system"],
+                         "us_census_geoid")
+
     def test_dataset_identification_owns_coordinate_column_selection(self) -> None:
         payload = identify_dataset_geography([
             {"name": "ActiveFireCandidate", "values": ["true", "false"]},

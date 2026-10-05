@@ -270,18 +270,24 @@ def _reference_graph_candidates(
         from .reference_graph import identify_aliases
         from .reference_exchange import _normalize_source_loc_id
 
+        # The public ZIP/ZCTA name is normalized to overlay_zcta, while the
+        # exact reference graph stores its Census system identifier.
+        graph_system = (
+            "usa.census.2020.zcta5.geoid"
+            if reference_system == "overlay_zcta" else reference_system
+        )
+
         for identifier in identifiers:
-            lookup = (
-                _normalize_source_loc_id(reference_system, identifier, country_scope)
-                if reference_system else identifier
-            )
+            lookup = identifier
+            if reference_system and reference_system != "overlay_zcta":
+                lookup = _normalize_source_loc_id(reference_system, identifier, country_scope)
             lookup_to_original[lookup].append(identifier)
 
         alias_rows = identify_aliases(
             list(lookup_to_original),
             limit=max(100, len(identifiers) * 25),
             iso3=country_scope or None,
-            reference_system=reference_system,
+            reference_system=graph_system,
             cancelled=lambda: _cancel_point(cancelled),
         )
     except IdentificationCancelled:
@@ -1235,6 +1241,13 @@ def _dataset_expected_hint(
         expected = census_expected()
         if expected:
             return expected, "USA"
+    if normalized in {"zip", "zip_code", "zipcode", "zcta", "zcta5", "postal_code"}:
+        samples = [str(value).strip() for value in values or [] if str(value).strip()]
+        if samples and all(re.fullmatch(r"\d{5}", value) for value in samples):
+            # Scope a strongly labelled US ZIP column before broad native-ID
+            # discovery. Do not force a ZCTA binding: maintained exact matches
+            # still have to verify the values below.
+            return {"system": "overlay_zcta"}, "USA"
     if normalized == "aiannhce":
         return {"system": "usa.census.2025.aiannhce"}, "USA"
     if normalized in {"iso3", "iso_3", "country_code", "location_code"}:
