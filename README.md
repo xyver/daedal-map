@@ -26,19 +26,19 @@ or this repository, which is the open runtime behind all of them.
 The hosted MCP server needs no install or account for discovery:
 
 ```text
-https://app.daedalmap.com/mcp
+https://app.daedalmap.com/mcp?registry=github
 ```
 
 Claude Code:
 
 ```bash
-claude mcp add --transport http daedalmap https://app.daedalmap.com/mcp
+claude mcp add --transport http daedalmap 'https://app.daedalmap.com/mcp?registry=github'
 ```
 
 Codex:
 
 ```bash
-codex mcp add daedalmap --url https://app.daedalmap.com/mcp
+codex mcp add daedalmap --url 'https://app.daedalmap.com/mcp?registry=github'
 ```
 
 Any client that supports streamable HTTP MCP can use the same URL. Start with
