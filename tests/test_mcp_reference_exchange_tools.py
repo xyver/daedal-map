@@ -275,7 +275,7 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         )
 
         self.assertEqual(envelope["result"]["serverInfo"]["name"], "com.daedalmap/geography")
-        self.assertEqual(envelope["result"]["serverInfo"]["version"], "1.6.1")
+        self.assertEqual(envelope["result"]["serverInfo"]["version"], "1.6.2")
 
     def test_browser_mcp_metadata_is_bounded_and_reaches_usage_analytics(self) -> None:
         caller = CallerIdentity(

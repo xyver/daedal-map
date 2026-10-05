@@ -852,7 +852,7 @@ class BlindCallerHelpTests(unittest.TestCase):
         )
         payload = envelope["result"]["structuredContent"]
         self.assertTrue(payload["ok"])
-        self.assertEqual(payload["access"]["pricing"], "paid_bulk_x402_base_usdc")
+        self.assertEqual(payload["access"]["pricing"], "free_with_paid_bulk")
         self.assertIn("active operator policy can waive settlement", payload["access"]["pricing_scope"])
         self.assertEqual(payload["access"]["limits"]["free_item_limit"], 100)
         self.assertEqual(payload["access"]["limits"]["account_item_limit"], 1000)

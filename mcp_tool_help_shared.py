@@ -20,6 +20,7 @@ from tool_access_shared import (
     tool_is_paid_bulk,
     tool_paid_item_limit,
     tool_pricing,
+    tool_public_pricing,
     tool_profile,
 )
 
@@ -444,7 +445,7 @@ def tool_help_payload(
         for values in (tool_effective_rate_limit(name, lane=lane),)
     }
     access = {
-        "pricing": pricing,
+        "pricing": tool_public_pricing(name),
         "pricing_scope": "authored_policy; active operator policy can waive settlement",
         "free_discovery": name in {"get_tool_help", "get_catalog", "get_pack", "identify_dataset_geography", "identify_reference_system"},
         "limits": limits,

@@ -405,6 +405,12 @@ def tool_pricing(tool_name: str) -> str:
     return str(tool_profile(tool_name).get("pricing") or PRICING_FREE).strip()
 
 
+def tool_public_pricing(tool_name: str) -> str:
+    """Describe access without exposing a dormant settlement implementation."""
+    pricing = tool_pricing(tool_name)
+    return "free_with_paid_bulk" if pricing.startswith("paid_bulk_") else pricing
+
+
 def tool_is_paid_bulk(tool_name: str) -> bool:
     """True for the explicit paid conversion/bulk lane.
 

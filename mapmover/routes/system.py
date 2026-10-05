@@ -1811,6 +1811,7 @@ def _mcp_pricing_payload(pack_id: str | None = None) -> dict:
         tool_meter,
         tool_price_micro_usd,
         tool_pricing,
+        tool_public_pricing,
         tool_pricing_version,
     )
 
@@ -1843,7 +1844,7 @@ def _mcp_pricing_payload(pack_id: str | None = None) -> dict:
             pricing = tool_pricing(name)
             row = {
                 "tool": name,
-                "pricing": pricing,
+                "pricing": tool_public_pricing(name),
                 "free_item_limit": tool_free_item_limit(name),
             }
             if pricing.startswith("paid") or pricing == "by_material":
