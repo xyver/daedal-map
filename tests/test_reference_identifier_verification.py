@@ -314,15 +314,20 @@ class GersResolutionTests(unittest.TestCase):
         self.assertEqual(selected["catalog"]["recommended_binding"]["geo_level"], "admin_2")
 
     def test_dataset_identification_binds_verified_zip_column(self) -> None:
-        payload = identify_dataset_geography([{
-            "name": "zip_code", "values": ["22031", "22032"], "nonempty_count": 2,
-        }])
+        with mock.patch(
+            "mapmover.runtime.reference_identification._identity_metadata_for_loc_ids",
+            side_effect=AssertionError("ZCTA aliases already define their level"),
+        ):
+            payload = identify_dataset_geography([{
+                "name": "zip_code", "values": ["22031", "22032"], "nonempty_count": 2,
+            }])
 
         self.assertEqual(payload["status"], "matched")
         selected = payload["candidates"][0]
         self.assertEqual(payload["recommended_candidate_id"], selected["id"])
         self.assertEqual(selected["catalog"]["recommended_binding"]["system"], "overlay_zcta")
         self.assertEqual(selected["catalog"]["recommended_binding"]["country_scope"], "USA")
+        self.assertEqual(selected["catalog"]["recommended_binding"]["geo_level"], "zcta")
 
     def test_dataset_identification_does_not_bind_unknown_zip(self) -> None:
         payload = identify_dataset_geography([{

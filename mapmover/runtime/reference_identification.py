@@ -311,21 +311,32 @@ def _reference_graph_candidates(
         for loc_id in values
         if re.fullmatch(r"[A-Z]{3}", loc_id)
     }
-    try:
-        loc_ids = list(dict.fromkeys(
-            loc_id for matches in grouped.values() for values in matches.values() for loc_id in values
-            if loc_id not in identity_levels
-        ))
-        for row in _identity_metadata_for_loc_ids(loc_ids).values():
-            loc_id = str(row.get("loc_id") or "")
-            raw_level = row.get("admin_level")
-            if raw_level is None or str(raw_level).strip() == "":
-                raw_level = row.get("level")
-            level = str(raw_level if raw_level is not None else "").strip()
-            if loc_id and level:
-                identity_levels[loc_id] = level if level.startswith("admin_") else f"admin_{level}"
-    except Exception:
-        identity_levels = {}
+    if reference_system == "overlay_zcta":
+        # The exact alias system already defines the geography level. Avoid
+        # opening the much larger identity and admin-route partitions merely
+        # to rediscover that a verified ZIP alias is a ZCTA.
+        identity_levels.update({
+            loc_id: "zcta"
+            for matches in grouped.values()
+            for values in matches.values()
+            for loc_id in values
+        })
+    else:
+        try:
+            loc_ids = list(dict.fromkeys(
+                loc_id for matches in grouped.values() for values in matches.values() for loc_id in values
+                if loc_id not in identity_levels
+            ))
+            for row in _identity_metadata_for_loc_ids(loc_ids).values():
+                loc_id = str(row.get("loc_id") or "")
+                raw_level = row.get("admin_level")
+                if raw_level is None or str(raw_level).strip() == "":
+                    raw_level = row.get("level")
+                level = str(raw_level if raw_level is not None else "").strip()
+                if loc_id and level:
+                    identity_levels[loc_id] = level if level.startswith("admin_") else f"admin_{level}"
+        except Exception:
+            identity_levels = {}
 
     results = []
     for system, matches in grouped.items():
