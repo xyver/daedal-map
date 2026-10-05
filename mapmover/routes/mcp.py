@@ -2379,7 +2379,7 @@ async def _execute_resolve_point_tool(request: Request, arguments: dict[str, Any
             message="resolve_point requires either one top-level lat/lon pair or a points array, but not both.",
         )
     legacy_fields = sorted(
-        {"lookup_mode", "country_scope", "admin_1_scope", "country_hint", "bulk_preset"}
+        {"lookup_mode", "country_scope", "admin_1_scope", "country_hint", "bulk_preset", "family"}
         .intersection(payload)
     )
     if legacy_fields:
@@ -2498,6 +2498,7 @@ def _shape_resolve_point_payload(raw: Any, request_id: str) -> dict[str, Any]:
         "deepest_resolved_family": raw.get("deepest_resolved_family") or (raw.get("matched") or {}).get("family"),
         "stack": raw.get("stack") or [],
         "overlap_families": raw.get("overlap_families") or [],
+        **({"geometry_review": raw["geometry_review"]} if raw.get("geometry_review") else {}),
         "join_keys": raw.get("join_keys") or {},
         "join_grain": raw.get("join_grain") or raw.get("deepest_resolved_admin_level"),
         "resolution_mode": raw.get("resolution_mode") or "latest_available_per_depth",
@@ -3670,6 +3671,18 @@ def _get_loc_id_info_item(
         "children_by_level": _parse_children_by_level(info.get("children_by_level")),
         "descendants_count": info.get("descendants_count"),
     }
+    as_of = payload.get("as_of")
+    if as_of is not None:
+        try:
+            from mapmover.runtime.source_release_review import review_loc_id
+
+            result["date_review"] = review_loc_id(canonical_loc_id, as_of)
+            result["date_review_required"] = bool(result["date_review"]["date_review_required"])
+            if result["date_review_required"]:
+                result["date_review_notice"] = "Double-check date"
+        except (TypeError, ValueError) as exc:
+            return {"loc_id": canonical_loc_id,
+                    "error": {"code": "invalid_as_of_or_source_metadata", "message": str(exc)}}
     context_key = (
         str(result.get("iso3") or str(result["loc_id"]).split("-", 1)[0]).strip().upper(),
         str(result.get("admin_level") or "").strip().lower(),

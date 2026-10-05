@@ -37,6 +37,7 @@ class RuntimeGeometryMatch:
 
     row: pd.Series
     candidate_count: int
+    candidate_loc_ids: tuple[str, ...] = ()
 
 
 class RuntimeGeometrySpineIndex:
@@ -127,7 +128,10 @@ class RuntimeGeometrySpineIndex:
             return None
         matches.sort(key=lambda item: (item[0], item[1], item[2]))
         row_position = matches[0][2]
-        return RuntimeGeometryMatch(row=self._frame.iloc[row_position], candidate_count=candidate_count)
+        return RuntimeGeometryMatch(
+            row=self._frame.iloc[row_position], candidate_count=candidate_count,
+            candidate_loc_ids=tuple(sorted({item[1] for item in matches})),
+        )
 
     def match_points(
         self,
@@ -168,6 +172,7 @@ class RuntimeGeometrySpineIndex:
 
         best: dict[int, tuple[float, str, int]] = {}
         counts: dict[int, int] = {}
+        candidate_ids: dict[int, set[str]] = {}
         for query_index, geometry_index in zip(raw_pairs[0], raw_pairs[1]):
             item_index = query_to_item[int(query_index)]
             row_position = self._row_positions[int(geometry_index)]
@@ -177,6 +182,7 @@ class RuntimeGeometrySpineIndex:
             counts[item_index] = counts.get(item_index, 0) + 1
             geometry = self._geometries[int(geometry_index)]
             candidate = (float(geometry.area), str(row.get(self.loc_id_column) or ""), row_position)
+            candidate_ids.setdefault(item_index, set()).add(candidate[1])
             current = best.get(item_index)
             if current is None or candidate < current:
                 best[item_index] = candidate
@@ -186,6 +192,7 @@ class RuntimeGeometrySpineIndex:
             results[item_index] = RuntimeGeometryMatch(
                 row=self._frame.iloc[row_position],
                 candidate_count=counts.get(item_index, 0),
+                candidate_loc_ids=tuple(sorted(candidate_ids.get(item_index, set()))),
             )
         return results
 

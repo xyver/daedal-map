@@ -1502,6 +1502,26 @@ def _resolve_deepest_point_match(
     return deepest_match
 
 
+def _merge_point_geometry_reviews(*reviews: dict | None) -> dict | None:
+    conflicts: dict[str, set[str]] = {}
+    for review in reviews:
+        for conflict in (review or {}).get("conflicts") or []:
+            level = str(conflict.get("admin_level") or "")
+            if level:
+                conflicts.setdefault(level, set()).update(conflict.get("candidate_loc_ids") or [])
+    if not conflicts:
+        return None
+    return {
+        "geometry_review_required": True,
+        "geometry_review_notice": "Double-check boundary",
+        "reason": "multiple_admin_matches_same_level",
+        "conflicts": [
+            {"admin_level": level, "candidate_loc_ids": sorted(loc_ids)}
+            for level, loc_ids in sorted(conflicts.items())
+        ],
+    }
+
+
 def resolve_point_to_location(lon: float, lat: float, include_geometry: bool = True):
     """Resolve a point to the deepest available location."""
     lon = float(lon)
@@ -1541,6 +1561,11 @@ def resolve_point_to_location(lon: float, lat: float, include_geometry: bool = T
             "stack": stack,
             "query_layout": "admin_0_3_plus_admin_1_deep",
         }
+        geometry_review = _merge_point_geometry_reviews(
+            country_match.get("geometry_review"), query_layout_match.get("geometry_review")
+        )
+        if geometry_review:
+            result["geometry_review"] = geometry_review
         if include_geometry:
             result["geojson"] = get_selection_geometries([matched.get("loc_id")])
         return result
@@ -1622,6 +1647,8 @@ def resolve_point_to_location(lon: float, lat: float, include_geometry: bool = T
         },
         "stack": stack,
     }
+    if country_match.get("geometry_review"):
+        result["geometry_review"] = country_match["geometry_review"]
     if include_geometry:
         result["geojson"] = get_selection_geometries([deepest_loc_id])
     return result
@@ -1946,6 +1973,11 @@ def resolve_points_to_locations(
                     else "admin_0_3_plus_admin_1_deep"
                 ),
             }
+            geometry_review = _merge_point_geometry_reviews(
+                country_match.get("geometry_review"), query_match.get("geometry_review")
+            )
+            if geometry_review:
+                results[item["index"]]["geometry_review"] = geometry_review
             if include_geometry:
                 results[item["index"]]["geojson"] = get_selection_geometries([selected.get("loc_id")])
         _add_timing_ms(timing_ms, f"{iso3}_query_layout_ms", stage_started)
@@ -2235,6 +2267,19 @@ def resolve_points_to_locations(
                 "resolution_family": "marine",
             }
         _add_timing_ms(timing_ms, "marine_context_ms", stage_started)
+
+    # Global Admin0 ambiguity also applies when the selected country has only
+    # the compatibility reader rather than an admitted country query layout.
+    for item in normalized_points:
+        country_match = item.get("country_match")
+        result = results[item["index"]]
+        if country_match is None or not isinstance(result, dict) or result.get("error"):
+            continue
+        geometry_review = _merge_point_geometry_reviews(
+            result.get("geometry_review"), country_match.get("geometry_review")
+        )
+        if geometry_review:
+            result["geometry_review"] = geometry_review
 
     # Fan the representative result back out to the duplicates it stood in for.
     for source_index, target_indexes in duplicate_targets.items():

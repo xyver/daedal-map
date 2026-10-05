@@ -72,6 +72,10 @@ class GlobalAdmin0QueryRuntimeTests(unittest.TestCase):
                 ])
 
         self.assertEqual([match["loc_id"] for match in matches], ["BBB", "AAA"])
+        self.assertEqual(matches[0]["geometry_review"]["conflicts"], [
+            {"admin_level": "admin_0", "candidate_loc_ids": ["AAA", "BBB"]}
+        ])
+        self.assertNotIn("geometry_review", matches[1])
 
     def test_missing_layout_requests_full_fallback(self):
         with patch("mapmover.runtime.global_admin0_query._active_layout", return_value=None):

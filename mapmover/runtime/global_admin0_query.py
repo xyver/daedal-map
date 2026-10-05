@@ -19,6 +19,7 @@ from .geometry_predicate_query import (
     read_hash_sharded_rows,
     read_rows_by_ids,
 )
+from .admin_spine_query import _geometry_review
 
 logger = logging.getLogger(__name__)
 _CACHE_LOCK = threading.Lock()
@@ -158,11 +159,13 @@ def resolve_global_admin0_query_points(
             results.append(None)
             continue
         selected = min(matches, key=lambda value: value[:3])[3]
+        geometry_review = _geometry_review({0: [match[1] for match in matches]})
         results.append(pd.Series({
             "loc_id": selected.get("loc_id"),
             "name": selected.get("name") or selected.get("loc_id"),
             "admin_level": 0,
             "source_system": selected.get("source_kind"),
+            **({"geometry_review": geometry_review} if geometry_review else {}),
         }))
     return results
 

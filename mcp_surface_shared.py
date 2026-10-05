@@ -315,12 +315,13 @@ def build_tool_definitions(*, include_paused: bool = False) -> list[dict]:
         {
             "name": "get_loc_id_info",
             "title": "Inspect Known loc_id Identities",
-            "description": "Known-place navigation and enrichment tool: use only when you already have one canonical loc_id or a bounded loc_ids array. It returns identity, strict stored parentage, lifecycle, shape status, and place-specific data-pack and geometry-family availability with executable next calls. It does not list the global catalog and does not return polygon coordinates; use get_catalog to browse everything or get_geometry for shapes. Set include_hierarchy for same-release ancestors and include_references for maintained external or cross-family connections. Historical records are never replaced automatically. No payment required.",
+            "description": "Known-place navigation and enrichment tool: use only when you already have one canonical loc_id or a bounded loc_ids array. It returns identity, strict stored parentage, lifecycle, shape status, and place-specific data-pack and geometry-family availability with executable next calls. Supply as_of for a precision-aware source-release date review alert. It does not list the global catalog and does not return polygon coordinates; use get_catalog to browse everything or get_geometry for shapes. Set include_hierarchy for same-release ancestors and include_references for maintained external or cross-family connections. Historical records are never replaced automatically. No payment required.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "loc_id": {"type": "string", "description": "DaedalMap loc_id, e.g. 'USA-CA'."},
                     "loc_ids": {"type": "array", "items": {"type": "string"}, "description": "DaedalMap loc_ids to inspect together, including every loc_id from a resolve_point stack. Default public cap is deployment-configurable."},
+                    "as_of": {"type": "string", "description": "Optional ISO day, month, or year (YYYY-MM-DD, YYYY-MM, or YYYY). Reviews the current Full source edition and returns a Double-check date alert for coarse or stale coverage; it does not select historical geometry."},
                     "include_hierarchy": {"type": "boolean", "description": "When true, include strict stored parent and ancestor data. This never invents a parent edge across mixed releases. Default false."},
                     "include_references": {"type": "boolean", "description": "When true, include known external or side-chain references attached to each loc_id. Default false."},
                     "systems": {"type": "array", "items": {"type": "string"}, "description": "Optional reference systems to include when include_references is true, such as zcta, nws_fire, overlay_tribal, or overlay_nws_public_zone."},

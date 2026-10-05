@@ -431,10 +431,16 @@ def _spatial_join_point_matches(
     if frame.empty:
         return results
     frame = frame.sort_values(["point_index", "admin_level", "match_area", "loc_id"])
+    covering_ids = frame.groupby(["point_index", "admin_level"])["loc_id"].agg(
+        lambda values: sorted({str(value) for value in values})
+    ).to_dict()
     for row in frame.drop_duplicates(["point_index", "admin_level"]).to_dict("records"):
         point_index = int(row.pop("point_index"))
         level = int(row.get("admin_level", 0))
         row.pop("match_area", None)
+        ids = covering_ids.get((point_index, level), [])
+        if len(ids) > 1:
+            row["__covering_loc_ids"] = ids
         results[point_index][level] = row
     return results
 
@@ -502,6 +508,22 @@ def _row_dict(row: tuple) -> dict[str, Any]:
     return dict(zip(META_COLUMN_NAMES, row))
 
 
+def _geometry_review(rows_by_level: dict[int, list[str]]) -> dict[str, Any] | None:
+    """Flag distinct same-level Admin spine polygons covering one point."""
+    conflicts = [
+        {"admin_level": f"admin_{level}", "candidate_loc_ids": sorted(set(ids))}
+        for level, ids in sorted(rows_by_level.items()) if len(set(ids)) > 1
+    ]
+    if not conflicts:
+        return None
+    return {
+        "geometry_review_required": True,
+        "geometry_review_notice": "Double-check boundary",
+        "reason": "multiple_admin_matches_same_level",
+        "conflicts": conflicts,
+    }
+
+
 def resolve_point(
     iso3: str, lon: float, lat: float, *, target_admin_level: int | None = None,
 ) -> dict[str, Any] | None:
@@ -540,6 +562,10 @@ def resolve_point(
             )
             deep = _exact_candidate_rows(deep_candidates, lon, lat)
             deep.sort(key=lambda item: (int(item[0][2]), -item[2], str(item[0][0])))
+        covering_by_level: dict[int, list[str]] = {}
+        for item in [*shallow, *deep]:
+            covering_by_level.setdefault(int(item[0][2]), []).append(str(item[0][0]))
+        geometry_review = _geometry_review(covering_by_level)
         all_matches = [shallow_by_level[level] for level in sorted(shallow_by_level)] + deep
         by_level: dict[int, tuple[tuple, bytes, float]] = {}
         for item in all_matches:
@@ -586,6 +612,7 @@ def resolve_point(
             "shallow_candidate_count": len(shallow_candidates),
             "deep_candidate_count": len(deep) if deep else 0,
             "query_layout": True,
+            **({"geometry_review": geometry_review} if geometry_review else {}),
         }
     finally:
         connection.close()
@@ -636,7 +663,10 @@ def resolve_points(
                     level_matches = index.match_points(point_items) if index is not None else [None] * len(point_items)
                     for position, match in enumerate(level_matches):
                         if match is not None:
-                            matches[position][level] = match.row.to_dict()
+                            row = match.row.to_dict()
+                            if len(match.candidate_loc_ids) > 1:
+                                row["__covering_loc_ids"] = list(match.candidate_loc_ids)
+                            matches[position][level] = row
 
         needs_deep = target is None or target > 3
         if needs_deep:
@@ -698,7 +728,10 @@ def resolve_points(
                     for owned_position, match in enumerate(level_matches):
                         if match is not None:
                             original_position = owned[owned_position][0]
-                            matches[original_position][level] = match.row.to_dict()
+                            row = match.row.to_dict()
+                            if len(match.candidate_loc_ids) > 1:
+                                row["__covering_loc_ids"] = list(match.candidate_loc_ids)
+                            matches[original_position][level] = row
 
         outputs: list[dict[str, Any]] = []
         missing_identity_ids: set[str] = set()
@@ -728,6 +761,12 @@ def resolve_points(
                         identities[str(row.get("loc_id") or "")] = row
 
         for levels in matches:
+            geometry_review = _geometry_review({
+                level: row.get("__covering_loc_ids", [str(row.get("loc_id") or "")])
+                for level, row in levels.items()
+            })
+            for row in levels.values():
+                row.pop("__covering_loc_ids", None)
             ordered = [levels[level] for level in sorted(levels)]
             if ordered:
                 deepest = ordered[-1]
@@ -743,6 +782,7 @@ def resolve_points(
                 "stack": ordered,
                 "matched": ordered[-1] if ordered else None,
                 "query_layout": True,
+                **({"geometry_review": geometry_review} if geometry_review else {}),
             })
         return outputs
     finally:

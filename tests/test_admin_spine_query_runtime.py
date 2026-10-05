@@ -4,8 +4,63 @@ from unittest.mock import patch
 import duckdb
 import pandas as pd
 from shapely.geometry import Polygon
+from shapely.wkb import dumps as dump_wkb
 
 from mapmover.runtime import admin_spine_query
+
+
+def test_geometry_review_only_flags_distinct_same_level_matches() -> None:
+    assert admin_spine_query._geometry_review({0: ["GBR"], 2: ["GBR-A"]}) is None
+    assert admin_spine_query._geometry_review({2: ["GBR-A", "GBR-A"]}) is None
+    assert admin_spine_query._geometry_review({2: ["GBR-B", "GBR-A"]}) == {
+        "geometry_review_required": True,
+        "geometry_review_notice": "Double-check boundary",
+        "reason": "multiple_admin_matches_same_level",
+        "conflicts": [{"admin_level": "admin_2", "candidate_loc_ids": ["GBR-A", "GBR-B"]}],
+    }
+
+
+def test_point_index_retains_competing_loc_ids_on_shared_boundary() -> None:
+    from mapmover.runtime.geometry_spine import RuntimeGeometrySpineIndex
+
+    left = Polygon([(0, 0), (1, 0), (1, 1), (0, 1)])
+    right = Polygon([(1, 0), (2, 0), (2, 1), (1, 1)])
+    index = RuntimeGeometrySpineIndex(pd.DataFrame([
+        {"loc_id": "GBR-A", "geometry": dump_wkb(left)},
+        {"loc_id": "GBR-B", "geometry": dump_wkb(right)},
+    ]))
+    assert index.match_points([{"lon": 0.5, "lat": 0.5}])[0].candidate_loc_ids == ("GBR-A",)
+    assert index.match_points([{"lon": 1.0, "lat": 0.5}])[0].candidate_loc_ids == ("GBR-A", "GBR-B")
+
+
+def test_batch_resolver_warns_on_same_level_shared_border() -> None:
+    left = Polygon([(0, 0), (1, 0), (1, 1), (0, 1)])
+    right = Polygon([(1, 0), (2, 0), (2, 1), (1, 1)])
+    rows = []
+    for loc_id, polygon in [("GBR-A", left), ("GBR-B", right)]:
+        row = {name: "" for name in admin_spine_query.META_COLUMN_NAMES}
+        row.update({"loc_id": loc_id, "admin_level": 2, "name": loc_id, "geometry": dump_wkb(polygon)})
+        rows.append(row)
+
+    class Connection:
+        def close(self):
+            pass
+
+    with (
+        patch.object(admin_spine_query, "layout_available", return_value=True),
+        patch.object(admin_spine_query, "layout_root", return_value=Path("layout")),
+        patch.object(admin_spine_query, "_connection", return_value=Connection()),
+        patch.object(admin_spine_query, "_metadata_with_geometry_bbox", return_value=pd.DataFrame(rows)),
+    ):
+        result = admin_spine_query.resolve_points(
+            "GBR", [{"lon": 0.5, "lat": 0.5}, {"lon": 1.0, "lat": 0.5}],
+            target_admin_level=2,
+        )
+
+    assert "geometry_review" not in result[0]
+    assert result[1]["geometry_review"]["conflicts"] == [
+        {"admin_level": "admin_2", "candidate_loc_ids": ["GBR-A", "GBR-B"]}
+    ]
 
 
 def test_cloud_manifest_check_follows_the_selected_active_lane() -> None:

@@ -587,6 +587,13 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         )
         self.assertEqual(payload["error"]["code"], "shallow_point_contract_violation")
 
+    def test_shallow_point_rejects_family_instead_of_ignoring_it(self) -> None:
+        payload = _tool_call(
+            self.client, "resolve_point",
+            {"lat": 29.7604, "lon": -95.3698, "family": "watershed"},
+        )
+        self.assertEqual(payload["error"]["code"], "shallow_point_contract_violation")
+
     def test_deep_point_requires_one_shallow_loc_id(self) -> None:
         payload = _tool_call(
             self.client,
@@ -1170,10 +1177,36 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         self.assertIn("scope", tools["get_geometry"]["inputSchema"]["properties"])
         self.assertIn("one WGS84 coordinate or a bounded point array", tools["resolve_point"]["description"])
         self.assertIn("navigation and enrichment tool", tools["get_loc_id_info"]["description"])
+        self.assertIn("as_of", tools["get_loc_id_info"]["inputSchema"]["properties"])
         self.assertIn("Use get_loc_id_info for hierarchy", tools["get_geometry"]["description"])
         self.assertIn("never substituted", tools["get_geometry"]["description"])
         self.assertNotIn("check_geometry", tools)
         self.assertIn("fast preflight", tools["get_geometry"]["description"])
+
+    def test_loc_id_info_returns_date_review_alert_when_as_of_is_requested(self) -> None:
+        review = {
+            "as_of": "2026-06-15", "date_review_required": True,
+            "status": "coarse_release_boundary",
+            "date_evidence_url": "https://example.org/source-date",
+        }
+        info = {"loc_id": "DEU-11", "name": "Berlin", "admin_level": 1,
+                "parent_id": "DEU", "iso3": "DEU", "has_polygon": True}
+        with (
+            mock.patch("mapmover.runtime.reference_exchange.resolve_loc_id_input",
+                       return_value={"ok": True, "loc_id": "DEU-11"}),
+            mock.patch("mapmover.geometry_handlers.get_location_info", return_value=info),
+            mock.patch("mapmover.routes.mcp._loc_id_catalog_context", return_value={}),
+            mock.patch("mapmover.runtime.source_release_review.review_loc_id",
+                       return_value=review) as review_call,
+        ):
+            result = _tool_call(
+                self.client, "get_loc_id_info",
+                {"loc_id": "DEU-11", "as_of": "2026-06-15"},
+            )
+        self.assertEqual(result["date_review"], review)
+        self.assertTrue(result["date_review_required"])
+        self.assertEqual(result["date_review_notice"], "Double-check date")
+        review_call.assert_called_once_with("DEU-11", "2026-06-15")
 
     def test_get_geometry_tool_resolves_an_admin_scope_before_shape_read(self) -> None:
         scope_result = {
