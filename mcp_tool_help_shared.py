@@ -445,6 +445,7 @@ def tool_help_payload(
     }
     access = {
         "pricing": pricing,
+        "pricing_scope": "authored_policy; active operator policy can waive settlement",
         "free_discovery": name in {"get_tool_help", "get_catalog", "get_pack", "identify_dataset_geography", "identify_reference_system"},
         "limits": limits,
         "above_free_limit": "payment_required" if pricing.startswith("paid") else (

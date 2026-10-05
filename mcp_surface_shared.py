@@ -432,7 +432,7 @@ def build_tool_definitions(*, include_paused: bool = False) -> list[dict]:
         {
             "name": "convert_reference",
             "title": "Convert Geographic Reference",
-            "description": "The single geographic reference converter. Converts one reference, or a bounded list, through DaedalMap loc_id: X -> loc_id -> Y. Omit to_system to enter the loc_id universe; provide it for any-to-any conversion. Use get_pack first when the family or country-specific system is unknown. The tools/list access metadata states the current free, account, and paid item allowances; exceeding an included allowance requires payment and exceeding the paid ceiling returns a typed cap error.",
+            "description": "The single geographic reference converter. Converts one reference, or a bounded list, through DaedalMap loc_id: X -> loc_id -> Y. Omit to_system to enter the loc_id universe; provide it for any-to-any conversion. Use get_pack first when the family or country-specific system is unknown. The tools/list access metadata states authored free, account, and paid item allowances; the active operator policy may waive payment. Exceeding the active item ceiling returns a typed cap error.",
             "inputSchema": {
                 "type": "object",
                 "properties": {

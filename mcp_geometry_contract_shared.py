@@ -255,7 +255,7 @@ def geometry_tool_publication_meta(tool_name: str) -> dict[str, Any] | None:
     }
     pricing = tool_pricing(name)
     if pricing.startswith("paid"):
-        above_free_limit = "payment_required; requests above the paid limit return a typed cap error"
+        above_free_limit = "payment under the authored policy; an active launch_free policy can waive settlement; requests above the active item limit return a typed cap error"
     elif pricing == "by_material":
         above_free_limit = "the selected material policy decides whether payment is required; requests above its lane limit return a typed cap error"
     else:
@@ -265,6 +265,7 @@ def geometry_tool_publication_meta(tool_name: str) -> dict[str, Any] | None:
         "capability_id": tool_capability_id(name),
         "family": tool_family(name),
         "pricing": pricing,
+        "pricing_scope": "authored_policy; active operator policy can waive settlement",
         "limits": {key: value for key, value in limits.items() if value is not None},
         "above_free_limit": above_free_limit,
         "meter": tool_meter(name),
