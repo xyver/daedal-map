@@ -419,6 +419,21 @@ class DataHelperTelemetryTests(unittest.TestCase):
         analytics_mock.assert_called_once()
         self.assertEqual(analytics_mock.call_args.kwargs["capability_id"], "disaster_event_lookup")
 
+    def test_get_event_logs_its_typed_failure(self) -> None:
+        with (
+            mock.patch("mapmover.routes.mcp.get_event_payload", side_effect=RuntimeError("source unavailable")),
+            mock.patch("mapmover.routes.mcp.log_api_query_event") as analytics_mock,
+        ):
+            envelope = _tool_call_envelope(
+                self.client,
+                "get_event",
+                {"event_id": "USA-HRCN-example", "pack_id": "hurricanes"},
+            )
+
+        self.assertTrue(envelope["result"]["isError"])
+        self.assertEqual(envelope["result"]["structuredContent"]["error"]["code"], "event_lookup_failed")
+        self.assertEqual(analytics_mock.call_args.kwargs["error_code"], "event_lookup_failed")
+
     def test_get_event_paid_pack_uses_shared_commercial_gate(self) -> None:
         event_payload = {
             "event_id": "USA-HRCN-example",

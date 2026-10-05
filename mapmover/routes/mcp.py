@@ -1578,6 +1578,8 @@ def _log_passthrough_data_helper(
         and str(payload.get("pack_id") or "").strip()
     ):
         analytics_pack_id = str(payload["pack_id"]).strip().lower()
+    error = payload.get("error") if isinstance(payload, dict) else None
+    typed_error_code = str(error.get("code") or "").strip() if isinstance(error, dict) else ""
     _log_mcp_tool_usage_event(
         request,
         request_id="",
@@ -1588,7 +1590,7 @@ def _log_passthrough_data_helper(
         row_count=_payload_row_count(payload),
         query_granularity="single",
         response_payload=payload,
-        error_code="tool_error" if is_error else None,
+        error_code=(typed_error_code or "tool_error") if is_error else None,
         analytics_pack_id=analytics_pack_id,
         metadata={
             "event": DATA_HELPER_CAPABILITIES.get(tool_name, tool_name),
