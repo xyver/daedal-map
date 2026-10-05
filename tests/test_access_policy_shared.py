@@ -10,6 +10,7 @@ from unittest import mock
 from access_policy_shared import (
     AccessPolicyError,
     clear_access_policy_cache,
+    free_facade_data_row_limit,
     load_access_policy,
     resolve_effective_access,
     surface_rate_limit,
@@ -20,6 +21,25 @@ from access_policy_shared import (
 class AccessPolicySharedTests(unittest.TestCase):
     def tearDown(self) -> None:
         clear_access_policy_cache()
+
+    def test_free_facade_row_limit_reloads_and_rejects_invalid_values(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "policy.json"
+            path.write_text(json.dumps({"schema_version": "1.0.0", "policy_revision": "legacy"}), encoding="utf-8")
+            with mock.patch.dict(os.environ, {"DAEDALMAP_ACCESS_POLICY_FILE": str(path)}, clear=True):
+                self.assertEqual(free_facade_data_row_limit(), 100)
+                for limit in (25, 40):
+                    path.write_text(json.dumps({
+                        "schema_version": "1.0.0", "policy_revision": f"rows-{limit}",
+                        "facades": {"free": {"data_row_limit": limit}},
+                    }), encoding="utf-8")
+                    self.assertEqual(free_facade_data_row_limit(), limit)
+                path.write_text(json.dumps({
+                    "schema_version": "1.0.0", "policy_revision": "invalid",
+                    "facades": {"free": {"data_row_limit": 501}},
+                }), encoding="utf-8")
+                with self.assertRaises(AccessPolicyError):
+                    free_facade_data_row_limit()
 
     def test_no_override_preserves_metered_default(self) -> None:
         with mock.patch.dict(os.environ, {}, clear=True):

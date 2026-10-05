@@ -59,6 +59,7 @@ DEFAULT_POLICY: dict[str, Any] = {
     "tools": {},
     "pricing": {"tools": {}},
     "rate_limits": {"surfaces": {}, "tools": {}},
+    "facades": {"free": {"data_row_limit": 100}},
 }
 
 _CACHE_KEY: tuple[str, str, int | None, int | None] | None = None
@@ -128,6 +129,11 @@ def _validate_policy(raw: Any) -> dict[str, Any]:
         version = entry.get("pricing_version")
         if version is not None and (not isinstance(version, str) or not version.strip() or len(version) > 128):
             raise AccessPolicyError(f"access policy pricing.tools.{tool_name}.pricing_version must be 1-128 characters")
+    facades = policy.get("facades")
+    free = facades.get("free") if isinstance(facades, dict) else None
+    row_limit = free.get("data_row_limit") if isinstance(free, dict) else None
+    if isinstance(row_limit, bool) or not isinstance(row_limit, int) or not 1 <= row_limit <= 500:
+        raise AccessPolicyError("access policy facades.free.data_row_limit must be an integer from 1 to 500")
     return policy
 
 
@@ -335,6 +341,10 @@ def _positive_int(value: Any) -> int | None:
     except (TypeError, ValueError):
         return None
     return parsed if parsed > 0 else None
+
+
+def free_facade_data_row_limit() -> int:
+    return int(load_access_policy()["facades"]["free"]["data_row_limit"])
 
 
 def surface_rate_limit(

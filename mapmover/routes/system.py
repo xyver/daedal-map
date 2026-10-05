@@ -1803,6 +1803,7 @@ def _mcp_remote_path(pack_id: str | None = None) -> str:
 
 
 def _mcp_pricing_payload(pack_id: str | None = None) -> dict:
+    from access_policy_shared import free_facade_data_row_limit
     from mapmover.routes.mcp import _free_pack_ids
     from tool_access_shared import (
         hosted_commercial_policy,
@@ -1814,6 +1815,12 @@ def _mcp_pricing_payload(pack_id: str | None = None) -> dict:
     )
 
     normalized = _normalize_mcp_facade_pack_id(pack_id)
+    if normalized == "free":
+        return {
+            "model": "free",
+            "notes": "No account key or payment is accepted for execution on /mcp/free. Paid material and above-free batches return typed errors.",
+            "free_data_row_limit": free_facade_data_row_limit(),
+        }
     if normalized in _free_pack_ids():
         return {
             "model": "free",
@@ -1863,6 +1870,10 @@ def _mcp_auth_notes() -> str:
 
 def _mcp_server_card_auth_notes(pack_id: str | None) -> str:
     normalized = _normalize_mcp_facade_pack_id(pack_id)
+    if normalized == "free":
+        return "No account or payment required. Calls above the free ceiling and paid data material are rejected."
+    if normalized == "data":
+        return "Discovery is free. Some pack rows and events require account credit with an X-API-Key on /mcp/account/data."
     if normalized in {"geography", "reverse-geocoding", "boundaries"}:
         return (
             "No API key required. Discovery and included calls are free; "
@@ -1889,8 +1900,12 @@ def _mcp_server_card_tools(pack_id: str | None) -> list[dict]:
         if not name:
             continue
         paid = tool_is_paid_bulk(name)
+        if normalized == "free":
+            paid = False
+        elif normalized == "data" and name in {"get_data", "get_event"}:
+            paid = True
         if name == "get_data":
-            paid = bool(normalized and _pack_is_paid(normalized))
+            paid = paid if normalized in {"free", "data"} else bool(normalized and _pack_is_paid(normalized))
         tools.append(
             {
                 "name": name,
@@ -1942,7 +1957,7 @@ def _build_mcp_server_card_payload(pack_id: str | None = None) -> dict:
         "tool_count": len(tools),
     }
     if normalized:
-        metadata.update({"facade_id": normalized, "facade_kind": pack_kind(normalized)})
+        metadata.update({"facade_id": normalized, "facade_kind": "product" if normalized in {"free", "data"} else pack_kind(normalized)})
     else:
         metadata["live_pack_ids"] = pack_ids
 

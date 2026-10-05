@@ -10,6 +10,7 @@ import re
 import time
 import threading
 import uuid
+from copy import deepcopy
 from contextlib import suppress
 from functools import lru_cache, wraps
 from typing import Any
@@ -17,7 +18,7 @@ from typing import Any
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, Response
 
-from access_policy_shared import resolve_effective_access
+from access_policy_shared import free_facade_data_row_limit, resolve_effective_access
 from mcp_surface_shared import build_mcp_instructions, build_tool_definitions
 from mcp_data_contract_shared import normalize_data_tool_error
 from mcp_tool_help_shared import topic_help_payload, tool_help_payload
@@ -385,6 +386,36 @@ PACK_SERVER_PROFILES = {
     for pack_id in (*published_pack_ids(), *tool_family_ids(), *tool_family_alias_ids())
 }
 STATIC_UTILITY_FACADE_IDS = frozenset((*tool_family_ids(), *tool_family_alias_ids()))
+PRODUCT_FACADE_PROFILES = {
+    "free": {
+        "name": "com.daedalmap/free",
+        "title": "DaedalMap Free Geography and Data",
+        "version": "1.0.0",
+        "description": "Free discovery, bounded geographic reference conversion through loc_id, point and identity lookup, and rows from free data packs. This endpoint never charges account credit.",
+        "registry_meta": {
+            "categories": ["geospatial", "data"],
+            "highlights": ["Free catalog discovery", "Bounded reference conversion through loc_id", "Rows from free data packs"],
+        },
+    },
+    "data": {
+        "name": "com.daedalmap/data",
+        "title": "DaedalMap Data Access",
+        "version": "1.0.0",
+        "description": "Discover maintained data packs and query their rows or events. Pack material policy determines whether a hosted call is free or requires account credit.",
+        "registry_meta": {
+            "categories": ["data", "geospatial"],
+            "highlights": ["Catalog-backed data pack discovery", "Structured pack rows and event detail", "Free and account-credit material lanes"],
+        },
+    },
+}
+PRODUCT_FACADE_TOOL_NAMES = {
+    "free": frozenset({
+        "get_tool_help", "get_catalog", "get_pack", "resolve_point",
+        "get_loc_id_info", "identify_reference_system", "identify_dataset_geography",
+        "convert_reference", "compare_geographies", "get_data",
+    }),
+    "data": frozenset({"get_tool_help", "get_catalog", "get_pack", "get_data", "get_event"}),
+}
 
 PACK_TOOL_ALLOWLIST: dict[str, set[str]] = pack_tool_allowlists()
 
@@ -481,7 +512,7 @@ def _catalog_access_profiles(pack_id: str | None = None) -> dict[str, str]:
 
 def _normalize_pack_id(pack_id: str | None) -> str | None:
     normalized = str(pack_id or "").strip().lower()
-    if normalized in STATIC_UTILITY_FACADE_IDS:
+    if normalized in STATIC_UTILITY_FACADE_IDS or normalized in PRODUCT_FACADE_PROFILES:
         return normalized
     return normalized if _api_catalog_pack(normalized) is not None else None
 
@@ -499,6 +530,8 @@ def _api_catalog_pack(pack_id: str | None) -> dict[str, Any] | None:
 
 
 def _server_profile(pack_id: str) -> dict[str, Any]:
+    if pack_id in PRODUCT_FACADE_PROFILES:
+        return dict(PRODUCT_FACADE_PROFILES[pack_id])
     static = PACK_SERVER_PROFILES.get(pack_id) if pack_id in STATIC_UTILITY_FACADE_IDS else None
     if isinstance(static, dict):
         return dict(static)
@@ -521,6 +554,8 @@ def _facade_tool_names(pack_id: str | None) -> set[str] | None:
     normalized = _normalize_pack_id(pack_id)
     if not normalized:
         return None
+    if normalized in PRODUCT_FACADE_TOOL_NAMES:
+        return set(PRODUCT_FACADE_TOOL_NAMES[normalized])
     return set(PACK_TOOL_ALLOWLIST.get(normalized) or {
         "get_tool_help", "get_catalog", "get_pack", "get_data",
     })
@@ -532,18 +567,77 @@ def _tool_allowed_for_facade(tool_name: str, pack_id: str | None) -> bool:
 
 
 @lru_cache(maxsize=128)
-def _facade_tools_cached(pack_id: str | None, _epoch: int) -> list[dict[str, Any]]:
+def _facade_tools_cached(pack_id: str | None, _epoch: int, free_limits: tuple[int, int, int] | None) -> list[dict[str, Any]]:
     allowed = _facade_tool_names(pack_id)
     tools = _tool_definitions()
     if allowed is None:
         return tools
-    return [tool for tool in tools if str(tool.get("name") or "") in allowed]
+    selected = [tool for tool in tools if str(tool.get("name") or "") in allowed]
+    if pack_id != "free":
+        return selected
+    free_tools = []
+    for tool in selected:
+        definition = deepcopy(tool)
+        name = str(definition.get("name") or "")
+        if name == "resolve_point":
+            definition["description"] = definition["description"].replace(
+                "Use a returned shallow loc_id with resolve_deep_point for Admin 4-6 or one explicit family. ",
+                "Use get_loc_id_info to inspect a returned loc_id. ",
+            )
+        if name == "get_data":
+            definition["description"] = definition["description"].replace(
+                "Disaster event rows include stable event_id values for get_event drill-down. ",
+                "",
+            )
+        if name in {"resolve_point", "convert_reference", "get_data"}:
+            definition["description"] = (
+                f"{definition.get('description', '').rstrip()} On this free endpoint, "
+                "calls above the free ceiling or using paid data material are rejected without a charge."
+            )
+        if name == "convert_reference":
+            definition["description"] = definition["description"].replace(
+                "The tools/list access metadata states authored free, account, and paid item allowances; the active operator policy may waive payment. ",
+                "",
+            )
+        schema = definition.get("inputSchema") or {}
+        properties = schema.get("properties") or {}
+        if name in {"resolve_point", "convert_reference"}:
+            field = str(tool_profile(name).get("item_field") or "")
+            if isinstance(properties.get(field), dict):
+                properties[field]["maxItems"] = free_limits[0 if name == "resolve_point" else 1]
+        if name == "get_data" and isinstance(properties.get("limit"), dict):
+            properties["limit"]["maximum"] = free_limits[2]
+        access = (definition.get("_meta") or {}).get("com.daedalmap/access")
+        if isinstance(access, dict):
+            access.update({
+                "pricing": "free_facade",
+                "pricing_scope": "this facade enforces free execution only",
+                "above_free_limit": "free_facade_limit_exceeded",
+                "limits": {"free": free_limits[2] if name == "get_data" else free_limits[0 if name == "resolve_point" else 1]}
+                if name in {"resolve_point", "convert_reference", "get_data"} else access.get("limits", {}),
+            })
+            for key in ("meter", "pricing_version", "price_micro_usd", "pricing_authority"):
+                access.pop(key, None)
+        guidance = (definition.get("_meta") or {}).get("com.daedalmap/blind-caller")
+        if isinstance(guidance, dict):
+            guidance["next_tools"] = [value for value in guidance.get("next_tools") or [] if value in allowed]
+            guidance["wrong_input_first_call"] = [
+                value for value in guidance.get("wrong_input_first_call") or []
+                if isinstance(value, dict) and value.get("tool") in allowed
+            ]
+        free_tools.append(definition)
+    return free_tools
 
 
 def _facade_tools(pack_id: str | None) -> list[dict[str, Any]]:
     from mapmover.catalog_cache_policy import control_catalog_cache_epoch
 
-    return _facade_tools_cached(pack_id, control_catalog_cache_epoch())
+    free_limits = (
+        _tool_batch_item_limit("resolve_point"),
+        _tool_batch_item_limit("convert_reference"),
+        free_facade_data_row_limit(),
+    ) if pack_id == "free" else None
+    return _facade_tools_cached(pack_id, control_catalog_cache_epoch(), free_limits)
 
 
 def _tool_facade_urls(tool_name: str) -> list[str]:
@@ -553,7 +647,7 @@ def _tool_facade_urls(tool_name: str) -> list[str]:
         for pack in (load_api_catalog() or {}).get("packs") or []
         if isinstance(pack, dict) and str(pack.get("pack_id") or "").strip()
     }
-    for pack_id in sorted(set(STATIC_UTILITY_FACADE_IDS) | catalog_pack_ids):
+    for pack_id in sorted(set(STATIC_UTILITY_FACADE_IDS) | set(PRODUCT_FACADE_PROFILES) | catalog_pack_ids):
         if tool_name in _facade_tool_names(pack_id):
             urls.append(f"/mcp/{pack_id}")
     return urls
@@ -586,6 +680,10 @@ def _resource_allowed_for_facade(uri: str, pack_id: str | None) -> bool:
     normalized = _normalize_pack_id(pack_id)
     if not normalized:
         return True
+    if normalized == "free":
+        return uri in {"daedalmap://catalog", "daedalmap://docs/loc-id"}
+    if normalized == "data":
+        return uri in PACK_RESOURCE_COMMON_URIS
     if uri in PACK_RESOURCE_COMMON_URIS:
         return True
     return uri == f"daedalmap://pack/{normalized}"
@@ -605,7 +703,7 @@ def _facade_resources(pack_id: str | None) -> list[dict[str, Any]]:
 
 def _filter_catalog_payload_for_facade(payload: Any, pack_id: str | None) -> Any:
     normalized = _normalize_pack_id(pack_id)
-    if not normalized or not isinstance(payload, dict):
+    if not normalized or normalized in PRODUCT_FACADE_PROFILES or not isinstance(payload, dict):
         return payload
     filtered = dict(payload)
     for key in ("packs", "items", "data", "sources"):
@@ -624,7 +722,7 @@ def _augment_catalog_with_tool_families(payload: Any, pack_id: str | None) -> An
         return payload
     family_ids = set(tool_family_ids())
     normalized = _normalize_pack_id(pack_id)
-    if normalized:
+    if normalized and normalized not in PRODUCT_FACADE_PROFILES:
         # On a facade, surface that facade's own entry (family or alias); the
         # umbrella catalog still lists only the canonical tool families.
         if normalized in family_ids or normalized in set(tool_family_alias_ids()):
@@ -632,7 +730,7 @@ def _augment_catalog_with_tool_families(payload: Any, pack_id: str | None) -> An
         else:
             entries = []
     else:
-        entries = [tool_family_catalog_entry(fid) for fid in tool_family_ids()]
+        entries = [] if normalized == "data" else [tool_family_catalog_entry(fid) for fid in tool_family_ids()]
     augmented = dict(payload)
     augmented["tool_families"] = entries
     augmented["tool_family_count"] = len(entries)
@@ -648,7 +746,7 @@ def _augment_catalog_with_tool_families(payload: Any, pack_id: str | None) -> An
 
 def _get_data_targets_facade(arguments: dict[str, Any], pack_id: str | None) -> bool:
     normalized = _normalize_pack_id(pack_id)
-    if not normalized:
+    if not normalized or normalized in PRODUCT_FACADE_PROFILES:
         return True
     requested_pack_id = str(arguments.get("pack_id") or "").strip().lower()
     requested_source_id = str(arguments.get("source_id") or "").strip()
@@ -657,6 +755,35 @@ def _get_data_targets_facade(arguments: dict[str, Any], pack_id: str | None) -> 
     if requested_source_id:
         return False
     return False
+
+
+def _free_facade_gate(request: Request, tool_name: str, arguments: dict[str, Any]) -> tuple[str, str] | None:
+    """Fail closed before any paid tool or pack can enter settlement."""
+    if tool_name in {"resolve_point", "convert_reference"}:
+        field = str(tool_profile(tool_name).get("item_field") or "")
+        batch = arguments.get(field)
+        if batch is not None and not isinstance(batch, list):
+            return "invalid_free_batch", f"{field} must be an array"
+        count = len(batch) if isinstance(batch, list) else 1
+        limit = _tool_batch_item_limit(tool_name)
+        if count > limit:
+            return "free_facade_limit_exceeded", f"{tool_name} accepts at most {limit} items on /mcp/free; split the request"
+    if tool_name == "get_data":
+        row_limit = free_facade_data_row_limit()
+        pack_id = str(arguments.get("pack_id") or "").strip().lower()
+        if pack_id not in _free_pack_ids() or pack_requires_commercial_access(pack_id):
+            return "free_pack_required", "get_data on /mcp/free requires a published free data pack; inspect get_catalog"
+        access = _pack_material_effective_access(request, pack_id)
+        if not access.get("allow") or access.get("settlement_required"):
+            return "free_material_required", "This pack is not cleared for free hosted retrieval"
+        try:
+            limit = int(arguments.get("limit", row_limit))
+        except (ValueError, TypeError):
+            return "invalid_free_limit", f"limit must be an integer between 1 and {row_limit}"
+        if not 1 <= limit <= row_limit:
+            return "free_facade_limit_exceeded", f"get_data accepts at most {row_limit} rows on /mcp/free"
+        arguments.setdefault("limit", row_limit)
+    return None
 
 
 def _parse_env_int(name: str, default: int) -> int:
@@ -1626,6 +1753,21 @@ def get_server_info(pack_id: str | None = None) -> dict[str, Any]:
 
 def get_server_description(pack_id: str | None = None) -> str:
     normalized = _normalize_pack_id(pack_id)
+    if normalized == "free":
+        return (
+            f"{PRODUCT_FACADE_PROFILES['free']['description']} Safety: {AGENT_SAFETY_NOTICE} "
+            "Call get_catalog for the current geometry families and data packs. "
+            "Use identify_reference_system and convert_reference for a bounded external-reference to loc_id workflow, "
+            "then get_loc_id_info or convert_reference again for a destination system. "
+            f"Use get_data only for free packs shown by the catalog, up to {free_facade_data_row_limit()} rows per call. "
+            "This endpoint rejects paid material and above-free batches even when an account key is supplied."
+        )
+    if normalized == "data":
+        return (
+            f"{PRODUCT_FACADE_PROFILES['data']['description']} Safety: {AGENT_SAFETY_NOTICE} "
+            "Start with get_catalog, then get_pack, then get_data with exact metrics and filters. "
+            "Use get_event only with an exact event_id from a returned data row."
+        )
     if normalized in {"geography", "reverse-geocoding", "boundaries"}:
         coverage_claim = str(geometry_capability_summary().get("public_claim") or "").strip()
         coverage_prefix = f"Coverage: {coverage_claim} " if coverage_claim else ""
@@ -5249,7 +5391,18 @@ async def mcp_endpoint_info(pack_id: str | None = None):
     normalized_pack_id = _normalize_pack_id(pack_id)
     if pack_id and not normalized_pack_id:
         return JSONResponse({"error": "Pack MCP facade not found"}, status_code=404)
-    if normalized_pack_id in {"geography", "reverse-geocoding", "boundaries"}:
+    if normalized_pack_id == "free":
+        how_to_start = [
+            "Call get_catalog, then get_pack for the selected family or free data pack.",
+            "Use identify_reference_system and convert_reference to reach loc_id, then get_loc_id_info or convert_reference to a destination system.",
+            "Use get_data for free packs only; this endpoint never charges account credit.",
+        ]
+    elif normalized_pack_id == "data":
+        how_to_start = [
+            "Call get_catalog with catalog='data', then get_pack for the selected pack.",
+            "Call get_data with exact metric ids and filters; use get_event for one returned event_id.",
+        ]
+    elif normalized_pack_id in {"geography", "reverse-geocoding", "boundaries"}:
         how_to_start = [
             "Call get_tool_help with topic='geometry' for the family workflow.",
             "Call get_catalog with catalog='geometry', then get_pack for one selected family.",
@@ -5456,6 +5609,33 @@ async def mcp_endpoint(request: Request, pack_id: str | None = None):
         return _jsonrpc_error(request_id, -32601, f"Tool '{tool_name}' not found")
     if not _tool_allowed_for_facade(tool_name, normalized_pack_id):
         return _jsonrpc_error(request_id, -32601, f"Tool '{tool_name}' is not available on this MCP facade")
+    if normalized_pack_id == "free":
+        gate_started_at = time.perf_counter()
+        free_denial = _free_facade_gate(request, tool_name, arguments)
+        if free_denial is not None:
+            code, message = free_denial
+            payload = {
+                "ok": False, "error": {"code": code, "message": message},
+                "facade": "free", "request_id": caller_request_id or None,
+            }
+            _log_mcp_tool_usage_event(
+                request,
+                request_id=caller_request_id,
+                tool_name=tool_name,
+                capability_id=tool_capability_id(tool_name),
+                decision="deny",
+                started_at=gate_started_at,
+                row_count=0,
+                query_granularity="batch" if isinstance(arguments.get("items") or arguments.get("points"), list) else "single",
+                response_payload=payload,
+                error_code=code,
+                analytics_pack_id=(
+                    str(arguments.get("pack_id") or "").strip().lower()
+                    if tool_name == "get_data" else ANALYTICS_PACK_GEOGRAPHY
+                ),
+                metadata={"free_facade_guard": True},
+            )
+            return _jsonrpc_response(_tool_result(payload, is_error=True), request_id)
     scope_denial = _mcp_scope_denial(request, tool_name, request_id)
     if scope_denial is not None:
         return scope_denial
@@ -5487,6 +5667,31 @@ async def mcp_endpoint(request: Request, pack_id: str | None = None):
                 )
             except ValueError as exc:
                 return _jsonrpc_error(request_id, -32602, str(exc))
+            if normalized_pack_id == "free":
+                payload["facade_scope"] = (
+                    "Only the tools in tools/list can execute here. get_data accepts free packs only; "
+                    "paid material and above-free batches return typed errors without a charge."
+                )
+                if topic == "geometry":
+                    payload["notes"] = [
+                        note for note in payload.get("notes") or []
+                        if "Paying raises" not in str(note) and "polygon" not in str(note).lower()
+                    ]
+                    payload["workflows"] = [
+                        {
+                            "name": "external_reference_through_loc_id",
+                            "steps": [
+                                "inspect the family with get_catalog and get_pack",
+                                "call identify_reference_system when the source system is unknown",
+                                "call convert_reference to obtain loc_id",
+                                "call get_loc_id_info or convert_reference from loc_id to another system",
+                            ],
+                        },
+                        {
+                            "name": "coordinate_to_loc_id",
+                            "steps": ["call resolve_point", "inspect the returned loc_ids with get_loc_id_info"],
+                        },
+                    ]
             return _finish_data_helper(
                 request,
                 tool_name=tool_name,
@@ -5494,9 +5699,12 @@ async def mcp_endpoint(request: Request, pack_id: str | None = None):
                 payload=payload,
                 rpc_request_id=request_id,
             )
-        target_definition = _tool_definition(target_name)
+        target_definition = next(
+            (tool for tool in _facade_tools(normalized_pack_id) if tool.get("name") == target_name),
+            None,
+        )
         if target_definition is None or not _tool_allowed_for_facade(target_name, normalized_pack_id):
-            unavailable_here = target_definition is not None
+            unavailable_here = _tool_definition(target_name) is not None
             return _finish_data_helper(
                 request,
                 tool_name=tool_name,
@@ -5533,10 +5741,34 @@ async def mcp_endpoint(request: Request, pack_id: str | None = None):
         payload = tool_help_payload(
             target_name,
             tool_definition=target_definition,
-            available_on_facades=_tool_facade_urls(target_name),
+            available_on_facades=["/mcp/free"] if normalized_pack_id == "free" else _tool_facade_urls(target_name),
             effective_limits=effective_limits,
             local_installed=is_local_loopback_request(request),
         )
+        if normalized_pack_id == "free":
+            payload["access"].update({
+                "pricing": "free_facade",
+                "pricing_scope": "this facade enforces free execution only",
+                "above_free_limit": "free_facade_limit_exceeded",
+                "payment_required": False,
+            })
+            for key in ("caller_tiers", "trusted_artifact_bypass", "hosted_limits"):
+                payload["access"].pop(key, None)
+            payload["access"]["limits"] = {
+                "free_item_limit": free_facade_data_row_limit() if target_name == "get_data" else _tool_batch_item_limit(target_name)
+            } if target_name in {"resolve_point", "convert_reference", "get_data"} else payload["access"].get("limits", {})
+            if target_name == "get_data":
+                payload["examples"] = [{
+                    "pack_id": "<free pack id from get_catalog>",
+                    "metrics": ["<metric id from get_pack>"],
+                    "filters": {},
+                    "limit": free_facade_data_row_limit(),
+                }]
+                payload["access"]["material_policy"] = "published free packs only"
+            payload["recommended_next_calls"] = [
+                name for name in payload.get("recommended_next_calls") or []
+                if name in PRODUCT_FACADE_TOOL_NAMES["free"]
+            ]
         return _finish_data_helper(
             request,
             tool_name=tool_name,
@@ -5558,6 +5790,8 @@ async def mcp_endpoint(request: Request, pack_id: str | None = None):
         time_range = arguments.get("time_range")
         if catalog not in {"data", "geometry"}:
             return _jsonrpc_error(request_id, -32602, "catalog must be 'data' or 'geometry'")
+        if normalized_pack_id == "data" and catalog != "data":
+            return _jsonrpc_error(request_id, -32602, "This MCP facade exposes catalog='data' only")
         if detail not in {"lite", "full", "download"}:
             return _jsonrpc_error(request_id, -32602, "detail must be 'lite', 'full', or 'download'")
         if country_scope and (catalog != "geometry" or detail == "download"):
@@ -5654,12 +5888,14 @@ async def mcp_endpoint(request: Request, pack_id: str | None = None):
                 is_error=True,
                 error_code="geometry_family_required",
             )
-        pack_id = pack_id or normalized_pack_id or ""
+        pack_id = pack_id or (normalized_pack_id if normalized_pack_id not in PRODUCT_FACADE_PROFILES else "") or ""
         if not pack_id:
             return _jsonrpc_error(request_id, -32602, "pack_id is required")
         inferred_catalog = "geometry" if facade_is_geometry or pack_id.lower() in geometry_ids else "data"
         selected_catalog = requested_catalog or inferred_catalog
-        if normalized_pack_id and not facade_is_geometry and pack_id.lower() != normalized_pack_id:
+        if normalized_pack_id == "data" and selected_catalog != "data":
+            return _jsonrpc_error(request_id, -32602, "This MCP facade exposes data packs only")
+        if normalized_pack_id and normalized_pack_id not in PRODUCT_FACADE_PROFILES and not facade_is_geometry and pack_id.lower() != normalized_pack_id:
             return _jsonrpc_error(request_id, -32602, f"Pack '{pack_id}' is not available on this MCP facade")
         if requested_catalog == "data" and inferred_catalog == "geometry":
             return _jsonrpc_error(
