@@ -5210,6 +5210,8 @@ async def _execute_get_event_tool(
 # The allowlist keeps the analytics dimension bounded; unknown tags fold to
 # "other". Add a slug here before handing a registry its tagged URL.
 MCP_SOURCE_REGISTRIES = {
+    "openai",
+    "claude",
     "glama",
     "pulsemcp",
     "smithery",
