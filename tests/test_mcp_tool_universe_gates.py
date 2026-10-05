@@ -590,7 +590,7 @@ class BlindCallerHelpTests(unittest.TestCase):
 
         convert_description = definitions["convert_reference"]["description"].lower()
         self.assertNotIn("no payment required", convert_description)
-        self.assertIn("requires payment", convert_description)
+        self.assertIn("active operator policy may waive payment", convert_description)
 
     def test_cached_retired_data_tool_gets_replacement_and_help_path(self) -> None:
         envelope = _tool_call_envelope(
@@ -838,6 +838,7 @@ class BlindCallerHelpTests(unittest.TestCase):
         payload = envelope["result"]["structuredContent"]
         self.assertTrue(payload["ok"])
         self.assertEqual(payload["access"]["pricing"], "paid_bulk_x402_base_usdc")
+        self.assertIn("active operator policy can waive settlement", payload["access"]["pricing_scope"])
         self.assertEqual(payload["access"]["limits"]["free_item_limit"], 100)
         self.assertEqual(payload["access"]["limits"]["account_item_limit"], 1000)
         self.assertEqual(payload["access"]["limits"]["paid_item_limit"], 10000)
@@ -872,6 +873,7 @@ class BlindCallerHelpTests(unittest.TestCase):
         payload = envelope["result"]["structuredContent"]
         self.assertFalse(payload["ok"])
         self.assertEqual(payload["error"]["code"], "tool_not_found")
+        self.assertEqual(payload["guidance"]["action"], "refresh_tools_list")
 
     def test_help_call_has_stable_free_analytics(self) -> None:
         with mock.patch("mapmover.routes.mcp.log_api_query_event") as analytics_mock:

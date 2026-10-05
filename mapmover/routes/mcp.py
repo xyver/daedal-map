@@ -1474,6 +1474,8 @@ def _log_mcp_tool_usage_event(
     request.state.analytics_source_id = tool_name
     request.state.analytics_metadata = {key: value for key, value in merged_metadata.items() if value is not None}
     try:
+        ip_hash = hash_ip_for_analytics(get_client_ip(request))
+        caller_identity = request_caller_identity(request, ip_hash=ip_hash)
         log_api_query_event(
             request_id=request_id or f"mcp-{tool_name}-{uuid.uuid4().hex[:12]}",
             capability_id=capability_id,
@@ -1482,8 +1484,11 @@ def _log_mcp_tool_usage_event(
             decision=decision,
             payment_rail=payment_rail,
             artifact_token_id=artifact_token_id,
-            auth_user_id=getattr(request.state, "auth_user_id", None),
-            ip_hash=hash_ip_for_analytics(get_client_ip(request)),
+            auth_user_id=getattr(request.state, "auth_user_id", None) or caller_identity.auth_user_id,
+            ip_hash=ip_hash,
+            caller_kind=caller_identity.kind,
+            caller_binding=caller_identity.binding,
+            caller_confidence=caller_identity.confidence,
             user_agent=request.headers.get("user-agent", "").strip() or None,
             execution_latency_ms=int((time.perf_counter() - started_at) * 1000),
             row_count=row_count,
@@ -1771,21 +1776,32 @@ def _provenance_summary(payload: dict[str, Any]) -> dict[str, Any]:
 
 def _tool_result(payload: Any, *, is_error: bool = False) -> dict[str, Any]:
     if is_error and isinstance(payload, dict):
+        error = payload.get("error")
+        capacity_error = isinstance(error, dict) and error.get("code") == "mcp_execution_capacity"
         if "guidance" not in payload:
             payload = {
                 **payload,
-                "guidance": {
-                    "action": "correct_call_then_retry",
-                    "message": "Use the typed error and this tool's input schema to correct the call. Call get_tool_help with the same tool name if the contract is unfamiliar.",
-                    "help_tool": "get_tool_help",
-                },
+                "guidance": (
+                    {
+                        "action": "wait_then_retry",
+                        "message": (
+                            f"The server is busy. Wait {payload.get('retry_after', 2)} seconds, "
+                            "then retry the same call."
+                        ),
+                    }
+                    if capacity_error else {
+                        "action": "correct_call_then_retry",
+                        "message": "Use the typed error and this tool's input schema to correct the call. Call get_tool_help with the same tool name if the contract is unfamiliar.",
+                        "help_tool": "get_tool_help",
+                    }
+                ),
             }
         if "clarification" not in payload:
             payload = {
                 **payload,
                 "clarification": {
                     "required": False,
-                    "reason": "client_call_correction",
+                    "reason": "server_busy" if capacity_error else "client_call_correction",
                     "questions": [],
                 },
             }
@@ -5476,6 +5492,7 @@ async def mcp_endpoint(request: Request, pack_id: str | None = None):
             )
         target_definition = _tool_definition(target_name)
         if target_definition is None or not _tool_allowed_for_facade(target_name, normalized_pack_id):
+            unavailable_here = target_definition is not None
             return _finish_data_helper(
                 request,
                 tool_name=tool_name,
@@ -5486,6 +5503,13 @@ async def mcp_endpoint(request: Request, pack_id: str | None = None):
                     "error": {
                         "code": "tool_not_found",
                         "message": f"Tool '{target_name}' is not available on this MCP facade",
+                    },
+                    "guidance": {
+                        "action": "refresh_tools_list" if unavailable_here else "check_tool_name",
+                        "message": (
+                            "Call tools/list on this facade and choose one of its listed tools."
+                            if unavailable_here else "Call tools/list to check the current tool names."
+                        ),
                     },
                 },
                 rpc_request_id=request_id,
@@ -5594,7 +5618,7 @@ async def mcp_endpoint(request: Request, pack_id: str | None = None):
         rate_limit_response = _live_tool_rate_limit_response(request, tool_name, request_id)
         if rate_limit_response:
             return rate_limit_response
-        pack_id = str(arguments.get("pack_id") or normalized_pack_id or "").strip()
+        pack_id = str(arguments.get("pack_id") or "").strip()
         detail = str(arguments.get("detail") or "lite").strip().lower()
         requested_catalog = str(arguments.get("catalog") or "").strip().lower()
         country_scope = str(arguments.get("country_scope") or "").strip().upper()
@@ -5603,10 +5627,32 @@ async def mcp_endpoint(request: Request, pack_id: str | None = None):
             return _jsonrpc_error(request_id, -32602, "detail must be 'lite', 'full', or 'download'")
         if requested_catalog and requested_catalog not in {"data", "geometry"}:
             return _jsonrpc_error(request_id, -32602, "catalog must be 'data' or 'geometry'")
-        if not pack_id:
-            return _jsonrpc_error(request_id, -32602, "pack_id is required")
         geometry_ids = set(tool_family_ids()) | set(tool_family_alias_ids())
         facade_is_geometry = normalized_pack_id in geometry_ids
+        if not pack_id and facade_is_geometry:
+            return _finish_data_helper(
+                request,
+                tool_name=tool_name,
+                started_at=helper_started_at,
+                payload={
+                    "ok": False,
+                    "catalog": "geometry",
+                    "error": {
+                        "code": "geometry_family_required",
+                        "message": "Choose one published geometry family and supply its pack_id.",
+                    },
+                    "guidance": {
+                        "action": "discover_geometry_families",
+                        "next_call": {"tool": "get_catalog", "arguments": {"catalog": "geometry"}},
+                    },
+                },
+                rpc_request_id=request_id,
+                is_error=True,
+                error_code="geometry_family_required",
+            )
+        pack_id = pack_id or normalized_pack_id or ""
+        if not pack_id:
+            return _jsonrpc_error(request_id, -32602, "pack_id is required")
         inferred_catalog = "geometry" if facade_is_geometry or pack_id.lower() in geometry_ids else "data"
         selected_catalog = requested_catalog or inferred_catalog
         if normalized_pack_id and not facade_is_geometry and pack_id.lower() != normalized_pack_id:

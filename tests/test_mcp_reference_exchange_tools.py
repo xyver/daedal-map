@@ -278,7 +278,15 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         self.assertEqual(envelope["result"]["serverInfo"]["version"], "1.6.1")
 
     def test_browser_mcp_metadata_is_bounded_and_reaches_usage_analytics(self) -> None:
-        with mock.patch("mapmover.routes.mcp.log_api_query_event") as analytics_mock:
+        caller = CallerIdentity(
+            kind=KIND_ACCOUNT,
+            identifier="test-account",
+            confidence=CONFIDENCE_VERIFIED,
+            auth_user_id="test-account",
+        )
+        with mock.patch("mapmover.routes.mcp.log_api_query_event") as analytics_mock, mock.patch(
+            "mapmover.routes.mcp.request_caller_identity", return_value=caller
+        ):
             envelope = _mcp_call(
                 self.client,
                 "tools/call",
@@ -302,6 +310,10 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         self.assertEqual(metadata["visitor_id"], "v1.0123456789abcdef")
         self.assertEqual(metadata["first_touch_source"], "newsletter")
         self.assertNotIn("ignored_authority", metadata)
+        self.assertEqual(analytics_mock.call_args.kwargs["caller_kind"], KIND_ACCOUNT)
+        self.assertEqual(analytics_mock.call_args.kwargs["caller_binding"], "account:test-account")
+        self.assertEqual(analytics_mock.call_args.kwargs["caller_confidence"], CONFIDENCE_VERIFIED)
+        self.assertEqual(analytics_mock.call_args.kwargs["auth_user_id"], "test-account")
 
     def test_large_structured_tool_result_summarizes_text_copy(self) -> None:
         payload = {
@@ -492,6 +504,9 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
 
         self.assertEqual(payload["error"]["code"], "mcp_execution_capacity")
         self.assertEqual(payload["retry_after"], 2)
+        self.assertEqual(payload["guidance"]["action"], "wait_then_retry")
+        self.assertIn("retry the same call", payload["guidance"]["message"])
+        self.assertEqual(payload["clarification"]["reason"], "server_busy")
         self.assertEqual(self.analytics_state["error_code"], "mcp_execution_capacity")
         self.assertTrue(self.analytics_state["concurrency_rejected"])
         analytics = analytics_mock.call_args.kwargs
@@ -1606,6 +1621,15 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         self.assertEqual(payload["countries"], ["CAN", "USA"])
         self.assertEqual(payload["next_step"]["tool"], "get_pack")
         self.assertEqual(payload["next_step"]["arguments"]["country_scope"], "<ISO3 from countries>")
+
+    def test_geometry_facade_get_pack_requires_a_selected_family(self) -> None:
+        payload = _tool_call(self.client, "get_pack", {}, path="/mcp/boundaries")
+
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["error"]["code"], "geometry_family_required")
+        self.assertEqual(payload["guidance"]["next_call"], {
+            "tool": "get_catalog", "arguments": {"catalog": "geometry"},
+        })
 
     def test_get_pack_geometry_download_links_selected_family_and_raw_catalog(self) -> None:
         payload = _tool_call(
