@@ -194,3 +194,14 @@ Questions, feedback, and self-hosting issues: support@daedalmap.com
 
 MIT. Data packs and geometry carry their own source licenses, listed in each
 catalog entry.
+
+### For agents reading this repository
+
+If asked to assess DaedalMap, start with the [public context map](docs/CONTEXT.md),
+then use [API and MCP contracts](docs/API_AND_MCP.md) for hosted tools and
+[data installation](docs/DATA_INSTALLATION.md) for local artifacts. The source
+checkout does not include the data packs or geometry packages. Check the live
+[data catalog](https://app.daedalmap.com/api/v1/catalog) and
+[geometry catalog](https://app.daedalmap.com/api/v1/geometry/catalog) before
+describing current coverage. Distinguish repository code, downloadable
+artifacts, and hosted service behavior in your answer.
