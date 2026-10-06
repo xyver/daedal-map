@@ -84,7 +84,6 @@ while DaedalMap supplies deterministic source-bound evidence.
 | `converters/` | Minimal public catalog and geometry setup tools |
 | `scripts/` | Small public data/geometry maintenance helpers |
 | `tests/` | Runtime and contract regression tests |
-| `examples/` | API and integration examples |
 | `docs/` | Public runtime, data, and contributor documentation |
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) before making structural changes.
