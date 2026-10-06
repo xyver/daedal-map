@@ -27,6 +27,16 @@
  * Lifetime is 400 days: Chrome clamps cookie Max-Age to 400 days, and that
  * also sits at the 13-month ceiling CNIL and the ICO point to for analytics
  * identifiers. Longer values are silently truncated by the browser anyway.
+ *
+ * Consent. EU/EEA, UK, and Swiss visitors must opt in before analytics
+ * cookies are set. The www server sets dm_region ("consent" or "notice") on
+ * the parent domain from Cloudflare's country header; app.daedalmap.com is
+ * DNS-only and the storefront is static, so they read that cookie. With no
+ * region known, the visitor is treated as needing consent. Until analytics
+ * are allowed, this file mints no dm_vid/dm_ft and pages must not load GA:
+ * they put their GA bootstrap in dmVisitor.whenAnalyticsAllowed(fn).
+ * dm_consent records the visitor's choice; dmVisitor.openSettings() reopens
+ * the banner from a footer or privacy-page link.
  */
 (function (global) {
   "use strict";
@@ -36,6 +46,12 @@
   var OPT_OUT_COOKIE = "dm_no_ga";
   var OPT_OUT_STORAGE_KEY = "dm_no_ga";
   var MAX_AGE_SECONDS = 400 * 24 * 60 * 60;
+  var CONSENT_COOKIE = "dm_consent";
+  var REGION_COOKIE = "dm_region";
+  // CNIL recommends asking again after about six months.
+  var CONSENT_MAX_AGE_SECONDS = 182 * 24 * 60 * 60;
+  var GA_MEASUREMENT_ID = "G-WTF95W3759";
+  var PRIVACY_URL = "https://www.daedalmap.com/privacy";
 
   // Our own hosts. A referrer from one of these is internal navigation, not an
   // acquisition source, and must never overwrite a real first touch.
@@ -264,19 +280,45 @@
 
   var state = {
     suppressed: true,
+    consent: "pending",
     visitorId: "",
     firstTouch: null
   };
+  var allowedCallbacks = [];
 
-  function init() {
-    state.suppressed = suppressed();
-    if (state.suppressed) {
-      // Deliberately do not mint an id for a suppressed browser. An owner
-      // browsing with ?noga=1 should leave no analytics identity behind at
-      // all, not merely be filtered out downstream.
-      stripGoogleLinkerParams();
-      return;
+  /* "granted", "denied", or "pending" (banner needed). Outside consent
+   * regions analytics default on, and an explicit "denied" still wins. */
+  function consentState() {
+    var choice = readCookie(CONSENT_COOKIE);
+    if (choice === "granted" || choice === "denied") return choice;
+    return readCookie(REGION_COOKIE) === "notice" ? "granted" : "pending";
+  }
+
+  function analyticsAllowed() {
+    return !state.suppressed && state.consent === "granted";
+  }
+
+  /* Remove every analytics cookie this browser holds for our domains. GA
+   * cookies are _ga and _ga_<container>; they may sit on the parent domain or
+   * the exact host, so both are cleared. */
+  function clearAnalyticsCookies() {
+    var names = [VISITOR_COOKIE, FIRST_TOUCH_COOKIE];
+    try {
+      var parts = String(global.document.cookie || "").split(";");
+      for (var i = 0; i < parts.length; i += 1) {
+        var name = parts[i].split("=")[0].trim();
+        if (name === "_ga" || name.indexOf("_ga_") === 0) names.push(name);
+      }
+    } catch (e) {}
+    for (var j = 0; j < names.length; j += 1) {
+      deleteCookie(names[j]);
+      try { global.document.cookie = names[j] + "=; path=/; max-age=0"; } catch (e) {}
     }
+    state.visitorId = "";
+    state.firstTouch = null;
+  }
+
+  function mintIdentity() {
     state.visitorId = readCookie(VISITOR_COOKIE);
     if (!state.visitorId || state.visitorId.indexOf("v1.") !== 0) {
       state.visitorId = randomId();
@@ -290,7 +332,118 @@
       state.firstTouch = computeFirstTouch();
       writeCookie(FIRST_TOUCH_COOKIE, encodeFirstTouch(state.firstTouch), MAX_AGE_SECONDS);
     }
+  }
+
+  function runAllowedCallbacks() {
+    var pending = allowedCallbacks;
+    allowedCallbacks = [];
+    for (var i = 0; i < pending.length; i += 1) {
+      try { pending[i](); } catch (e) {}
+    }
+  }
+
+  function setConsent(choice) {
+    writeCookie(CONSENT_COOKIE, choice, CONSENT_MAX_AGE_SECONDS);
+    state.consent = choice;
+    if (choice === "granted") {
+      if (state.suppressed) return;
+      mintIdentity();
+      if (typeof global.gtag === "function") {
+        try { global.gtag("consent", "update", { analytics_storage: "granted" }); } catch (e) {}
+      }
+      global["ga-disable-" + GA_MEASUREMENT_ID] = false;
+      runAllowedCallbacks();
+      return;
+    }
+    // A loaded gtag cannot be unloaded; disabling the property stops further
+    // hits on this page, and the cookies go now.
+    global["ga-disable-" + GA_MEASUREMENT_ID] = true;
+    if (typeof global.gtag === "function") {
+      try { global.gtag("consent", "update", { analytics_storage: "denied" }); } catch (e) {}
+    }
+    clearAnalyticsCookies();
+  }
+
+  /* Consent banner. Plain DOM with inline styles so www, app, and the static
+   * storefront render it identically without a shared stylesheet. Accept and
+   * Decline are equal in size and weight, as CNIL and the ICO expect. */
+  var BANNER_ID = "dm-consent-banner";
+
+  function closeBanner() {
+    var existing = global.document.getElementById(BANNER_ID);
+    if (existing && existing.parentNode) existing.parentNode.removeChild(existing);
+  }
+
+  function buttonCss() {
+    return "flex:1 1 0;min-width:110px;padding:10px 16px;border-radius:8px;" +
+      "border:1px solid rgba(126,206,255,.45);background:#0d2236;color:#e7f2fb;" +
+      "font:600 14px system-ui,-apple-system,Segoe UI,sans-serif;cursor:pointer";
+  }
+
+  function showBanner() {
+    var doc = global.document;
+    if (!doc || !doc.body || doc.getElementById(BANNER_ID)) return;
+    var banner = doc.createElement("div");
+    banner.id = BANNER_ID;
+    banner.setAttribute("role", "dialog");
+    banner.setAttribute("aria-label", "Analytics cookies");
+    banner.style.cssText = "position:fixed;left:16px;right:16px;bottom:16px;z-index:2147483000;" +
+      "max-width:640px;margin:0 auto;padding:16px 18px;border-radius:12px;" +
+      "background:#081a2a;color:#e7f2fb;border:1px solid rgba(116,185,224,.3);" +
+      "box-shadow:0 12px 40px rgba(0,0,0,.45);" +
+      "font:14px/1.5 system-ui,-apple-system,Segoe UI,sans-serif";
+
+    var text = doc.createElement("p");
+    text.style.cssText = "margin:0 0 12px";
+    text.appendChild(doc.createTextNode(
+      "DaedalMap would like to use analytics cookies (Google Analytics and a " +
+      "DaedalMap visitor id) to see which pages and tools are used. They stay " +
+      "off unless you accept. "
+    ));
+    var link = doc.createElement("a");
+    link.href = PRIVACY_URL;
+    link.textContent = "Privacy policy";
+    link.style.cssText = "color:#7eceff";
+    text.appendChild(link);
+    banner.appendChild(text);
+
+    var row = doc.createElement("div");
+    row.style.cssText = "display:flex;gap:10px;flex-wrap:wrap";
+    var choices = [["Accept", "granted"], ["Decline", "denied"]];
+    for (var i = 0; i < choices.length; i += 1) {
+      (function (label, choice) {
+        var button = doc.createElement("button");
+        button.type = "button";
+        button.textContent = label;
+        button.setAttribute("data-consent", choice);
+        button.style.cssText = buttonCss();
+        button.addEventListener("click", function () {
+          setConsent(choice);
+          closeBanner();
+        });
+        row.appendChild(button);
+      })(choices[i][0], choices[i][1]);
+    }
+    banner.appendChild(row);
+    doc.body.appendChild(banner);
+  }
+
+  function whenBodyReady(fn) {
+    var doc = global.document;
+    if (doc.body) { fn(); return; }
+    doc.addEventListener("DOMContentLoaded", fn);
+  }
+
+  function init() {
+    state.suppressed = suppressed();
+    // Deliberately do not mint an id for a suppressed browser. An owner
+    // browsing with ?noga=1 should leave no analytics identity behind at
+    // all, not merely be filtered out downstream. The same holds until a
+    // consent-region visitor accepts.
+    state.consent = consentState();
+    if (analyticsAllowed()) mintIdentity();
     stripGoogleLinkerParams();
+    if (!state.suppressed && state.consent === "pending") whenBodyReady(showBanner);
   }
 
   init();
@@ -303,6 +456,33 @@
     firstTouch: function () { return state.firstTouch ? Object.assign({}, state.firstTouch) : null; },
 
     suppressed: function () { return state.suppressed; },
+
+    /* True when analytics may run: not suppressed and consent granted (or
+     * granted by default outside consent regions). */
+    analyticsAllowed: function () { return analyticsAllowed(); },
+
+    /* "granted", "denied", or "pending". */
+    consent: function () { return state.consent; },
+
+    /* Run fn now if analytics are allowed, otherwise once the visitor
+     * accepts. Pages put their GA bootstrap here and nowhere else. */
+    whenAnalyticsAllowed: function (fn) {
+      if (typeof fn !== "function") return;
+      if (analyticsAllowed()) {
+        try { fn(); } catch (e) {}
+        return;
+      }
+      // Queued even after a decline, so accepting later from openSettings()
+      // starts analytics on the current page.
+      if (!state.suppressed) allowedCallbacks.push(fn);
+    },
+
+    /* Reopen the banner so a visitor can change an earlier choice. */
+    openSettings: function () {
+      if (state.suppressed) return;
+      closeBanner();
+      whenBodyReady(showBanner);
+    },
 
     /* Bounded, low-cardinality params for GA events. The visitor id is
      * deliberately absent: GA is not the join surface, Supabase is, and

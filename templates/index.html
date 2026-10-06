@@ -119,16 +119,19 @@
       //
       // dm_no_ga / visitor identity live in dm-visitor.js, which is loaded in
       // <head> and is a generated copy of the private site's canonical file.
-      if (window.dmVisitor && !window.dmVisitor.suppressed()) {
-        window.dataLayer = window.dataLayer || [];
-        window.gtag = function gtag(){ window.dataLayer.push(arguments); };
-        window.gtag('js', new Date());
-        window.gtag('set', window.dmVisitor.gaParams());
-        window.gtag('config', 'G-WTF95W3759');
-        loadScriptWithFallback(
-          'https://www.googletagmanager.com/gtag/js?id=G-WTF95W3759',
-          null
-        );
+      // GA starts only once that file allows analytics (consent banner).
+      if (window.dmVisitor) {
+        window.dmVisitor.whenAnalyticsAllowed(() => {
+          window.dataLayer = window.dataLayer || [];
+          window.gtag = function gtag(){ window.dataLayer.push(arguments); };
+          window.gtag('js', new Date());
+          window.gtag('set', window.dmVisitor.gaParams());
+          window.gtag('config', 'G-WTF95W3759');
+          loadScriptWithFallback(
+            'https://www.googletagmanager.com/gtag/js?id=G-WTF95W3759',
+            null
+          );
+        });
       }
 
       // maplibre-gl.css is loaded as a static link in <head> so our map.css
