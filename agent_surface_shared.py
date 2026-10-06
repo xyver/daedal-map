@@ -195,10 +195,10 @@ def geography_tools_section(app_origin: str) -> str:
         profile = pack_mcp_server_profile(family_id)
         tool_line = ", ".join(f"`{tool.get('name')}`" for tool in (entry.get("tools") or []))
         blocks.append(
-            f"- `{family_id}` utility family (free) - {entry.get('description')}\n"
+            f"- `{family_id}` utility family (free per-call allowance) - {entry.get('description')}\n"
             f"  - facade: `{base}/mcp/{family_id}` (registry name `{profile.get('name')}`)\n"
             f"  - tools: {tool_line}\n"
-            f"  - also reachable on the umbrella `{base}/mcp`; no payment required"
+            f"  - also reachable on the umbrella `{base}/mcp`; free within each tool's per-call allowance, account credit above it"
         )
     return "\n".join(blocks)
 
@@ -343,8 +343,8 @@ def render_app_llms_txt(*, app_origin: str = DEFAULT_APP_ORIGIN, site_origin: st
         f"- Geometry discovery: {app_origin}/api/v1/geometry/catalog\n"
         "- Use the catalog endpoints instead of crawling underlying object paths.\n\n"
         f"{coverage_section(app_origin, site_origin)}\n"
-        "## Geography utility tools (free)\n"
-        "Free geographic reference and geometry tools: resolve coordinates and codes, inspect loc_id identities and relationships, discover published coverage, retrieve boundaries, and follow available crosswalks without flattening distinct geography families.\n"
+        "## Geography utility tools (free per-call allowance)\n"
+        "Geographic reference and geometry tools, free within each tool's per-call allowance: resolve coordinates and codes, inspect loc_id identities and relationships, discover published coverage, retrieve boundaries, and follow available crosswalks without flattening distinct geography families.\n"
         f"{geography_tools_section(app_origin)}\n\n"
         "### Choose the tool by question\n"
         f"{geography_workflow_section()}\n\n"
@@ -407,8 +407,8 @@ def render_site_llms_txt(*, app_origin: str = DEFAULT_APP_ORIGIN, site_origin: s
         f"{coverage_section(app_origin, site_origin)}\n"
         "## Registry facades\n\n"
         f"{facade_link_bullets(app_origin)}\n\n"
-        "## Geography utility tools (free)\n\n"
-        "A free geographic reference and geometry family: resolve coordinates and codes, inspect loc_id identities and relationships, discover country and family coverage, retrieve boundaries, and follow published crosswalks. The administrative spine is the main join surface; other geography families retain distinct identities.\n\n"
+        "## Geography utility tools (free per-call allowance)\n\n"
+        "A geographic reference and geometry family, free within each tool's per-call allowance: resolve coordinates and codes, inspect loc_id identities and relationships, discover country and family coverage, retrieve boundaries, and follow published crosswalks. The administrative spine is the main join surface; other geography families retain distinct identities.\n\n"
         f"{geography_tools_section(app_origin)}\n\n"
         "### Choose the tool by question\n\n"
         f"{geography_workflow_section()}\n\n"
@@ -488,8 +488,8 @@ def render_site_llms_full(*, app_origin: str = DEFAULT_APP_ORIGIN, site_origin: 
         f"- Geometry: `{app_origin}/api/v1/geometry/catalog/download`\n"
         "- Use these bounded discovery surfaces instead of crawling the downloadable object tree.\n\n"
         f"{coverage_section(app_origin, site_origin)}\n"
-        "## Geography utility tools (free)\n\n"
-        "Alongside maintained data packs, DaedalMap exposes a free geographic reference and geometry family. These tools resolve coordinates and codes, inspect loc_id identities and relationships, discover published country and family coverage, retrieve boundaries and bounding boxes, and follow available crosswalks. The administrative spine is the main join surface; postal, watershed, Indigenous land, forest, and other families retain distinct identities rather than being forced onto one universal key.\n\n"
+        "## Geography utility tools (free per-call allowance)\n\n"
+        "Alongside maintained data packs, DaedalMap exposes a geographic reference and geometry family that is free within each tool's per-call allowance. These tools resolve coordinates and codes, inspect loc_id identities and relationships, discover published country and family coverage, retrieve boundaries and bounding boxes, and follow available crosswalks. The administrative spine is the main join surface; postal, watershed, Indigenous land, forest, and other families retain distinct identities rather than being forced onto one universal key.\n\n"
         f"{geography_tools_section(app_origin)}\n\n"
         "### Choose the tool by question\n\n"
         f"{geography_workflow_section()}\n\n"
@@ -505,7 +505,7 @@ def render_site_llms_full(*, app_origin: str = DEFAULT_APP_ORIGIN, site_origin: 
         "Floods and tornadoes have dedicated MCP facades alongside the other\n"
         "registry-published packs.\n\n"
         "Short bot-facing positioning:\n\n"
-        "- free loc_id resolution, reference identification, geometry discovery and retrieval, and published crosswalk tools\n"
+        "- loc_id resolution, reference identification, geometry discovery and retrieval, and published crosswalk tools, free within each tool's per-call allowance\n"
         "- remote MCP server for earthquake, tsunami, volcano, hurricane, flood, tornado, SDG, World Factbook, and development-indicator data queries\n"
         "- free discovery plus mixed free and paid structured retrieval\n"
         "- deterministic outputs over a maintained geographic reference graph and reusable geometry library\n"
