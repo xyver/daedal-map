@@ -47,7 +47,13 @@ USA_COUNTY_EQUIVALENT_SUFFIXES = (
 
 def canonicalize_loc_id(loc_id: str) -> str:
     """Return runtime loc_ids in canonical form for shared spine comparisons."""
-    return str(loc_id or "").strip().upper()
+    value = str(loc_id or "").strip()
+    # Historical source identities use a lowercase hexadecimal discriminator.
+    # Uppercasing that discriminator makes the exact graph key unresolvable.
+    historical = re.fullmatch(r"([A-Za-z]{3}-HIST-.*-)([0-9A-Fa-f]{10})", value, re.I)
+    if historical:
+        return historical.group(1).upper() + historical.group(2).lower()
+    return value.upper()
 
 
 def _load_water_body_loc_ids() -> set[str]:

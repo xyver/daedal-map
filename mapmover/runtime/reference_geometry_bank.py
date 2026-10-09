@@ -24,6 +24,8 @@ from ..duckdb_helpers import parquet_available, parquet_columns, path_to_uri, ru
 from ..paths import DATA_ROOT
 from .reference_graph import identities, identity_at
 from .geometry_catalog import geometry_bank_lineage
+from .compact_reverse_geometry import read_compact_reverse_rows
+from .compact_edition_history import read_compact_edition_history_rows
 
 
 IDENTITY_VERSION_COLUMNS = ["loc_id", "geometry_partition", "shape_storage"]
@@ -353,10 +355,32 @@ def load_reference_graph_geometry(
         if version_rows is None or version_rows.empty:
             continue
         partitions: dict[Path, list[str]] = {}
+        compact_ids: list[str] = []
+        compact_edition_ids: list[str] = []
         for row in version_rows.to_dict("records"):
+            if str(row.get("shape_storage") or "").strip() == "compact_reverse_wkb":
+                compact_ids.append(str(row.get("loc_id")))
+                continue
+            if str(row.get("shape_storage") or "").strip() == "compact_edition_history_v1":
+                compact_edition_ids.append(str(row.get("loc_id")))
+                continue
             partition = _safe_partition_path(bank_root, row.get("geometry_partition"))
             if partition is not None and str(row.get("shape_storage") or "").strip() != "identity_only":
                 partitions.setdefault(partition, []).append(str(row.get("loc_id")))
+        if compact_ids:
+            shape_rows = read_compact_reverse_rows(bank_root, compact_ids)
+            for row in shape_rows.to_dict("records"):
+                for identity_row in identities_by_geometry_id.get(str(row.get("loc_id")), []):
+                    item = _normalized_row(row, identity_row)
+                    if item is not None:
+                        normalized.append(item)
+        if compact_edition_ids:
+            shape_rows = read_compact_edition_history_rows(bank_root, compact_edition_ids)
+            for row in shape_rows.to_dict("records"):
+                for identity_row in identities_by_geometry_id.get(str(row.get("loc_id")), []):
+                    item = _normalized_row(row, identity_row)
+                    if item is not None:
+                        normalized.append(item)
         for partition, partition_ids in partitions.items():
             shape_rows = _read_shape_partition(partition, partition_ids)
             source_crs = _geoparquet_crs(str(partition.resolve()))

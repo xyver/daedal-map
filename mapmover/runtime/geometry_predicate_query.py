@@ -41,6 +41,7 @@ def read_bbox_candidates(
     lat: float,
     *,
     columns: Iterable[str],
+    raw_geoparquet: bool = False,
 ) -> pd.DataFrame:
     """Read rows whose admitted WGS84 bounds can contain one point."""
     selected = list(dict.fromkeys([*columns, *BBOX_COLUMNS]))
@@ -52,6 +53,7 @@ def read_bbox_candidates(
         "WHERE bbox_min_lon <= ? AND bbox_max_lon >= ? "
         "AND bbox_min_lat <= ? AND bbox_max_lat >= ?",
         [path_to_uri(path), float(lon), float(lon), float(lat), float(lat)],
+        raw_geoparquet=raw_geoparquet,
     )
 
 
@@ -60,6 +62,7 @@ def read_bbox_candidates_for_points(
     points: Iterable[dict[str, Any]],
     *,
     columns: Iterable[str],
+    raw_geoparquet: bool = False,
 ) -> pd.DataFrame:
     """Read bbox candidates for a point batch in one pushed-down scan."""
     point_rows: list[tuple[int, float, float]] = []
@@ -86,7 +89,7 @@ def read_bbox_candidates_for_points(
         "AND candidate.bbox_max_lon >= query_point.lon "
         "AND candidate.bbox_min_lat <= query_point.lat "
         "AND candidate.bbox_max_lat >= query_point.lat",
-        parameters,
+        parameters, raw_geoparquet=raw_geoparquet,
     )
 
 
@@ -145,6 +148,7 @@ def read_rows_by_ids(
     *,
     id_column: str,
     columns: Iterable[str],
+    raw_geoparquet: bool = False,
 ) -> pd.DataFrame:
     """Read a projected set of admitted geometry rows by exact identifier."""
     requested = sorted({str(value) for value in values if str(value)})
@@ -156,7 +160,7 @@ def read_rows_by_ids(
     return run_df(
         f"SELECT {projection} FROM read_parquet(?) "
         f"WHERE {quote_ident(id_column)} IN ({placeholders})",
-        [path_to_uri(path), *requested],
+        [path_to_uri(path), *requested], raw_geoparquet=raw_geoparquet,
     )
 
 

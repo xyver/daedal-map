@@ -27,7 +27,11 @@ from .geography_reference import (
     load_conversions,
     translate_geometry_id_to_local_id,
 )
-from .marine_geometry import load_marine_geometry_at_point, load_marine_geometry_for_points
+from .marine_geometry import (
+    load_marine_geometry_at_point,
+    load_marine_geometry_for_points,
+    marine_physical_land_contains_point,
+)
 from .place_lookup import resolve_populated_place
 
 _LOC_ID_RE = re.compile(r"^[A-Z]{3}(?:-[A-Z0-9]+)+$|^[A-Z]{3}$")
@@ -102,6 +106,10 @@ def _resolve_point_to_marine_stack(
     geometry_cache: dict[str, Any] | None = None,
     marine_rows_by_loc_id: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any] | None:
+    # IHO sea outlines and EEZs can overlap islands. The release-pinned
+    # physical-land mask wins when the admin bank lacks that island.
+    if marine_physical_land_contains_point(lon, lat):
+        return None
     if marine_df is None:
         marine_df = load_marine_geometry_at_point(lon, lat)
     if marine_df is None or marine_df.empty:

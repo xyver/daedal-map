@@ -326,6 +326,21 @@ class GeometrySelectionRuntimeTests(unittest.TestCase):
         ownership_mock.assert_called_once_with([loc_id])
         graph_mock.assert_called_once_with([loc_id])
 
+    def test_historical_admin_family_shape_is_graph_owned(self):
+        from mapmover.geometry_handlers import _reference_graph_shape_owned_ids
+
+        with patch("mapmover.runtime.reference_graph.identities", return_value=[{
+            "loc_id": "USA-CT-110", "family": "usa_census_admin2_history",
+            "geography_family": "admin_2", "has_shape": True,
+            "geometry_bank": "geometry/countries/USA/relationships/history",
+        }, {
+            "loc_id": "USA-CT-001", "family": "admin_2",
+            "has_shape": True, "geometry_bank": "geometry/countries/USA/admin_spine",
+        }]):
+            owned = _reference_graph_shape_owned_ids(["USA-CT-110", "USA-CT-001"])
+
+        self.assertEqual(owned, {"USA-CT-110"})
+
     def test_admitted_deep_admin_id_uses_query_layout_before_reference_graph(self):
         loc_id = "USA-CA-037-207400-1-024"
         query_df = pd.DataFrame([{

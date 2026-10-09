@@ -4227,9 +4227,7 @@ def _reference_graph_shape_owned_ids(loc_ids: list[str]) -> set[str]:
             for row in identities(requested)
             if row.get("has_shape") is True
             and str(row.get("geometry_bank") or "").strip()
-            and not str(
-                row.get("geography_family") or row.get("family") or ""
-            ).strip().lower().startswith("admin")
+            and not str(row.get("family") or "").strip().lower().startswith("admin")
         }
     except Exception:
         # Graph discovery is an optional fast semantic discriminator here. The

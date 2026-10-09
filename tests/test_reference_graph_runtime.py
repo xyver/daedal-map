@@ -304,6 +304,7 @@ class ReferenceGraphRuntimeTests(unittest.TestCase):
         self.assertEqual(identity("TST-A-001")["name"], "Current Area")
         self.assertEqual(identities(["TST-A-001"])[0]["name"], "Current Area")
         self.assertEqual(identity_at("TST-A-001", date(2025, 6, 1))["name"], "Earlier Area")
+        self.assertIsNone(identity_at("TST-A-001", date(2024, 6, 1)))
 
     def test_dated_identity_outranks_shared_undated_spine_row(self) -> None:
         current = pd.read_parquet(self.root / "identities.parquet")

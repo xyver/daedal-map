@@ -39,6 +39,21 @@ class MarineGeometryRuntimeTests(unittest.TestCase):
 
         self.assertEqual(matches, {0: {"LEFT"}, 1: {"RIGHT"}})
 
+    def test_canonical_geoparquet_geometry_column_matches_points(self):
+        from shapely.geometry import Polygon
+
+        rows = pd.DataFrame([{
+            "loc_id": "WATER", "geometry": Polygon(
+                [(0, 0), (0, 2), (2, 2), (2, 0)]
+            ).wkb,
+        }])
+        self.assertEqual(
+            marine_runtime._exact_jurisdiction_matches(
+                [{"lon": 1, "lat": 1}, {"lon": 4, "lat": 1}], rows,
+            ),
+            {0: {"WATER"}},
+        )
+
     def test_catalog_domain_projection_exposes_activation_without_component_bloat(self):
         catalog = {"domain_profiles": [{
             "release_unit_id": "MARINE",
@@ -82,6 +97,7 @@ class MarineGeometryRuntimeTests(unittest.TestCase):
                 "jurisdictions": {"path": f"{release_rel}/exact/jurisdictions.parquet"},
                 "water_bodies": {"path": f"{release_rel}/exact/water_bodies.parquet"},
                 "named_water_areas": {"path": f"{release_rel}/exact/named_water_areas.parquet"},
+                "physical_surface": {"path": f"{release_rel}/exact/physical_surface.parquet"},
                 "bbox_index": {"path": f"{release_rel}/predicate/bbox_index.parquet"},
                 "point_bank": {"path": f"{release_rel}/predicate/point_bank.parquet"},
                 "country_components": {

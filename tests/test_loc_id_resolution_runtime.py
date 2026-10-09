@@ -17,6 +17,23 @@ from mapmover.runtime.geometry_catalog import resolve_geometry_name
 
 
 class LocIdResolutionRuntimeTests(unittest.TestCase):
+    def test_marine_point_resolution_rejects_land_inside_overlapping_sea_polygon(self):
+        from shapely.geometry import Polygon
+
+        candidates = pd.DataFrame([{
+            "loc_id": "IHO1953-1", "name": "Sea outline crossing an island",
+            "geometry_wkb": Polygon([(-120, 32), (-120, 34), (-118, 34), (-118, 32)]).wkb,
+        }])
+        with patch("mapmover.runtime.loc_id_resolution.marine_physical_land_contains_point",
+                   return_value=True), patch(
+            "mapmover.runtime.loc_id_resolution.load_marine_geometry_at_point",
+            return_value=candidates,
+        ) as marine_loader:
+            resolved = _resolve_point_to_marine_stack(-119.0, 33.0)
+
+        self.assertIsNone(resolved)
+        marine_loader.assert_not_called()
+
     def test_marine_point_resolution_reads_exact_wkb_predicate_geometry(self):
         from shapely.geometry import Polygon
 

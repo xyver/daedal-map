@@ -7,6 +7,7 @@ legacy-file fallback or second source of activation truth.
 from __future__ import annotations
 
 import threading
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Iterable, Optional
 
@@ -15,6 +16,9 @@ import pandas as pd
 from ..duckdb_helpers import (
     is_cloud_mode,
     parquet_available,
+    path_to_uri,
+    quote_ident,
+    run_df,
     select_columns_from_parquet,
 )
 from ..paths import GEOMETRY_DIR
@@ -52,6 +56,7 @@ def clear_marine_geometry_cache() -> None:
     with _ACTIVE_DOMAIN_CACHE_LOCK:
         _ACTIVE_DOMAIN_CACHE_SIGNATURE = None
         _ACTIVE_DOMAIN_CACHE_VALUE = None
+    _physical_land_tree.cache_clear()
 
 
 def _active_domain_paths() -> Optional[dict[str, Any]]:
@@ -81,7 +86,8 @@ def _active_domain_paths() -> Optional[dict[str, Any]]:
     paths = {
         key: catalog_artifact_path(GEOMETRY_DIR.parent, artifacts.get(key))
         for key in (
-            "jurisdictions", "water_bodies", "named_water_areas", "bbox_index", "point_bank",
+            "jurisdictions", "water_bodies", "named_water_areas", "physical_surface",
+            "bbox_index", "point_bank",
         )
     }
     if any(path is None for path in paths.values()):
@@ -94,6 +100,13 @@ def _active_domain_paths() -> Optional[dict[str, Any]]:
     if any(paths.get(key) is None for key in paths):
         return None
     value = {**paths, "country_components": country_components}
+    contract = active.get("spatial_contract") or {}
+    value["canonical_geoparquet"] = (
+        contract.get("file_type") == "GeoParquet"
+        and contract.get("geometry_column") == "geometry"
+        and contract.get("encoding") == "WKB"
+        and contract.get("crs") == "OGC:CRS84"
+    )
     with _ACTIVE_DOMAIN_CACHE_LOCK:
         _ACTIVE_DOMAIN_CACHE_SIGNATURE = signature
         _ACTIVE_DOMAIN_CACHE_VALUE = value
@@ -125,8 +138,33 @@ def has_marine_geometry() -> bool:
         return False
     if is_cloud_mode():
         return True
-    required = ("jurisdictions", "water_bodies", "named_water_areas", "bbox_index", "point_bank")
+    required = ("jurisdictions", "water_bodies", "named_water_areas", "physical_surface",
+                "bbox_index", "point_bank")
     return all(Path(domain[key]).is_file() for key in required)
+
+
+@lru_cache(maxsize=4)
+def _physical_land_tree(path: str):
+    """Load the release-pinned physical land mask once per immutable path."""
+    from shapely import wkb
+    from shapely.strtree import STRtree
+
+    frame = run_df("SELECT geometry FROM read_parquet(?)", [path_to_uri(path)], raw_geoparquet=True)
+    geometries = [wkb.loads(bytes(value)) for value in frame["geometry"] if value is not None]
+    if not geometries:
+        raise ValueError(f"Marine physical-land mask is empty: {path}")
+    return STRtree(geometries)
+
+
+def marine_physical_land_contains_point(lon: float, lat: float) -> bool:
+    """Test the active Marine release's physical-land mask before sea fallback."""
+    from shapely.geometry import Point
+
+    domain = _active_domain_paths()
+    if domain is None:
+        return False
+    tree = _physical_land_tree(str(domain["physical_surface"]))
+    return bool(len(tree.query(Point(float(lon), float(lat)), predicate="covered_by")))
 
 
 def resolve_marine_geometry_source(loc_id: str | None) -> dict:
@@ -157,10 +195,16 @@ def _read_bank(path: Path, want: Optional[set], columns: Optional[list[str]] = N
         selected_columns.insert(0, "loc_id")
     if not parquet_available(path):
         return pd.DataFrame(columns=selected_columns)
+    raw = bool((_active_domain_paths() or {}).get("canonical_geoparquet")) and "geometry" in selected_columns
     if want:
         return read_rows_by_ids(
             path, want, id_column="loc_id", columns=selected_columns,
+            raw_geoparquet=raw,
         )
+    if raw:
+        projection = ", ".join(quote_ident(column) for column in selected_columns)
+        return run_df(f"SELECT {projection} FROM read_parquet(?)", [path_to_uri(path)],
+                      raw_geoparquet=True)
     return select_columns_from_parquet(path, selected_columns)
 
 
@@ -175,8 +219,9 @@ def load_marine_geometry_at_point(lon: float, lat: float) -> pd.DataFrame:
             set(bbox_candidates["loc_id"].astype(str))
             if bbox_candidates is not None and not bbox_candidates.empty else set()
         )
+        geometry_column = "geometry" if domain.get("canonical_geoparquet") else "geometry_wkb"
         jurisdiction_columns = [
-            "loc_id", "name", "geometry_wkb", "area_km2",
+            "loc_id", "name", geometry_column, "area_km2",
             "bbox_min_lon", "bbox_min_lat", "bbox_max_lon", "bbox_max_lat",
         ]
         frames = [read_rows_by_ids(
@@ -184,17 +229,12 @@ def load_marine_geometry_at_point(lon: float, lat: float) -> pd.DataFrame:
             jurisdiction_ids,
             id_column="loc_id",
             columns=jurisdiction_columns,
+            raw_geoparquet=domain.get("canonical_geoparquet", False),
         )]
-        frames.extend([
-            read_bbox_candidates(
-                domain["water_bodies"], float(lon), float(lat),
-                columns=["loc_id", "name", "geometry", "centroid_lon", "centroid_lat"],
-            ),
-            read_bbox_candidates(
-                domain["named_water_areas"], float(lon), float(lat),
-                columns=["loc_id", "name", "geometry", "centroid_lon", "centroid_lat"],
-            ),
-        ])
+        water_columns = ["loc_id", "name", "geometry", "centroid_lon", "centroid_lat"]
+        frames.extend(read_bbox_candidates(path, float(lon), float(lat), columns=water_columns,
+                                           raw_geoparquet=domain.get("canonical_geoparquet", False))
+                      for path in (domain["water_bodies"], domain["named_water_areas"]))
     else:
         return pd.DataFrame(columns=_MARINE_POINT_COLUMNS)
     frames = [frame for frame in frames if frame is not None and not frame.empty]
@@ -225,15 +265,17 @@ def load_marine_geometry_for_points(
         domain["bbox_index"], point_items, columns=["loc_id"],
     )
     jurisdiction_ids = set(jurisdiction_pairs["loc_id"].astype(str)) if not jurisdiction_pairs.empty else set()
+    geometry_column = "geometry" if domain.get("canonical_geoparquet") else "geometry_wkb"
     jurisdiction_frame = pd.DataFrame(columns=_MARINE_POINT_COLUMNS)
     if jurisdiction_ids:
         jurisdiction_frame = read_rows_by_ids(
             domain["point_bank"], jurisdiction_ids,
             id_column="loc_id",
             columns=[
-                "name", "geometry_wkb", "area_km2",
+                "name", geometry_column, "area_km2",
                 "bbox_min_lon", "bbox_min_lat", "bbox_max_lon", "bbox_max_lat",
             ],
+            raw_geoparquet=domain.get("canonical_geoparquet", False),
         )
         frames.append(jurisdiction_frame)
     for position, loc_ids in _exact_jurisdiction_matches(point_items, jurisdiction_frame).items():
@@ -244,7 +286,18 @@ def load_marine_geometry_for_points(
         # These are compact physical-water banks (172 total polygons). DuckDB
         # can do exact containment during each bank's only scan, leaving the
         # larger overlapping jurisdiction family on its separate path.
-        pairs = read_geojson_containment_for_points(path, point_items, columns=water_columns)
+        if domain.get("canonical_geoparquet"):
+            pairs = read_bbox_candidates_for_points(
+                path, point_items, columns=water_columns, raw_geoparquet=True,
+            )
+            exact = _exact_jurisdiction_matches(point_items, pairs)
+            allowed = {(position, loc_id) for position, ids in exact.items() for loc_id in ids}
+            pairs = pairs[pairs.apply(
+                lambda row: (int(row["point_position"]), str(row["loc_id"])) in allowed,
+                axis=1,
+            )]
+        else:
+            pairs = read_geojson_containment_for_points(path, point_items, columns=water_columns)
         if not pairs.empty:
             frames.append(
                 pairs.drop(columns=["point_position"], errors="ignore")
@@ -272,12 +325,13 @@ def _exact_jurisdiction_matches(
         return {}
     from shapely import STRtree, from_wkb, points as make_points
 
-    shapes = jurisdictions.dropna(subset=["loc_id", "geometry_wkb"]).drop_duplicates(
+    geometry_column = "geometry" if "geometry" in jurisdictions.columns else "geometry_wkb"
+    shapes = jurisdictions.dropna(subset=["loc_id", geometry_column]).drop_duplicates(
         subset=["loc_id"], keep="first",
     )
     if shapes.empty:
         return {}
-    shape_values = from_wkb([bytes(value) for value in shapes["geometry_wkb"]])
+    shape_values = from_wkb([bytes(value) for value in shapes[geometry_column]])
     point_positions: list[int] = []
     coordinates: list[tuple[float, float]] = []
     for position, point in enumerate(points):

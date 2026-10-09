@@ -756,20 +756,20 @@ def identity_at(loc_id: str, as_of: date | None = None) -> dict[str, Any] | None
                         FROM read_parquet({source}, union_by_name=True)
                     ) AS candidates
                     WHERE loc_id = ?
-                    ORDER BY
-                      CASE
-                        WHEN (NULLIF(CAST(valid_from AS VARCHAR), '') IS NOT NULL
-                              OR NULLIF(CAST(valid_to AS VARCHAR), '') IS NOT NULL)
+                      AND (
+                        ((NULLIF(CAST(valid_from AS VARCHAR), '') IS NOT NULL
+                          OR NULLIF(CAST(valid_to AS VARCHAR), '') IS NOT NULL)
                          AND (TRY_CAST(NULLIF(CAST(valid_from AS VARCHAR), '') AS DATE) IS NULL
                               OR TRY_CAST(NULLIF(CAST(valid_from AS VARCHAR), '') AS DATE) <= ?)
                          AND (TRY_CAST(NULLIF(CAST(valid_to AS VARCHAR), '') AS DATE) IS NULL
-                              OR TRY_CAST(NULLIF(CAST(valid_to AS VARCHAR), '') AS DATE) > ?)
-                          THEN 0
-                        WHEN (NULLIF(CAST(valid_from AS VARCHAR), '') IS NOT NULL
-                              OR NULLIF(CAST(valid_to AS VARCHAR), '') IS NOT NULL)
-                          THEN 1
-                        ELSE 2
-                      END,
+                              OR TRY_CAST(NULLIF(CAST(valid_to AS VARCHAR), '') AS DATE) > ?))
+                        OR (NULLIF(CAST(valid_from AS VARCHAR), '') IS NULL
+                            AND NULLIF(CAST(valid_to AS VARCHAR), '') IS NULL)
+                      )
+                    ORDER BY
+                      CASE WHEN NULLIF(CAST(valid_from AS VARCHAR), '') IS NOT NULL
+                                  OR NULLIF(CAST(valid_to AS VARCHAR), '') IS NOT NULL
+                           THEN 0 ELSE 1 END,
                       {IDENTITY_RECENCY_ORDER}
                     LIMIT 1""",
                 [str(loc_id), as_of, as_of],

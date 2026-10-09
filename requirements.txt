@@ -47,6 +47,8 @@ rapidfuzz==3.14.3
 
 # Required for country bounds bbox intersection (viewport geometry loading):
 shapely==2.1.2
+# Exact reverse-patch geometry decoding for compact historical Admin editions.
+zstandard==0.25.0
 # Required for WGS84 geodesic areas in compare_geographies.  Planar degree
 # areas are not valid overlap percentages for global geometry.
 pyproj==3.7.2

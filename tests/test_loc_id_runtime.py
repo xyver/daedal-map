@@ -53,6 +53,11 @@ class LocIdRuntimeTests(unittest.TestCase):
         self.assertEqual(canonicalize_loc_id(legacy), legacy)
         self.assertEqual(translate_loc_id_to_geometry_id(legacy), legacy)
 
+    def test_historical_hash_suffix_keeps_its_graph_key_case(self):
+        loc_id = "FRA-HIST-PLACE-75116-9caff63699"
+        self.assertEqual(canonicalize_loc_id(loc_id), loc_id)
+        self.assertEqual(canonicalize_loc_id(loc_id.upper()), loc_id)
+
     def test_crosswalk_maps_include_admin1_and_admin2_entries(self):
         local_to_geo, geo_to_local = build_crosswalk_maps(
             {
