@@ -236,3 +236,55 @@ def test_python_source_specializer_cannot_override_catalog_api_admission() -> No
     api_query_runtime.clear_api_source_spec_cache()
     with mock.patch.object(api_query_runtime, "load_catalog", return_value={"sources": []}):
         assert api_query_runtime.get_api_source_spec("fx_usd_historical") is None
+
+
+def test_api_source_lookup_requests_api_catalog_surface() -> None:
+    from mapmover.catalog_surface import get_catalog_surface_override
+
+    source = {"source_id": "01", "pack_id": "un_sdg", "catalog_surfaces": ["api"]}
+    seen = []
+
+    def scoped_catalog():
+        surface = get_catalog_surface_override()
+        seen.append(surface)
+        return {"sources": [source] if surface == "api" else []}
+
+    with mock.patch.object(api_query_runtime, "load_catalog", side_effect=scoped_catalog):
+        assert api_query_runtime._catalog_api_source("01") == source
+    assert seen == ["api"]
+
+
+def test_api_source_access_reads_api_catalog_surface() -> None:
+    from mapmover.catalog_surface import get_catalog_surface_override
+    from mapmover.routes import api_query
+
+    source = {"source_id": "01", "pack_id": "un_sdg", "material_policy": {}}
+    seen = []
+
+    def scoped_catalog():
+        surface = get_catalog_surface_override()
+        seen.append(surface)
+        return {"sources": [source] if surface == "api" else []}
+
+    with mock.patch.object(api_query, "load_catalog", side_effect=scoped_catalog):
+        assert api_query._source_material_record("01") == source
+    assert seen == ["api"]
+
+
+def test_api_pack_access_reads_api_catalog_surface() -> None:
+    from mapmover import api_query_commercial, data_loading
+    from mapmover.catalog_surface import get_catalog_surface_override
+
+    pack = {"pack_id": "un_sdg", "material_policy": {
+        "permission": "free", "hosted_access": {"publication_ready": True, "maximum_lane": "free"}}}
+    seen = []
+
+    def scoped_catalog():
+        surface = get_catalog_surface_override()
+        seen.append(surface)
+        return {"packs": [pack] if surface == "api" else []}
+
+    with mock.patch.object(data_loading, "load_catalog", side_effect=scoped_catalog):
+        access = api_query_commercial.pack_effective_access("un_sdg")
+    assert seen == ["api"]
+    assert access["allow"] is True

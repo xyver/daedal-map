@@ -1541,7 +1541,9 @@ def resolve_point_to_location(lon: float, lat: float, include_geometry: bool = T
     iso3 = country_match.get("loc_id")
     country_name = country_match.get("name") or iso3
 
-    query_layout_match = resolve_admin_spine_query_point(iso3, lon, lat)
+    query_layout_match = resolve_admin_spine_query_point(
+        iso3, lon, lat, country_already_resolved=True,
+    )
     if query_layout_match is not None:
         matched = query_layout_match["matched"]
         stack = [
@@ -1876,6 +1878,7 @@ def resolve_points_to_locations(
             iso3, country_items, target_admin_level=io_admin_level,
             admin_1_scope=admin_1_scope,
             stage_timing_ms=timing_ms,
+            country_already_resolved=True,
         )
         if query_matches is None:
             query_matches = [None] * len(country_items)

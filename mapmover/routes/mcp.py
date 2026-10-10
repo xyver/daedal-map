@@ -4622,6 +4622,39 @@ async def _execute_get_geometry_tool(request: Request, arguments: dict[str, Any]
         get_selection_geometry_metadata,
         loc_ids,
     )
+    # Exact Admin0 can be hundreds of MB as WKB and several GB as inline
+    # GeoJSON. Reject that representation before decoding a shape or charging
+    # a caller; the exact geometry remains available in the Detail download.
+    if include_polygon:
+        from mapmover.runtime.admin_spine_query import (
+            admin0_inline_geometry_bytes, layout_available,
+        )
+
+        for row in access_rows or []:
+            country_id = str(row.get("loc_id") or "").strip().upper()
+            if (len(country_id) != 3 or not country_id.isalpha()
+                    or int(row.get("admin_level") or 0) != 0
+                    or not layout_available(country_id)):
+                continue
+            estimated_bytes = await run_mcp_blocking(
+                "get_geometry_admin0_size_preflight",
+                admin0_inline_geometry_bytes,
+                country_id,
+            )
+            if estimated_bytes > 16 * 1024 * 1024:
+                error_payload = _batch_error_payload(
+                    request_id=request_id, batch_id=batch_id,
+                    code="geometry_too_large_for_inline",
+                    message=(
+                        f"Exact {country_id} Admin0 geometry exceeds the bounded "
+                        "inline response size; use its Detail download."
+                    ),
+                    loc_id_count=len(loc_ids),
+                )
+                error_payload["estimated_wkb_bytes"] = estimated_bytes
+                return _jsonrpc_response(
+                    _tool_result(error_payload, is_error=True), rpc_request_id,
+                )
     from mapmover.runtime.geometry_catalog import geometry_bank_id_map_for_metadata
 
     access_bank_by_loc_id = geometry_bank_id_map_for_metadata(access_rows or [])

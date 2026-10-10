@@ -12,7 +12,7 @@ import pandas as pd
 
 from .data_loading import get_source_path, load_catalog, load_source_metadata
 from .catalog_cache_policy import control_catalog_cache_epoch
-from .catalog_surface import has_catalog_product_surface, is_mcp_distribution_source
+from .catalog_surface import catalog_surface_scope, has_catalog_product_surface, is_mcp_distribution_source
 from .duckdb_helpers import parquet_available, parquet_columns, path_to_uri, quote_ident, run_df
 from .paths import DATA_ROOT
 from .runtime.aggregate_primitives import resolve_aggregate_admin2_dir
@@ -542,16 +542,17 @@ PLAIN_YEAR_RE = re.compile(r"^-?\d{1,6}$")
 
 
 def _catalog_api_source(source_id: str) -> dict[str, Any] | None:
-    return next(
-        (
-            source
-            for source in (load_catalog() or {}).get("sources", [])
-            if isinstance(source, dict)
-            and str(source.get("source_id") or "").strip() == source_id
-            and has_catalog_product_surface(source, "api")
-        ),
-        None,
-    )
+    with catalog_surface_scope("api"):
+        return next(
+            (
+                source
+                for source in (load_catalog() or {}).get("sources", [])
+                if isinstance(source, dict)
+                and str(source.get("source_id") or "").strip() == source_id
+                and has_catalog_product_surface(source, "api")
+            ),
+            None,
+        )
 
 
 def _normalize_string_tuple(value: Any) -> tuple[str, ...]:

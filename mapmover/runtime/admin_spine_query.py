@@ -8,7 +8,10 @@ from functools import lru_cache
 import os
 import threading
 import time
+from urllib.parse import urlparse
 
+import pyarrow.fs as arrow_fs
+import pyarrow.parquet as arrow_parquet
 from shapely import from_wkb
 from shapely.geometry import Point
 import pandas as pd
@@ -17,7 +20,7 @@ from ..duckdb_helpers import is_cloud_mode, lease_query_connection, path_to_uri
 from ..paths import COUNTRY_GEOMETRY_DIR, DATA_ROOT
 from .geometry_catalog import load_geometry_catalog
 from .geometry_storage_layout import country_admin_spine_root
-from .published_artifacts import read_artifact_json
+from .published_artifacts import artifact_ref, read_artifact_json
 from .geometry_spine import geometry_spine_index_for_frame
 
 
@@ -231,7 +234,7 @@ def _connection():
 
 
 def _metadata_with_geometry(connection, path: Path, lon: float, lat: float,
-                            admin3: str = "") -> list[tuple]:
+                            admin3: str = "", minimum_level: int = 0) -> list[tuple]:
     """Return bbox candidates and their shapes in one object-store read.
 
     The old resolver queried a file once for metadata and then reopened the
@@ -241,14 +244,15 @@ def _metadata_with_geometry(connection, path: Path, lon: float, lat: float,
     this same read so the candidate scan is not duplicated.
     """
     owner_clause = "" if not admin3 else " AND admin_3_loc_id = ?"
-    parameters: list[Any] = [path_to_uri(path), lon, lon, lat, lat]
+    parameters: list[Any] = [path_to_uri(path), lon, lon, lat, lat, minimum_level]
     if admin3:
         parameters.append(admin3)
     return connection.execute(f"""
         SELECT {META_COLUMNS}, ST_AsWKB(geometry) AS geometry_wkb
         FROM read_parquet(?)
         WHERE bbox_max_lon >= ? AND bbox_min_lon <= ?
-          AND bbox_max_lat >= ? AND bbox_min_lat <= ? {owner_clause}
+          AND bbox_max_lat >= ? AND bbox_min_lat <= ?
+          AND admin_level >= ? {owner_clause}
         ORDER BY admin_level, loc_id
     """, parameters).fetchall()
 
@@ -259,6 +263,7 @@ def _metadata_with_geometry_bbox(
     points: list[dict[str, Any]],
     *,
     maximum_level: int | None = None,
+    minimum_level: int = 0,
     admin3: str = "",
     stage_timing_ms: dict[str, int] | None = None,
 ) -> pd.DataFrame:
@@ -294,6 +299,8 @@ def _metadata_with_geometry_bbox(
             if maximum_level is not None:
                 clauses.append("admin_level <= ?")
                 branch_params.append(int(maximum_level))
+            clauses.append("admin_level >= ?")
+            branch_params.append(int(minimum_level))
             if admin3:
                 clauses.append("admin_3_loc_id = ?")
                 branch_params.append(admin3)
@@ -327,6 +334,8 @@ def _metadata_with_geometry_bbox(
     if maximum_level is not None:
         clauses.append("admin_level <= ?")
         parameters.append(int(maximum_level))
+    clauses.append("admin_level >= ?")
+    parameters.append(int(minimum_level))
     if admin3:
         clauses.append("admin_3_loc_id = ?")
         parameters.append(admin3)
@@ -389,6 +398,7 @@ def _spatial_join_point_matches(
     points: list[dict[str, Any]],
     *,
     maximum_level: int | None = None,
+    minimum_level: int = 0,
     admin3: str = "",
     stage_timing_ms: dict[str, int] | None = None,
 ) -> list[dict[int, dict[str, Any]]]:
@@ -406,6 +416,8 @@ def _spatial_join_point_matches(
     if maximum_level is not None:
         clauses.append("regions.admin_level <= ?")
         parameters.append(int(maximum_level))
+    clauses.append("regions.admin_level >= ?")
+    parameters.append(int(minimum_level))
     if admin3:
         clauses.append("regions.admin_3_loc_id = ?")
         parameters.append(admin3)
@@ -526,6 +538,7 @@ def _geometry_review(rows_by_level: dict[int, list[str]]) -> dict[str, Any] | No
 
 def resolve_point(
     iso3: str, lon: float, lat: float, *, target_admin_level: int | None = None,
+    country_already_resolved: bool = False,
 ) -> dict[str, Any] | None:
     """Resolve one point through the national Admin0-3 file and one owner file.
 
@@ -543,8 +556,16 @@ def resolve_point(
     try:
         shallow_candidates = _metadata_with_geometry(
             connection, root / "admin_0_3.parquet", lon, lat,
+            minimum_level=1 if country_already_resolved else 0,
         )
         shallow = _exact_candidate_rows(shallow_candidates, lon, lat)
+        if country_already_resolved:
+            country_rows = _identity_rows(connection, root / "admin_0_3.parquet", [iso3])
+            if len(country_rows) != 1:
+                raise ValueError(f"{iso3} query layout lacks its Admin0 identity row")
+            shallow.insert(0, (
+                tuple(country_rows[0].get(name) for name in META_COLUMN_NAMES), None, 0.0,
+            ))
         if not shallow:
             return None
         shallow.sort(key=lambda item: (int(item[0][2]), -item[2], str(item[0][0])))
@@ -625,6 +646,7 @@ def resolve_points(
     target_admin_level: int | None = None,
     admin_1_scope: str | None = None,
     stage_timing_ms: dict[str, int] | None = None,
+    country_already_resolved: bool = False,
 ) -> list[dict[str, Any]] | None:
     """Resolve a point batch using one physical bank per scope.
 
@@ -649,12 +671,16 @@ def resolve_points(
         if _spatial_join_bank_eligible(country, shallow_path, point_items):
             matches = _spatial_join_point_matches(
                 connection, shallow_path, point_items,
-                maximum_level=shallow_maximum, stage_timing_ms=stage_timing_ms,
+                maximum_level=shallow_maximum,
+                minimum_level=1 if country_already_resolved else 0,
+                stage_timing_ms=stage_timing_ms,
             )
         else:
             shallow = _metadata_with_geometry_bbox(
                 connection, shallow_path, point_items,
-                maximum_level=shallow_maximum, stage_timing_ms=stage_timing_ms,
+                maximum_level=shallow_maximum,
+                minimum_level=1 if country_already_resolved else 0,
+                stage_timing_ms=stage_timing_ms,
             )
             if not shallow.empty:
                 for level in sorted(int(value) for value in shallow["admin_level"].dropna().unique()):
@@ -667,6 +693,13 @@ def resolve_points(
                             if len(match.candidate_loc_ids) > 1:
                                 row["__covering_loc_ids"] = list(match.candidate_loc_ids)
                             matches[position][level] = row
+
+        if country_already_resolved:
+            country_rows = _identity_rows(connection, shallow_path, [country])
+            if len(country_rows) != 1:
+                raise ValueError(f"{country} query layout lacks its Admin0 identity row")
+            for levels in matches:
+                levels[0] = dict(country_rows[0])
 
         needs_deep = target is None or target > 3
         if needs_deep:
@@ -858,18 +891,21 @@ def load_rows_by_loc_ids(iso3: str, loc_ids: list[str], columns: list[str] | Non
         for path, requests_by_level in requests_by_path.items():
             if not path.is_file() and not is_cloud_mode():
                 continue
-            predicates = []
-            parameters: list[Any] = [path_to_uri(path)]
             for admin_level, path_loc_ids in sorted(requests_by_level.items()):
-                placeholders = ",".join("?" for _ in path_loc_ids)
-                predicates.append(f"(admin_level = ? AND loc_id IN ({placeholders}))")
-                parameters.extend([admin_level, *path_loc_ids])
-            frame = connection.execute(
-                f"SELECT {select_clause} FROM read_parquet(?) WHERE {' OR '.join(predicates)}",
-                parameters,
-            ).fetchdf()
-            if not frame.empty:
-                frames.append(frame)
+                if columns is None:
+                    # Full-fidelity Admin0 may be a single >256 MB WKB value.
+                    # Arrow reads its Parquet row group directly instead of
+                    # asking DuckDB to hold two copies under a 512 MB budget.
+                    frame = _read_exact_shape_rows_arrow(path, admin_level, path_loc_ids)
+                else:
+                    placeholders = ",".join("?" for _ in path_loc_ids)
+                    frame = connection.execute(
+                        f"SELECT {select_clause} FROM read_parquet(?) "
+                        f"WHERE admin_level = ? AND loc_id IN ({placeholders})",
+                        [path_to_uri(path), admin_level, *path_loc_ids],
+                    ).fetchdf()
+                if not frame.empty:
+                    frames.append(frame)
         if not frames:
             return pd.DataFrame()
         result = pd.concat(frames, ignore_index=True).drop_duplicates(subset=["loc_id"], keep="first")
@@ -878,6 +914,59 @@ def load_rows_by_loc_ids(iso3: str, loc_ids: list[str], columns: list[str] | Non
         return result.sort_values("_requested_order").drop(columns=["_requested_order"]).reset_index(drop=True)
     finally:
         connection.close()
+
+
+def _open_layout_arrow_source(path: Path) -> Any:
+    """Open a layout Parquet file locally or through ranged active-lane S3 reads."""
+    if is_cloud_mode():
+        relative = path.relative_to(Path(DATA_ROOT)).as_posix()
+        ref = artifact_ref(relative, lane="active")
+        endpoint = urlparse(ref.endpoint_url or "")
+        filesystem = arrow_fs.S3FileSystem(
+            access_key=os.environ.get("AWS_ACCESS_KEY_ID"),
+            secret_key=os.environ.get("AWS_SECRET_ACCESS_KEY"),
+            region=ref.region,
+            endpoint_override=endpoint.netloc,
+            scheme=endpoint.scheme or "https",
+            force_virtual_addressing=False,
+        )
+        return filesystem.open_input_file(f"{ref.bucket}/{ref.key}")
+    return path
+
+
+def admin0_inline_geometry_bytes(iso3: str) -> int:
+    """Estimate the largest Admin0 WKB row group before constructing GeoJSON."""
+    path = layout_root(iso3) / "admin_0_3.parquet"
+    source = _open_layout_arrow_source(path)
+    try:
+        metadata = arrow_parquet.ParquetFile(source).metadata
+        level_column = metadata.schema.names.index("admin_level")
+        geometry_column = metadata.schema.names.index("geometry")
+        sizes = []
+        for index in range(metadata.num_row_groups):
+            group = metadata.row_group(index)
+            stats = group.column(level_column).statistics
+            if stats and stats.has_min_max and int(stats.min) <= 0 <= int(stats.max):
+                sizes.append(group.column(geometry_column).total_uncompressed_size)
+        return max(sizes, default=0)
+    finally:
+        if source is not path:
+            source.close()
+
+
+def _read_exact_shape_rows_arrow(path: Path, admin_level: int, loc_ids: list[str]) -> pd.DataFrame:
+    """Read exact WKB with Parquet predicate pushdown outside DuckDB's buffer cap."""
+    source = _open_layout_arrow_source(path)
+    try:
+        table = arrow_parquet.read_table(
+            source,
+            filters=[("admin_level", "=", admin_level), ("loc_id", "in", loc_ids)],
+            use_threads=False,
+        )
+        return table.to_pandas()
+    finally:
+        if source is not path:
+            source.close()
 
 
 def load_route_rows_by_loc_ids(iso3: str, loc_ids: list[str]) -> pd.DataFrame:

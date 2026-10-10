@@ -2,6 +2,7 @@ import unittest
 from unittest.mock import patch
 
 from mapmover.runtime.geography_reference import (
+    canonicalize_loc_id,
     derive_eurostat_geo_level,
     normalize_county_slug,
     normalize_subdivision_slug,
@@ -11,6 +12,11 @@ from mapmover.runtime.geography_reference import (
 
 
 class GeographyRuntimeTests(unittest.TestCase):
+    def test_canada_source_detail_graph_key_survives_runtime_normalization(self):
+        key = "CAN-ADA-16-10010001::source_detail"
+        self.assertEqual(canonicalize_loc_id(key), key)
+        self.assertEqual(canonicalize_loc_id(key.lower()), key)
+
     def test_derive_eurostat_geo_level_from_loc_id_shape(self):
         self.assertEqual(derive_eurostat_geo_level("FRA"), "admin_0")
         self.assertEqual(derive_eurostat_geo_level("FRA-FR1"), "admin_1")

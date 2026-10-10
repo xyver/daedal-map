@@ -18,6 +18,27 @@ from mapmover.runtime.geography_reference import is_named_water_loc_id
 
 
 class MarineGeometryRuntimeTests(unittest.TestCase):
+    def test_physical_land_reader_passes_path_to_cloud_uri_resolver(self):
+        from shapely.geometry import Polygon
+
+        seen = []
+
+        def uri(path):
+            seen.append(path)
+            self.assertIsInstance(path, Path)
+            return "s3://test/physical_land.parquet"
+
+        marine_runtime._physical_land_tree.cache_clear()
+        with (
+            patch.object(marine_runtime, "path_to_uri", side_effect=uri),
+            patch.object(marine_runtime, "run_df", return_value=pd.DataFrame({
+                "geometry": [Polygon([(0, 0), (1, 0), (1, 1), (0, 0)]).wkb],
+            })),
+        ):
+            tree = marine_runtime._physical_land_tree("physical_land.parquet")
+        self.assertEqual(len(tree.geometries), 1)
+        self.assertEqual(seen, [Path("physical_land.parquet")])
+
     def test_jurisdiction_batch_tree_returns_only_exact_point_matches(self):
         from shapely.geometry import Polygon
 

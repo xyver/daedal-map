@@ -149,7 +149,7 @@ def _physical_land_tree(path: str):
     from shapely import wkb
     from shapely.strtree import STRtree
 
-    frame = run_df("SELECT geometry FROM read_parquet(?)", [path_to_uri(path)], raw_geoparquet=True)
+    frame = run_df("SELECT geometry FROM read_parquet(?)", [path_to_uri(Path(path))], raw_geoparquet=True)
     geometries = [wkb.loads(bytes(value)) for value in frame["geometry"] if value is not None]
     if not geometries:
         raise ValueError(f"Marine physical-land mask is empty: {path}")

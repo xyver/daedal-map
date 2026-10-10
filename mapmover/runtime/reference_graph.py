@@ -8,6 +8,7 @@ a JSON array of candidate roots for a country batch without uploading data.
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import re
 from datetime import date
@@ -20,7 +21,7 @@ from typing import Any, Callable
 from ..duckdb_helpers import is_cloud_mode, lease_query_connection, parquet_columns, path_to_uri, select_rows
 from ..paths import DATA_ROOT
 from ..runtime_config import get_runtime_config
-from .published_artifacts import read_artifact_json, relative_data_path
+from .published_artifacts import read_artifact_bytes, read_artifact_json, relative_data_path
 from .geometry_catalog import load_geometry_catalog
 from .geometry_storage_layout import (
     country_reference_root,
@@ -722,6 +723,68 @@ def identity(loc_id: str) -> dict[str, Any] | None:
         connection.close()
 
 
+def _identity_row_covers_date(row: dict[str, Any], as_of: date) -> bool:
+    def parsed(value: Any) -> date | None:
+        if value is None or str(value).strip() == "":
+            return None
+        try:
+            return date.fromisoformat(str(value)[:10])
+        except ValueError:
+            return None
+
+    start = parsed(row.get("valid_from"))
+    end = parsed(row.get("valid_to"))
+    return (start is None or start <= as_of) and (end is None or as_of < end)
+
+
+@lru_cache(maxsize=32)
+def _source_selection_bindings(root_text: str, cloud_mode: bool) -> dict[str, tuple[str, str | None, str]]:
+    """Bind graph namespace rows to hash-pinned Full source-edition windows."""
+    root = Path(root_text)
+    full_root = root.parent.parent
+    package_path = full_root / "full_package_manifest.json"
+
+    def read_bytes(path: Path) -> bytes:
+        if cloud_mode:
+            return read_artifact_bytes(_relative_data_path(path), lane="active")
+        return path.read_bytes()
+
+    try:
+        package = json.loads(read_bytes(package_path))
+    except FileNotFoundError:
+        if full_root.name == "can_geometry_1_3_5" and "CAN" in root.parts:
+            raise ValueError("Canada graph temporal binding package is missing")
+        return {}
+    bindings = package.get("graph_temporal_source_bindings") or {}
+    if not bindings:
+        return {}
+    if package.get("status") != "PASS_LOCAL_FULL" or package.get("release_id") != full_root.name:
+        raise ValueError("graph temporal bindings lack a matching Full package")
+    metadata_relative = str(package.get("source_release_metadata_path") or "")
+    metadata_path = DATA_ROOT / metadata_relative
+    if not metadata_relative or not metadata_path.resolve().is_relative_to(DATA_ROOT.resolve()):
+        raise ValueError("graph temporal source metadata leaves the data root")
+    raw = read_bytes(metadata_path)
+    if hashlib.sha256(raw).hexdigest() != package.get("source_release_metadata_sha256"):
+        raise ValueError("graph temporal source metadata hash drift")
+    metadata = json.loads(raw)
+    releases = metadata.get("source_releases") or {}
+    selected: dict[str, tuple[str, str | None, str]] = {}
+    for namespace, source_id in bindings.items():
+        record = releases.get(source_id) or {}
+        start = record.get("selection_from")
+        end = record.get("selection_to_exclusive")
+        if (not isinstance(namespace, str) or not namespace
+                or record.get("source_release_id") != source_id
+                or record.get("canonical_family") != "health_region"
+                or record.get("source_native_subtype") != "statistics_canada_health_region"
+                or not isinstance(start, str) or not start
+                or (end is not None and date.fromisoformat(end) <= date.fromisoformat(start))):
+            raise ValueError(f"invalid graph temporal source binding: {namespace}")
+        selected[namespace] = (start, end, source_id)
+    return selected
+
+
 def identity_at(loc_id: str, as_of: date | None = None) -> dict[str, Any] | None:
     """Return the graph identity state selected for a requested date.
 
@@ -756,27 +819,25 @@ def identity_at(loc_id: str, as_of: date | None = None) -> dict[str, Any] | None
                         FROM read_parquet({source}, union_by_name=True)
                     ) AS candidates
                     WHERE loc_id = ?
-                      AND (
-                        ((NULLIF(CAST(valid_from AS VARCHAR), '') IS NOT NULL
-                          OR NULLIF(CAST(valid_to AS VARCHAR), '') IS NOT NULL)
-                         AND (TRY_CAST(NULLIF(CAST(valid_from AS VARCHAR), '') AS DATE) IS NULL
-                              OR TRY_CAST(NULLIF(CAST(valid_from AS VARCHAR), '') AS DATE) <= ?)
-                         AND (TRY_CAST(NULLIF(CAST(valid_to AS VARCHAR), '') AS DATE) IS NULL
-                              OR TRY_CAST(NULLIF(CAST(valid_to AS VARCHAR), '') AS DATE) > ?))
-                        OR (NULLIF(CAST(valid_from AS VARCHAR), '') IS NULL
-                            AND NULLIF(CAST(valid_to AS VARCHAR), '') IS NULL)
-                      )
                     ORDER BY
                       CASE WHEN NULLIF(CAST(valid_from AS VARCHAR), '') IS NOT NULL
                                   OR NULLIF(CAST(valid_to AS VARCHAR), '') IS NOT NULL
                            THEN 0 ELSE 1 END,
-                      {IDENTITY_RECENCY_ORDER}
-                    LIMIT 1""",
-                [str(loc_id), as_of, as_of],
+                      {IDENTITY_RECENCY_ORDER}""",
+                [str(loc_id)],
             )
-            row = cursor.fetchone()
-            if row is not None:
-                return dict(zip([item[0] for item in cursor.description], row))
+            columns = [item[0] for item in cursor.description]
+            for values in cursor.fetchall():
+                row = dict(zip(columns, values))
+                if row.get("geography_family") == "health_region" and "CAN" in root.parts:
+                    selection = _source_selection_bindings(str(root), is_cloud_mode()).get(
+                        str(row.get("namespace_release") or ""),
+                    )
+                    if selection is not None:
+                        row["valid_from"], row["valid_to"], row["source_release_id"] = selection
+                        row["frame_selection_basis"] = "reviewed_source_release_metadata"
+                if _identity_row_covers_date(row, as_of):
+                    return row
         return None
     finally:
         connection.close()

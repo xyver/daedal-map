@@ -93,9 +93,12 @@ def _source_material_record(source_id: str) -> dict[str, Any]:
     resolved material policy, so hosted access must not independently rebuild a
     legal decision from the source file during each request.
     """
-    for source in (load_catalog() or {}).get("sources", []):
-        if isinstance(source, dict) and str(source.get("source_id") or "").strip() == source_id:
-            return source
+    from mapmover.catalog_surface import catalog_surface_scope
+
+    with catalog_surface_scope("api"):
+        for source in (load_catalog() or {}).get("sources", []):
+            if isinstance(source, dict) and str(source.get("source_id") or "").strip() == source_id:
+                return source
     return {}
 
 

@@ -209,7 +209,7 @@ def test_single_point_candidates_push_bbox_filter_into_parquet_scan() -> None:
     assert "EXISTS" not in connection.sql
     assert "regions.bbox_min_lon <= ?" in connection.sql
     assert "ST_AsWKB(geometry) AS geometry" in connection.sql
-    assert connection.parameters == ["layout.parquet", -118.25, -118.25, 34.05, 34.05]
+    assert connection.parameters == ["layout.parquet", 0, -118.25, -118.25, 34.05, 34.05]
 
 
 def test_single_point_candidates_return_wkb_in_one_read() -> None:
@@ -262,8 +262,8 @@ def test_small_distributed_batch_uses_per_point_pushdown() -> None:
     assert "UNION ALL" in connection.sql
     assert "EXISTS" not in connection.sql
     assert connection.parameters == [
-        "layout.parquet", -118.25, -118.25, 34.05, 34.05, 2,
-        "layout.parquet", -122.42, -122.42, 37.77, 37.77, 2,
+        "layout.parquet", -118.25, -118.25, 34.05, 34.05, 2, 0,
+        "layout.parquet", -122.42, -122.42, 37.77, 37.77, 2, 0,
     ]
     assert result["loc_id"].tolist() == ["USA-CA", "USA-CA-037"]
 
@@ -679,6 +679,45 @@ def test_point_resolve_reads_each_layout_file_once_with_exact_shape_check() -> N
     assert len(connection.calls) == 2
     assert all("ST_AsWKB(geometry)" in sql for sql, _ in connection.calls)
     assert all("WHERE loc_id IN" not in sql for sql, _ in connection.calls)
+
+
+def test_trusted_country_point_skips_admin0_wkb() -> None:
+    """A globally verified country must not decompress its giant Admin0 shape again."""
+    names = admin_spine_query.META_COLUMN_NAMES
+    country = {name: "" for name in names}
+    country.update({"loc_id": "CAN", "admin_level": 0, "name": "Canada"})
+    province = {name: "" for name in names}
+    province.update({
+        "loc_id": "CAN-BC", "parent_id": "CAN", "admin_level": 1,
+        "name": "British Columbia", "admin_0_loc_id": "CAN",
+        "admin_1_loc_id": "CAN-BC",
+    })
+    square_wkb = Polygon([(0, 0), (0, 10), (10, 10), (10, 0), (0, 0)]).wkb
+    scan_levels = []
+
+    def scan(_connection, _path, _lon, _lat, *, minimum_level=0):
+        scan_levels.append(minimum_level)
+        return [tuple(province[name] for name in names) + (square_wkb,)]
+
+    class Connection:
+        def close(self):
+            pass
+
+    with (
+        patch.object(admin_spine_query, "layout_available", return_value=True),
+        patch.object(admin_spine_query, "layout_root", return_value=Path("layout")),
+        patch.object(admin_spine_query, "_connection", return_value=Connection()),
+        patch.object(admin_spine_query, "_metadata_with_geometry", side_effect=scan),
+        patch.object(admin_spine_query, "_identity_rows", return_value=[country]),
+    ):
+        result = admin_spine_query.resolve_point(
+            "CAN", 5.0, 5.0, target_admin_level=1,
+            country_already_resolved=True,
+        )
+
+    assert scan_levels == [1]
+    assert [item["loc_id"] for item in result["stack"]] == ["CAN", "CAN-BC"]
+    assert result["matched"]["loc_id"] == "CAN-BC"
 
 
 def test_batch_point_resolve_opens_shallow_bank_once_for_every_point() -> None:

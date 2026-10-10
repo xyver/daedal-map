@@ -53,6 +53,10 @@ def canonicalize_loc_id(loc_id: str) -> str:
     historical = re.fullmatch(r"([A-Za-z]{3}-HIST-.*-)([0-9A-Fa-f]{10})", value, re.I)
     if historical:
         return historical.group(1).upper() + historical.group(2).lower()
+    # Canada source-detail packages disambiguate identities shared with
+    # source-native families using this case-sensitive graph key suffix.
+    if value.lower().endswith("::source_detail"):
+        return value[:-len("::source_detail")].upper() + "::source_detail"
     return value.upper()
 
 

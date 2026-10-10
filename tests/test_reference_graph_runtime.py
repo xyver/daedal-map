@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import tempfile
 import unittest
@@ -34,6 +35,53 @@ from mapmover.runtime import reference_graph
 
 
 class ReferenceGraphRuntimeTests(unittest.TestCase):
+    def test_health_source_windows_are_hash_pinned_and_month_precise(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            data_root = Path(directory)
+            root = (data_root / "geometry/countries/CAN/releases/geometry/"
+                    "can_geometry_1_3_5/runtime/reference_graph")
+            root.mkdir(parents=True)
+            source = root.parent / "source_releases.json"
+            source.write_text(json.dumps({"source_releases": {
+                "can_national_health_region_2023": {
+                    "source_release_id": "can_national_health_region_2023",
+                    "canonical_family": "health_region",
+                    "source_native_subtype": "statistics_canada_health_region",
+                    "selection_from": "2023-09-01",
+                    "selection_to_exclusive": "2024-09-01",
+                },
+            }}), encoding="utf-8")
+            package = root.parent.parent / "full_package_manifest.json"
+            package.write_text(json.dumps({
+                "status": "PASS_LOCAL_FULL", "release_id": "can_geometry_1_3_5",
+                "source_release_metadata_path": source.relative_to(data_root).as_posix(),
+                "source_release_metadata_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
+                "graph_temporal_source_bindings": {
+                    "statcan_health_regions_2023": "can_national_health_region_2023",
+                },
+            }), encoding="utf-8")
+            with mock.patch.object(reference_graph, "DATA_ROOT", data_root):
+                reference_graph._source_selection_bindings.cache_clear()
+                bindings = reference_graph._source_selection_bindings(str(root), False)
+                start, end, source_id = bindings["statcan_health_regions_2023"]
+                self.assertEqual((start, end, source_id), (
+                    "2023-09-01", "2024-09-01", "can_national_health_region_2023"))
+                self.assertFalse(reference_graph._identity_row_covers_date(
+                    {"valid_from": start, "valid_to": end}, date(2023, 8, 31)))
+                self.assertTrue(reference_graph._identity_row_covers_date(
+                    {"valid_from": start, "valid_to": end}, date(2023, 9, 1)))
+                self.assertFalse(reference_graph._identity_row_covers_date(
+                    {"valid_from": start, "valid_to": end}, date(2024, 9, 1)))
+                reference_graph._source_selection_bindings.cache_clear()
+                source.write_text(source.read_text(encoding="utf-8") + " ", encoding="utf-8")
+                with self.assertRaisesRegex(ValueError, "hash drift"):
+                    reference_graph._source_selection_bindings(str(root), False)
+                reference_graph._source_selection_bindings.cache_clear()
+                package.unlink()
+                with self.assertRaisesRegex(ValueError, "binding package is missing"):
+                    reference_graph._source_selection_bindings(str(root), False)
+                reference_graph._source_selection_bindings.cache_clear()
+
     def test_local_override_selects_two_candidate_graphs_without_catalog_promotion(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             data_root = Path(directory)

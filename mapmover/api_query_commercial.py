@@ -57,8 +57,10 @@ def pack_effective_access(
 ) -> dict[str, Any]:
     normalized = str(pack_id or "").strip().lower()
     from mapmover.data_loading import get_pack_metadata, load_catalog
+    from mapmover.catalog_surface import catalog_surface_scope
 
-    pack = get_pack_metadata(normalized, load_catalog())
+    with catalog_surface_scope("api"):
+        pack = get_pack_metadata(normalized, load_catalog())
     if not isinstance(pack, dict):
         return resolve_effective_access(
             resource_kind="pack",
