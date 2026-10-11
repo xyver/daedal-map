@@ -3594,31 +3594,43 @@ async def _execute_get_loc_id_info_tool(request: Request, arguments: dict[str, A
 
 def _get_loc_id_info_items(loc_ids: list[str], payload: dict[str, Any]) -> list[dict[str, Any]]:
     from mapmover.geometry_handlers import get_location_infos
-    from mapmover.runtime.reference_exchange import resolve_loc_id_inputs
-    from mapmover.runtime.reference_graph import indexed_public_alias_candidates
+    from mapmover.runtime.reference_graph import ReferenceRouteUnavailable, indexed_public_alias_candidates
 
     requested = [str(loc_id or "").strip().upper() for loc_id in loc_ids]
     unique_requested = list(dict.fromkeys(requested))
+
+    def route_error(message: str) -> list[dict[str, Any]]:
+        return [{
+            "loc_id": loc_id, "requested_loc_id": loc_id,
+            "error": {"code": "reference_route_unavailable", "message": message},
+        } for loc_id in requested]
+
     try:
-        indexed_aliases = indexed_public_alias_candidates(unique_requested) or {}
-    except Exception:
-        indexed_aliases = {}
+        indexed_aliases = indexed_public_alias_candidates(unique_requested)
+    except Exception as exc:
+        return route_error(f"preferred-public alias index could not be read: {type(exc).__name__}")
+    if indexed_aliases is None:
+        return route_error("preferred-public alias index is absent or stale")
     # Published aliases already have an exact index hit. Probing their public
     # strings through geometry and identity routes first can exhaust the MCP
     # execution window before the canonical target is ever read.
     direct_ids = [loc_id for loc_id in unique_requested if not indexed_aliases.get(loc_id)]
-    direct_infos = get_location_infos(
-        direct_ids,
-        include_memberships=False,
-        fallback=False,
-    ) if direct_ids else []
+    try:
+        direct_infos = get_location_infos(
+            direct_ids,
+            include_memberships=False,
+            fallback=False,
+            graph_authoritative=True,
+        ) if direct_ids else []
+    except ReferenceRouteUnavailable as exc:
+        return route_error(str(exc))
     direct_info_by_loc_id = {
         loc_id: info
         for loc_id, info in zip(direct_ids, direct_infos)
         if isinstance(info, dict) and not info.get("error")
     }
-    unresolved_ids = [loc_id for loc_id in direct_ids if loc_id not in direct_info_by_loc_id]
-    resolved_fallbacks = iter(resolve_loc_id_inputs(unresolved_ids) if unresolved_ids else [])
+    # Retain direct misses too, so an absent identity is never queried again.
+    direct_lookup_by_loc_id = dict(zip(direct_ids, direct_infos))
     resolutions: dict[str, dict[str, Any]] = {}
     for loc_id in unique_requested:
         alias_rows = indexed_aliases.get(loc_id) or []
@@ -3638,31 +3650,30 @@ def _get_loc_id_info_items(loc_ids: list[str], payload: dict[str, Any]) -> list[
                     "public_alias": loc_id, "reference_system": systems[0] if len(systems) == 1 else None,
                     "reference_systems": systems,
                 }
-        elif loc_id in direct_info_by_loc_id:
-            resolutions[loc_id] = {
-                "ok": True,
-                "status": "unchanged",
-                "requested_loc_id": loc_id,
-                "loc_id": loc_id,
-                "resolved_from_public_alias": False,
-            }
         else:
-            resolutions[loc_id] = next(resolved_fallbacks)
+            resolutions[loc_id] = {
+                "ok": True, "status": "unchanged", "requested_loc_id": loc_id,
+                "loc_id": loc_id, "resolved_from_public_alias": False,
+            }
     canonical_ids = list(dict.fromkeys(
         str(resolution.get("loc_id") or requested_id)
         for requested_id, resolution in resolutions.items()
         if resolution.get("ok")
     ))
-    missing_canonical_ids = [
+    alias_target_ids = [
         canonical_id for canonical_id in canonical_ids
-        if canonical_id not in direct_info_by_loc_id
+        if canonical_id not in direct_lookup_by_loc_id
     ]
-    fallback_infos = get_location_infos(
-        missing_canonical_ids,
-        include_memberships=False,
-    ) if missing_canonical_ids else []
-    info_by_loc_id = dict(direct_info_by_loc_id)
-    info_by_loc_id.update(zip(missing_canonical_ids, fallback_infos))
+    try:
+        target_infos = get_location_infos(
+            alias_target_ids,
+            include_memberships=False,
+            graph_authoritative=True,
+        ) if alias_target_ids else []
+    except ReferenceRouteUnavailable as exc:
+        return route_error(str(exc))
+    info_by_loc_id = dict(direct_lookup_by_loc_id)
+    info_by_loc_id.update(zip(alias_target_ids, target_infos))
     for loc_id, resolution in resolutions.items():
         if not resolution.get("resolved_from_public_alias") or not indexed_aliases.get(loc_id):
             continue

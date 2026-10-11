@@ -36,6 +36,10 @@ PUBLIC_ALIAS_TYPE = "preferred_public_loc_id"
 PUBLIC_REFERENCE_PREFIX = "public."
 LEGACY_PUBLIC_REFERENCE_PREFIX = "daedalmap.public."
 
+
+class ReferenceRouteUnavailable(RuntimeError):
+    """An exact graph lookup cannot use its declared routing index safely."""
+
 #: Every country publishes its graph in the same place and the same shape.
 #: There is one format - a hash-pinned partition index - so this module never
 #: branches on generation. A country is discovered by its directory, not by a
@@ -421,7 +425,7 @@ def _partition_paths(root: Path, table: str) -> list[Path]:
 
 
 def _route_paths(
-    root: Path, index_name: str, key: str, values: list[str],
+    root: Path, index_name: str, key: str, values: list[str], *, strict: bool = False,
 ) -> list[Path] | None:
     """Resolve optional exact routes without weakening older graph releases."""
     index_path = root / index_name
@@ -430,23 +434,32 @@ def _route_paths(
     try:
         if index_path.is_file():
             if not {key, "path"}.issubset(pq.ParquetFile(index_path).schema_arrow.names):
-                return None
+                raise ValueError("routing index lacks required columns")
             rows = pq.read_table(
                 index_path, columns=["path"], filters=[(key, "in", values)],
             ).to_pydict().get("path", [])
         elif is_cloud_mode():
             if not {key, "path"}.issubset(parquet_columns(index_path)):
-                return None
+                raise ValueError("routing index lacks required columns")
             frame = select_rows(index_path, columns=["path"], in_filters={key: values})
             rows = frame["path"].tolist() if "path" in frame.columns else []
         else:
-            return None
-    except Exception:
+            raise FileNotFoundError(index_path)
+    except Exception as exc:
+        if strict:
+            raise ReferenceRouteUnavailable(f"exact routing index unavailable: {index_name}") from exc
         return None
     if not rows:
         return []
     table = next((name for name, filename in PARTITION_INDEXES.items() if filename == index_name), "")
-    path_map = _partition_source_map(str(root), table)
+    try:
+        path_map = _partition_source_map(str(root), table)
+    except Exception as exc:
+        if strict:
+            raise ReferenceRouteUnavailable(f"partition index unavailable for {index_name}") from exc
+        raise
+    if strict and any(str(value) not in path_map for value in rows):
+        raise ReferenceRouteUnavailable(f"routing index references an unpinned partition: {index_name}")
     return list(dict.fromkeys(path_map.get(str(value), DATA_ROOT / str(value)) for value in rows if value))
 
 
@@ -856,10 +869,14 @@ def identity_at(loc_id: str, as_of: date | None = None) -> dict[str, Any] | None
             connection.close()
 
 
-def identities(loc_ids: list[str]) -> list[dict[str, Any]]:
+def identities(loc_ids: list[str], *, require_route: bool = False) -> list[dict[str, Any]]:
     """Return graph identities in caller order with one predicate-pushed scan."""
     requested = list(dict.fromkeys(str(item).strip() for item in loc_ids if str(item).strip()))
-    if not requested or not reference_graph_available():
+    if not requested:
+        return []
+    if not reference_graph_available():
+        if require_route:
+            raise ReferenceRouteUnavailable("active reference graph unavailable")
         return []
     # Query roots in authority order, opening DuckDB only after an exact route
     # selects a physical partition. Do not hydrate every partition up front.
@@ -876,7 +893,7 @@ def identities(loc_ids: list[str]) -> list[dict[str, Any]]:
         for root in roots:
             if not remaining:
                 break
-            routed = _route_paths(root, IDENTITY_ROUTE_INDEX, "loc_id", remaining)
+            routed = _route_paths(root, IDENTITY_ROUTE_INDEX, "loc_id", remaining, strict=require_route)
             partition_paths = routed if routed is not None else _partition_paths(root, "identities")
             source = _table_source_for_roots("identities", [root], selected_paths=partition_paths)
             if not source:
@@ -1176,13 +1193,15 @@ def resolve_public_loc_ids(loc_ids: list[str]) -> list[dict[str, Any]]:
 def indexed_public_alias_candidates(loc_ids: list[str]) -> dict[str, list[dict[str, Any]]] | None:
     """Find exact preferred public aliases in a current, release-pinned index.
 
-    ``None`` means the index cannot safely answer this request; callers must
-    use the normal graph resolver in that case. This lookup deliberately does
-    not open the large identity route index or validate target identities.
+    ``None`` means the index cannot safely answer this request. Exact callers
+    should return an index error instead of scanning every graph partition.
+    This lookup does not open identity partitions or validate target identities.
     """
     requested = list(dict.fromkeys(str(value or "").strip().upper() for value in loc_ids if str(value or "").strip()))
-    if not requested or not reference_graph_available():
+    if not requested:
         return {}
+    if not reference_graph_available():
+        return None
     roots = reference_graph_roots()
     countries = {value.split("-", 1)[0] for value in requested}
     if any(country not in roots for country in countries):

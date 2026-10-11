@@ -257,6 +257,35 @@ class ReferenceGraphRuntimeTests(unittest.TestCase):
         ), "")
         self.assertIsNone(identity("TST-MISSING"))
 
+    def test_required_identity_route_miss_does_not_open_partition(self) -> None:
+        from mapmover.geometry_handlers import get_location_infos
+
+        pd.DataFrame([{
+            "loc_id": "TST-A-001", "path": str(self.root / "identities.parquet"),
+        }]).to_parquet(self.root / "identity_routes.parquet", index=False)
+        with (
+            mock.patch.object(reference_graph, "_connection") as connection,
+            mock.patch("mapmover.geometry_handlers.get_selection_geometry_metadata") as geometry,
+        ):
+            infos = get_location_infos(["TST-MISSING"], graph_authoritative=True)
+
+        self.assertEqual(infos[0]["error"], "no identity in the active reference graph")
+        connection.assert_not_called()
+        geometry.assert_not_called()
+
+    def test_required_identity_route_missing_fails_without_partition_scan(self) -> None:
+        from mapmover.geometry_handlers import get_location_infos
+
+        with (
+            mock.patch.object(reference_graph, "_partition_paths") as partitions,
+            mock.patch("mapmover.geometry_handlers.get_selection_geometry_metadata") as geometry,
+        ):
+            with self.assertRaisesRegex(reference_graph.ReferenceRouteUnavailable, "identity_routes.parquet"):
+                get_location_infos(["TST-A-001"], graph_authoritative=True)
+
+        partitions.assert_not_called()
+        geometry.assert_not_called()
+
     def test_batch_location_info_reads_sidechain_identity_without_geometry(self) -> None:
         from mapmover.geometry_handlers import get_location_infos
 

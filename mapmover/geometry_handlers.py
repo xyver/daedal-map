@@ -3066,6 +3066,7 @@ def get_location_infos(
     *,
     include_memberships: bool = False,
     fallback: bool = True,
+    graph_authoritative: bool = False,
 ) -> list[dict]:
     """Return location metadata with one grouped geometry-metadata pipeline.
 
@@ -3077,6 +3078,19 @@ def get_location_infos(
     if not requested:
         return []
     unique = list(dict.fromkeys(requested))
+    if graph_authoritative:
+        from .runtime.reference_graph import identities
+
+        graph_rows = identities(unique, require_route=True)
+        by_id = {
+            str(row.get("loc_id") or ""): _reference_graph_info_from_identity(
+                row, {"release_id": row.get("namespace_release")},
+            )
+            for row in graph_rows if row.get("loc_id")
+        }
+        return [by_id.get(loc_id, {
+            "loc_id": loc_id, "error": "no identity in the active reference graph",
+        }) for loc_id in requested]
     graph_infos: dict[str, dict] = {}
     try:
         from .runtime.reference_graph import identities, where_is_geography_data
