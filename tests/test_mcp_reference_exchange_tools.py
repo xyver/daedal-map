@@ -5,8 +5,10 @@ import gzip
 import io
 import json
 import unittest
+from datetime import date, datetime
 from unittest import mock
 
+import pandas as pd
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -363,6 +365,23 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         decoded = json.loads(response.body)
 
         self.assertEqual(decoded["result"]["structuredContent"]["bbox"], [None])
+
+    def test_tool_result_serializes_graph_and_geometry_dates(self) -> None:
+        result = _tool_result({
+            "valid_from": pd.Timestamp("2020-01-01"),
+            "valid_to": pd.NaT,
+            "resolved_from_public_alias": True,
+            "rows": [{"source_vintage": date(2025, 6, 1),
+                      "observed_at": datetime(2026, 10, 11, 12, 30)}],
+        })
+
+        structured = result["structuredContent"]
+        self.assertEqual(structured["valid_from"], "2020-01-01T00:00:00")
+        self.assertIsNone(structured["valid_to"])
+        self.assertIs(structured["resolved_from_public_alias"], True)
+        self.assertEqual(structured["rows"][0]["source_vintage"], "2025-06-01")
+        self.assertEqual(structured["rows"][0]["observed_at"], "2026-10-11T12:30:00")
+        self.assertEqual(json.loads(result["content"][0]["text"]), structured)
 
     def test_geometry_topic_help_explains_workflows_and_per_tool_help(self) -> None:
         with mock.patch("mapmover.routes.mcp.log_api_query_event") as analytics_mock:
@@ -1503,6 +1522,20 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
             [result["loc_id"] for result in payload["results"]],
             ["USA-CA-037", "USA-NY-061", "USA-CA-037"],
         )
+
+    def test_loc_id_info_batch_serializes_parquet_timestamp(self) -> None:
+        with (
+            mock.patch("mapmover.runtime.reference_graph.indexed_public_alias_candidates", return_value={}),
+            mock.patch("mapmover.geometry_handlers.get_location_infos", return_value=[{
+                "loc_id": "USA-VA-059", "name": "Fairfax County", "admin_level": 2,
+                "iso3": "USA", "valid_from": pd.Timestamp("2020-01-01"),
+            }]),
+            mock.patch("mapmover.routes.mcp._loc_id_catalog_context", return_value={}),
+        ):
+            payload = _tool_call(self.client, "get_loc_id_info", {"loc_ids": ["USA-VA-059"]})
+
+        self.assertEqual(payload["found_count"], 1)
+        self.assertEqual(payload["results"][0]["valid_from"], "2020-01-01T00:00:00")
 
     def test_loc_id_info_indexed_alias_skips_public_id_metadata_probe(self) -> None:
         alias = "USA-POSTAL-EXAMPLE"

@@ -422,22 +422,28 @@ def _partition_paths(root: Path, table: str) -> list[Path]:
 
 def _route_paths(
     root: Path, index_name: str, key: str, values: list[str],
-) -> list[Path]:
+) -> list[Path] | None:
     """Resolve optional exact routes without weakening older graph releases."""
     index_path = root / index_name
     if not values:
         return []
     try:
         if index_path.is_file():
+            if not {key, "path"}.issubset(pq.ParquetFile(index_path).schema_arrow.names):
+                return None
             rows = pq.read_table(
                 index_path, columns=["path"], filters=[(key, "in", values)],
             ).to_pydict().get("path", [])
         elif is_cloud_mode():
+            if not {key, "path"}.issubset(parquet_columns(index_path)):
+                return None
             frame = select_rows(index_path, columns=["path"], in_filters={key: values})
             rows = frame["path"].tolist() if "path" in frame.columns else []
         else:
-            return []
+            return None
     except Exception:
+        return None
+    if not rows:
         return []
     table = next((name for name, filename in PARTITION_INDEXES.items() if filename == index_name), "")
     path_map = _partition_source_map(str(root), table)
@@ -490,11 +496,16 @@ def _table_source_for_roots(
     reference_system: str | None = None,
     relationship_family: str | None = None,
     relationship_endpoint: str | None = None,
+    selected_paths: list[Path] | None = None,
 ) -> str:
+    if selected_paths is not None and len(roots) != 1:
+        raise ValueError("selected_paths requires one graph root")
     paths: list[str] = []
     for root in roots:
-        routed: list[Path] = []
-        if table in {"identities", "identity_versions"} and loc_ids:
+        routed: list[Path] | None = None
+        if selected_paths is not None:
+            routed = selected_paths
+        elif table in {"identities", "identity_versions"} and loc_ids:
             routed = _route_paths(root, IDENTITY_ROUTE_INDEX, "loc_id", loc_ids)
         elif table == "aliases" and reference_system:
             routed = _route_paths(
@@ -504,7 +515,7 @@ def _table_source_for_roots(
             routed = _relationship_route_paths(
                 root, relationship_family, relationship_endpoint,
             )
-        selected = routed or _partition_paths(root, table)
+        selected = routed if routed is not None else _partition_paths(root, table)
         paths.extend(
             _sql_path(path)
             for path in selected
@@ -697,18 +708,18 @@ def reference_graph_families() -> list[dict[str, Any]]:
 def identity(loc_id: str) -> dict[str, Any] | None:
     if not reference_graph_available():
         return None
-    connection = _connection()
+    connection = None
     try:
         # Query roots one at a time so country authority wins deterministically
         # when its Admin0 loc_id is also present in the global fallback.
         for root in graph_roots_for_loc_id(loc_id):
-            partition_paths = (
-                _route_paths(root, IDENTITY_ROUTE_INDEX, "loc_id", [str(loc_id)])
-                or _partition_paths(root, "identities")
-            )
-            source = _table_source_for_roots("identities", [root], loc_ids=[str(loc_id)])
+            routed = _route_paths(root, IDENTITY_ROUTE_INDEX, "loc_id", [str(loc_id)])
+            partition_paths = routed if routed is not None else _partition_paths(root, "identities")
+            source = _table_source_for_roots("identities", [root], selected_paths=partition_paths)
             if not source:
                 continue
+            if connection is None:
+                connection = _connection()
             cursor = connection.execute(
                 f"SELECT * FROM (SELECT {_identity_columns_for_roots([root], partition_paths)} "
                 f"FROM read_parquet({source}, union_by_name=True)) AS candidates "
@@ -720,7 +731,8 @@ def identity(loc_id: str) -> dict[str, Any] | None:
                 return dict(zip([item[0] for item in cursor.description], row))
         return None
     finally:
-        connection.close()
+        if connection is not None:
+            connection.close()
 
 
 def _identity_row_covers_date(row: dict[str, Any], as_of: date) -> bool:
@@ -796,22 +808,22 @@ def identity_at(loc_id: str, as_of: date | None = None) -> dict[str, Any] | None
         return identity(loc_id)
     if not reference_graph_available():
         return None
-    connection = _connection()
+    connection = None
     try:
         # Country authority wins over the global fallback. Within that graph,
         # an explicit temporal version outranks an undated current-spine row;
         # otherwise the latter would mask every historical frame for an ID
         # shared with the current admin spine.
         for root in graph_roots_for_loc_id(loc_id):
-            partition_paths = (
-                _route_paths(root, IDENTITY_ROUTE_INDEX, "loc_id", [str(loc_id)])
-                or _partition_paths(root, "identity_versions")
-            )
+            routed = _route_paths(root, IDENTITY_ROUTE_INDEX, "loc_id", [str(loc_id)])
+            partition_paths = routed if routed is not None else _partition_paths(root, "identity_versions")
             source = _table_source_for_roots(
-                "identity_versions", [root], loc_ids=[str(loc_id)],
+                "identity_versions", [root], selected_paths=partition_paths,
             )
             if not source:
                 continue
+            if connection is None:
+                connection = _connection()
             selected = _identity_columns_for_roots([root], partition_paths)
             cursor = connection.execute(
                 f"""SELECT * FROM (
@@ -840,7 +852,8 @@ def identity_at(loc_id: str, as_of: date | None = None) -> dict[str, Any] | None
                     return row
         return None
     finally:
-        connection.close()
+        if connection is not None:
+            connection.close()
 
 
 def identities(loc_ids: list[str]) -> list[dict[str, Any]]:
@@ -848,18 +861,11 @@ def identities(loc_ids: list[str]) -> list[dict[str, Any]]:
     requested = list(dict.fromkeys(str(item).strip() for item in loc_ids if str(item).strip()))
     if not requested or not reference_graph_available():
         return []
-    # Resolve the shared source before opening DuckDB.  A graph can be
-    # discoverable through its catalog while its identity partition index is
-    # empty or unavailable; that is a clean fail-closed result, not a reason
-    # to construct a connection (or issue a broad fallback query).
-    if not _table_source("identities"):
-        return []
-    # Query roots in authority order.  Combining a country graph with the
-    # global fallback in one UNION makes their shared Admin IDs peers and lets
-    # physical scan order decide which metadata wins.
+    # Query roots in authority order, opening DuckDB only after an exact route
+    # selects a physical partition. Do not hydrate every partition up front.
     remaining = requested[:]
     found: dict[str, dict[str, Any]] = {}
-    connection = _connection()
+    connection = None
     try:
         roots: list[Path] = []
         for loc_id in requested:
@@ -870,13 +876,13 @@ def identities(loc_ids: list[str]) -> list[dict[str, Any]]:
         for root in roots:
             if not remaining:
                 break
-            partition_paths = (
-                _route_paths(root, IDENTITY_ROUTE_INDEX, "loc_id", remaining)
-                or _partition_paths(root, "identities")
-            )
-            source = _table_source_for_roots("identities", [root], loc_ids=remaining)
+            routed = _route_paths(root, IDENTITY_ROUTE_INDEX, "loc_id", remaining)
+            partition_paths = routed if routed is not None else _partition_paths(root, "identities")
+            source = _table_source_for_roots("identities", [root], selected_paths=partition_paths)
             if not source:
                 continue
+            if connection is None:
+                connection = _connection()
             placeholders = ", ".join("?" for _ in remaining)
             cursor = connection.execute(
                 f"""WITH candidates AS (
@@ -899,7 +905,8 @@ def identities(loc_ids: list[str]) -> list[dict[str, Any]]:
             remaining = [loc_id for loc_id in remaining if loc_id not in found]
         return [found[loc_id] for loc_id in requested if loc_id in found]
     finally:
-        connection.close()
+        if connection is not None:
+            connection.close()
 
 
 def aliases_for_loc_id(loc_id: str, *, limit: int = 100) -> list[dict[str, Any]]:

@@ -74,6 +74,7 @@ def test_cloud_exact_identity_route_avoids_partition_index_fanout(tmp_path: Path
     with (
         patch.object(reference_graph, "DATA_ROOT", tmp_path),
         patch.object(reference_graph, "is_cloud_mode", return_value=True),
+        patch.object(reference_graph, "parquet_columns", return_value={"loc_id", "path"}),
         patch.object(reference_graph, "select_rows", return_value=frame) as reader,
     ):
         paths = reference_graph._route_paths(
@@ -136,7 +137,8 @@ def test_cloud_reference_family_discovery_is_catalog_owned(tmp_path: Path) -> No
 def test_identities_fail_closed_before_duckdb_when_graph_has_no_partitions() -> None:
     with (
         patch.object(reference_graph, "reference_graph_available", return_value=True),
-        patch.object(reference_graph, "_table_source", return_value=""),
+        patch.object(reference_graph, "graph_roots_for_loc_id", return_value=[Path("missing_graph")]),
+        patch.object(reference_graph, "_route_paths", return_value=[]),
         patch.object(reference_graph, "_connection") as connection,
     ):
         assert reference_graph.identities(["AUS-NSW-117-03"]) == []

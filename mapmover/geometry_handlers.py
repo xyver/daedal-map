@@ -2670,28 +2670,34 @@ def _reference_graph_location_info(loc_id: str) -> dict | None:
         row = identity(loc_id)
         if not row:
             return None
-        source = where_is_geography_data(loc_id)
-        return {
-            "loc_id": row.get("loc_id") or loc_id,
-            "name": row.get("name"),
-            "admin_level": row.get("admin_level"),
-            "parent_id": row.get("parent_loc_id"),
-            "family": row.get("geography_family") or row.get("family"),
-            "iso3": str(row.get("loc_id") or loc_id).split("-", 1)[0],
-            "has_polygon": bool(row.get("has_shape")),
-            "valid_from": row.get("valid_from"),
-            "valid_to": row.get("valid_to"),
-            "source_vintage": row.get("source_vintage"),
-            "source_id": row.get("native_id"),
-            "source_system": row.get("source_system"),
-            "geometry_source": row.get("geometry_bank"),
-            "release_id": source.get("release_id"),
-            "reference_graph_status": source.get("status"),
-            "children_count": 0,
-            "descendants_count": 0,
-        }
+        return _reference_graph_info_from_identity(row, where_is_geography_data(loc_id))
     except Exception:
         return None
+
+
+def _reference_graph_info_from_identity(row: dict, source: dict | None = None) -> dict:
+    """Build lightweight location info from an exact graph identity row."""
+    loc_id = str(row.get("loc_id") or "")
+    source = source or {}
+    return {
+        "loc_id": row.get("loc_id") or loc_id,
+        "name": row.get("name"),
+        "admin_level": row.get("admin_level"),
+        "parent_id": row.get("parent_loc_id"),
+        "family": row.get("geography_family") or row.get("family"),
+        "iso3": loc_id.split("-", 1)[0],
+        "has_polygon": bool(row.get("has_shape")),
+        "valid_from": row.get("valid_from"),
+        "valid_to": row.get("valid_to"),
+        "source_vintage": row.get("source_vintage"),
+        "source_id": row.get("native_id"),
+        "source_system": row.get("source_system"),
+        "geometry_source": row.get("geometry_bank"),
+        "release_id": source.get("release_id"),
+        "reference_graph_status": source.get("status"),
+        "children_count": 0,
+        "descendants_count": 0,
+    }
 
 
 def get_location_info(loc_id: str, *, include_memberships: bool = True):
@@ -3071,14 +3077,31 @@ def get_location_infos(
     if not requested:
         return []
     unique = list(dict.fromkeys(requested))
-    rows = get_selection_geometry_metadata(unique)
+    graph_infos: dict[str, dict] = {}
+    try:
+        from .runtime.reference_graph import identities, where_is_geography_data
+
+        for row in identities(unique):
+            loc_id = str(row.get("loc_id") or "")
+            family = str(row.get("geography_family") or row.get("family") or "")
+            if loc_id and family and not family.startswith("admin"):
+                graph_infos[loc_id] = _reference_graph_info_from_identity(
+                    row, where_is_geography_data(loc_id),
+                )
+    except Exception:
+        # A missing graph must leave the established exact geometry readers usable.
+        graph_infos = {}
+    geometry_ids = [loc_id for loc_id in unique if loc_id not in graph_infos]
+    rows = get_selection_geometry_metadata(geometry_ids) if geometry_ids else []
     by_loc_id = {
         str(row.get("loc_id") or row.get("source_loc_id") or "").strip(): row
         for row in rows
         if str(row.get("loc_id") or row.get("source_loc_id") or "").strip()
     }
-    info_by_loc_id: dict[str, dict] = {}
+    info_by_loc_id: dict[str, dict] = dict(graph_infos)
     for loc_id in unique:
+        if loc_id in graph_infos:
+            continue
         row = by_loc_id.get(loc_id)
         if row is not None:
             info_by_loc_id[loc_id] = _build_metadata_based_location_info(

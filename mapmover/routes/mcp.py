@@ -12,6 +12,7 @@ import threading
 import uuid
 from copy import deepcopy
 from contextlib import suppress
+from datetime import date, datetime, time as datetime_time
 from functools import lru_cache, wraps
 from typing import Any
 
@@ -1829,7 +1830,7 @@ def _mcp_origin_allowed(request: Request) -> bool:
 
 
 def _json_safe(value: Any) -> Any:
-    """Replace non-finite floats so strict JSON encoding cannot fail.
+    """Normalize data-frame scalars before strict JSON encoding.
 
     Starlette renders with allow_nan=False, so a single NaN or infinity
     anywhere in a payload raises and the caller sees a 500 instead of the
@@ -1838,12 +1839,19 @@ def _json_safe(value: Any) -> Any:
     rather than failing the whole response. Non-float reals are normalized
     through float() because numpy scalars are not JSON serializable either.
     """
+    if isinstance(value, (datetime, date, datetime_time)):
+        encoded = value.isoformat()
+        return None if encoded == "NaT" else encoded
     if isinstance(value, float):
         return value if math.isfinite(value) else None
     if isinstance(value, dict):
         return {key: _json_safe(item) for key, item in value.items()}
     if isinstance(value, (list, tuple)):
         return [_json_safe(item) for item in value]
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, numbers.Integral):
+        return int(value)
     if isinstance(value, numbers.Real) and not isinstance(value, (int, bool)):
         numeric = float(value)
         return numeric if math.isfinite(numeric) else None

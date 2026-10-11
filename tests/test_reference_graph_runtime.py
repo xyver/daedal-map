@@ -244,6 +244,44 @@ class ReferenceGraphRuntimeTests(unittest.TestCase):
         self.assertTrue(any(row["external_id"] == "001" for row in aliases_for_loc_id("TST-A-001")))
         self.assertEqual(relationships_for_loc_id("TST-A-001")[0]["target_loc_id"], "TST-B-002")
 
+    def test_exact_identity_route_miss_does_not_scan_all_partitions(self) -> None:
+        pd.DataFrame([{
+            "loc_id": "TST-A-001", "path": str(self.root / "identities.parquet"),
+        }]).to_parquet(self.root / "identity_routes.parquet", index=False)
+        self.assertEqual(identity("TST-A-001")["name"], "Test Area")
+        self.assertEqual(reference_graph._route_paths(
+            self.root, reference_graph.IDENTITY_ROUTE_INDEX, "loc_id", ["TST-MISSING"],
+        ), [])
+        self.assertEqual(reference_graph._table_source_for_roots(
+            "identities", [self.root], loc_ids=["TST-MISSING"],
+        ), "")
+        self.assertIsNone(identity("TST-MISSING"))
+
+    def test_batch_location_info_reads_sidechain_identity_without_geometry(self) -> None:
+        from mapmover.geometry_handlers import get_location_infos
+
+        with (
+            mock.patch("mapmover.runtime.reference_graph.identities", return_value=[{
+                "loc_id": "TST-A-001", "name": "Test Area", "family": "test_sidechain",
+                "parent_loc_id": "TST", "has_shape": True,
+            }, {
+                "loc_id": "TST-B-002", "name": "Related Area", "family": "test_sidechain",
+                "parent_loc_id": "TST", "has_shape": False,
+            }]) as identities_reader,
+            mock.patch("mapmover.runtime.reference_graph.where_is_geography_data", return_value={
+                "release_id": "test_candidate", "status": "PASS",
+            }),
+            mock.patch("mapmover.geometry_handlers.get_selection_geometry_metadata") as geometry,
+        ):
+            infos = get_location_infos(["TST-A-001", "TST-B-002", "TST-A-001"], fallback=False)
+
+        self.assertEqual(infos[0]["name"], "Test Area")
+        self.assertEqual(infos[0]["family"], "test_sidechain")
+        self.assertTrue(infos[0]["has_polygon"])
+        self.assertEqual([item["name"] for item in infos], ["Test Area", "Related Area", "Test Area"])
+        identities_reader.assert_called_once_with(["TST-A-001", "TST-B-002"])
+        geometry.assert_not_called()
+
     def test_alias_identification_opens_physical_files_sequentially(self) -> None:
         second = self.root / "aliases_second.parquet"
         pd.DataFrame([{
