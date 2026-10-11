@@ -738,7 +738,30 @@ def resolve_admin_text_to_loc_id(
             spine_levels = [parent_level + 1, parent_level + 2, parent_level + 3]
         else:
             spine_levels = None
-        spine = spine_candidates(country, value, levels=spine_levels, parent_loc_id=parent_scope)
+        try:
+            spine = spine_candidates(country, value, levels=spine_levels, parent_loc_id=parent_scope)
+        except Exception as exc:
+            return {
+                "query": value,
+                "match_type": "direct_admin_name",
+                "matches": {},
+                "deepest_resolved_loc_id": None,
+                "deepest_resolved_admin_level": None,
+                "should_persist_deepest_loc_id": False,
+                "error": f"admin name lookup failed for {country}: {exc}",
+                "error_code": "spine_lookup_failed",
+            }
+        if spine.get("status") == "no_source":
+            return {
+                "query": value,
+                "match_type": "direct_admin_name",
+                "matches": {},
+                "deepest_resolved_loc_id": None,
+                "deepest_resolved_admin_level": None,
+                "should_persist_deepest_loc_id": False,
+                "error": f"no published admin name source is available for {country}",
+                "error_code": "name_source_unavailable",
+            }
         if spine.get("status") == "matched":
             row = spine["match"]
             entry = _build_match_entry(

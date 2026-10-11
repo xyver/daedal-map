@@ -199,6 +199,51 @@ class LocIdResolutionRuntimeTests(unittest.TestCase):
         self.assertIsNone(resolved["deepest_resolved_loc_id"])
         self.assertEqual({c["loc_id"] for c in resolved["candidates"]}, {"USA-AL-069", "USA-TX-225"})
 
+    def test_place_partitions_resolve_read_locations_per_call(self):
+        # Hosted hydrates small files into an evictable cache, so only the
+        # partition identity may be cached; the read location is resolved each
+        # call, and a failed index read is never cached as "no partitions".
+        from pathlib import Path
+
+        import pandas as pd
+
+        from mapmover.runtime import graph_name_lookup as lookup
+
+        lookup._place_alias_partitions.cache_clear()
+        root = Path("graph-root")
+        index = pd.DataFrame([{"family": "place_or_municipality", "path": "aliases/places.parquet"}])
+        with patch.object(lookup, "select_rows", side_effect=[pd.DataFrame(), index]), patch.object(
+            lookup.graph, "_partition_source_map", return_value={"aliases/places.parquet": Path("published/places.parquet")},
+        ):
+            with self.assertRaises(LookupError):
+                lookup._place_alias_partitions(str(root))
+            first = lookup._place_alias_partitions(str(root))
+        self.assertEqual(first, (Path("published/places.parquet"),))
+        with patch.object(lookup.graph, "_sql_path", side_effect=["/cache/a.parquet", "/cache/b.parquet"]) as sql_path:
+            sources = [lookup.graph._sql_path(path) for path in first] + [lookup.graph._sql_path(path) for path in first]
+        self.assertEqual(sources, ["/cache/a.parquet", "/cache/b.parquet"])
+        self.assertEqual(sql_path.call_count, 2)
+        lookup._place_alias_partitions.cache_clear()
+
+    def test_missing_name_source_is_a_typed_item_error(self):
+        with patch(
+            "mapmover.runtime.loc_id_resolution.spine_candidates", return_value={"status": "no_source"},
+        ), patch("mapmover.runtime.loc_id_resolution.place_candidates") as places:
+            resolved = resolve_admin_text_to_loc_id("Nairobi", country_hint="KEN")
+
+        self.assertEqual(resolved["error_code"], "name_source_unavailable")
+        places.assert_not_called()
+
+    def test_spine_lookup_failure_is_a_typed_item_error(self):
+        with patch(
+            "mapmover.runtime.loc_id_resolution.spine_candidates",
+            side_effect=LookupError("Global Baseline identity partitions could not be resolved for KEN"),
+        ):
+            resolved = resolve_admin_text_to_loc_id("Nairobi", country_hint="KEN")
+
+        self.assertIsNone(resolved["deepest_resolved_loc_id"])
+        self.assertEqual(resolved["error_code"], "spine_lookup_failed")
+
     def test_place_lookup_failure_is_a_typed_item_error(self):
         with self._spine([{"loc_id": "USA-OR", "admin_level": 1, "name": "Oregon"}]), patch(
             "mapmover.runtime.loc_id_resolution.place_candidates",

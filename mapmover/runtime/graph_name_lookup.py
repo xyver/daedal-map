@@ -20,7 +20,7 @@ from __future__ import annotations
 import threading
 from functools import lru_cache
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import pyarrow as pa
 import pyarrow.compute as pc
@@ -88,26 +88,39 @@ def name_keys(text: str) -> dict[str, tuple[str, ...]]:
     }
 
 
-def _spine_source(country: str) -> tuple[str, list[Any], int] | None:
-    """Return the catalog-selected shallow name source for one country."""
+def _spine_source(country: str) -> tuple[str, Callable[[], tuple[str, list[Any]]], int] | None:
+    """Return the catalog-selected shallow name source for one country.
+
+    The first value is the stable published identity used as the cache key.
+    The query and its read locations are built only when the table is loaded,
+    because hosted read locations point into an evictable hydration cache.
+    """
     if layout_available(country):
         bank = layout_root(country) / "admin_0_3.parquet"
         return (
-            "SELECT loc_id, admin_level, name FROM read_parquet(?) WHERE admin_level BETWEEN 0 AND ?",
-            [path_to_uri(bank), SPINE_MAX_LEVEL_ADOPTED],
+            str(bank),
+            lambda: (
+                "SELECT loc_id, admin_level, name FROM read_parquet(?) WHERE admin_level BETWEEN 0 AND ?",
+                [path_to_uri(bank), SPINE_MAX_LEVEL_ADOPTED],
+            ),
             SPINE_MAX_LEVEL_ADOPTED,
         )
     root = graph.global_reference_graph_root()
-    source = graph._table_source_for_roots("identities", [root]) if root else ""
-    if not source:
+    if not root:
         return None
-    return (
-        f"SELECT loc_id, CAST(admin_level AS INTEGER) AS admin_level, name "
-        f"FROM read_parquet({source}, union_by_name=True) "
-        f"WHERE (loc_id = ? OR loc_id LIKE ?) AND admin_level BETWEEN 0 AND ?",
-        [country, f"{country}-%", SPINE_MAX_LEVEL_GLOBAL],
-        SPINE_MAX_LEVEL_GLOBAL,
-    )
+
+    def global_query() -> tuple[str, list[Any]]:
+        source = graph._table_source_for_roots("identities", [root])
+        if not source:
+            raise LookupError(f"Global Baseline identity partitions could not be resolved for {country}")
+        return (
+            f"SELECT loc_id, CAST(admin_level AS INTEGER) AS admin_level, name "
+            f"FROM read_parquet({source}, union_by_name=True) "
+            f"WHERE (loc_id = ? OR loc_id LIKE ?) AND admin_level BETWEEN 0 AND ?",
+            [country, f"{country}-%", SPINE_MAX_LEVEL_GLOBAL],
+        )
+
+    return str(root), global_query, SPINE_MAX_LEVEL_GLOBAL
 
 
 def spine_name_table(country: str) -> tuple[pa.Table, int, frozenset[int]] | None:
@@ -122,12 +135,13 @@ def spine_name_table(country: str) -> tuple[pa.Table, int, frozenset[int]] | Non
     source = _spine_source(country) if country else None
     if source is None:
         return None
-    sql, params, max_level = source
-    cache_key = (country, repr(params))
+    source_identity, build_query, max_level = source
+    cache_key = (country, source_identity)
     with _SPINE_LOCK:
         cached = _SPINE_CACHE.get(cache_key)
     if cached is not None:
         return cached
+    sql, params = build_query()
     connection = lease_query_connection()
     try:
         table = connection.execute(
@@ -222,15 +236,20 @@ def spine_candidates(
 
 
 @lru_cache(maxsize=32)
-def _place_alias_partitions(root_text: str) -> tuple[str, ...]:
-    """Alias partitions holding city and urban-area names for one graph."""
+def _place_alias_partitions(root_text: str) -> tuple[Path, ...]:
+    """Published alias partitions holding city and urban-area names for one graph.
+
+    Only partition identities are cached. Read locations are resolved per call
+    (hosted hydrates small files into an evictable local cache), and a failed
+    index read raises instead of caching an empty result.
+    """
     root = Path(root_text)
     frame = select_rows(root / graph.PARTITION_INDEXES["aliases"], columns=["family", "path"])
     if frame is None or frame.empty or "family" not in frame.columns:
-        return ()
+        raise LookupError(f"alias partition index could not be read for {root_text}")
     selected = frame[frame["family"].isin(PLACE_FAMILIES)]["path"].dropna().astype(str).tolist()
     path_map = graph._partition_source_map(root_text, "aliases")
-    return tuple(dict.fromkeys(graph._sql_path(path_map.get(path, graph.DATA_ROOT / path)) for path in selected))
+    return tuple(dict.fromkeys(path_map.get(path, graph.DATA_ROOT / path) for path in selected))
 
 
 def place_candidates(country: str, query: str, *, parent_loc_id: str | None = None) -> dict[str, Any]:
@@ -246,7 +265,7 @@ def place_candidates(country: str, query: str, *, parent_loc_id: str | None = No
     keys = name_keys(query)["exact"]
     if not keys:
         return {"status": "not_found"}
-    source = "[" + ", ".join(f"'{path}'" for path in partitions) + "]"
+    source = "[" + ", ".join(f"'{graph._sql_path(path)}'" for path in partitions) + "]"
     connection = lease_query_connection()
     try:
         alias_rows = connection.execute(
