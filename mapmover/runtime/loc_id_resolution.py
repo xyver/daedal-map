@@ -329,12 +329,47 @@ def _normalize_admin_text(value: Any) -> str:
     return _ADMIN_TEXT_ALIASES.get(text, text)
 
 
+def _normalize_full_admin_text(value: Any) -> str:
+    """Like _normalize_admin_text but keeps suffixes such as County or Parish.
+
+    Used only to break ties: "Orleans Parish" and "Orleans County" share the
+    stripped form "orleans", but only one keeps "parish".
+    """
+    text = str(value or "").strip().lower().replace("&", " and ")
+    text = text.replace("\u00fc", "u").replace("\u00f6", "o").replace("\u00e4", "a").replace("\u00df", "ss")
+    return " ".join(_TEXT_COLLAPSE_RE.sub(" ", text).split())
+
+
+_REGION_LABEL_CACHE: dict[tuple[str, str], str | None] = {}
+
+
+def _region_label_loc_id(region_label: Any, country: str) -> str | None:
+    """Admin-1 loc_id for a place's region_label ("IL", "British Columbia")."""
+    label = str(region_label or "").strip()
+    if not label or not country:
+        return None
+    key = (country.upper(), label.lower())
+    if key not in _REGION_LABEL_CACHE:
+        resolved = resolve_admin_text_to_loc_id(label, country_hint=country, admin_level_hint=1)
+        loc_id = resolved.get("deepest_resolved_loc_id")
+        _REGION_LABEL_CACHE[key] = str(loc_id).upper() if loc_id and not resolved.get("error") else None
+    return _REGION_LABEL_CACHE[key]
+
+
 def _resolve_country_geometry_name(
     query: str,
     *,
     country_hint: str,
     admin_level: int,
+    parent_loc_id: str | None = None,
+    ambiguous_out: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any] | None:
+    """Match a name within one country and admin level.
+
+    parent_loc_id limits matches to that parent's descendants. When several
+    places still match, an exact unstripped-name match wins; otherwise the
+    candidates are appended to ambiguous_out and None is returned.
+    """
     country = str(country_hint or "").strip().upper()
     # Hosted point resolution already selects and queries the admitted exact
     # Admin0-3 spine. Reuse that same lightweight identity lane for names;
@@ -360,11 +395,15 @@ def _resolve_country_geometry_name(
         loc_id = str(row.get("loc_id") or "").strip()
         if not loc_id:
             continue
-        for field in ("name", "name_local", "iso_3166_2", "code"):
-            value = row.get(field)
+        fields = [row.get(field) for field in ("name", "name_local", "iso_3166_2", "code")]
+        if int(admin_level) == 1 and loc_id.count("-") == 1:
+            # Subdivision codes are the loc_id suffix (USA-VA, CAN-BC), which
+            # holds even where the name and code columns are empty.
+            fields.append(loc_id.split("-", 1)[1])
+        for value in fields:
             normalized_value = _normalize_admin_text(value)
             if normalized_value and normalized_value == normalized_query:
-                candidates.append((loc_id, row.get("name")))
+                candidates.append((loc_id, row.get("name") or loc_id))
                 break
 
     if not candidates:
@@ -378,6 +417,19 @@ def _resolve_country_geometry_name(
         seen_loc_ids.add(loc_id)
         unique_candidates.append((loc_id, name))
 
+    parent = str(parent_loc_id or "").strip().upper()
+    if parent:
+        unique_candidates = [c for c in unique_candidates if c[0].upper().startswith(parent + "-")]
+    if len(unique_candidates) > 1:
+        full_query = _normalize_full_admin_text(query)
+        exact = [c for c in unique_candidates if _normalize_full_admin_text(c[1]) == full_query]
+        if len(exact) == 1:
+            unique_candidates = exact
+    if len(unique_candidates) > 1 and ambiguous_out is not None:
+        ambiguous_out.extend(
+            {"loc_id": loc_id, "name": name, "admin_level": admin_level}
+            for loc_id, name in unique_candidates
+        )
     if len(unique_candidates) != 1:
         return None
 
@@ -831,10 +883,27 @@ def resolve_admin_text_to_loc_id(
     *,
     country_hint: str | None = None,
     admin_level_hint: int | None = None,
+    parent_loc_id: str | None = None,
 ) -> dict[str, Any]:
+    """Resolve admin text to a loc_id.
+
+    A parent scope can come from parent_loc_id, from a subdivision country_hint
+    such as "USA-OR", or from the text itself ("Washington County, Oregon",
+    "Fairfax County, VA"). Ambiguous names that no parent narrows return their
+    candidates instead of a guess.
+    """
     value = str(query or "").strip()
     if not value:
         return {"query": value, "error": "query is required", "matches": {}}
+    hint_text = str(country_hint or "").strip().upper()
+    if re.fullmatch(r"[A-Z]{3}-[A-Z0-9-]+", hint_text):
+        parent_loc_id = parent_loc_id or hint_text
+        country_hint = hint_text[:3]
+    parent_scope = str(parent_loc_id or "").strip().upper() or None
+    ambiguous: list[dict[str, Any]] = []
+
+    def in_parent(loc_id: Any) -> bool:
+        return not parent_scope or str(loc_id or "").upper().startswith(parent_scope + "-")
 
     postal_match = _resolve_us_zip_to_stack(value)
     if postal_match.get("match_type") == "postal_code":
@@ -922,9 +991,14 @@ def resolve_admin_text_to_loc_id(
     if effective_level_hint is not None:
         level_order = [int(effective_level_hint)]
     elif country:
-        # Let the shared country geometry spine resolve the deepest matching
-        # admin level first instead of assuming province/state or county only.
-        level_order = [2, 1, None, 0]
+        # Top-down: the largest region with a matching name wins, so "Oregon"
+        # is the state, not Oregon County, Missouri. A parent scope starts one
+        # level below the parent.
+        if parent_scope:
+            parent_level = infer_admin_level_from_loc_id(parent_scope) or 0
+            level_order = [lvl for lvl in (parent_level + 1, parent_level + 2, parent_level + 3) if lvl <= 5] + [None]
+        else:
+            level_order = [1, 2, None, 0]
     else:
         level_order = [0]
 
@@ -938,6 +1012,8 @@ def resolve_admin_text_to_loc_id(
                 value,
                 country_hint=country,
                 admin_level=int(admin_level),
+                parent_loc_id=parent_scope,
+                ambiguous_out=ambiguous,
             )
         resolved = (
             None
@@ -946,6 +1022,8 @@ def resolve_admin_text_to_loc_id(
                 value, country=country, admin_level=admin_level,
             )
         )
+        if resolved and not in_parent(translate_geometry_id_to_local_id(resolved)):
+            resolved = None
         if not resolved:
             if fallback_entry is not None:
                 pass
@@ -956,8 +1034,10 @@ def resolve_admin_text_to_loc_id(
                     value,
                     country_hint=country,
                     admin_level=int(admin_level),
+                    parent_loc_id=parent_scope,
+                    ambiguous_out=ambiguous,
                 )
-            if fallback_entry is None:
+            if fallback_entry is None or not in_parent(fallback_entry.get("loc_id")):
                 continue
             fallback_loc_id = str(fallback_entry.get("loc_id") or "")
             preferred_loc_id = fallback_loc_id
@@ -1046,7 +1126,84 @@ def resolve_admin_text_to_loc_id(
             result["deepest_resolved_family"] = family
         return result
 
-    return {
+    # Top-down continues below the admin spine: cities, towns, and other
+    # populated places from the country place index, inside any parent scope.
+    if country:
+        place = resolve_populated_place(value, country_hint=country, limit=200)
+        # Some place ids (for example CAN-FEATURE-...) do not embed their
+        # province, so a state/province parent also matches on region_label,
+        # which is a code in some countries ("IL") and a name in others
+        # ("British Columbia").
+        parent_is_admin1 = bool(parent_scope) and parent_scope.count("-") == 1
+        pool = [
+            c for c in (place or {}).get("candidates") or []
+            if in_parent(c.get("loc_id"))
+            or (parent_is_admin1 and _region_label_loc_id(c.get("region_label"), country) == parent_scope)
+        ]
+        if pool:
+            best_rank = min(int(c.get("subtype_rank") or 0) for c in pool)
+            best = [c for c in pool if int(c.get("subtype_rank") or 0) == best_rank]
+            if len(best) == 1:
+                match = best[0]
+                loc_id = str(match["loc_id"])
+                return {
+                    "query": value,
+                    "match_type": "populated_place",
+                    "loc_id_family": classify_loc_id_family(loc_id),
+                    "matches": {},
+                    "deepest_resolved_loc_id": loc_id,
+                    "deepest_resolved_admin_level": None,
+                    "deepest_resolved_family": match.get("family"),
+                    "should_persist_deepest_loc_id": True,
+                    "place": {
+                        "name": match.get("display_name") or match.get("matched_name"),
+                        "region": match.get("region_label"),
+                        "subtype": match.get("subtype"),
+                    },
+                }
+            ambiguous.extend(
+                {
+                    "loc_id": c.get("loc_id"),
+                    "name": c.get("display_name") or c.get("matched_name"),
+                    "family": c.get("family"),
+                    "region": c.get("region_label"),
+                }
+                for c in best[:25]
+            )
+
+    # "Name, Parent[, Grandparent...]": resolve top-down, biggest region first
+    # (the last part), then each part inside the one before it.
+    if "," in value and not parent_scope:
+        parts = [part.strip() for part in value.split(",") if part.strip()]
+        scope: str | None = None
+        for index, part in enumerate(reversed(parts[1:])):
+            if scope is None:
+                # The outermost part is usually a state or province ("Oregon"
+                # must not become Oregon County, Missouri), so try admin 1 first.
+                step = resolve_admin_text_to_loc_id(part, country_hint=country, admin_level_hint=1)
+                if not step.get("deepest_resolved_loc_id") or step.get("error"):
+                    step = resolve_admin_text_to_loc_id(part, country_hint=country)
+            else:
+                step = resolve_admin_text_to_loc_id(part, country_hint=country, parent_loc_id=scope)
+            if not step.get("deepest_resolved_loc_id") or step.get("error"):
+                scope = None
+                break
+            scope = str(step["deepest_resolved_loc_id"])
+        if scope and len(parts) > 1:
+            scoped = resolve_admin_text_to_loc_id(
+                parts[0],
+                country_hint=country,
+                admin_level_hint=admin_level_hint,
+                parent_loc_id=scope,
+            )
+            if scoped.get("deepest_resolved_loc_id") and not scoped.get("error"):
+                scoped["query"] = value
+                scoped["parent_loc_id"] = scope
+                return scoped
+            if scoped.get("candidates"):
+                ambiguous.extend(scoped["candidates"])
+
+    result = {
         "query": value,
         "match_type": "direct_admin_name",
         "matches": {},
@@ -1055,6 +1212,22 @@ def resolve_admin_text_to_loc_id(
         "should_persist_deepest_loc_id": False,
         "error": "no direct admin-name match found",
     }
+    if ambiguous:
+        seen: set[str] = set()
+        candidates = []
+        for candidate in ambiguous:
+            loc_id = str(candidate.get("loc_id") or "")
+            if loc_id and loc_id not in seen:
+                seen.add(loc_id)
+                candidates.append(candidate)
+        result["candidates"] = candidates[:25]
+        result["candidate_count"] = len(candidates)
+        result["error"] = (
+            "ambiguous admin name; add the parent region to the text "
+            "(for example 'Washington County, Oregon') or use a subdivision "
+            "country_hint such as USA-OR"
+        )
+    return result
 
 
 def resolve_place_to_point(

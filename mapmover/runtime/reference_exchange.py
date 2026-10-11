@@ -1954,6 +1954,8 @@ def _admin_text_result(value: str, *, country_hint: str | None, admin_level_hint
         "admin_level": raw.get("deepest_resolved_admin_level"),
         "matches": raw.get("matches") or {},
         "error": raw.get("error"),
+        **({"parent_loc_id": raw["parent_loc_id"]} if raw.get("parent_loc_id") else {}),
+        **({"candidates": raw["candidates"], "candidate_count": raw.get("candidate_count")} if raw.get("candidates") else {}),
     }
 
 

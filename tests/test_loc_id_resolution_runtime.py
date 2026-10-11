@@ -115,7 +115,8 @@ class LocIdResolutionRuntimeTests(unittest.TestCase):
             "mapmover.runtime.loc_id_resolution._get_name_standardizer"
         ) as get_standardizer:
             standardizer = get_standardizer.return_value
-            standardizer.get_loc_id_from_name.side_effect = [None, "USA-VA"]
+            # Top-down: the state-level lookup is asked first.
+            standardizer.get_loc_id_from_name.side_effect = ["USA-VA"]
             resolved = resolve_admin_text_to_loc_id("Virginia", country_hint="USA")
 
         self.assertEqual(resolved["match_type"], "direct_admin_name")
