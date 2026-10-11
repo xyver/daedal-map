@@ -135,16 +135,16 @@ class RepoSplitRuntimeBoundaryTests(unittest.TestCase):
         with mock.patch("mapmover.routes.private_mcp.get_private_mcp_provider", return_value=None):
             with mock.patch("mapmover.routes.private_mcp.requests.request", side_effect=fake_request):
                 response = client.post(
-                    "/mcp-private/grants",
-                    headers={"Authorization": "Bearer granttest1"},
+                    "/mcp-private/research",
+                    headers={"Authorization": "Bearer researchtest1"},
                     json={"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}},
                 )
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["private"], True)
         self.assertEqual(captured["method"], "POST")
-        self.assertEqual(captured["url"], "https://private.example/internal/mcp/grants")
-        self.assertEqual(captured["headers"]["Authorization"], "Bearer granttest1")
+        self.assertEqual(captured["url"], "https://private.example/internal/mcp/research")
+        self.assertEqual(captured["headers"]["Authorization"], "Bearer researchtest1")
         self.assertEqual(captured["headers"]["x-internal-api-key"], "internal_test_token")
         self.assertIn(b'"method":"tools/list"', captured["data"])
 
