@@ -6,10 +6,8 @@ from typing import Any
 
 import pandas as pd
 
-from ..duckdb_helpers import is_cloud_mode
 from ..geometry_handlers import (
     get_selection_geometries,
-    load_country_parquet,
     load_global_country_display_frame,
     load_subcounty_geometry,
     resolve_point_to_location as legacy_resolve_point_to_location,
@@ -18,7 +16,6 @@ from ..name_standardizer import NameStandardizer
 from ..paths import GEOMETRY_DIR
 from ..reference.usa.location_lookup import by_zip as usa_zip_lookup
 from .admin_hierarchy import get_parent_loc_id, infer_admin_level_from_loc_id
-from .admin_spine_query import shallow_identity_level_rows
 from .country_geography import get_country_location_aliases
 from .geography_reference import (
     canonicalize_loc_id,
@@ -32,7 +29,7 @@ from .marine_geometry import (
     load_marine_geometry_for_points,
     marine_physical_land_contains_point,
 )
-from .place_lookup import resolve_populated_place
+from .graph_name_lookup import place_candidates, spine_candidates
 
 _LOC_ID_RE = re.compile(r"^[A-Z]{3}(?:-[A-Z0-9]+)+$|^[A-Z]{3}$")
 _USA_ZIP_RE = re.compile(r"^\d{5}$")
@@ -329,120 +326,6 @@ def _normalize_admin_text(value: Any) -> str:
     return _ADMIN_TEXT_ALIASES.get(text, text)
 
 
-def _normalize_full_admin_text(value: Any) -> str:
-    """Like _normalize_admin_text but keeps suffixes such as County or Parish.
-
-    Used only to break ties: "Orleans Parish" and "Orleans County" share the
-    stripped form "orleans", but only one keeps "parish".
-    """
-    text = str(value or "").strip().lower().replace("&", " and ")
-    text = text.replace("\u00fc", "u").replace("\u00f6", "o").replace("\u00e4", "a").replace("\u00df", "ss")
-    return " ".join(_TEXT_COLLAPSE_RE.sub(" ", text).split())
-
-
-_REGION_LABEL_CACHE: dict[tuple[str, str], str | None] = {}
-
-
-def _region_label_loc_id(region_label: Any, country: str) -> str | None:
-    """Admin-1 loc_id for a place's region_label ("IL", "British Columbia")."""
-    label = str(region_label or "").strip()
-    if not label or not country:
-        return None
-    key = (country.upper(), label.lower())
-    if key not in _REGION_LABEL_CACHE:
-        resolved = resolve_admin_text_to_loc_id(label, country_hint=country, admin_level_hint=1)
-        loc_id = resolved.get("deepest_resolved_loc_id")
-        _REGION_LABEL_CACHE[key] = str(loc_id).upper() if loc_id and not resolved.get("error") else None
-    return _REGION_LABEL_CACHE[key]
-
-
-def _resolve_country_geometry_name(
-    query: str,
-    *,
-    country_hint: str,
-    admin_level: int,
-    parent_loc_id: str | None = None,
-    ambiguous_out: list[dict[str, Any]] | None = None,
-) -> dict[str, Any] | None:
-    """Match a name within one country and admin level.
-
-    parent_loc_id limits matches to that parent's descendants. When several
-    places still match, an exact unstripped-name match wins; otherwise the
-    candidates are appended to ambiguous_out and None is returned.
-    """
-    country = str(country_hint or "").strip().upper()
-    # Hosted point resolution already selects and queries the admitted exact
-    # Admin0-3 spine. Reuse that same lightweight identity lane for names;
-    # loading through the generic geometry path made this lookup depend on a
-    # second cloud-accessibility probe and could return no frame even while
-    # point resolution for the country was healthy.
-    df = (
-        shallow_identity_level_rows(country, admin_level)
-        if is_cloud_mode() and 0 <= int(admin_level) <= 3
-        else None
-    )
-    if df is None:
-        df = load_country_parquet(country, admin_level=admin_level)
-    if df is None or df.empty:
-        return None
-
-    normalized_query = _normalize_admin_text(query)
-    if not normalized_query:
-        return None
-
-    candidates: list[tuple[str, str | None]] = []
-    for _, row in df.iterrows():
-        loc_id = str(row.get("loc_id") or "").strip()
-        if not loc_id:
-            continue
-        fields = [row.get(field) for field in ("name", "name_local", "iso_3166_2", "code")]
-        if int(admin_level) == 1 and loc_id.count("-") == 1:
-            # Subdivision codes are the loc_id suffix (USA-VA, CAN-BC), which
-            # holds even where the name and code columns are empty.
-            fields.append(loc_id.split("-", 1)[1])
-        for value in fields:
-            normalized_value = _normalize_admin_text(value)
-            if normalized_value and normalized_value == normalized_query:
-                candidates.append((loc_id, row.get("name") or loc_id))
-                break
-
-    if not candidates:
-        return None
-
-    unique_candidates = []
-    seen_loc_ids: set[str] = set()
-    for loc_id, name in candidates:
-        if loc_id in seen_loc_ids:
-            continue
-        seen_loc_ids.add(loc_id)
-        unique_candidates.append((loc_id, name))
-
-    parent = str(parent_loc_id or "").strip().upper()
-    if parent:
-        unique_candidates = [c for c in unique_candidates if c[0].upper().startswith(parent + "-")]
-    if len(unique_candidates) > 1:
-        full_query = _normalize_full_admin_text(query)
-        exact = [c for c in unique_candidates if _normalize_full_admin_text(c[1]) == full_query]
-        if len(exact) == 1:
-            unique_candidates = exact
-    if len(unique_candidates) > 1 and ambiguous_out is not None:
-        ambiguous_out.extend(
-            {"loc_id": loc_id, "name": name, "admin_level": admin_level}
-            for loc_id, name in unique_candidates
-        )
-    if len(unique_candidates) != 1:
-        return None
-
-    loc_id, name = unique_candidates[0]
-    return _build_match_entry(
-        loc_id,
-        admin_level=admin_level,
-        name=name,
-        method="geometry_name_lookup",
-        source_loc_id=loc_id,
-    )
-
-
 def _resolve_country_name_from_global_geometry(query: str) -> dict[str, Any] | None:
     # Name-to-loc_id matching reads the name column only. The Display bank
     # carries every Admin0 name and costs ~5 MB against the exact bank's
@@ -578,65 +461,6 @@ def _resolve_country_fallback_location_alias(query: str, *, country_hint: str | 
     if not normalized_query:
         return None
     return _load_country_fallback_location_aliases(country_hint).get(normalized_query)
-
-
-def _prefer_same_name_ancestor(
-    local_loc_id: str,
-    query: str,
-    *,
-    country: str | None,
-    matched_level: int | None,
-    standardizer,
-) -> str:
-    """Prefer a shallower ancestor that carries the identical name.
-
-    Name lookup runs deepest-level-first so "Harris County" resolves to the
-    county rather than the state. That ordering misfires when a region has a
-    single subdivision of the same name: "Fukuoka Prefecture" and "Australian
-    Capital Territory" each exist at admin_1 and again at admin_2, and the
-    deeper row is a structural artifact rather than what the caller meant.
-    Only an exact parent carrying the exact same name wins, so genuinely
-    distinct deeper places are untouched.
-    """
-    if not local_loc_id or matched_level is None or matched_level < 1:
-        return local_loc_id
-
-    shallower_level = int(matched_level) - 1
-    shallower_local = ""
-    try:
-        shallower = standardizer.get_loc_id_from_name(
-            query, country=country, admin_level=shallower_level
-        )
-        if shallower:
-            shallower_local = translate_geometry_id_to_local_id(shallower)
-    except Exception:
-        shallower_local = ""
-
-    if not shallower_local and country and shallower_level in {1, 2}:
-        # The standardizer and the geometry-name index cover different rows, so
-        # a shallower match may only exist in the geometry names.
-        fallback = _resolve_country_geometry_name(
-            query, country_hint=country, admin_level=shallower_level
-        )
-        if fallback:
-            shallower_local = str(fallback.get("loc_id") or "")
-
-    if not shallower_local or shallower_local == local_loc_id:
-        return local_loc_id
-
-    parent = get_parent_loc_id(local_loc_id)
-    if not parent:
-        return local_loc_id
-    # Compare in the same namespace: the parent edge may still be a geometry id
-    # while the shallower match has already been translated to local form.
-    parent_local = translate_geometry_id_to_local_id(str(parent))
-    candidates = {
-        str(parent).strip().upper(),
-        str(parent_local).strip().upper(),
-    }
-    if str(shallower_local).strip().upper() in candidates:
-        return shallower_local
-    return local_loc_id
 
 
 def _level_key(admin_level: int | None) -> str | None:
@@ -987,110 +811,121 @@ def resolve_admin_text_to_loc_id(
 
     explicit_text_level = _explicit_admin_level_from_text(value)
     effective_level_hint = admin_level_hint if admin_level_hint is not None else explicit_text_level
-    level_order: list[int | None]
-    if effective_level_hint is not None:
-        level_order = [int(effective_level_hint)]
-    elif country:
-        # Top-down: the largest region with a matching name wins, so "Oregon"
-        # is the state, not Oregon County, Missouri. A parent scope starts one
-        # level below the parent.
-        if parent_scope:
-            parent_level = infer_admin_level_from_loc_id(parent_scope) or 0
-            level_order = [lvl for lvl in (parent_level + 1, parent_level + 2, parent_level + 3) if lvl <= 5] + [None]
-        else:
-            level_order = [1, 2, None, 0]
-    else:
-        level_order = [0]
 
-    for admin_level in level_order:
-        fallback_entry = None
-        # Country-scoped exact identities are cheaper and more authoritative
-        # than booting the general name standardizer. The maintained USA
-        # Admin0-2 slice is already a required Railway prewarm task.
-        if country and admin_level in {1, 2, 3} and is_cloud_mode():
-            fallback_entry = _resolve_country_geometry_name(
-                value,
-                country_hint=country,
-                admin_level=int(admin_level),
-                parent_loc_id=parent_scope,
-                ambiguous_out=ambiguous,
+    def place_result() -> dict[str, Any] | None:
+        place = place_candidates(country, value, parent_loc_id=parent_scope)
+        if place.get("status") == "matched":
+            match = place["match"]
+            loc_id = str(match["loc_id"])
+            return {
+                "query": value,
+                "match_type": "populated_place",
+                "loc_id_family": classify_loc_id_family(loc_id),
+                "matches": {},
+                "deepest_resolved_loc_id": loc_id,
+                "deepest_resolved_admin_level": None,
+                "deepest_resolved_family": match.get("family"),
+                "should_persist_deepest_loc_id": True,
+                "place": {
+                    "name": match.get("name"),
+                    "family": match.get("family"),
+                    "anchor_loc_id": match.get("anchor_loc_id"),
+                },
+            }
+        if place.get("status") == "ambiguous":
+            ambiguous.extend(
+                {
+                    "loc_id": c.get("loc_id"),
+                    "name": c.get("name"),
+                    "family": c.get("family"),
+                    "anchor_loc_id": c.get("anchor_loc_id"),
+                }
+                for c in place["candidates"][:25]
             )
-        resolved = (
-            None
-            if fallback_entry is not None
-            else get_standardizer().get_loc_id_from_name(
-                value, country=country, admin_level=admin_level,
+        return None
+
+    # Every country resolves names the same way: the catalog-selected spine,
+    # then the country graph's city and urban-area names. Top-down, the
+    # shallowest matching level wins, so "Oregon" is the state, not Oregon
+    # County, Missouri. A parent scope starts one level below the parent.
+    # The graph is the only name source inside a country. A published spine
+    # level without names fails explicitly instead of letting a same-named
+    # city answer for it.
+    within_country = bool(country) and effective_level_hint != 0
+    if within_country:
+        if effective_level_hint is not None:
+            spine_levels: list[int] | None = [int(effective_level_hint)]
+        elif parent_scope:
+            parent_level = infer_admin_level_from_loc_id(parent_scope) or 0
+            spine_levels = [parent_level + 1, parent_level + 2, parent_level + 3]
+        else:
+            spine_levels = None
+        spine = spine_candidates(country, value, levels=spine_levels, parent_loc_id=parent_scope)
+        if spine.get("status") == "matched":
+            row = spine["match"]
+            entry = _build_match_entry(
+                str(row["loc_id"]),
+                admin_level=int(row["admin_level"]),
+                name=row.get("name"),
+                method="graph_name_lookup",
+                source_loc_id=str(row["loc_id"]),
             )
-        )
-        if resolved and not in_parent(translate_geometry_id_to_local_id(resolved)):
-            resolved = None
-        if not resolved:
-            if fallback_entry is not None:
-                pass
-            elif admin_level == 0:
-                fallback_entry = _resolve_country_name_from_global_geometry(value)
-            elif country and admin_level in {1, 2}:
-                fallback_entry = _resolve_country_geometry_name(
-                    value,
-                    country_hint=country,
-                    admin_level=int(admin_level),
-                    parent_loc_id=parent_scope,
-                    ambiguous_out=ambiguous,
-                )
-            if fallback_entry is None or not in_parent(fallback_entry.get("loc_id")):
-                continue
-            fallback_loc_id = str(fallback_entry.get("loc_id") or "")
-            preferred_loc_id = fallback_loc_id
-            if effective_level_hint is None:
-                preferred_loc_id = _prefer_same_name_ancestor(
-                    fallback_loc_id,
-                    value,
-                    country=country,
-                    matched_level=fallback_entry.get("admin_level"),
-                    standardizer=get_standardizer(),
-                )
-            if preferred_loc_id != fallback_loc_id:
-                fallback_entry = _build_match_entry(
-                    preferred_loc_id,
-                    admin_level=infer_admin_level_from_loc_id(preferred_loc_id),
-                    name=value,
-                    method="geometry_name_lookup",
-                    source_loc_id=preferred_loc_id,
-                )
-            key = _level_key(fallback_entry.get("admin_level"))
+            key = _level_key(entry["admin_level"])
             return {
                 "query": value,
                 "match_type": "direct_admin_name",
-                "matches": {key: fallback_entry} if key else {},
-                "deepest_resolved_loc_id": fallback_entry.get("loc_id"),
+                "matches": {key: entry} if key else {},
+                "deepest_resolved_loc_id": entry["loc_id"],
                 "deepest_resolved_admin_level": key,
                 "should_persist_deepest_loc_id": True,
             }
-        local_loc_id = translate_geometry_id_to_local_id(resolved)
-        if effective_level_hint is None:
-            local_loc_id = _prefer_same_name_ancestor(
-                local_loc_id,
-                value,
-                country=country,
-                matched_level=admin_level,
-                standardizer=get_standardizer(),
+        if spine.get("status") == "ambiguous":
+            ambiguous.extend(
+                {"loc_id": row["loc_id"], "name": row.get("name"), "admin_level": int(row["admin_level"])}
+                for row in spine["candidates"]
             )
-        resolved_level = infer_admin_level_from_loc_id(local_loc_id)
-        key = _level_key(resolved_level)
-        entry = _build_match_entry(
-            local_loc_id,
-            admin_level=resolved_level,
-            method="name_lookup",
-            source_loc_id=resolved,
+        elif spine.get("status") == "names_missing":
+            return {
+                "query": value,
+                "match_type": "direct_admin_name",
+                "matches": {},
+                "deepest_resolved_loc_id": None,
+                "deepest_resolved_admin_level": None,
+                "should_persist_deepest_loc_id": False,
+                "error": (
+                    f"the published {country} release has no names at admin levels "
+                    f"{', '.join(str(level) for level in spine.get('levels') or [])}; "
+                    "name lookup cannot match them"
+                ),
+                "error_code": "release_names_missing",
+            }
+        elif effective_level_hint is None:
+            placed = place_result()
+            if placed:
+                return placed
+
+    # Country names (Admin 0) when no country scope is given.
+    if not within_country and not ambiguous:
+        resolved = get_standardizer().get_loc_id_from_name(value, country=country, admin_level=0)
+        entry = (
+            _build_match_entry(
+                translate_geometry_id_to_local_id(resolved),
+                admin_level=0,
+                method="name_lookup",
+                source_loc_id=resolved,
+            )
+            if resolved
+            else _resolve_country_name_from_global_geometry(value)
         )
-        return {
-            "query": value,
-            "match_type": "direct_admin_name",
-            "matches": {key: entry} if key else {},
-            "deepest_resolved_loc_id": local_loc_id,
-            "deepest_resolved_admin_level": key,
-            "should_persist_deepest_loc_id": True,
-        }
+        if entry is not None:
+            return {
+                "query": value,
+                "match_type": "direct_admin_name",
+                "matches": {"admin_0": entry},
+                "deepest_resolved_loc_id": entry.get("loc_id"),
+                "deepest_resolved_admin_level": "admin_0",
+                "should_persist_deepest_loc_id": True,
+            }
 
     # Admin resolution failed, so a derived sidechain alias is now safe to use.
     fallback_loc_id = _resolve_country_fallback_location_alias(value, country_hint=country)
@@ -1125,51 +960,6 @@ def resolve_admin_text_to_loc_id(
         if key is None:
             result["deepest_resolved_family"] = family
         return result
-
-    # Top-down continues below the admin spine: cities, towns, and other
-    # populated places from the country place index, inside any parent scope.
-    if country:
-        place = resolve_populated_place(value, country_hint=country, limit=200)
-        # Some place ids (for example CAN-FEATURE-...) do not embed their
-        # province, so a state/province parent also matches on region_label,
-        # which is a code in some countries ("IL") and a name in others
-        # ("British Columbia").
-        parent_is_admin1 = bool(parent_scope) and parent_scope.count("-") == 1
-        pool = [
-            c for c in (place or {}).get("candidates") or []
-            if in_parent(c.get("loc_id"))
-            or (parent_is_admin1 and _region_label_loc_id(c.get("region_label"), country) == parent_scope)
-        ]
-        if pool:
-            best_rank = min(int(c.get("subtype_rank") or 0) for c in pool)
-            best = [c for c in pool if int(c.get("subtype_rank") or 0) == best_rank]
-            if len(best) == 1:
-                match = best[0]
-                loc_id = str(match["loc_id"])
-                return {
-                    "query": value,
-                    "match_type": "populated_place",
-                    "loc_id_family": classify_loc_id_family(loc_id),
-                    "matches": {},
-                    "deepest_resolved_loc_id": loc_id,
-                    "deepest_resolved_admin_level": None,
-                    "deepest_resolved_family": match.get("family"),
-                    "should_persist_deepest_loc_id": True,
-                    "place": {
-                        "name": match.get("display_name") or match.get("matched_name"),
-                        "region": match.get("region_label"),
-                        "subtype": match.get("subtype"),
-                    },
-                }
-            ambiguous.extend(
-                {
-                    "loc_id": c.get("loc_id"),
-                    "name": c.get("display_name") or c.get("matched_name"),
-                    "family": c.get("family"),
-                    "region": c.get("region_label"),
-                }
-                for c in best[:25]
-            )
 
     # "Name, Parent[, Grandparent...]": resolve top-down, biggest region first
     # (the last part), then each part inside the one before it.
@@ -1238,40 +1028,8 @@ def resolve_place_to_point(
     country_hint: str | None = None,
 ) -> dict[str, Any]:
     value = str(query or "").strip()
-    if resolved_place is None:
-        local_place = resolve_populated_place(value, country_hint=country_hint)
-        if local_place and local_place.get("status") == "ambiguous":
-            return {
-                "query": value,
-                "provider": "daedalmap_place_index",
-                "error": "place name is ambiguous; provide a country or region qualifier",
-                "candidates": local_place.get("candidates") or [],
-            }
-        if local_place and local_place.get("status") == "matched":
-            match = local_place["match"]
-            normalized = _normalize_resolved_place(
-                {
-                    "label": match.get("display_name") or match.get("matched_name") or value,
-                    "place_id": match.get("loc_id"),
-                    "place_type": "populated_place",
-                    "lat": match.get("latitude"),
-                    "lng": match.get("longitude"),
-                    "state": match.get("region_label"),
-                    "country_code": match.get("country_code"),
-                },
-                query=value,
-                provider="daedalmap_place_index",
-            )
-            if normalized is not None:
-                normalized["resolved_place"]["canonical_place_loc_id"] = match.get("loc_id")
-                normalized["resolved_place"]["feature_subtype"] = match.get("subtype")
-                normalized["resolved_place"]["matched_name"] = match.get("matched_name")
-                normalized["resolved_place"]["source_system"] = match.get("source_system")
-                normalized["resolved_place"]["source_release"] = match.get("source_release")
-                return normalized
-
     direct_match = resolve_admin_text_to_loc_id(value, country_hint=country_hint)
-    if direct_match.get("matches"):
+    if direct_match.get("deepest_resolved_loc_id") and not direct_match.get("error"):
         return {
             "query": value,
             "provider": "direct_admin_text",
@@ -1433,30 +1191,9 @@ def resolve_place_to_loc_id_stack(
         country_hint=country_hint,
         admin_level_hint=admin_level_hint,
     )
-    if direct_match.get("matches"):
+    if direct_match.get("deepest_resolved_loc_id") and not direct_match.get("error"):
         direct_match["resolution_mode"] = "direct_admin_text"
         return direct_match
-
-    local_place = resolve_populated_place(value, country_hint=country_hint) if resolved_place is None else None
-    if local_place:
-        point_payload = resolve_place_to_point(
-            value,
-            resolved_place=resolved_place,
-            provider=provider,
-            country_hint=country_hint,
-        )
-        if point_payload.get("error"):
-            point_payload["resolution_mode"] = "populated_place_index"
-            return point_payload
-        place = point_payload.get("resolved_place") or {}
-        stack_payload = resolve_point_to_loc_id_stack(
-            place.get("lng"), place.get("lat"), include_geometry=include_geometry
-        )
-        stack_payload["query"] = value
-        stack_payload["provider"] = point_payload.get("provider")
-        stack_payload["resolved_place"] = place
-        stack_payload["resolution_mode"] = "populated_place_index"
-        return stack_payload
 
     point_payload = resolve_place_to_point(
         value,

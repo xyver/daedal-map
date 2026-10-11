@@ -14,6 +14,7 @@ from mapmover.explore.preprocessor_runtime import (
     extract_query_constraints,
 )
 from mapmover.runtime.geography_reference import translate_geometry_id_to_local_id
+from mapmover.runtime.graph_name_lookup import spine_name_table
 from mapmover.runtime.loc_id_resolution import resolve_admin_text_to_loc_id
 
 
@@ -48,11 +49,12 @@ def _pick_evenly_spaced_rows(df: pd.DataFrame, count: int) -> pd.DataFrame:
 
 
 def _load_country_level_samples(iso3: str, admin_level: int, per_level: int) -> list[dict]:
-    parquet_path = GEOMETRY_ROOT / f"{iso3}.parquet"
-    if not parquet_path.exists():
+    # Sample from the same catalog-selected spine names the resolver reads,
+    # so expectations follow the published release rather than retired banks.
+    loaded = spine_name_table(iso3)
+    if loaded is None:
         return []
-
-    df = pd.read_parquet(parquet_path, columns=["loc_id", "name", "admin_level"])
+    df = loaded[0].select(["loc_id", "name", "admin_level"]).to_pandas()
     if df.empty:
         return []
 
@@ -102,7 +104,8 @@ def _generated_location_samples() -> list[dict]:
 
 class PreprocessorLocationSpineTests(unittest.TestCase):
     @pytest.mark.spine_gap(
-        "2 of 4 subcases fail: 'normandie france' expects pre-v2 G-ID FRA-G141265; 'harris county usa' needs suffix handling plus GA/TX disambiguation (counties stored bare as 'Harris')."
+        "'ontario canada' fails until a Canada release restores admin names (1.3.5 publishes blank Admin 1-3 names); "
+        "'harris county usa' needs suffix handling plus GA/TX disambiguation (counties stored bare as 'Harris')."
     )
     def test_curated_shared_location_cases(self):
         cases = [
@@ -116,7 +119,7 @@ class PreprocessorLocationSpineTests(unittest.TestCase):
             },
             {
                 "query": "show me population in normandie france",
-                "expected_loc_id": "FRA-G141265",
+                "expected_loc_id": "FRA-28",
             },
             {
                 "query": "show me the counties in harris county usa",

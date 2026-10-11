@@ -110,84 +110,78 @@ class LocIdResolutionRuntimeTests(unittest.TestCase):
         self.assertEqual(resolved["matches"], {})
         self.assertEqual(resolved["error"], "non-geometry identifier requires exact event or entity routing")
 
-    def test_direct_admin_name_uses_name_standardizer(self):
-        with patch(
+    @staticmethod
+    def _spine(rows):
+        import duckdb
+        from mapmover.runtime import graph_name_lookup
+
+        frame = pd.DataFrame(rows)  # noqa: F841 - read by the DuckDB replacement scan
+        table = duckdb.sql(
+            f"""SELECT loc_id, admin_level, name, {graph_name_lookup._key_select('name')},
+                       CASE WHEN admin_level = 1 THEN lower(split_part(loc_id, '-', 2)) END AS k_code
+                FROM frame"""
+        ).arrow()
+        table = table if hasattr(table, "column") else table.read_all()
+        return patch.object(graph_name_lookup, "spine_name_table", return_value=(table, 3, frozenset()))
+
+    def test_direct_admin_name_uses_graph_spine_not_legacy_standardizer(self):
+        with self._spine([{"loc_id": "USA-VA", "admin_level": 1, "name": "Virginia"}]), patch(
             "mapmover.runtime.loc_id_resolution._get_name_standardizer"
         ) as get_standardizer:
-            standardizer = get_standardizer.return_value
-            # Top-down: the state-level lookup is asked first.
-            standardizer.get_loc_id_from_name.side_effect = ["USA-VA"]
             resolved = resolve_admin_text_to_loc_id("Virginia", country_hint="USA")
 
         self.assertEqual(resolved["match_type"], "direct_admin_name")
         self.assertEqual(resolved["deepest_resolved_loc_id"], "USA-VA")
         self.assertEqual(resolved["deepest_resolved_admin_level"], "admin_1")
-        self.assertEqual(resolved["matches"]["admin_1"]["method"], "name_lookup")
+        self.assertEqual(resolved["matches"]["admin_1"]["method"], "graph_name_lookup")
+        get_standardizer.assert_not_called()
 
-    def test_direct_admin_name_falls_back_to_country_geometry_for_county_suffixes(self):
-        with patch(
+    def test_direct_admin_name_matches_county_suffix_through_stripped_key(self):
+        with self._spine([{"loc_id": "USA-VA-600", "admin_level": 2, "name": "Fairfax"}]), patch(
             "mapmover.runtime.loc_id_resolution._get_name_standardizer"
-        ) as get_standardizer, patch(
-            "mapmover.runtime.loc_id_resolution.load_country_parquet"
-        ) as load_country_parquet:
-            standardizer = get_standardizer.return_value
-            standardizer.get_loc_id_from_name.return_value = None
-            load_country_parquet.return_value = pd.DataFrame(
-                [
-                    {"loc_id": "USA-VA-600", "name": "Fairfax", "name_local": None, "code": "600"},
-                ]
-            )
+        ) as get_standardizer:
             resolved = resolve_admin_text_to_loc_id("Fairfax County", country_hint="USA", admin_level_hint=2)
 
         self.assertEqual(resolved["deepest_resolved_loc_id"], "USA-VA-600")
         self.assertEqual(resolved["deepest_resolved_admin_level"], "admin_2")
-        self.assertEqual(resolved["matches"]["admin_2"]["method"], "geometry_name_lookup")
+        get_standardizer.assert_not_called()
 
-    def test_hosted_admin_name_uses_exact_spine_identity_lane(self):
-        with patch(
-            "mapmover.runtime.loc_id_resolution._get_name_standardizer"
-        ) as get_standardizer, patch(
-            "mapmover.runtime.loc_id_resolution.is_cloud_mode",
-            return_value=True,
+    def test_unnamed_spine_level_fails_explicitly(self):
+        # A published spine level with no names (Canada 1.3.5) fails with a
+        # typed error; neither a same-named urban area nor the legacy name
+        # tables may answer for it.
+        from mapmover.runtime import graph_name_lookup
+
+        with self._spine([{"loc_id": "CAN-QC", "admin_level": 1, "name": ""}]), patch.object(
+            graph_name_lookup, "spine_name_table",
+            return_value=(graph_name_lookup.spine_name_table("CAN")[0], 3, frozenset({1, 2, 3})),
         ), patch(
-            "mapmover.runtime.loc_id_resolution.shallow_identity_level_rows",
-            return_value=pd.DataFrame([{
-                "loc_id": "USA-VA-059",
-                "admin_level": 2,
-                "name": "Fairfax County",
-            }]),
-        ) as identity_rows, patch(
-            "mapmover.runtime.loc_id_resolution.load_country_parquet"
-        ) as generic_geometry:
-            get_standardizer.return_value.get_loc_id_from_name.return_value = None
-            resolved = resolve_admin_text_to_loc_id(
-                "Fairfax County", country_hint="USA", admin_level_hint=2,
-            )
+            "mapmover.runtime.loc_id_resolution.place_candidates",
+            return_value={"status": "matched", "match": {"loc_id": "CAN-QC-2422-URBAN-24421", "family": "urban_or_metro_area"}},
+        ) as places, patch(
+            "mapmover.runtime.loc_id_resolution._get_name_standardizer"
+        ) as get_standardizer:
+            resolved = resolve_admin_text_to_loc_id("Quebec", country_hint="CAN")
 
-        self.assertEqual(resolved["deepest_resolved_loc_id"], "USA-VA-059")
-        identity_rows.assert_called_once_with("USA", 2)
-        generic_geometry.assert_not_called()
+        self.assertIsNone(resolved["deepest_resolved_loc_id"])
+        self.assertEqual(resolved["error_code"], "release_names_missing")
+        places.assert_not_called()
+        get_standardizer.assert_not_called()
+
+    def test_graph_miss_inside_country_never_consults_legacy_names(self):
+        with self._spine([{"loc_id": "USA-OR", "admin_level": 1, "name": "Oregon"}]), patch(
+            "mapmover.runtime.loc_id_resolution.place_candidates", return_value={"status": "not_found"},
+        ), patch(
+            "mapmover.runtime.loc_id_resolution._get_name_standardizer"
+        ) as get_standardizer:
+            resolved = resolve_admin_text_to_loc_id("Virginia", country_hint="USA")
+
+        self.assertIsNone(resolved["deepest_resolved_loc_id"])
+        self.assertIn("no direct admin-name match", resolved["error"])
         get_standardizer.assert_not_called()
 
     def test_direct_admin_name_checks_country_sublevels_without_explicit_hint(self):
-        with patch(
-            "mapmover.runtime.loc_id_resolution._get_name_standardizer"
-        ) as get_standardizer, patch(
-            "mapmover.runtime.loc_id_resolution.load_country_parquet"
-        ) as load_country_parquet:
-            standardizer = get_standardizer.return_value
-            standardizer.get_loc_id_from_name.side_effect = [None, None, None, None]
-
-            def load_country_parquet_side_effect(country_hint, admin_level=None):
-                if country_hint == "USA" and admin_level == 2:
-                    return pd.DataFrame(
-                        [
-                            {"loc_id": "USA-CA-037", "name": "Los Angeles", "name_local": None, "code": "037"},
-                        ]
-                    )
-                return pd.DataFrame()
-
-            load_country_parquet.side_effect = load_country_parquet_side_effect
+        with self._spine([{"loc_id": "USA-CA-037", "admin_level": 2, "name": "Los Angeles"}]):
             resolved = resolve_admin_text_to_loc_id("Los Angeles County", country_hint="USA")
 
         self.assertEqual(resolved["deepest_resolved_loc_id"], "USA-CA-037")
@@ -206,25 +200,6 @@ class LocIdResolutionRuntimeTests(unittest.TestCase):
         self.assertEqual(resolved["deepest_resolved_admin_level"], "admin_2")
         self.assertEqual(resolved["matches"]["admin_2"]["method"], "country_location_alias")
 
-    def test_direct_admin_name_falls_back_to_localized_geometry_aliases(self):
-        with patch(
-            "mapmover.runtime.loc_id_resolution._get_name_standardizer"
-        ) as get_standardizer, patch(
-            "mapmover.runtime.loc_id_resolution.load_country_parquet"
-        ) as load_country_parquet:
-            standardizer = get_standardizer.return_value
-            standardizer.get_loc_id_from_name.return_value = None
-            load_country_parquet.return_value = pd.DataFrame(
-                [
-                    {"loc_id": "DEU-G109260", "name": "Bayern", "name_local": None, "code": "DEU-BY"},
-                ]
-            )
-            resolved = resolve_admin_text_to_loc_id("Bavaria", country_hint="DEU", admin_level_hint=1)
-
-        self.assertEqual(resolved["deepest_resolved_loc_id"], "DEU-G109260")
-        self.assertEqual(resolved["deepest_resolved_admin_level"], "admin_1")
-        self.assertEqual(resolved["matches"]["admin_1"]["method"], "geometry_name_lookup")
-
     @patch(
         "mapmover.runtime.loc_id_resolution._load_country_direct_location_aliases",
         return_value={"navajo nation": "USA-TRIBAL-2430"},
@@ -239,23 +214,10 @@ class LocIdResolutionRuntimeTests(unittest.TestCase):
         self.assertEqual(resolved["deepest_resolved_admin_level"], None)
 
     def test_direct_admin_name_geometry_fallback_skips_ambiguous_normalized_matches(self):
-        with patch(
-            "mapmover.runtime.loc_id_resolution._get_name_standardizer"
-        ) as get_standardizer, patch(
-            "mapmover.runtime.loc_id_resolution.load_country_parquet"
-        ) as load_country_parquet:
-            standardizer = get_standardizer.return_value
-            standardizer.get_loc_id_from_name.side_effect = [None, None, None, None]
-            load_country_parquet.side_effect = lambda country_hint, admin_level=None: (
-                pd.DataFrame(
-                    [
-                        {"loc_id": "USA-AL-069", "name": "Houston", "name_local": None, "code": "069"},
-                        {"loc_id": "USA-TX-225", "name": "Houston", "name_local": None, "code": "225"},
-                    ]
-                )
-                if country_hint == "USA" and admin_level == 2
-                else pd.DataFrame()
-            )
+        with self._spine([
+            {"loc_id": "USA-AL-069", "admin_level": 2, "name": "Houston"},
+            {"loc_id": "USA-TX-225", "admin_level": 2, "name": "Houston"},
+        ]):
             resolved = resolve_admin_text_to_loc_id("Houston", country_hint="USA")
 
         self.assertEqual(resolved["deepest_resolved_loc_id"], "USA-TX-201")

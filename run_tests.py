@@ -47,7 +47,7 @@ GROUPS: dict[str, tuple[str, ...]] = {
     "geometry": (
         "admin_*", "canada_*", "country_geography*", "country_release_*", "foundation_geometry*",
         "external_reference_*", "geography_*", "geometry_*", "grid_*", "loc_id_*", "marine_*",
-        "place_lookup*", "preprocessor_location_spine", "reference_*",
+        "preprocessor_location_spine", "reference_*",
         "region_location_aliases", "sidechain_admin_*",
     ),
     "ops": (
