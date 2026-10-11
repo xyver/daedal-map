@@ -432,12 +432,12 @@ def build_tool_definitions(*, include_paused: bool = False) -> list[dict]:
         {
             "name": "convert_reference",
             "title": "Convert Geographic Reference",
-            "description": "The single geographic reference converter. Converts one reference, or a bounded list, through DaedalMap loc_id: X -> loc_id -> Y. Omit to_system to enter the loc_id universe; provide it for any-to-any conversion. Use get_pack first when the family or country-specific system is unknown. The tools/list access metadata states authored free, account, and paid item allowances; the active operator policy may waive payment. Exceeding the active item ceiling returns a typed cap error.",
+            "description": "The single geographic reference converter. Converts one reference, or a bounded list, through DaedalMap loc_id: X -> loc_id -> Y. Omit to_system to enter the loc_id universe; provide it for any-to-any conversion. For admin or city names use from_system admin_boundary with a country_hint; matching ignores case and accents, the shallowest matching level wins, and ambiguous names return candidates. Use get_pack first when the family or country-specific system is unknown. The tools/list access metadata states authored free, account, and paid item allowances; the active operator policy may waive payment. Exceeding the active item ceiling returns a typed cap error.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "from_system": {"type": "string", "description": "Input reference system, such as zip, overlay_zcta, nws_fire, tribal, admin_boundary, or loc_id."},
-                    "value": {"type": "string", "description": "Identifier or name in the input system."},
+                    "from_system": {"type": "string", "description": "Input reference system, such as admin_boundary (admin and city names; admin_text and place_name are accepted aliases), zip, overlay_zcta, nws_fire, tribal, or loc_id."},
+                    "value": {"type": "string", "description": "Identifier or name in the input system, for example 'Springfield, Illinois' with admin_boundary."},
                     "to_system": {"type": "string", "default": "daedalmap.loc_id", "description": "Optional output reference system. Defaults to DaedalMap loc_id; provide zcta, nws_fire, overlay_nws_public_zone, overlay_tribal, admin_local, or another catalog system for any-to-any conversion."},
                     "items": {
                         "type": "array",

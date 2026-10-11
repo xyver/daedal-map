@@ -29,7 +29,7 @@ def _g(use_when, do_not_use_for, example, outputs, next_calls=(), provenance=())
     return {
         "use_when": list(use_when),
         "do_not_use_for": list(do_not_use_for),
-        "examples": [example],
+        "examples": list(example) if isinstance(example, list) else [example],
         "important_output_fields": list(outputs),
         "provenance_fields": list(provenance),
         "recommended_next_calls": list(next_calls),
@@ -94,10 +94,17 @@ TOOL_GUIDANCE: dict[str, dict[str, Any]] = {
         ["selected input column", "reference system", "country scope", "admin level", "sample match rate"],
     ),
     "convert_reference": _g(
-        ["You need an outside reference expressed as loc_id, or one reference system expressed in another through loc_id."],
+        [
+            "You need an outside reference expressed as loc_id, or one reference system expressed in another through loc_id.",
+            "You have an admin or city name: use from_system admin_boundary with a country_hint. Send the parent with the name ('Springfield, Illinois') or a subdivision hint (USA-IL); the shallowest matching level wins, and equal matches return candidates.",
+        ],
         ["Resolving coordinates", "Discarding one-to-many weights"],
-        {"from_system": "zip", "value": "00601", "to_system": "nws_fire"},
-        ["from", "to_system", "results", "relationship_type", "weight"],
+        [
+            {"from_system": "admin_boundary", "value": "Springfield, Illinois", "country_hint": "USA"},
+            {"from_system": "admin_boundary", "items": [{"value": "Koeln", "country_hint": "DEU"}, {"value": "Kamloops", "country_hint": "CAN"}]},
+            {"from_system": "zip", "value": "00601", "to_system": "nws_fire"},
+        ],
+        ["from.resolved_loc_id", "from.match_type", "from.candidates", "results", "relationship_type", "weight"],
         ["get_loc_id_info", "get_geometry"],
         ["source and target systems", "bridge vintage", "relationship method", "artifact id"]
     ),
