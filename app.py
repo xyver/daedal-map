@@ -34,8 +34,10 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
+from fastapi.exception_handlers import http_exception_handler
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from access_policy_shared import RUNTIME_POLICY_FILE_ENV, surface_rate_limit
 from agent_surface_shared import (
@@ -441,6 +443,69 @@ app.add_middleware(
 app.add_middleware(GZipMiddleware, minimum_size=1024)
 
 
+_MACHINE_PATH_PREFIXES = ("/api/", "/mcp", "/geometry/", "/reference/", "/debug/", "/static/", "/.well-known/")
+
+_ERROR_PAGE_TEMPLATE = """<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex">
+  <title>{title} - DaedalMap</title>
+  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+  <style>
+    body {{ margin: 0; font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #06111c; color: #d8dee9; }}
+    .wrap {{ min-height: 100vh; display: grid; place-items: center; padding: 24px; box-sizing: border-box; }}
+    .card {{ width: min(520px, 100%); background: #0d1b2a; border: 1px solid rgba(255,255,255,.08); border-radius: 16px; padding: 28px; box-sizing: border-box; }}
+    h1 {{ margin: 0 0 8px; font-size: 1.6rem; color: #f4f7fb; }}
+    p {{ margin: 0 0 20px; color: #97a3b6; line-height: 1.55; }}
+    a {{ color: #7eceff; }}
+    .links a {{ display: inline-block; margin: 0 16px 8px 0; }}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <h1>{title}</h1>
+      <p>{message}</p>
+      <div class="links">
+        <a href="/">Open the map</a>
+        <a href="https://www.daedalmap.com/">DaedalMap home</a>
+        <a href="mailto:contact@daedalmap.com">Contact</a>
+      </div>
+    </div>
+  </div>
+</body>
+</html>"""
+
+
+def _wants_html_error_page(request: Request) -> bool:
+    """True for a browser page navigation; API, MCP, and asset callers keep machine errors."""
+    path = str(request.url.path)
+    if request.method not in ("GET", "HEAD") or path.startswith(_MACHINE_PATH_PREFIXES):
+        return False
+    return "text/html" in (request.headers.get("accept") or "").lower()
+
+
+def _html_error_page(status_code: int) -> HTMLResponse:
+    if status_code == 404:
+        title, message = "Page not found", "This page does not exist or has moved."
+    else:
+        title, message = "Something went wrong", "The server hit an error loading this page. Try again in a moment."
+    return HTMLResponse(
+        _ERROR_PAGE_TEMPLATE.format(title=title, message=message),
+        status_code=status_code,
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@app.exception_handler(StarletteHTTPException)
+async def browser_aware_http_exception_handler(request: Request, exc: StarletteHTTPException):
+    if exc.status_code == 404 and _wants_html_error_page(request):
+        return _html_error_page(404)
+    return await http_exception_handler(request, exc)
+
+
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception):
     import traceback
@@ -453,6 +518,8 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
         path=path,
         traceback=traceback.format_exc(),
     )
+    if _wants_html_error_page(request):
+        return _html_error_page(500)
     return JSONResponse({"error": "Internal server error"}, status_code=500)
 
 
