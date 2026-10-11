@@ -211,19 +211,68 @@ class LocIdResolutionRuntimeTests(unittest.TestCase):
 
         lookup._place_alias_partitions.cache_clear()
         root = Path("graph-root")
-        index = pd.DataFrame([{"family": "place_or_municipality", "path": "aliases/places.parquet"}])
+        index = pd.DataFrame([{"family": "place_or_municipality", "path": "aliases/places.parquet", "sha256": "a" * 64}])
         with patch.object(lookup, "select_rows", side_effect=[pd.DataFrame(), index]), patch.object(
-            lookup.graph, "_partition_source_map", return_value={"aliases/places.parquet": Path("published/places.parquet")},
+            lookup.graph, "_published_partition_path", return_value=Path("published/places.parquet"),
         ):
             with self.assertRaises(LookupError):
                 lookup._place_alias_partitions(str(root))
             first = lookup._place_alias_partitions(str(root))
-        self.assertEqual(first, (Path("published/places.parquet"),))
+        self.assertEqual(first, ((Path("published/places.parquet"), "place_or_municipality"),))
         with patch.object(lookup.graph, "_sql_path", side_effect=["/cache/a.parquet", "/cache/b.parquet"]) as sql_path:
-            sources = [lookup.graph._sql_path(path) for path in first] + [lookup.graph._sql_path(path) for path in first]
+            sources = [lookup.graph._sql_path(path) for path, _family in first] + [lookup.graph._sql_path(path) for path, _family in first]
         self.assertEqual(sources, ["/cache/a.parquet", "/cache/b.parquet"])
         self.assertEqual(sql_path.call_count, 2)
         lookup._place_alias_partitions.cache_clear()
+
+    def test_place_partition_requires_published_hash(self):
+        import pandas as pd
+
+        from mapmover.runtime import graph_name_lookup as lookup
+
+        lookup._place_alias_partitions.cache_clear()
+        index = pd.DataFrame([{"family": "place_or_municipality", "path": "aliases/places.parquet", "sha256": None}])
+        with patch.object(lookup, "select_rows", return_value=index), patch.object(
+            lookup.graph, "_published_partition_path",
+        ) as published_path:
+            with self.assertRaises(LookupError):
+                lookup._place_alias_partitions("graph-root")
+        published_path.assert_not_called()
+        lookup._place_alias_partitions.cache_clear()
+
+    def test_place_lookup_uses_alias_family_without_identity_route_read(self):
+        import duckdb
+
+        from mapmover.runtime import graph_name_lookup as lookup
+
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            place_path = root / "places.parquet"
+            urban_path = root / "urban.parquet"
+            pd.DataFrame([
+                {"loc_id": "USA-IL-167-PLACE-1772000", "external_id": "Springfield", "alias_type": "official_name"},
+                {"loc_id": "USA-MO-077-PLACE-2970000", "external_id": "Springfield", "alias_type": "official_name"},
+            ]).to_parquet(place_path)
+            pd.DataFrame([
+                {"loc_id": "USA-IL-167-URBAN-42", "external_id": "Springfield", "alias_type": "official_name"},
+            ]).to_parquet(urban_path)
+            partitions = ((place_path, "place_or_municipality"), (urban_path, "urban_or_metro_area"))
+            with patch.object(lookup.graph, "reference_graph_roots", return_value={"USA": root}), patch.object(
+                lookup, "_place_alias_partitions", return_value=partitions,
+            ), patch.object(lookup.graph, "_sql_path", side_effect=lambda path: str(path).replace("'", "''")), patch.object(
+                lookup, "lease_query_connection", side_effect=lambda: duckdb.connect(),
+            ), patch.object(lookup.graph, "identities") as identities:
+                scoped = lookup.place_candidates("USA", "Springfield", parent_loc_id="USA-IL")
+                unscoped = lookup.place_candidates("USA", "Springfield")
+
+            identities.assert_not_called()
+            self.assertEqual(scoped["status"], "matched")
+            self.assertEqual(scoped["match"]["loc_id"], "USA-IL-167-PLACE-1772000")
+            self.assertEqual(scoped["match"]["anchor_loc_id"], "USA-IL-167")
+            self.assertEqual(unscoped["status"], "ambiguous")
+            self.assertEqual({row["loc_id"] for row in unscoped["candidates"]}, {
+                "USA-IL-167-PLACE-1772000", "USA-MO-077-PLACE-2970000",
+            })
 
     def test_missing_name_source_is_a_typed_item_error(self):
         with patch(

@@ -236,7 +236,7 @@ def spine_candidates(
 
 
 @lru_cache(maxsize=32)
-def _place_alias_partitions(root_text: str) -> tuple[Path, ...]:
+def _place_alias_partitions(root_text: str) -> tuple[tuple[Path, str], ...]:
     """Published alias partitions holding city and urban-area names for one graph.
 
     Only partition identities are cached. Read locations are resolved per call
@@ -244,12 +244,26 @@ def _place_alias_partitions(root_text: str) -> tuple[Path, ...]:
     index read raises instead of caching an empty result.
     """
     root = Path(root_text)
-    frame = select_rows(root / graph.PARTITION_INDEXES["aliases"], columns=["family", "path"])
-    if frame is None or frame.empty or "family" not in frame.columns:
+    frame = select_rows(root / graph.PARTITION_INDEXES["aliases"], columns=["family", "path", "sha256"])
+    if frame is None or frame.empty or not {"family", "path", "sha256"}.issubset(frame.columns):
         raise LookupError(f"alias partition index could not be read for {root_text}")
-    selected = frame[frame["family"].isin(PLACE_FAMILIES)]["path"].dropna().astype(str).tolist()
-    path_map = graph._partition_source_map(root_text, "aliases")
-    return tuple(dict.fromkeys(path_map.get(path, graph.DATA_ROOT / path) for path in selected))
+    selected = frame[frame["family"].isin(PLACE_FAMILIES)]
+    if selected[["path", "sha256"]].isna().any().any():
+        raise LookupError(f"place alias partition lacks a published hash or path for {root_text}")
+    return tuple(dict.fromkeys(
+        (graph._published_partition_path(root, row.path, row.sha256), row.family)
+        for row in selected.itertuples(index=False)
+    ))
+
+
+def _place_anchor(loc_id: str) -> str | None:
+    """Return the admin prefix encoded in an anchored place loc_id."""
+    for marker in ("-PLACE-", "-URBAN-"):
+        if marker in loc_id:
+            prefix = loc_id.split(marker, 1)[0]
+            if len(prefix.split("-")) >= 3:
+                return prefix
+    return None
 
 
 def place_candidates(country: str, query: str, *, parent_loc_id: str | None = None) -> dict[str, Any]:
@@ -265,36 +279,43 @@ def place_candidates(country: str, query: str, *, parent_loc_id: str | None = No
     keys = name_keys(query)["exact"]
     if not keys:
         return {"status": "not_found"}
-    source = "[" + ", ".join(f"'{graph._sql_path(path)}'" for path in partitions) + "]"
     connection = lease_query_connection()
     try:
-        alias_rows = connection.execute(
-            f"""SELECT DISTINCT loc_id, external_id, reference_system
-                FROM read_parquet({source}, union_by_name=True)
-                WHERE lower(alias_type) LIKE '%name%' AND lower(alias_type) NOT LIKE '%\\_id' ESCAPE '\\'
-                  AND (list_contains(?, {name_key_sql('external_id')})
-                       OR list_contains(?, {name_key_sql('external_id', transliterate=True)}))""",
-            [list(keys), list(keys)],
-        ).fetchall()
+        alias_rows = []
+        for family in PLACE_FAMILIES:
+            paths = [path for path, partition_family in partitions if partition_family == family]
+            if not paths:
+                continue
+            source = "[" + ", ".join(f"'{graph._sql_path(path)}'" for path in paths) + "]"
+            rows = connection.execute(
+                f"""SELECT DISTINCT loc_id, external_id
+                    FROM read_parquet({source}, union_by_name=True)
+                    WHERE lower(alias_type) LIKE '%name%' AND lower(alias_type) NOT LIKE '%\\_id' ESCAPE '\\'
+                      AND (list_contains(?, {name_key_sql('external_id')})
+                           OR list_contains(?, {name_key_sql('external_id', transliterate=True)}))""",
+                [list(keys), list(keys)],
+            ).fetchall()
+            alias_rows.extend((str(loc_id), str(name), family) for loc_id, name in rows)
     finally:
         connection.close()
     if not alias_rows:
         return {"status": "not_found"}
     parent = str(parent_loc_id or "").strip().upper() or None
-    matched_names = {str(loc_id): str(name) for loc_id, name, _system in alias_rows}
-    candidates = []
-    for identity in graph.identities(list(matched_names)):
-        family = str(identity.get("geography_family") or identity.get("family") or "")
-        if family not in PLACE_FAMILY_RANK:
+    candidates_by_id: dict[str, dict[str, Any]] = {}
+    for loc_id, name, family in sorted(alias_rows):
+        anchor = _place_anchor(loc_id)
+        if not _in_scope(loc_id, parent, anchor):
             continue
-        if not _in_scope(identity.get("loc_id"), parent, identity.get("sibling_anchor_loc_id")):
-            continue
-        candidates.append({
-            "loc_id": identity["loc_id"],
-            "name": identity.get("name") or matched_names.get(str(identity["loc_id"])),
+        candidate = {
+            "loc_id": loc_id,
+            "name": name,
             "family": family,
-            "anchor_loc_id": identity.get("sibling_anchor_loc_id"),
-        })
+            "anchor_loc_id": anchor,
+        }
+        previous = candidates_by_id.get(loc_id)
+        if previous is None or PLACE_FAMILY_RANK[family] < PLACE_FAMILY_RANK[previous["family"]]:
+            candidates_by_id[loc_id] = candidate
+    candidates = list(candidates_by_id.values())
     if not candidates:
         return {"status": "not_found"}
     best_rank = min(PLACE_FAMILY_RANK[c["family"]] for c in candidates)
