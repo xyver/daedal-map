@@ -186,43 +186,29 @@ class LocIdResolutionRuntimeTests(unittest.TestCase):
 
         self.assertEqual(resolved["deepest_resolved_loc_id"], "USA-CA-037")
         self.assertEqual(resolved["deepest_resolved_admin_level"], "admin_2")
-        self.assertIn(resolved["matches"]["admin_2"]["method"], {"geometry_name_lookup", "country_location_alias"})
+        self.assertEqual(resolved["matches"]["admin_2"]["method"], "graph_name_lookup")
 
-    @patch(
-        "mapmover.runtime.loc_id_resolution._load_country_direct_location_aliases",
-        return_value={"detroit": "USA-MI-163"},
-    )
-    def test_direct_location_alias_resolves_curated_city_anchor(self, _aliases_mock):
-        resolved = resolve_admin_text_to_loc_id("Detroit", country_hint="USA")
-
-        self.assertEqual(resolved["match_type"], "direct_location_alias")
-        self.assertEqual(resolved["deepest_resolved_loc_id"], "USA-MI-163")
-        self.assertEqual(resolved["deepest_resolved_admin_level"], "admin_2")
-        self.assertEqual(resolved["matches"]["admin_2"]["method"], "country_location_alias")
-
-    @patch(
-        "mapmover.runtime.loc_id_resolution._load_country_direct_location_aliases",
-        return_value={"navajo nation": "USA-TRIBAL-2430"},
-    )
-    def test_direct_location_alias_resolves_overlay_tribal_loc_id(self, _aliases_mock):
-        resolved = resolve_admin_text_to_loc_id("Navajo Nation", country_hint="USA")
-
-        self.assertEqual(resolved["match_type"], "direct_location_alias")
-        self.assertEqual(resolved["deepest_resolved_loc_id"], "USA-TRIBAL-2430")
-        self.assertEqual(resolved["loc_id_family"], "overlay_tribal")
-        self.assertEqual(resolved["matches"], {})
-        self.assertEqual(resolved["deepest_resolved_admin_level"], None)
-
-    def test_direct_admin_name_geometry_fallback_skips_ambiguous_normalized_matches(self):
+    def test_same_name_spine_matches_return_candidates(self):
+        # No city-to-county alias table: two Houston counties are candidates.
         with self._spine([
             {"loc_id": "USA-AL-069", "admin_level": 2, "name": "Houston"},
             {"loc_id": "USA-TX-225", "admin_level": 2, "name": "Houston"},
         ]):
             resolved = resolve_admin_text_to_loc_id("Houston", country_hint="USA")
 
-        self.assertEqual(resolved["deepest_resolved_loc_id"], "USA-TX-201")
-        self.assertEqual(resolved["deepest_resolved_admin_level"], "admin_2")
-        self.assertEqual(resolved["matches"]["admin_2"]["method"], "country_location_alias")
+        self.assertIsNone(resolved["deepest_resolved_loc_id"])
+        self.assertEqual({c["loc_id"] for c in resolved["candidates"]}, {"USA-AL-069", "USA-TX-225"})
+
+    def test_place_lookup_failure_is_a_typed_item_error(self):
+        with self._spine([{"loc_id": "USA-OR", "admin_level": 1, "name": "Oregon"}]), patch(
+            "mapmover.runtime.loc_id_resolution.place_candidates",
+            side_effect=ValueError("Released artifact hash is absent from the active manifest: abc"),
+        ):
+            resolved = resolve_admin_text_to_loc_id("Springfield", country_hint="USA")
+
+        self.assertIsNone(resolved["deepest_resolved_loc_id"])
+        self.assertEqual(resolved["error_code"], "place_lookup_failed")
+        self.assertIn("absent from the active manifest", resolved["error"])
 
     def test_zip_short_circuit_uses_us_crosswalk_and_stays_on_admin_spine(self):
         with patch(

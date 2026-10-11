@@ -13,15 +13,12 @@ from ..geometry_handlers import (
     resolve_point_to_location as legacy_resolve_point_to_location,
 )
 from ..name_standardizer import NameStandardizer
-from ..paths import GEOMETRY_DIR
 from ..reference.usa.location_lookup import by_zip as usa_zip_lookup
 from .admin_hierarchy import get_parent_loc_id, infer_admin_level_from_loc_id
-from .country_geography import get_country_location_aliases
 from .geography_reference import (
     canonicalize_loc_id,
     classify_loc_id_family,
     is_named_water_loc_id,
-    load_conversions,
     translate_geometry_id_to_local_id,
 )
 from .marine_geometry import (
@@ -35,10 +32,6 @@ _LOC_ID_RE = re.compile(r"^[A-Z]{3}(?:-[A-Z0-9]+)+$|^[A-Z]{3}$")
 _USA_ZIP_RE = re.compile(r"^\d{5}$")
 _NAME_STANDARDIZER: NameStandardizer | None = None
 _TEXT_COLLAPSE_RE = re.compile(r"[^a-z0-9]+")
-_USA_TRIBAL_ALIAS_SUFFIX_RE = re.compile(
-    r"\b(indian reservation and off reservation trust land|indian reservation|off reservation trust land|reservation|nation|tribe|tribal community|community|pueblo|village|native village)\b",
-    re.IGNORECASE,
-)
 _ADMIN_TEXT_SUFFIX_RE = re.compile(
     r"\b(county|parish|borough|municipality|municipio|district|region|province|state|prefecture|department|departement|oblast|county of)\b",
     re.IGNORECASE,
@@ -59,8 +52,6 @@ _ADMIN_TEXT_ALIASES = {
     "mecklenburg western pomerania": "mecklenburg vorpommern",
     "mecklenburg-western pomerania": "mecklenburg vorpommern",
 }
-_COUNTRY_DIRECT_LOCATION_ALIAS_CACHE: dict[str, dict[str, str]] = {}
-_COUNTRY_FALLBACK_LOCATION_ALIAS_CACHE: dict[str, dict[str, str]] = {}
 
 
 def _explicit_admin_level_from_text(value: str) -> int | None:
@@ -370,99 +361,6 @@ def _resolve_country_name_from_global_geometry(query: str) -> dict[str, Any] | N
     return None
 
 
-def _build_usa_tribal_aliases() -> tuple[dict[str, str], dict[str, str]]:
-    """Return (exact_aliases, derived_aliases) for USA tribal areas.
-
-    Exact names ("Onondaga Nation Reservation") are unambiguous and may resolve
-    ahead of the admin spine. Suffix-stripped names ("Onondaga") are a guess and
-    routinely collide with county names, so they are kept separate and consulted
-    only after admin resolution fails. Tribal areas are a sidechain; a sidechain
-    guess must never shadow the admin spine.
-    """
-    alias_map: dict[str, str] = {}
-    derived_map: dict[str, str] = {}
-    file_path = GEOMETRY_DIR / "countries" / "USA" / "tribal" / "USA.parquet"
-    if not file_path.exists():
-        return alias_map, derived_map
-
-    try:
-        df = pd.read_parquet(file_path, columns=["loc_id", "name"])
-    except Exception:
-        return alias_map, derived_map
-
-    stripped_candidates: dict[str, set[str]] = {}
-    for row in df.itertuples(index=False):
-        loc_id = str(getattr(row, "loc_id", "") or "").strip()
-        name = str(getattr(row, "name", "") or "").strip()
-        if not loc_id or not name:
-            continue
-        normalized_name = _normalize_admin_text(name)
-        if normalized_name:
-            alias_map.setdefault(normalized_name, loc_id)
-        stripped = _normalize_admin_text(_USA_TRIBAL_ALIAS_SUFFIX_RE.sub(" ", name))
-        if stripped and stripped != normalized_name:
-            stripped_candidates.setdefault(stripped, set()).add(loc_id)
-
-    for alias_text, loc_ids in stripped_candidates.items():
-        if len(loc_ids) == 1 and alias_text not in alias_map:
-            derived_map[alias_text] = next(iter(loc_ids))
-    return alias_map, derived_map
-
-
-def _load_country_direct_location_aliases(country_hint: str | None) -> dict[str, str]:
-    iso3 = str(country_hint or "").strip().upper()
-    if not iso3:
-        return {}
-    cached = _COUNTRY_DIRECT_LOCATION_ALIAS_CACHE.get(iso3)
-    if cached is not None:
-        return cached
-
-    alias_map: dict[str, str] = {}
-    for alias, loc_id in get_country_location_aliases(iso3).items():
-        alias_text = _normalize_admin_text(alias)
-        loc_id_text = str(loc_id or "").strip()
-        if alias_text and loc_id_text:
-            alias_map.setdefault(alias_text, loc_id_text)
-
-    if iso3 == "USA":
-        for alias_text, loc_id in _build_usa_tribal_aliases()[0].items():
-            alias_map.setdefault(alias_text, loc_id)
-
-    _COUNTRY_DIRECT_LOCATION_ALIAS_CACHE[iso3] = alias_map
-    return alias_map
-
-
-def _load_country_fallback_location_aliases(country_hint: str | None) -> dict[str, str]:
-    """Sidechain aliases that are only safe once admin resolution has failed."""
-    iso3 = str(country_hint or "").strip().upper()
-    if not iso3:
-        return {}
-    cached = _COUNTRY_FALLBACK_LOCATION_ALIAS_CACHE.get(iso3)
-    if cached is not None:
-        return cached
-
-    alias_map: dict[str, str] = {}
-    if iso3 == "USA":
-        alias_map.update(_build_usa_tribal_aliases()[1])
-
-    _COUNTRY_FALLBACK_LOCATION_ALIAS_CACHE[iso3] = alias_map
-    return alias_map
-
-
-def _resolve_country_direct_location_alias(query: str, *, country_hint: str | None) -> str | None:
-    normalized_query = _normalize_admin_text(query)
-    if not normalized_query:
-        return None
-    return _load_country_direct_location_aliases(country_hint).get(normalized_query)
-
-
-def _resolve_country_fallback_location_alias(query: str, *, country_hint: str | None) -> str | None:
-    normalized_query = _normalize_admin_text(query)
-    if not normalized_query:
-        return None
-    return _load_country_fallback_location_aliases(country_hint).get(normalized_query)
-
-
 def _level_key(admin_level: int | None) -> str | None:
     if admin_level is None or admin_level < 0:
         return None
@@ -765,40 +663,6 @@ def resolve_admin_text_to_loc_id(
             "should_persist_deepest_loc_id": True,
         }
 
-    aliased_loc_id = _resolve_country_direct_location_alias(value, country_hint=country_hint)
-    if not aliased_loc_id:
-        normalized_value = _normalize_admin_text(value)
-        reviewed_aliases = (load_conversions() or {}).get("location_aliases", {})
-        for alias, candidate_loc_id in reviewed_aliases.items():
-            if _normalize_admin_text(alias) == normalized_value:
-                aliased_loc_id = canonicalize_loc_id(candidate_loc_id)
-                break
-    if aliased_loc_id:
-        family = classify_loc_id_family(aliased_loc_id)
-        admin_level = infer_admin_level_from_loc_id(aliased_loc_id) if family in {"admin_0", "admin_local", "admin_geometry"} else None
-        key = _level_key(admin_level)
-        entry = None
-        if key:
-            entry = _build_match_entry(
-                aliased_loc_id,
-                admin_level=admin_level,
-                name=value,
-                method="country_location_alias",
-                source_loc_id=aliased_loc_id,
-            )
-        result = {
-            "query": value,
-            "match_type": "direct_location_alias",
-            "loc_id_family": family,
-            "matches": {key: entry} if key and entry else {},
-            "deepest_resolved_loc_id": aliased_loc_id,
-            "deepest_resolved_admin_level": key,
-            "should_persist_deepest_loc_id": True,
-        }
-        if key is None:
-            result["deepest_resolved_family"] = family
-        return result
-
     standardizer: NameStandardizer | None = None
 
     def get_standardizer() -> NameStandardizer:
@@ -813,7 +677,21 @@ def resolve_admin_text_to_loc_id(
     effective_level_hint = admin_level_hint if admin_level_hint is not None else explicit_text_level
 
     def place_result() -> dict[str, Any] | None:
-        place = place_candidates(country, value, parent_loc_id=parent_scope)
+        try:
+            place = place_candidates(country, value, parent_loc_id=parent_scope)
+        except Exception as exc:
+            # A broken published graph is reported on this item, not hidden
+            # and not allowed to fail the caller's whole batch.
+            return {
+                "query": value,
+                "match_type": "populated_place",
+                "matches": {},
+                "deepest_resolved_loc_id": None,
+                "deepest_resolved_admin_level": None,
+                "should_persist_deepest_loc_id": False,
+                "error": f"place name lookup failed for {country}: {exc}",
+                "error_code": "place_lookup_failed",
+            }
         if place.get("status") == "matched":
             match = place["match"]
             loc_id = str(match["loc_id"])
@@ -926,40 +804,6 @@ def resolve_admin_text_to_loc_id(
                 "deepest_resolved_admin_level": "admin_0",
                 "should_persist_deepest_loc_id": True,
             }
-
-    # Admin resolution failed, so a derived sidechain alias is now safe to use.
-    fallback_loc_id = _resolve_country_fallback_location_alias(value, country_hint=country)
-    if fallback_loc_id:
-        family = classify_loc_id_family(fallback_loc_id)
-        admin_level = (
-            infer_admin_level_from_loc_id(fallback_loc_id)
-            if family in {"admin_0", "admin_local", "admin_geometry"}
-            else None
-        )
-        key = _level_key(admin_level)
-        entry = (
-            _build_match_entry(
-                fallback_loc_id,
-                admin_level=admin_level,
-                name=value,
-                method="country_location_alias_fallback",
-                source_loc_id=fallback_loc_id,
-            )
-            if key
-            else None
-        )
-        result = {
-            "query": value,
-            "match_type": "direct_location_alias",
-            "loc_id_family": family,
-            "matches": {key: entry} if key and entry else {},
-            "deepest_resolved_loc_id": fallback_loc_id,
-            "deepest_resolved_admin_level": key,
-            "should_persist_deepest_loc_id": True,
-        }
-        if key is None:
-            result["deepest_resolved_family"] = family
-        return result
 
     # "Name, Parent[, Grandparent...]": resolve top-down, biggest region first
     # (the last part), then each part inside the one before it.

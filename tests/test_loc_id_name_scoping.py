@@ -58,9 +58,6 @@ class NameScopingTests(unittest.TestCase):
         patches = [
             patch.object(graph_name_lookup, "spine_name_table", side_effect=lambda country: (table, 3, frozenset()) if country == "USA" else None),
             patch.object(loc_id_resolution, "place_candidates", side_effect=_places),
-            patch.object(loc_id_resolution, "_load_country_direct_location_aliases", return_value={}),
-            patch.object(loc_id_resolution, "load_conversions", return_value={}),
-            patch.object(loc_id_resolution, "_resolve_country_fallback_location_alias", return_value=None),
         ]
         standardizer = patch.object(loc_id_resolution, "_get_name_standardizer")
         get_standardizer = standardizer.start()

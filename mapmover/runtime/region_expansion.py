@@ -129,18 +129,6 @@ def expand_region(
     region_lower = region.lower()
     region_normalized = region_lower.replace("_", " ").replace("-", " ")
 
-    # Reviewed, direct loc_id aliases are deliberately separate from broad
-    # regional groupings. They let an unambiguous administrative name such as
-    # "British Columbia" become CAN-BC without teaching the runtime to guess
-    # that every place-shaped proper noun (notably "New York") means Admin1.
-    location_aliases = conversions.get("location_aliases", {})
-    for alias, loc_id in location_aliases.items():
-        alias_lower = str(alias).lower()
-        if alias_lower == region_lower or alias_lower.replace("_", " ").replace("-", " ") == region_normalized:
-            canonical = str(loc_id or "").strip().upper()
-            if canonical:
-                return {canonical}
-
     region_aliases = conversions.get("region_aliases", {})
     for alias, grouping_key in region_aliases.items():
         alias_lower = alias.lower()
