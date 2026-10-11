@@ -3587,33 +3587,59 @@ async def _execute_get_loc_id_info_tool(request: Request, arguments: dict[str, A
 def _get_loc_id_info_items(loc_ids: list[str], payload: dict[str, Any]) -> list[dict[str, Any]]:
     from mapmover.geometry_handlers import get_location_infos
     from mapmover.runtime.reference_exchange import resolve_loc_id_inputs
+    from mapmover.runtime.reference_graph import indexed_public_alias_candidates
 
     requested = [str(loc_id or "").strip().upper() for loc_id in loc_ids]
     unique_requested = list(dict.fromkeys(requested))
+    try:
+        indexed_aliases = indexed_public_alias_candidates(unique_requested) or {}
+    except Exception:
+        indexed_aliases = {}
+    # Published aliases already have an exact index hit. Probing their public
+    # strings through geometry and identity routes first can exhaust the MCP
+    # execution window before the canonical target is ever read.
+    direct_ids = [loc_id for loc_id in unique_requested if not indexed_aliases.get(loc_id)]
     direct_infos = get_location_infos(
-        unique_requested,
+        direct_ids,
         include_memberships=False,
         fallback=False,
-    )
+    ) if direct_ids else []
     direct_info_by_loc_id = {
         loc_id: info
-        for loc_id, info in zip(unique_requested, direct_infos)
+        for loc_id, info in zip(direct_ids, direct_infos)
         if isinstance(info, dict) and not info.get("error")
     }
-    unresolved_ids = [loc_id for loc_id in unique_requested if loc_id not in direct_info_by_loc_id]
-    resolved_fallbacks = iter(resolve_loc_id_inputs(unresolved_ids))
+    unresolved_ids = [loc_id for loc_id in direct_ids if loc_id not in direct_info_by_loc_id]
+    resolved_fallbacks = iter(resolve_loc_id_inputs(unresolved_ids) if unresolved_ids else [])
     resolutions: dict[str, dict[str, Any]] = {}
     for loc_id in unique_requested:
-        resolutions[loc_id] = (
-            {
+        alias_rows = indexed_aliases.get(loc_id) or []
+        if alias_rows:
+            targets = sorted({str(row.get("loc_id") or "").strip() for row in alias_rows if str(row.get("loc_id") or "").strip()})
+            systems = sorted({str(row.get("reference_system") or "").strip() for row in alias_rows if str(row.get("reference_system") or "").strip()})
+            if len(targets) != 1:
+                resolutions[loc_id] = {
+                    "ok": False, "status": "ambiguous", "requested_loc_id": loc_id,
+                    "loc_id": None, "candidate_loc_ids": targets, "reference_systems": systems,
+                    "error": {"code": "ambiguous_public_loc_id", "message": "preferred public loc_id resolves to more than one canonical identity"},
+                }
+            else:
+                resolutions[loc_id] = {
+                    "ok": True, "status": "resolved", "requested_loc_id": loc_id,
+                    "loc_id": targets[0], "resolved_from_public_alias": True,
+                    "public_alias": loc_id, "reference_system": systems[0] if len(systems) == 1 else None,
+                    "reference_systems": systems,
+                }
+        elif loc_id in direct_info_by_loc_id:
+            resolutions[loc_id] = {
                 "ok": True,
                 "status": "unchanged",
                 "requested_loc_id": loc_id,
                 "loc_id": loc_id,
                 "resolved_from_public_alias": False,
             }
-            if loc_id in direct_info_by_loc_id else next(resolved_fallbacks)
-        )
+        else:
+            resolutions[loc_id] = next(resolved_fallbacks)
     canonical_ids = list(dict.fromkeys(
         str(resolution.get("loc_id") or requested_id)
         for requested_id, resolution in resolutions.items()
@@ -3629,6 +3655,18 @@ def _get_loc_id_info_items(loc_ids: list[str], payload: dict[str, Any]) -> list[
     ) if missing_canonical_ids else []
     info_by_loc_id = dict(direct_info_by_loc_id)
     info_by_loc_id.update(zip(missing_canonical_ids, fallback_infos))
+    for loc_id, resolution in resolutions.items():
+        if not resolution.get("resolved_from_public_alias") or not indexed_aliases.get(loc_id):
+            continue
+        target = str(resolution.get("loc_id") or "")
+        info = info_by_loc_id.get(target)
+        if isinstance(info, dict) and not info.get("error"):
+            continue
+        resolutions[loc_id] = {
+            **resolution, "ok": False, "status": "invalid_target", "loc_id": None,
+            "candidate_loc_ids": [target],
+            "error": {"code": "invalid_public_loc_id_target", "message": "preferred public loc_id points to an identity absent from the active graph"},
+        }
     catalog_context_cache: dict[tuple[str, str, str], dict[str, Any]] = {}
     return [
         _get_loc_id_info_item(

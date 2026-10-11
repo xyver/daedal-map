@@ -1166,6 +1166,50 @@ def resolve_public_loc_ids(loc_ids: list[str]) -> list[dict[str, Any]]:
     })) for value in requested]
 
 
+def indexed_public_alias_candidates(loc_ids: list[str]) -> dict[str, list[dict[str, Any]]] | None:
+    """Find exact preferred public aliases in a current, release-pinned index.
+
+    ``None`` means the index cannot safely answer this request; callers must
+    use the normal graph resolver in that case. This lookup deliberately does
+    not open the large identity route index or validate target identities.
+    """
+    requested = list(dict.fromkeys(str(value or "").strip().upper() for value in loc_ids if str(value or "").strip()))
+    if not requested or not reference_graph_available():
+        return {}
+    roots = reference_graph_roots()
+    countries = {value.split("-", 1)[0] for value in requested}
+    if any(country not in roots for country in countries):
+        if not _global_discovery_index_current(is_cloud_mode()):
+            return None
+    elif any(not _country_discovery_index_current(country, is_cloud_mode(), str(roots[country])) for country in countries):
+        return None
+    index_path = DATA_ROOT / GLOBAL_DISCOVERY_RELATIVE
+    placeholders = ", ".join("?" for _ in requested)
+    connection = _connection()
+    try:
+        cursor = connection.execute(
+            f"""SELECT external_id, reference_system, loc_id, country_scope
+                FROM read_parquet(?)
+                WHERE external_id IN ({placeholders})
+                  AND lower(alias_type) = ?
+                  AND (lower(reference_system) LIKE ? OR lower(reference_system) LIKE ?)""",
+            [path_to_uri(index_path), *requested, PUBLIC_ALIAS_TYPE,
+             f"{PUBLIC_REFERENCE_PREFIX}%", f"{LEGACY_PUBLIC_REFERENCE_PREFIX}%"],
+        )
+        rows: dict[str, list[dict[str, Any]]] = {value: [] for value in requested}
+        columns = [item[0] for item in cursor.description]
+        for record in cursor.fetchall():
+            row = dict(zip(columns, record))
+            external_id = str(row.get("external_id") or "").upper()
+            country = external_id.split("-", 1)[0]
+            if country in roots and str(row.get("country_scope") or "").upper() != country:
+                continue
+            rows[external_id].append(row)
+        return rows
+    finally:
+        connection.close()
+
+
 def public_alias_reference_systems(*, iso3: str | None = None) -> list[dict[str, Any]]:
     """Describe callable preferred-public alias systems in active graphs."""
     roots_by_country = reference_graph_roots()

@@ -407,6 +407,33 @@ class ReferenceGraphRuntimeTests(unittest.TestCase):
 
         self.assertEqual(batched, singles)
 
+    def test_indexed_public_alias_candidates_uses_exact_current_country_rows(self) -> None:
+        index = self.root / "identifier_index.parquet"
+        pd.DataFrame([
+            {"external_id": "TST-PUBLIC-A", "reference_system": "public.tst.test_sidechain.v2",
+             "loc_id": "TST-A-001", "alias_type": "preferred_public_loc_id", "country_scope": "TST"},
+            {"external_id": "TST-PUBLIC-A", "reference_system": "public.tst.test_sidechain.v2",
+             "loc_id": "OTHER-A-001", "alias_type": "preferred_public_loc_id", "country_scope": "OTHER"},
+            {"external_id": "TST-PUBLIC-A", "reference_system": "test.code",
+             "loc_id": "TST-B-002", "alias_type": "official_code", "country_scope": "TST"},
+        ]).to_parquet(index, index=False)
+        with (
+            mock.patch.object(reference_graph, "DATA_ROOT", self.root),
+            mock.patch.object(reference_graph, "GLOBAL_DISCOVERY_RELATIVE", Path("identifier_index.parquet")),
+            mock.patch.object(reference_graph, "reference_graph_roots", return_value={"TST": self.root}),
+            mock.patch.object(reference_graph, "_country_discovery_index_current", return_value=True),
+            mock.patch.object(reference_graph, "reference_graph_available", return_value=True),
+        ):
+            rows = reference_graph.indexed_public_alias_candidates(["tst-public-a", "TST-MISSING"])
+        self.assertEqual([row["loc_id"] for row in rows["TST-PUBLIC-A"]], ["TST-A-001"])
+        self.assertEqual(rows["TST-MISSING"], [])
+        with (
+            mock.patch.object(reference_graph, "reference_graph_roots", return_value={"TST": self.root}),
+            mock.patch.object(reference_graph, "_country_discovery_index_current", return_value=False),
+            mock.patch.object(reference_graph, "reference_graph_available", return_value=True),
+        ):
+            self.assertIsNone(reference_graph.indexed_public_alias_candidates(["TST-PUBLIC-A"]))
+
     def test_geometry_calls_preserve_canonical_output_and_requested_public_alias(self) -> None:
         metadata = [{
             "loc_id": "TST-A-001", "name": "Test Area", "admin_level": None,

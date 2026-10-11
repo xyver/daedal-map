@@ -1504,6 +1504,53 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
             ["USA-CA-037", "USA-NY-061", "USA-CA-037"],
         )
 
+    def test_loc_id_info_indexed_alias_skips_public_id_metadata_probe(self) -> None:
+        alias = "USA-POSTAL-EXAMPLE"
+        target = "USA-VA-059-POSTAL-22030"
+        with (
+            mock.patch(
+                "mapmover.runtime.reference_graph.indexed_public_alias_candidates",
+                return_value={alias: [{
+                    "external_id": alias, "loc_id": target,
+                    "reference_system": "public.usa.postal.v2", "country_scope": "USA",
+                }]},
+            ),
+            mock.patch(
+                "mapmover.geometry_handlers.get_location_infos",
+                return_value=[{"loc_id": target, "name": "Example", "iso3": "USA"}],
+            ) as infos,
+            mock.patch("mapmover.routes.mcp._loc_id_catalog_context", return_value={}),
+            mock.patch("mapmover.runtime.reference_exchange.resolve_loc_id_inputs") as fallback,
+        ):
+            payload = _tool_call(self.client, "get_loc_id_info", {"loc_ids": [alias]})
+
+        self.assertEqual(payload["found_count"], 1)
+        self.assertEqual(payload["results"][0]["loc_id"], target)
+        self.assertTrue(payload["results"][0]["resolved_from_public_alias"])
+        infos.assert_called_once_with([target], include_memberships=False)
+        fallback.assert_not_called()
+
+    def test_loc_id_info_indexed_alias_fails_closed(self) -> None:
+        ambiguous = "USA-PUBLIC-AMBIG"
+        missing = "USA-PUBLIC-MISSING-TARGET"
+        rows = {
+            ambiguous: [
+                {"loc_id": "USA-A", "reference_system": "public.usa.test"},
+                {"loc_id": "USA-B", "reference_system": "public.usa.test"},
+            ],
+            missing: [{"loc_id": "USA-NO-IDENTITY", "reference_system": "public.usa.test"}],
+        }
+        with (
+            mock.patch("mapmover.runtime.reference_graph.indexed_public_alias_candidates", return_value=rows),
+            mock.patch("mapmover.geometry_handlers.get_location_infos", return_value=[{
+                "loc_id": "USA-NO-IDENTITY", "error": "no geometry metadata found",
+            }]),
+        ):
+            payload = _tool_call(self.client, "get_loc_id_info", {"loc_ids": [ambiguous, missing]})
+
+        self.assertEqual(payload["results"][0]["error"]["code"], "ambiguous_public_loc_id")
+        self.assertEqual(payload["results"][1]["error"]["code"], "invalid_public_loc_id_target")
+
     def test_loc_id_info_rejects_ambiguous_preferred_public_alias(self) -> None:
         with (
             mock.patch(
