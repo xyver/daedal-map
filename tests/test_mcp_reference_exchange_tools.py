@@ -1678,8 +1678,8 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         }
         with (
             mock.patch("mapmover.runtime.reference_graph.indexed_public_alias_candidates", return_value={}),
-            mock.patch("mapmover.geometry_handlers.get_location_infos", return_value=[rows["CAN-BC-5915004"]]),
-            mock.patch("mapmover.geometry_handlers.get_location_info", side_effect=lambda loc_id, **_: rows[loc_id]),
+            mock.patch("mapmover.geometry_handlers.get_location_infos", side_effect=lambda loc_ids, **_: [rows[loc_ids[0]]]),
+            mock.patch("mapmover.geometry_handlers.get_location_info") as legacy,
         ):
             payload = _tool_call(
                 self.client,
@@ -1690,6 +1690,24 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         self.assertEqual(payload["hierarchy"]["relationship_mode"], "strict_stored_parent")
         self.assertEqual(payload["hierarchy"]["parent"], "CAN-BC-5915")
         self.assertEqual(payload["hierarchy"]["ancestors"], ["CAN-BC-5915", "CAN-BC", "CAN"])
+        legacy.assert_not_called()
+
+    def test_loc_id_info_hierarchy_parent_miss_stops_at_exact_route(self) -> None:
+        child = {"loc_id": "CAN-BC-5915004", "name": "Surrey", "parent_id": "CAN-BC-5915", "iso3": "CAN"}
+        missing_parent = {"loc_id": "CAN-BC-5915", "error": "no identity in the active reference graph"}
+        with (
+            mock.patch("mapmover.runtime.reference_graph.indexed_public_alias_candidates", return_value={}),
+            mock.patch("mapmover.geometry_handlers.get_location_infos", side_effect=[[child], [missing_parent]]) as infos,
+            mock.patch("mapmover.geometry_handlers.get_location_info") as legacy,
+        ):
+            payload = _tool_call(self.client, "get_loc_id_info", {
+                "loc_id": "CAN-BC-5915004", "include_hierarchy": True,
+            })
+
+        self.assertEqual(payload["hierarchy"]["ancestors"], ["CAN-BC-5915"])
+        self.assertEqual(payload["hierarchy"]["ancestor_rows"], [{"loc_id": "CAN-BC-5915"}])
+        self.assertEqual(infos.call_count, 2)
+        legacy.assert_not_called()
 
     def test_loc_id_info_references_batch_uses_smaller_guard(self) -> None:
         with (

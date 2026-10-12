@@ -3944,6 +3944,8 @@ def _get_loc_id_info_item(
         })
     if bool(payload.get("include_hierarchy")):
         try:
+            from mapmover.geometry_handlers import get_location_infos
+
             ancestors: list[str] = []
             ancestor_rows: list[dict[str, Any]] = []
             seen = {str(result["loc_id"])}
@@ -3951,7 +3953,9 @@ def _get_loc_id_info_item(
             while current_parent and current_parent not in seen and len(ancestors) < 32:
                 seen.add(current_parent)
                 ancestors.append(current_parent)
-                parent_info = get_location_info(current_parent, include_memberships=False)
+                parent_info = get_location_infos(
+                    [current_parent], include_memberships=False, graph_authoritative=True,
+                )[0]
                 if not isinstance(parent_info, dict) or parent_info.get("error"):
                     ancestor_rows.append({"loc_id": current_parent})
                     break
