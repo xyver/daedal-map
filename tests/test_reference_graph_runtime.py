@@ -104,12 +104,13 @@ class ReferenceGraphRuntimeTests(unittest.TestCase):
                     str(data_root), json.dumps([str(roots[0]), str(roots[0])]), False,
                 )
 
-    def test_discovery_index_allows_authoring_global_graph_absent_from_hosted_runtime(self) -> None:
+    def test_country_discovery_index_uses_only_its_own_release(self) -> None:
         manifest = {
             "status": "PASS",
+            "schema_version": "reference_discovery_index_v1",
+            "artifact": "identifier_index.parquet",
             "source_graphs": {
                 "BRA": {"release_id": "bra_reference_graph_1_2_5"},
-                "__global__": {"release_id": "global_admin_exact_v1"},
             },
         }
         bra_root = Path("geometry/countries/BRA/reference_graph")
@@ -117,19 +118,19 @@ class ReferenceGraphRuntimeTests(unittest.TestCase):
         def graph_json(path: Path):
             return (
                 manifest
-                if path == reference_graph.DATA_ROOT / reference_graph.GLOBAL_DISCOVERY_MANIFEST
+                if path == reference_graph._country_discovery_paths("BRA")[1]
                 else {"release_id": "bra_reference_graph_1_2_5"}
             )
 
-        reference_graph._global_discovery_index_current.cache_clear()
+        reference_graph._country_discovery_index_current.cache_clear()
         with (
             mock.patch.object(reference_graph, "_graph_json", side_effect=graph_json),
             mock.patch.object(reference_graph, "parquet_columns", return_value=("external_id",)),
             mock.patch.object(reference_graph, "reference_graph_roots", return_value={"BRA": bra_root}),
             mock.patch.object(reference_graph, "global_reference_graph_root", return_value=None),
         ):
-            self.assertTrue(reference_graph._global_discovery_index_current(True))
-        reference_graph._global_discovery_index_current.cache_clear()
+            self.assertTrue(reference_graph._country_discovery_index_current("BRA", True, str(bra_root)))
+        reference_graph._country_discovery_index_current.cache_clear()
 
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
@@ -321,7 +322,7 @@ class ReferenceGraphRuntimeTests(unittest.TestCase):
         identities_reader.assert_called_once_with(["TST-A-001", "TST-B-002"])
         geometry.assert_not_called()
 
-    def test_alias_identification_opens_physical_files_sequentially(self) -> None:
+    def test_alias_identification_fails_when_country_index_is_missing(self) -> None:
         second = self.root / "aliases_second.parquet"
         pd.DataFrame([{
             "reference_system": "test.other", "external_id": "002",
@@ -353,26 +354,24 @@ class ReferenceGraphRuntimeTests(unittest.TestCase):
             mock.patch.object(reference_graph, "_country_discovery_index_current", return_value=False),
             mock.patch.object(reference_graph, "_connection", side_effect=RecordingConnection),
         ):
-            rows = identify_aliases(["001", "002"], iso3="TST")
-
-        self.assertEqual({row["external_id"] for row in rows}, {"001", "002"})
-        self.assertEqual(opened, [str(self.root / "aliases.parquet"), str(second)])
+            with self.assertRaisesRegex(reference_graph.ReferenceRouteUnavailable, "index unavailable"):
+                identify_aliases(["001", "002"], iso3="TST")
+        self.assertEqual(opened, [])
 
     def test_country_alias_identification_uses_current_discovery_index(self) -> None:
         data_root = self.root / "data"
-        discovery = data_root / reference_graph.GLOBAL_DISCOVERY_RELATIVE
+        discovery = data_root / "geometry" / "countries" / "TST" / "reference_discovery" / "identifier_index.parquet"
         discovery.parent.mkdir(parents=True)
-        (data_root / reference_graph.GLOBAL_DISCOVERY_MANIFEST).write_text(json.dumps({
+        (discovery.parent / "manifest.json").write_text(json.dumps({
             "status": "PASS",
+            "schema_version": "reference_discovery_index_v1",
+            "artifact": "identifier_index.parquet",
             "source_graphs": {
                 "TST": {"release_id": "test_candidate"},
-                "OTH": {"release_id": "other_old_release"},
             },
         }), encoding="utf-8")
         pd.DataFrame([
             {"external_id": "001", "reference_system": "test.code", "loc_id": "TST-A-001", "alias_type": "official_code", "country_scope": "TST"},
-            {"external_id": "001", "reference_system": "test.code", "loc_id": "OTH-A-001", "alias_type": "official_code", "country_scope": "OTH"},
-            {"external_id": "001", "reference_system": "test.code", "loc_id": "GLB-A-001", "alias_type": "official_code", "country_scope": ""},
         ]).to_parquet(discovery, index=False)
         opened: list[str] = []
         real_connection = reference_graph._connection
@@ -400,12 +399,50 @@ class ReferenceGraphRuntimeTests(unittest.TestCase):
         self.assertEqual([row["loc_id"] for row in rows], ["TST-A-001"])
         self.assertEqual(opened, [str(discovery)])
 
+    def test_unscoped_alias_identification_reads_country_indexes_sequentially(self) -> None:
+        data_root = self.root / "data"
+        for country in ("AAA", "BBB"):
+            index = data_root / "geometry" / "countries" / country / "reference_discovery" / "identifier_index.parquet"
+            index.parent.mkdir(parents=True)
+            pd.DataFrame([{
+                "external_id": "001", "reference_system": "test.code",
+                "loc_id": f"{country}-A-001", "alias_type": "official_code",
+                "country_scope": country,
+            }]).to_parquet(index, index=False)
+        opened: list[str] = []
+        real_connection = reference_graph._connection
+
+        class RecordingConnection:
+            def __init__(self):
+                self.connection = real_connection()
+
+            def execute(self, statement, parameters=None):
+                opened.append(str(parameters[0]))
+                return self.connection.execute(statement, parameters or [])
+
+            def close(self):
+                self.connection.close()
+
+        with (
+            mock.patch.object(reference_graph, "DATA_ROOT", data_root),
+            mock.patch.object(reference_graph, "reference_graph_roots", return_value={"AAA": self.root, "BBB": self.root}),
+            mock.patch.object(reference_graph, "_country_discovery_index_current", return_value=True),
+            mock.patch.object(reference_graph, "reference_graph_available", return_value=True),
+            mock.patch.object(reference_graph, "_connection", side_effect=RecordingConnection),
+        ):
+            rows = identify_aliases(["001"])
+        self.assertEqual({row["loc_id"] for row in rows}, {"AAA-A-001", "BBB-A-001"})
+        self.assertEqual(len(opened), 2)
+        self.assertIn("AAA", opened[0])
+        self.assertIn("BBB", opened[1])
+
     def test_alias_identification_honors_cancellation_between_files(self) -> None:
-        with self.assertRaisesRegex(RuntimeError, "cancelled"):
-            identify_aliases(
-                ["001"], iso3="TST",
-                cancelled=lambda: (_ for _ in ()).throw(RuntimeError("cancelled")),
-            )
+        with mock.patch.object(reference_graph, "_country_discovery_index_current", return_value=True):
+            with self.assertRaisesRegex(RuntimeError, "cancelled"):
+                identify_aliases(
+                    ["001"], iso3="TST",
+                    cancelled=lambda: (_ for _ in ()).throw(RuntimeError("cancelled")),
+                )
 
     def test_undated_single_and_batch_identity_queries_select_newest_version(self) -> None:
         current = pd.read_parquet(self.root / "identities.parquet")
@@ -485,7 +522,8 @@ class ReferenceGraphRuntimeTests(unittest.TestCase):
         self.assertEqual(batched, singles)
 
     def test_indexed_public_alias_candidates_uses_exact_current_country_rows(self) -> None:
-        index = self.root / "identifier_index.parquet"
+        index = self.root / "geometry" / "countries" / "TST" / "reference_discovery" / "identifier_index.parquet"
+        index.parent.mkdir(parents=True, exist_ok=True)
         pd.DataFrame([
             {"external_id": "TST-PUBLIC-A", "reference_system": "public.tst.test_sidechain.v2",
              "loc_id": "TST-A-001", "alias_type": "preferred_public_loc_id", "country_scope": "TST"},
@@ -496,7 +534,6 @@ class ReferenceGraphRuntimeTests(unittest.TestCase):
         ]).to_parquet(index, index=False)
         with (
             mock.patch.object(reference_graph, "DATA_ROOT", self.root),
-            mock.patch.object(reference_graph, "GLOBAL_DISCOVERY_RELATIVE", Path("identifier_index.parquet")),
             mock.patch.object(reference_graph, "reference_graph_roots", return_value={"TST": self.root}),
             mock.patch.object(reference_graph, "_country_discovery_index_current", return_value=True),
             mock.patch.object(reference_graph, "reference_graph_available", return_value=True),
@@ -512,6 +549,8 @@ class ReferenceGraphRuntimeTests(unittest.TestCase):
             self.assertIsNone(reference_graph.indexed_public_alias_candidates(["TST-PUBLIC-A"]))
 
     def test_indexed_legacy_usa_aliases_use_official_codes_in_same_file(self) -> None:
+        index = self.root / "geometry" / "countries" / "USA" / "reference_discovery" / "identifier_index.parquet"
+        index.parent.mkdir(parents=True, exist_ok=True)
         pd.DataFrame([
             {"external_id": "42223", "reference_system": "usa.census.2020.zcta5.geoid",
              "loc_id": "USA-TN-125-101400-POSTAL-42223", "alias_type": "official_identifier", "country_scope": "USA"},
@@ -519,10 +558,9 @@ class ReferenceGraphRuntimeTests(unittest.TestCase):
              "loc_id": "OTHER-POSTAL-42223", "alias_type": "official_identifier", "country_scope": "OTHER"},
             {"external_id": "1234", "reference_system": "usa.census.2025.aiannhce",
              "loc_id": "USA-TRIBAL-EXAMPLE", "alias_type": "official_identifier", "country_scope": "USA"},
-        ]).to_parquet(self.root / "identifier_index.parquet", index=False)
+        ]).to_parquet(index, index=False)
         with (
             mock.patch.object(reference_graph, "DATA_ROOT", self.root),
-            mock.patch.object(reference_graph, "GLOBAL_DISCOVERY_RELATIVE", Path("identifier_index.parquet")),
             mock.patch.object(reference_graph, "reference_graph_roots", return_value={"USA": self.root}),
             mock.patch.object(reference_graph, "_country_discovery_index_current", return_value=True),
             mock.patch.object(reference_graph, "reference_graph_available", return_value=True),

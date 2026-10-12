@@ -57,8 +57,7 @@ FULL_GRAPH_FILES = (
 )
 IDENTITY_ROUTE_INDEX = "identity_routes.parquet"
 ALIAS_SYSTEM_ROUTE_INDEX = "alias_system_routes.parquet"
-GLOBAL_DISCOVERY_RELATIVE = Path("geometry/global/reference_discovery/identifier_index.parquet")
-GLOBAL_DISCOVERY_MANIFEST = Path("geometry/global/reference_discovery/manifest.json")
+COUNTRY_DISCOVERY_DIRECTORY = Path("reference_discovery")
 
 #: Identity columns read from partitions. Partitions span countries and
 #: families with differing schemas, and some carry a GEOMETRY column DuckDB
@@ -244,7 +243,6 @@ def clear_reference_graph_cache() -> None:
     _load_graph_json.cache_clear()
     _missing_graph_files.cache_clear()
     _discover_roots.cache_clear()
-    _global_discovery_index_current.cache_clear()
     _country_discovery_index_current.cache_clear()
     _country_release_paths.cache_clear()
     _partition_source_map.cache_clear()
@@ -284,56 +282,29 @@ def _published_partition_path(root: Path, source: Any, sha256: Any) -> Path:
     return DATA_ROOT / relative
 
 
-@lru_cache(maxsize=2)
-def _global_discovery_index_current(cloud_mode: bool) -> bool:
-    """Return whether the compact discovery index matches active graph roots."""
-    index_path = DATA_ROOT / GLOBAL_DISCOVERY_RELATIVE
-    manifest_path = DATA_ROOT / GLOBAL_DISCOVERY_MANIFEST
-    manifest = _graph_json(manifest_path) or {}
-    if str(manifest.get("status") or "").upper() != "PASS":
-        return False
-    try:
-        available = bool(parquet_columns(index_path)) if cloud_mode else index_path.is_file()
-    except Exception:
-        return False
-    if not available:
-        return False
-    expected = manifest.get("source_graphs") or {}
-    current: dict[str, str] = {}
-    for country, root in reference_graph_roots().items():
-        current[country] = str((_graph_json(root / "manifest.json") or {}).get("release_id") or "")
-    global_root = global_reference_graph_root()
-    if global_root is not None:
-        current["__global__"] = str(
-            (_graph_json(global_root / "manifest.json") or {}).get("release_id") or ""
-        )
-    declared = {
-        str(key): str((value or {}).get("release_id") or "")
-        for key, value in expected.items() if isinstance(value, dict)
-    }
-    # The compact index may be built from the complete authoring graph while a
-    # hosted deployment intentionally serves only catalog-admitted country
-    # graphs. An unavailable global fallback does not make the country rows
-    # stale; every graph that is actually active must still match exactly, and
-    # extra/removed country scopes remain a hard mismatch.
-    if "__global__" not in current:
-        declared.pop("__global__", None)
-    return bool(current) and declared == current
+def _country_discovery_paths(country: str) -> tuple[Path, Path]:
+    base = DATA_ROOT / "geometry" / "countries" / country / COUNTRY_DISCOVERY_DIRECTORY
+    return base / "identifier_index.parquet", base / "manifest.json"
 
 
 @lru_cache(maxsize=64)
 def _country_discovery_index_current(country: str, cloud_mode: bool, root_text: str) -> bool:
-    """A country slice stays valid when another country's graph changes."""
-    manifest = _graph_json(DATA_ROOT / GLOBAL_DISCOVERY_MANIFEST) or {}
-    if str(manifest.get("status") or "").upper() != "PASS":
+    """A country's compact index is pinned only to that country's graph."""
+    index_path, manifest_path = _country_discovery_paths(country)
+    manifest = _graph_json(manifest_path) or {}
+    if (str(manifest.get("status") or "").upper() != "PASS"
+            or manifest.get("schema_version") != "reference_discovery_index_v1"
+            or manifest.get("artifact") != "identifier_index.parquet"):
         return False
-    expected = (manifest.get("source_graphs") or {}).get(country) or {}
+    source_graphs = manifest.get("source_graphs") or {}
+    if set(source_graphs) != {country}:
+        return False
+    expected = source_graphs.get(country) or {}
     release_id = str(expected.get("release_id") or "")
     if not release_id or release_id != str(
         (_graph_json(Path(root_text) / "manifest.json") or {}).get("release_id") or ""
     ):
         return False
-    index_path = DATA_ROOT / GLOBAL_DISCOVERY_RELATIVE
     try:
         return bool(parquet_columns(index_path)) if cloud_mode else index_path.is_file()
     except Exception:
@@ -1197,7 +1168,7 @@ def resolve_public_loc_ids(loc_ids: list[str]) -> list[dict[str, Any]]:
 
 
 def indexed_public_alias_candidates(loc_ids: list[str]) -> dict[str, list[dict[str, Any]]] | None:
-    """Find preferred public and supported legacy IDs in one pinned index.
+    """Find preferred public and supported legacy IDs in country indexes.
 
     ``None`` means the index cannot safely answer this request. Exact callers
     should return an index error instead of scanning every graph partition.
@@ -1209,59 +1180,60 @@ def indexed_public_alias_candidates(loc_ids: list[str]) -> dict[str, list[dict[s
     if not reference_graph_available():
         return None
     roots = reference_graph_roots()
-    countries = {value.split("-", 1)[0] for value in requested}
-    if any(country not in roots for country in countries):
-        if not _global_discovery_index_current(is_cloud_mode()):
-            return None
-    elif any(not _country_discovery_index_current(country, is_cloud_mode(), str(roots[country])) for country in countries):
+    by_country: dict[str, list[str]] = {}
+    for value in requested:
+        by_country.setdefault(value.split("-", 1)[0], []).append(value)
+    if any(country not in roots or not _country_discovery_index_current(
+        country, is_cloud_mode(), str(roots[country]),
+    ) for country in by_country):
         return None
-    index_path = DATA_ROOT / GLOBAL_DISCOVERY_RELATIVE
-    placeholders = ", ".join("?" for _ in requested)
+    rows: dict[str, list[dict[str, Any]]] = {value: [] for value in requested}
     connection = _connection()
     try:
-        cursor = connection.execute(
-            f"""SELECT external_id, reference_system, loc_id, country_scope
-                FROM read_parquet(?)
-                WHERE external_id IN ({placeholders})
-                  AND lower(alias_type) = ?
-                  AND (lower(reference_system) LIKE ? OR lower(reference_system) LIKE ?)""",
-            [path_to_uri(index_path), *requested, PUBLIC_ALIAS_TYPE,
-             f"{PUBLIC_REFERENCE_PREFIX}%", f"{LEGACY_PUBLIC_REFERENCE_PREFIX}%"],
-        )
-        rows: dict[str, list[dict[str, Any]]] = {value: [] for value in requested}
-        columns = [item[0] for item in cursor.description]
-        for record in cursor.fetchall():
-            row = dict(zip(columns, record))
-            external_id = str(row.get("external_id") or "").upper()
-            country = external_id.split("-", 1)[0]
-            if country in roots and str(row.get("country_scope") or "").upper() != country:
-                continue
-            rows[external_id].append(row)
-        legacy_keys: dict[tuple[str, str], str] = {}
-        for value in requested:
-            if rows[value]:
-                continue
-            zcta = re.fullmatch(r"USA-Z-(\d{5})", value)
-            tribal = re.fullmatch(r"USA-TRIBAL-(\d{4})", value)
-            if zcta:
-                legacy_keys[(zcta.group(1), "usa.census.2020.zcta5.geoid")] = value
-            elif tribal:
-                legacy_keys[(tribal.group(1), "usa.census.2025.aiannhce")] = value
-        if legacy_keys:
-            predicates = " OR ".join("(external_id = ? AND lower(reference_system) = ?)" for _ in legacy_keys)
-            parameters = [item for key in legacy_keys for item in key]
+        for country, values in by_country.items():
+            index_path, _ = _country_discovery_paths(country)
+            placeholders = ", ".join("?" for _ in values)
             cursor = connection.execute(
                 f"""SELECT external_id, reference_system, loc_id, country_scope
-                    FROM read_parquet(?) WHERE {predicates}""",
-                [path_to_uri(index_path), *parameters],
+                    FROM read_parquet(?)
+                    WHERE external_id IN ({placeholders})
+                      AND lower(alias_type) = ?
+                      AND (lower(reference_system) LIKE ? OR lower(reference_system) LIKE ?)""",
+                [path_to_uri(index_path), *values, PUBLIC_ALIAS_TYPE,
+                 f"{PUBLIC_REFERENCE_PREFIX}%", f"{LEGACY_PUBLIC_REFERENCE_PREFIX}%"],
             )
             columns = [item[0] for item in cursor.description]
             for record in cursor.fetchall():
                 row = dict(zip(columns, record))
-                key = (str(row.get("external_id") or ""), str(row.get("reference_system") or "").lower())
-                requested_id = legacy_keys.get(key)
-                if requested_id and str(row.get("country_scope") or "").upper() == "USA":
-                    rows[requested_id].append(row)
+                external_id = str(row.get("external_id") or "").upper()
+                if external_id in rows and str(row.get("country_scope") or "").upper() == country:
+                    rows[external_id].append(row)
+            legacy_keys: dict[tuple[str, str], str] = {}
+            if country == "USA":
+                for value in values:
+                    if rows[value]:
+                        continue
+                    zcta = re.fullmatch(r"USA-Z-(\d{5})", value)
+                    tribal = re.fullmatch(r"USA-TRIBAL-(\d{4})", value)
+                    if zcta:
+                        legacy_keys[(zcta.group(1), "usa.census.2020.zcta5.geoid")] = value
+                    elif tribal:
+                        legacy_keys[(tribal.group(1), "usa.census.2025.aiannhce")] = value
+            if legacy_keys:
+                predicates = " OR ".join("(external_id = ? AND lower(reference_system) = ?)" for _ in legacy_keys)
+                parameters = [item for key in legacy_keys for item in key]
+                cursor = connection.execute(
+                    f"""SELECT external_id, reference_system, loc_id, country_scope
+                        FROM read_parquet(?) WHERE {predicates}""",
+                    [path_to_uri(index_path), *parameters],
+                )
+                columns = [item[0] for item in cursor.description]
+                for record in cursor.fetchall():
+                    row = dict(zip(columns, record))
+                    key = (str(row.get("external_id") or ""), str(row.get("reference_system") or "").lower())
+                    requested_id = legacy_keys.get(key)
+                    if requested_id and str(row.get("country_scope") or "").upper() == country:
+                        rows[requested_id].append(row)
         return rows
     finally:
         connection.close()
@@ -1311,63 +1283,42 @@ def identify_aliases(
     reference_system: str | None = None,
     cancelled: Callable[[], bool] | None = None,
 ) -> list[dict[str, Any]]:
-    """Return exact aliases while opening only one physical file at a time."""
+    """Return exact aliases from country indexes, one file at a time."""
     requested = list(dict.fromkeys(str(item).strip() for item in external_ids if str(item).strip()))
     if not requested or not reference_graph_available():
         return []
     country = str(iso3 or "").strip().upper()
     roots_by_country = reference_graph_roots()
-    roots = [roots_by_country[country]] if country in roots_by_country else (
-        [] if country else [
-            *roots_by_country.values(),
-            *([global_reference_graph_root()] if global_reference_graph_root() else []),
-        ]
+    if country and country not in roots_by_country:
+        raise ReferenceRouteUnavailable(f"country reference graph unavailable: {country}")
+    selected_countries = [country] if country in roots_by_country else (
+        [] if country else sorted(roots_by_country)
     )
+    for selected_country in selected_countries:
+        if not _country_discovery_index_current(
+            selected_country, is_cloud_mode(), str(roots_by_country[selected_country]),
+        ):
+            raise ReferenceRouteUnavailable(
+                f"exact alias index unavailable or stale: {selected_country}"
+            )
     placeholders = ", ".join("?" for _ in requested)
     connection = _connection()
     try:
         system_filter = " AND lower(reference_system) = lower(?)" if reference_system else ""
         maximum = max(1, int(limit))
         rows: list[dict[str, Any]] = []
-        # Unknown-country discovery normally touches one compact, release-pinned
-        # file. A missing/stale derivative falls back safely to graph partitions
-        # but still reads them sequentially instead of constructing one huge
-        # read_parquet list.
-        discovery = DATA_ROOT / GLOBAL_DISCOVERY_RELATIVE
-        if country in roots_by_country:
-            use_discovery_index = _country_discovery_index_current(
-                country, is_cloud_mode(), str(roots_by_country[country]),
-            )
-        else:
-            use_discovery_index = not country and _global_discovery_index_current(is_cloud_mode())
-        if use_discovery_index:
-            paths = [discovery]
-        else:
-            paths = []
-            for root in roots:
-                routed = (
-                    _route_paths(
-                        root, ALIAS_SYSTEM_ROUTE_INDEX, "reference_system", [str(reference_system)],
-                    )
-                    if reference_system else []
-                )
-                paths.extend(routed or _partition_paths(root, "aliases"))
-            paths = list(dict.fromkeys(paths))
-        for path in paths:
+        for selected_country in selected_countries:
+            path, _ = _country_discovery_paths(selected_country)
             if cancelled:
                 cancelled()
-            if not is_cloud_mode() and not path.is_file():
-                continue
             parameters = [path_to_uri(path), *requested]
-            scope_filter = " AND country_scope = ?" if use_discovery_index and country else ""
-            if scope_filter:
-                parameters.append(country)
+            parameters.append(selected_country)
             if reference_system:
                 parameters.append(str(reference_system))
             parameters.append(maximum)
             cursor = connection.execute(
                 f"""SELECT * FROM read_parquet(?)
-                    WHERE external_id IN ({placeholders}){scope_filter}{system_filter}
+                    WHERE external_id IN ({placeholders}) AND country_scope = ?{system_filter}
                     ORDER BY reference_system, external_id, loc_id LIMIT ?""",
                 parameters,
             )
