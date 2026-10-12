@@ -1227,9 +1227,8 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         info = {"loc_id": "DEU-11", "name": "Berlin", "admin_level": 1,
                 "parent_id": "DEU", "iso3": "DEU", "has_polygon": True}
         with (
-            mock.patch("mapmover.runtime.reference_exchange.resolve_loc_id_input",
-                       return_value={"ok": True, "loc_id": "DEU-11"}),
-            mock.patch("mapmover.geometry_handlers.get_location_info", return_value=info),
+            mock.patch("mapmover.runtime.reference_graph.indexed_public_alias_candidates", return_value={}),
+            mock.patch("mapmover.geometry_handlers.get_location_infos", return_value=[info]),
             mock.patch("mapmover.routes.mcp._loc_id_catalog_context", return_value={}),
             mock.patch("mapmover.runtime.source_release_review.review_loc_id",
                        return_value=review) as review_call,
@@ -1379,9 +1378,10 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
 
     def test_loc_id_info_can_include_references(self) -> None:
         with (
+            mock.patch("mapmover.runtime.reference_graph.indexed_public_alias_candidates", return_value={}),
             mock.patch(
-                "mapmover.geometry_handlers.get_location_info",
-                return_value={
+                "mapmover.geometry_handlers.get_location_infos",
+                return_value=[{
                     "loc_id": "USA-AK-282",
                     "name": "Yakutat",
                     "admin_level": 2,
@@ -1398,7 +1398,7 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
                     "children_count": 0,
                     "children_by_level": "{}",
                     "descendants_count": 0,
-                },
+                }],
             ),
             mock.patch(
                 "mapmover.runtime.reference_exchange.loc_id_references",
@@ -1420,9 +1420,9 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         self.assertEqual(payload["references"]["references"][0]["system"], "overlay_nws_fire_weather_zone")
 
     def test_loc_id_info_returns_requested_history_before_successor_prompt(self) -> None:
-        with mock.patch(
-            "mapmover.geometry_handlers.get_location_info",
-            return_value={
+        with (
+            mock.patch("mapmover.runtime.reference_graph.indexed_public_alias_candidates", return_value={}),
+            mock.patch("mapmover.geometry_handlers.get_location_infos", return_value=[{
                 "loc_id": "USA-CT-OLD",
                 "name": "Historical Connecticut county",
                 "admin_level": 2,
@@ -1430,7 +1430,7 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
                 "valid_to": "2022-12-31",
                 "superseded_by": "USA-CT-NEW",
                 "has_polygon": True,
-            },
+            }]),
         ):
             payload = _tool_call(
                 self.client,
@@ -1446,23 +1446,18 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
     def test_loc_id_info_accepts_preferred_public_alias_and_returns_canonical_id(self) -> None:
         with (
             mock.patch(
-                "mapmover.runtime.reference_exchange.resolve_loc_id_input",
-                return_value={
-                    "ok": True,
-                    "status": "resolved",
-                    "requested_loc_id": "USA-PLACE-SPRINGFIELD-IL",
+                "mapmover.runtime.reference_graph.indexed_public_alias_candidates",
+                return_value={"USA-PLACE-SPRINGFIELD-IL": [{
                     "loc_id": "USA-IL-167-PLACE-12345",
-                    "resolved_from_public_alias": True,
-                    "public_alias": "USA-PLACE-SPRINGFIELD-IL",
                     "reference_system": "public.usa.place.v2",
-                },
+                }]},
             ),
             mock.patch(
-                "mapmover.geometry_handlers.get_location_info",
-                return_value={
+                "mapmover.geometry_handlers.get_location_infos",
+                return_value=[{
                     "loc_id": "USA-IL-167-PLACE-12345", "name": "Springfield",
                     "family": "place_or_municipality", "iso3": "USA",
-                },
+                }],
             ) as info_mock,
         ):
             payload = _tool_call(
@@ -1471,7 +1466,7 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
                 {"loc_id": "USA-PLACE-SPRINGFIELD-IL"},
             )
 
-        expected_call = mock.call("USA-IL-167-PLACE-12345", include_memberships=False)
+        expected_call = mock.call(["USA-IL-167-PLACE-12345"], include_memberships=False, graph_authoritative=True)
         self.assertEqual(info_mock.call_args_list.count(expected_call), 1)
         self.assertEqual(payload["loc_id"], "USA-IL-167-PLACE-12345")
         self.assertEqual(payload["requested_loc_id"], "USA-PLACE-SPRINGFIELD-IL")
@@ -1577,6 +1572,18 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         infos.assert_not_called()
         resolver.assert_not_called()
 
+    def test_loc_id_info_single_missing_alias_index_does_not_use_legacy_reader(self) -> None:
+        with (
+            mock.patch("mapmover.runtime.reference_graph.indexed_public_alias_candidates", return_value=None),
+            mock.patch("mapmover.geometry_handlers.get_location_infos") as infos,
+            mock.patch("mapmover.geometry_handlers.get_location_info") as legacy,
+        ):
+            payload = _tool_call(self.client, "get_loc_id_info", {"loc_id": "USA-VA-059"})
+
+        self.assertEqual(payload["error"]["code"], "reference_route_unavailable")
+        infos.assert_not_called()
+        legacy.assert_not_called()
+
     def test_loc_id_info_exact_identity_miss_is_checked_once(self) -> None:
         missing = "USA-VA-NOT-PUBLISHED"
         with (
@@ -1616,16 +1623,13 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
     def test_loc_id_info_rejects_ambiguous_preferred_public_alias(self) -> None:
         with (
             mock.patch(
-                "mapmover.runtime.reference_exchange.resolve_loc_id_input",
-                return_value={
-                    "ok": False,
-                    "requested_loc_id": "USA-PLACE-SPRINGFIELD",
-                    "loc_id": None,
-                    "candidate_loc_ids": ["USA-IL-167-PLACE-12345", "USA-MO-077-PLACE-67890"],
-                    "error": {"code": "ambiguous_public_loc_id", "message": "ambiguous"},
-                },
+                "mapmover.runtime.reference_graph.indexed_public_alias_candidates",
+                return_value={"USA-PLACE-SPRINGFIELD": [
+                    {"loc_id": "USA-IL-167-PLACE-12345", "reference_system": "public.usa.place.v2"},
+                    {"loc_id": "USA-MO-077-PLACE-67890", "reference_system": "public.usa.place.v2"},
+                ]},
             ),
-            mock.patch("mapmover.geometry_handlers.get_location_info") as info_mock,
+            mock.patch("mapmover.geometry_handlers.get_location_infos") as info_mock,
         ):
             payload = _tool_call(
                 self.client,
@@ -1672,9 +1676,10 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
                 "iso3": "CAN",
             },
         }
-        with mock.patch(
-            "mapmover.geometry_handlers.get_location_info",
-            side_effect=lambda loc_id, **_: rows[loc_id],
+        with (
+            mock.patch("mapmover.runtime.reference_graph.indexed_public_alias_candidates", return_value={}),
+            mock.patch("mapmover.geometry_handlers.get_location_infos", return_value=[rows["CAN-BC-5915004"]]),
+            mock.patch("mapmover.geometry_handlers.get_location_info", side_effect=lambda loc_id, **_: rows[loc_id]),
         ):
             payload = _tool_call(
                 self.client,

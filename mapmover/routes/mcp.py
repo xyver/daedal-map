@@ -3543,7 +3543,8 @@ async def _execute_get_loc_id_info_tool(request: Request, arguments: dict[str, A
             rpc_request_id,
         )
     runtime_started = time.perf_counter()
-    item = await run_mcp_blocking("get_loc_id_info", _get_loc_id_info_item, loc_id, payload)
+    items = await run_mcp_blocking("get_loc_id_info", _get_loc_id_info_items, [loc_id], payload)
+    item = items[0]
     result = {"request_id": request_id, **item}
     stages = {"metadata_fetch_ms": _elapsed_ms(runtime_started)}
     if result.get("error"):
