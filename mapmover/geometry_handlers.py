@@ -19,6 +19,7 @@ import threading
 import time
 import pandas as pd
 from collections import OrderedDict
+from datetime import date
 from functools import lru_cache
 from pathlib import Path
 
@@ -2406,9 +2407,13 @@ def df_to_geojson(df, polygon_only=False):
         if polygon_only and geometry.get('type') == 'Point':
             continue
 
-        # Build properties - only include non-null values
-        properties = {col: row[col] for col in prop_cols
-                      if row.get(col) is not None and not (isinstance(row[col], float) and pd.isna(row[col]))}
+        # Build properties with MessagePack-safe dates from the query layout.
+        properties = {}
+        for col in prop_cols:
+            value = row.get(col)
+            if value is None or (isinstance(value, (float, date)) and pd.isna(value)):
+                continue
+            properties[col] = value.isoformat() if isinstance(value, date) else value
         # USA Admin 5 rows are converted directly from the locally staged
         # Census 2024 TABBLOCK20 source.  Preserve that provenance on the
         # returned feature so a popup never borrows a stale source label from
