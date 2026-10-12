@@ -1197,7 +1197,7 @@ def resolve_public_loc_ids(loc_ids: list[str]) -> list[dict[str, Any]]:
 
 
 def indexed_public_alias_candidates(loc_ids: list[str]) -> dict[str, list[dict[str, Any]]] | None:
-    """Find exact preferred public aliases in a current, release-pinned index.
+    """Find preferred public and supported legacy IDs in one pinned index.
 
     ``None`` means the index cannot safely answer this request. Exact callers
     should return an index error instead of scanning every graph partition.
@@ -1237,6 +1237,31 @@ def indexed_public_alias_candidates(loc_ids: list[str]) -> dict[str, list[dict[s
             if country in roots and str(row.get("country_scope") or "").upper() != country:
                 continue
             rows[external_id].append(row)
+        legacy_keys: dict[tuple[str, str], str] = {}
+        for value in requested:
+            if rows[value]:
+                continue
+            zcta = re.fullmatch(r"USA-Z-(\d{5})", value)
+            tribal = re.fullmatch(r"USA-TRIBAL-(\d{4})", value)
+            if zcta:
+                legacy_keys[(zcta.group(1), "usa.census.2020.zcta5.geoid")] = value
+            elif tribal:
+                legacy_keys[(tribal.group(1), "usa.census.2025.aiannhce")] = value
+        if legacy_keys:
+            predicates = " OR ".join("(external_id = ? AND lower(reference_system) = ?)" for _ in legacy_keys)
+            parameters = [item for key in legacy_keys for item in key]
+            cursor = connection.execute(
+                f"""SELECT external_id, reference_system, loc_id, country_scope
+                    FROM read_parquet(?) WHERE {predicates}""",
+                [path_to_uri(index_path), *parameters],
+            )
+            columns = [item[0] for item in cursor.description]
+            for record in cursor.fetchall():
+                row = dict(zip(columns, record))
+                key = (str(row.get("external_id") or ""), str(row.get("reference_system") or "").lower())
+                requested_id = legacy_keys.get(key)
+                if requested_id and str(row.get("country_scope") or "").upper() == "USA":
+                    rows[requested_id].append(row)
         return rows
     finally:
         connection.close()

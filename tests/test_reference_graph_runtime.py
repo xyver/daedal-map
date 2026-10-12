@@ -511,6 +511,30 @@ class ReferenceGraphRuntimeTests(unittest.TestCase):
         ):
             self.assertIsNone(reference_graph.indexed_public_alias_candidates(["TST-PUBLIC-A"]))
 
+    def test_indexed_legacy_usa_aliases_use_official_codes_in_same_file(self) -> None:
+        pd.DataFrame([
+            {"external_id": "42223", "reference_system": "usa.census.2020.zcta5.geoid",
+             "loc_id": "USA-TN-125-101400-POSTAL-42223", "alias_type": "official_identifier", "country_scope": "USA"},
+            {"external_id": "42223", "reference_system": "usa.census.2020.zcta5.geoid",
+             "loc_id": "OTHER-POSTAL-42223", "alias_type": "official_identifier", "country_scope": "OTHER"},
+            {"external_id": "1234", "reference_system": "usa.census.2025.aiannhce",
+             "loc_id": "USA-TRIBAL-EXAMPLE", "alias_type": "official_identifier", "country_scope": "USA"},
+        ]).to_parquet(self.root / "identifier_index.parquet", index=False)
+        with (
+            mock.patch.object(reference_graph, "DATA_ROOT", self.root),
+            mock.patch.object(reference_graph, "GLOBAL_DISCOVERY_RELATIVE", Path("identifier_index.parquet")),
+            mock.patch.object(reference_graph, "reference_graph_roots", return_value={"USA": self.root}),
+            mock.patch.object(reference_graph, "_country_discovery_index_current", return_value=True),
+            mock.patch.object(reference_graph, "reference_graph_available", return_value=True),
+        ):
+            rows = reference_graph.indexed_public_alias_candidates([
+                "USA-Z-42223", "USA-TRIBAL-1234", "USA-Z-99999",
+            ])
+
+        self.assertEqual([row["loc_id"] for row in rows["USA-Z-42223"]], ["USA-TN-125-101400-POSTAL-42223"])
+        self.assertEqual([row["loc_id"] for row in rows["USA-TRIBAL-1234"]], ["USA-TRIBAL-EXAMPLE"])
+        self.assertEqual(rows["USA-Z-99999"], [])
+
     def test_geometry_calls_preserve_canonical_output_and_requested_public_alias(self) -> None:
         metadata = [{
             "loc_id": "TST-A-001", "name": "Test Area", "admin_level": None,
