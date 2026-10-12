@@ -451,7 +451,13 @@ def _route_paths(
         return None
     if not rows:
         return []
-    table = next((name for name, filename in PARTITION_INDEXES.items() if filename == index_name), "")
+    route_tables = {
+        IDENTITY_ROUTE_INDEX: "identities",
+        ALIAS_SYSTEM_ROUTE_INDEX: "aliases",
+    }
+    table = route_tables.get(index_name)
+    if table is None:
+        raise ValueError(f"unknown routing index: {index_name}")
     try:
         path_map = _partition_source_map(str(root), table)
     except Exception as exc:

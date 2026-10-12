@@ -273,6 +273,16 @@ class ReferenceGraphRuntimeTests(unittest.TestCase):
         connection.assert_not_called()
         geometry.assert_not_called()
 
+    def test_required_identity_route_hit_uses_pinned_partition(self) -> None:
+        pd.DataFrame([{
+            "loc_id": "TST-A-001", "path": str(self.root / "identities.parquet"),
+        }]).to_parquet(self.root / "identity_routes.parquet", index=False)
+        with mock.patch.object(reference_graph, "_partition_paths") as broad_partitions:
+            rows = identities(["TST-A-001"], require_route=True)
+
+        self.assertEqual(rows[0]["name"], "Test Area")
+        broad_partitions.assert_not_called()
+
     def test_required_identity_route_missing_fails_without_partition_scan(self) -> None:
         from mapmover.geometry_handlers import get_location_infos
 
