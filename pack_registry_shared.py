@@ -201,26 +201,6 @@ PACK_REGISTRY: dict[str, dict] = {
             "preferred_tool": "get_data",
         },
     },
-    "nri": {
-        "display_name": "FEMA NRI",
-        "pricing": "free",
-        "mcp_tool_allowlist": ("get_catalog", "get_pack", "get_data"),
-        "mcp_name": "com.daedalmap/fema-nri",
-        "mcp_title": "DaedalMap FEMA National Risk Index",
-        "mcp_description": "FEMA National Risk Index county hazard-risk layers, including baseline risk, expected annual loss, social vulnerability, resilience, and selected future scenario fields. Free.",
-        "registry_search_alias": "fema-nri",
-        "registry_meta": {
-            "categories": ["hazard", "risk", "geospatial", "data"],
-            "highlights": [
-                "County-level FEMA National Risk Index hazard members",
-                "Free MCP access for risk scores, expected annual loss, social vulnerability, and resilience",
-                "USA county loc_id filtering for hazard-specific risk layers",
-            ],
-        },
-        "routing": {
-            "preferred_tool": "get_data",
-        },
-    },
     "cejst": {
         "display_name": "CEJST",
         "pricing": "free",

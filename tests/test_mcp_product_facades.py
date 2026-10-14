@@ -26,6 +26,13 @@ class ProductFacadeTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.text)
         return response.json()
 
+    def test_internal_nri_has_no_public_facade(self):
+        self.assertEqual(self.client.get("/mcp/nri").status_code, 404)
+        response = self.client.post("/mcp/nri", json={
+            "jsonrpc": "2.0", "id": "internal-pack", "method": "tools/list",
+        })
+        self.assertEqual(response.status_code, 404)
+
     def test_product_facades_expose_distinct_tool_lists_and_cards(self):
         free = self.client.post("/mcp/free", json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"}).json()
         data = self.client.post("/mcp/data", json={"jsonrpc": "2.0", "id": 2, "method": "tools/list"}).json()
