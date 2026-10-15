@@ -1529,7 +1529,7 @@ def resolve_point_to_location(lon: float, lat: float, include_geometry: bool = T
     lat = float(lat)
 
     indexed_matches = resolve_global_admin0_query_points([{"lon": lon, "lat": lat}])
-    if indexed_matches is None:
+    if indexed_matches is None or indexed_matches[0] is None:
         country_df = load_global_countries_frame()
         if country_df is None or country_df.empty:
             return {"error": "No global geometry available"}
@@ -1818,6 +1818,7 @@ def resolve_points_to_locations(
     else:
         country_matches = resolve_global_admin0_query_points(normalized_points)
         used_predicate_layout = country_matches is not None
+        predicate_miss_country_df = None
         if country_matches is None:
             country_df = load_global_countries_frame()
             _add_timing_ms(timing_ms, "global_country_fallback_load_ms", stage_started)
@@ -1845,10 +1846,19 @@ def resolve_points_to_locations(
             lon = float(item["lon"])
             lat = float(item["lat"])
             if country_match is None:
-                # A bbox/index miss is normally offshore. Resolve the compact
-                # Marine predicate index before invoking the expensive legacy
-                # country-bank fallback; land still wins whenever the global
-                # Admin0 spine contains the point.
+                # The compact predicate index can omit a coastal/island point
+                # covered by the authoritative global Admin0 bank. Check that
+                # bank before assigning the point to Marine.
+                if used_predicate_layout:
+                    if predicate_miss_country_df is None:
+                        predicate_miss_country_df = load_global_countries_frame()
+                    if predicate_miss_country_df is not None and not predicate_miss_country_df.empty:
+                        country_match = _find_containing_country_with_fallback(
+                            predicate_miss_country_df, lon, lat,
+                        )
+            if country_match is None:
+                # After the authoritative Admin0 check, try Marine for points
+                # still outside the country bank.
                 from .runtime.loc_id_resolution import _resolve_point_to_marine_stack
 
                 marine_result = _resolve_point_to_marine_stack(

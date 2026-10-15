@@ -209,12 +209,13 @@ def build_tool_definitions(*, include_paused: bool = False) -> list[dict]:
         {
             "name": "get_event",
             "title": "Get Event",
-            "description": "Retrieve and traverse one exact disaster event. The lightweight default returns event identity and core attributes without heavy shape columns. Add relationships for cross-hazard event links, affected_places for event-to-loc_id coverage, observations for native tracks/progression/runups/sequences, or geometry for explicit shapes. Start with get_data to find an event_id; use get_pack to discover published relationship families.",
+            "description": "Retrieve one exact disaster event. Pass the same pack_id used for get_data, its result's source_id, and one exact event_id from its row. The default returns event identity and core attributes without heavy shape columns. Add relationships, affected_places, observations, or geometry only when needed. Invalid routing inputs return an error; the tool queries one declared event source once. Use get_pack to inspect published relationship families.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "event_id": {"type": "string", "minLength": 1, "description": "Exact stable event_id returned by a disaster-pack get_data row."},
-                    "pack_id": {"type": "string", "description": "Optional disaster pack hint. Recommended when known to avoid probing unrelated event sources."},
+                    "pack_id": {"type": "string", "minLength": 1, "description": "Required disaster pack_id that returned this event_id from get_data. The tool never searches other packs."},
+                    "source_id": {"type": "string", "minLength": 1, "description": "Required source_id from the same get_data result. Must identify one published event source in pack_id."},
                     "include": {
                         "type": "array",
                         "uniqueItems": True,
@@ -226,7 +227,7 @@ def build_tool_definitions(*, include_paused: bool = False) -> list[dict]:
                     "limit": {"type": "integer", "minimum": 1, "maximum": 500, "default": 100, "description": "Per-section ceiling for relationships, affected places, observations, or geometry frames."},
                     "request_id": {"type": "string", "description": "Optional caller-supplied request id for tracing."},
                 },
-                "required": ["event_id"],
+                "required": ["pack_id", "source_id", "event_id"],
                 "additionalProperties": False,
             },
             "annotations": {"readOnlyHint": True},
@@ -343,7 +344,7 @@ def build_tool_definitions(*, include_paused: bool = False) -> list[dict]:
         {
             "name": "identify_dataset_geography",
             "title": "Choose Geography Columns From a Dataset",
-            "description": "Multi-column dataset classifier: use when you do not yet know which column or latitude/longitude pair represents geography. Pass bounded samples from several named scalar columns; it selects the plausible geography column(s), then proposes a country, level, and maintained reference-system binding. It does not validate a preselected identifier column value-by-value; after selecting a code column, use identify_reference_system when explicit verification is needed. Returns up to three reviewable bindings and recommends only an unambiguous high-confidence result. No geometry is loaded and no full dataset is retained. No payment required.",
+            "description": "Fast structural column selector: pass bounded named columns to find recognized geography headers or latitude/longitude pairs. It does not infer a country, level, or identifier system, open country indexes, or validate values. If more than one column is plausible, select one; then call identify_reference_system with the selected identifier column and one country_scope. No payment required.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -372,7 +373,7 @@ def build_tool_definitions(*, include_paused: bool = False) -> list[dict]:
                         },
                         "additionalProperties": False,
                     },
-                    "country_scope": {"type": "string", "description": "Optional caller-declared ISO3 hint. Omit when unknown."},
+                    "country_scope": {"type": "string", "description": "Optional caller-declared ISO3 country, passed through to the selected column."},
                     "request_id": {"type": "string"},
                 },
                 "required": ["columns"],
@@ -383,7 +384,7 @@ def build_tool_definitions(*, include_paused: bool = False) -> list[dict]:
         {
             "name": "identify_reference_system",
             "title": "Identify One Identifier Column's Reference System",
-            "description": "Single-column code-system classifier: use after an identifier column has already been selected, or to inspect one bounded set of like geography codes. Pass only identifier strings from that one field so leading zeros are preserved. It determines or verifies the system, country, level, vintage, and compatible geometry bank; it does not choose among dataset columns, convert the full dataset, or return polygons. Use identify_dataset_geography instead when column selection is still unknown. Ambiguous results remain unselected until the caller retries with expected.system; a known system can be verified by supplying expected on the first call. No payment required.",
+            "description": "Identify one selected identifier column within one required ISO3 country, GLOBAL, or MARINE scope. Pass bounded strings preserving leading zeros. It checks maintained identifier evidence, not dataset columns or polygons. Ambiguous systems stay unselected until expected.system is supplied. Use identify_dataset_geography first when the column is unknown. No payment required.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -404,7 +405,7 @@ def build_tool_definitions(*, include_paused: bool = False) -> list[dict]:
                         },
                         "additionalProperties": False,
                     },
-                    "country_scope": {"type": "string", "description": "Optional ISO3 country hint used to narrow candidate banks."},
+                    "country_scope": {"type": "string", "description": "Required single ISO3 country, GLOBAL, or MARINE scope. Missing scope fails before identifier reads."},
                     "dataset_context": {
                         "type": "object",
                         "description": "Bounded, non-row dataset clues used to rank plausible interpretations without replacing exact identifier verification.",
@@ -421,6 +422,7 @@ def build_tool_definitions(*, include_paused: bool = False) -> list[dict]:
                     "validation_scope": {"type": "string", "enum": ["sample", "all_distinct_identifiers"], "description": "Describes whether the bounded input is a sample or, only when it fits the identification cap, the complete distinct-key set. This tool validates every supplied identifier; create_conversion_job validates every row in the full dataset."},
                     "request_id": {"type": "string", "description": "Optional caller-supplied request id for tracing."},
                 },
+                "required": ["country_scope"],
                 "anyOf": [
                     {"required": ["identifier"]},
                     {"required": ["identifiers"]},
@@ -432,7 +434,7 @@ def build_tool_definitions(*, include_paused: bool = False) -> list[dict]:
         {
             "name": "convert_reference",
             "title": "Convert Geographic Reference",
-            "description": "The single geographic reference converter. Converts one reference, or a bounded list, through DaedalMap loc_id: X -> loc_id -> Y. Omit to_system to enter the loc_id universe; provide it for any-to-any conversion. For admin or city names use from_system admin_boundary with a country_hint; matching ignores case and accents, the shallowest matching level wins, and ambiguous names return candidates. Use get_pack first when the family or country-specific system is unknown. The tools/list access metadata states authored free, account, and paid item allowances; the active operator policy may waive payment. Exceeding the active item ceiling returns a typed cap error.",
+            "description": "Convert within one declared scope per call: iso3 is required and names one ISO3 country, GLOBAL, or MARINE. A batch uses one from_system, to_system, and crosswalk_id, with at most 25000 requested result rows. Convert X -> loc_id -> Y; omit to_system to enter the loc_id universe. For admin or city names use from_system admin_boundary with a country_hint inside the declared country. A published direct crosswalk uses one selected artifact; if the system pair has multiple artifacts, supply crosswalk_id from the typed ambiguity error. An exact miss ends on that artifact. Use get_pack when the family or country-specific system is unknown. The tools/list access metadata states authored free, account, and paid item allowances; active operator policy may waive payment.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -448,9 +450,10 @@ def build_tool_definitions(*, include_paused: bool = False) -> list[dict]:
                                 "from_system": {"type": "string", "description": "Input reference system for this row. Defaults to top-level from_system when omitted."},
                                 "value": {"type": "string", "description": "Identifier or name in the input system."},
                                 "to_system": {"type": "string", "description": "Output reference system for this row. Defaults to top-level to_system when omitted."},
-                                "iso3": {"type": "string", "description": "Optional country hint for this row."},
+                                "iso3": {"type": "string", "description": "Optional repeat of the top-level scope; must match it. Split mixed countries or packs into separate calls."},
                                 "target_admin_level": {"anyOf": [{"type": "string"}, {"type": "integer"}], "description": "Optional intermediate admin target level for this row."},
                                 "relationship_vintage": {"type": "string", "description": "Optional relationship vintage for this row."},
+                                "crosswalk_id": {"type": "string", "description": "Exact published crosswalk ID when the source/target system pair has multiple artifacts."},
                                 "min_share": {"type": "number", "minimum": 0, "maximum": 1, "description": "Optional minimum overlap share threshold for this row."},
                                 "limit": {"type": "integer", "minimum": 1, "maximum": 100, "description": "Maximum ranked output references for this row."},
                                 "country_hint": {"type": "string", "description": "Optional country hint for admin/name resolution (USA), or a subdivision to search within (USA-OR). Names may also carry their parent: 'Washington County, Oregon'. Ambiguous names return candidates instead of a match."},
@@ -462,11 +465,12 @@ def build_tool_definitions(*, include_paused: bool = False) -> list[dict]:
                             "required": ["value"],
                             "additionalProperties": False,
                         },
-                        "description": "Reference conversions to run in one call. Default public cap is deployment-configurable.",
+                        "description": "Reference conversions within one scope and one source/target/crosswalk route. Split mixed routes. Maximum requested item count times per-item limit is 25000.",
                     },
-                    "iso3": {"type": "string", "description": "Country hint for crosswalk artifacts. Default USA."},
+                    "iso3": {"type": "string", "minLength": 3, "description": "Required scope pack for the entire call: one ISO3 country, GLOBAL, or MARINE. Every item must stay within this scope."},
                     "target_admin_level": {"anyOf": [{"type": "string"}, {"type": "integer"}], "description": "Admin level used as the intermediate crosswalk target. Default admin_2."},
                     "relationship_vintage": {"type": "string", "description": "Optional source relationship vintage to require."},
+                    "crosswalk_id": {"type": "string", "description": "Exact published crosswalk ID when the source/target system pair has multiple artifacts. A route ambiguity error lists valid IDs."},
                     "min_share": {"type": "number", "minimum": 0, "maximum": 1, "description": "Optional minimum overlap share threshold."},
                     "limit": {"type": "integer", "minimum": 1, "maximum": 100, "description": "Maximum ranked output references to return. Default 10."},
                     "country_hint": {"type": "string", "description": "Optional country hint for admin/name resolution (USA), or a subdivision to search within (USA-OR). Names may also carry their parent: 'Washington County, Oregon'. Ambiguous names return candidates instead of a match."},
@@ -476,8 +480,8 @@ def build_tool_definitions(*, include_paused: bool = False) -> list[dict]:
                     "request_id": {"type": "string", "description": "Optional caller-supplied request id for tracing."},
                 },
                 "anyOf": [
-                    {"required": ["from_system", "value"]},
-                    {"required": ["items"]},
+                    {"required": ["iso3", "from_system", "value"]},
+                    {"required": ["iso3", "items"]},
                 ],
                 "additionalProperties": False,
             },
@@ -823,7 +827,7 @@ def build_tool_definitions(*, include_paused: bool = False) -> list[dict]:
         {
             "name": "get_data",
             "title": "Get Data",
-            "description": "The single workhorse for published data-pack rows inside the loc_id universe. After get_pack, pass its pack_id, exact metric ids, structured filters, sort, and row limit. filters.region_ids accepts canonical loc_ids; an administrative parent such as USA-TX matches descendant rows at the pack's published geography grain. Disaster event rows always include their stable event_id; pass that id to get_event for relationships, affected places, native observations, or explicit event geometry. Use resolution/onboarding tools before get_data when the input is coordinates, outside codes, names, or an unidentified user column. Pack metadata owns source routing, time grain, geography, access, and pack-specific rules; callers do not choose internal source_id values. Geometry tool families use their focused next_step tools instead of this row-query contract.",
+            "description": "The single workhorse for published data-pack rows inside the loc_id universe. After get_pack, pass its pack_id, exact metric ids, structured filters, sort, and row limit. filters.region_ids accepts canonical loc_ids; an administrative parent such as USA-TX matches descendant rows at the pack's published geography grain. For disaster event rows, pass the same pack_id, result's source_id, and one row's exact event_id to get_event. Use resolution/onboarding tools before get_data when the input is coordinates, outside codes, names, or an unidentified user column. Pack metadata owns get_data source routing, time grain, geography, access, and pack-specific rules; callers do not choose internal source_id values for get_data. Geometry tool families use their focused next_step tools instead of this row-query contract.",
             "inputSchema": {
                 "type": "object",
                 "properties": {

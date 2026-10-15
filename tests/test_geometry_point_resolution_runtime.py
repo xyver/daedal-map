@@ -29,6 +29,31 @@ class GeometryPointResolutionRuntimeTests(unittest.TestCase):
         self._query_layout_patch.stop()
         clear_cache()
 
+    def test_predicate_index_miss_uses_authoritative_admin0_for_single_and_bulk(self):
+        import pandas as pd
+
+        country = {"loc_id": "GBR", "name": "United Kingdom", "admin_level": 0}
+        ward = {"loc_id": "GBR-ISLAND-WARD", "name": "Island Ward", "admin_level": 3}
+        frame = pd.DataFrame([{
+            **country,
+            "bbox_min_lon": 0.0, "bbox_min_lat": 0.0,
+            "bbox_max_lon": 1.0, "bbox_max_lat": 1.0,
+            "geometry": '{"type":"Polygon","coordinates":[[[0,0],[1,0],[1,1],[0,1],[0,0]]]}',
+        }])
+        query_match = {"stack": [country, ward], "matched": ward}
+        with (
+            patch("mapmover.geometry_handlers.resolve_global_admin0_query_points", return_value=[None]),
+            patch("mapmover.geometry_handlers.load_global_countries_frame", return_value=frame),
+            patch("mapmover.geometry_handlers.resolve_admin_spine_query_point", return_value=query_match),
+            patch("mapmover.geometry_handlers.resolve_admin_spine_query_points", return_value=[query_match]),
+        ):
+            single = resolve_point_to_location(0.5, 0.5, include_geometry=False)
+            bulk = resolve_points_to_locations(
+                [{"lon": 0.5, "lat": 0.5}], include_marine_context=False,
+            )[0]
+        self.assertEqual(single["matched"]["loc_id"], ward["loc_id"])
+        self.assertEqual(bulk["matched"]["loc_id"], ward["loc_id"])
+
     def test_admin_preview_can_skip_optional_marine_context(self):
         country = {"loc_id": "CAN", "name": "Canada", "admin_level": 0}
         query_match = {"stack": [country], "matched": country}

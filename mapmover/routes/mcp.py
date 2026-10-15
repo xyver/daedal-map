@@ -587,7 +587,7 @@ def _facade_tools_cached(pack_id: str | None, _epoch: int, free_limits: tuple[in
             )
         if name == "get_data":
             definition["description"] = definition["description"].replace(
-                "Disaster event rows include stable event_id values for get_event drill-down. ",
+                "Disaster event rows include stable event_id values; pass pack_id, source_id, and event_id to get_event. ",
                 "",
             )
         if name in {"resolve_point", "convert_reference", "get_data"}:
@@ -1767,7 +1767,7 @@ def get_server_description(pack_id: str | None = None) -> str:
         return (
             f"{PRODUCT_FACADE_PROFILES['data']['description']} Safety: {AGENT_SAFETY_NOTICE} "
             "Start with get_catalog, then get_pack, then get_data with exact metrics and filters. "
-            "Use get_event only with an exact event_id from a returned data row."
+            "Use get_event only with the pack_id, source_id, and exact event_id from a returned data row."
         )
     if normalized in {"geography", "reverse-geocoding", "boundaries"}:
         coverage_claim = str(geometry_capability_summary().get("public_claim") or "").strip()
@@ -4023,6 +4023,13 @@ async def _execute_identify_reference_system_tool(request: Request, arguments: d
         identifiers = [payload.get("identifier")]
     if not isinstance(identifiers, list):
         identifiers = []
+    country_scope = str(payload.get("country_scope") or "").strip().upper()
+    expected_scope = str((payload.get("expected") or {}).get("country_scope") or "").strip().upper() if isinstance(payload.get("expected"), dict) else ""
+    if not re.fullmatch(r"[A-Z]{3}|GLOBAL|MARINE", country_scope) or (expected_scope and expected_scope != country_scope):
+        code = "country_scope_mismatch" if expected_scope and country_scope else "country_scope_required"
+        error_payload = {"request_id": request_id, "ok": False, "status": "invalid_request", "error": {
+            "code": code, "message": "Supply one ISO3 country, GLOBAL, or MARINE as country_scope; expected.country_scope must match."}}
+        return _jsonrpc_response(_tool_result(error_payload, is_error=True), rpc_request_id)
     limit = _tool_batch_item_limit("identify_reference_system")
     trusted_token, _trusted_token_id = _trusted_artifact_access(request)
     if len(identifiers) > limit and trusted_token is None and not is_local_loopback_request(request):
@@ -4057,7 +4064,7 @@ async def _execute_identify_reference_system_tool(request: Request, arguments: d
             identify_reference_system,
             identifiers,
             expected=payload.get("expected"),
-            country_scope=payload.get("country_scope"),
+            country_scope=country_scope,
             validation_scope=str(payload.get("validation_scope") or "sample"),
             dataset_context=payload.get("dataset_context"),
         )
@@ -4201,6 +4208,9 @@ async def _execute_convert_reference_tool(request: Request, arguments: dict[str,
     started_at = time.perf_counter()
     payload = _ensure_request_id(arguments, "convert_reference")
     request_id = str(payload.get("request_id") or "")
+    scope_error = _convert_reference_scope_error(payload)
+    if scope_error:
+        return _jsonrpc_response(_tool_result({"request_id": request_id, "error": scope_error}, is_error=True), rpc_request_id)
     if "items" in payload:
         batch_id = str(payload.get("batch_id") or "").strip() or None
         items = payload.get("items")
@@ -4357,6 +4367,70 @@ async def _execute_convert_reference_tool(request: Request, arguments: dict[str,
     return _jsonrpc_response(_tool_result(result), rpc_request_id)
 
 
+def _convert_reference_scope_error(payload: dict[str, Any]) -> dict[str, str] | None:
+    """Reject cross-pack conversion before authorization or artifact reads."""
+    scope = str(payload.get("iso3") or "").strip().upper()
+    if not scope:
+        return {"code": "scope_pack_required", "message": "convert_reference requires iso3: one ISO3 country, GLOBAL, or MARINE."}
+    if not (scope in {"GLOBAL", "MARINE"} or (len(scope) == 3 and scope.isalpha())):
+        return {"code": "invalid_scope_pack", "message": "iso3 must name one ISO3 country, GLOBAL, or MARINE."}
+    items = payload.get("items")
+    rows = items if isinstance(items, list) else [payload]
+    selected_pair: tuple[str, str, str] | None = None
+    maximum_rows = 0
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        row_scope = str(row.get("iso3") or scope).strip().upper()
+        if row_scope != scope:
+            return {"code": "mixed_scope_pack", "message": "convert_reference accepts one country, GLOBAL, or MARINE per call; split rows by iso3."}
+        hint = str(row.get("country_hint") or payload.get("country_hint") or "").strip().upper()
+        source = str(row.get("from_system") or payload.get("from_system") or "").strip().lower().replace("-", "_")
+        target = str(row.get("to_system") or payload.get("to_system") or "daedalmap.loc_id").strip().lower().replace("-", "_")
+        crosswalk_id = str(row.get("crosswalk_id") or payload.get("crosswalk_id") or "").strip()
+        pair = (source, target, crosswalk_id)
+        if selected_pair is None:
+            selected_pair = pair
+        elif pair != selected_pair:
+            return {"code": "mixed_conversion_route", "message": "A convert_reference batch must use one from_system, to_system, and crosswalk_id; split mixed routes."}
+        try:
+            item_limit = int(row.get("limit") or payload.get("limit") or 10)
+        except (TypeError, ValueError):
+            return {"code": "invalid_convert_request", "message": "limit must be an integer."}
+        if item_limit < 1 or item_limit > 100:
+            return {"code": "invalid_convert_request", "message": "limit must be between 1 and 100."}
+        maximum_rows += item_limit
+        if maximum_rows > 25000:
+            return {"code": "conversion_plan_too_large", "message": "Requested batch could return more than 25000 references; lower limit or split the call."}
+        value = str(row.get("value") or "").strip().upper()
+        loc_id_sources = {"loc_id", "locid", "daedalmap.loc_id", "daedalmap_loc_id", "admin_local", "admin_geometry"}
+        marine_systems = {"marine_eez", "eez", "water_body", "iho", "iho_water_body"}
+        global_systems = {"geoboundaries.code", "historical_country", "historical", "historical_country_name", "iso3166_3", "iso_3166_3"}
+        if scope in {"GLOBAL", "MARINE"}:
+            if hint:
+                return {"code": "scope_hint_mismatch", "message": f"country_hint is not allowed inside the {scope} pack."}
+            allowed = ({"loc_id", "locid", "daedalmap.loc_id", "daedalmap_loc_id"} |
+                       (global_systems if scope == "GLOBAL" else marine_systems))
+            if source not in allowed or target not in allowed:
+                return {"code": "scope_system_mismatch", "message": f"from_system and to_system must belong to the declared {scope} pack."}
+            if source in loc_id_sources and value:
+                if scope == "GLOBAL" and not (len(value) == 3 and value.isalpha()):
+                    return {"code": "scope_value_mismatch", "message": "GLOBAL accepts only Admin 0 country loc_ids as input."}
+                if scope == "MARINE" and len(value.split("-", 1)[0]) == 3 and value.split("-", 1)[0].isalpha():
+                    return {"code": "scope_value_mismatch", "message": "A country loc_id cannot be read through the MARINE pack."}
+            continue
+        if source in marine_systems | global_systems or target in marine_systems | global_systems:
+            return {"code": "scope_system_mismatch", "message": "Use MARINE or GLOBAL for marine or global-baseline systems."}
+        hint_country = hint.split("-", 1)[0]
+        if hint and (hint_country != scope or not (len(hint_country) == 3 and hint_country.isalpha())):
+            return {"code": "scope_hint_mismatch", "message": f"country_hint must stay inside declared scope {scope}."}
+        if source in loc_id_sources and len(value) >= 3:
+            value_country = value.split("-", 1)[0]
+            if len(value_country) == 3 and value_country.isalpha() and value_country != scope:
+                return {"code": "scope_value_mismatch", "message": f"input loc_id belongs to {value_country}, outside declared scope {scope}."}
+    return None
+
+
 def _convert_reference_item(payload: dict[str, Any]) -> dict[str, Any]:
     from_system = str(payload.get("from_system") or "").strip()
     to_system = str(payload.get("to_system") or "daedalmap.loc_id").strip()
@@ -4373,6 +4447,7 @@ def _convert_reference_item(payload: dict[str, Any]) -> dict[str, Any]:
             iso3=str(payload.get("iso3") or "USA"),
             target_admin_level=payload.get("target_admin_level", "admin_2"),
             relationship_vintage=payload.get("relationship_vintage"),
+            crosswalk_id=payload.get("crosswalk_id"),
             min_share=_normalize_crosswalk_share(payload.get("min_share")),
             limit=_normalize_crosswalk_limit(payload.get("limit")) or 10,
             country_hint=payload.get("country_hint"),
@@ -4435,6 +4510,7 @@ def _convert_reference_items(items: list[Any], base_payload: dict[str, Any]) -> 
             "iso3": str(merged.get("iso3") or "USA"),
             "target_admin_level": merged.get("target_admin_level", "admin_2"),
             "relationship_vintage": merged.get("relationship_vintage"),
+            "crosswalk_id": merged.get("crosswalk_id"),
             "min_share": _normalize_crosswalk_share(merged.get("min_share")),
             "limit": _normalize_crosswalk_limit(merged.get("limit")) or 10,
             "country_hint": merged.get("country_hint"),
@@ -5314,12 +5390,41 @@ async def _execute_get_event_tool(
     payload = _ensure_request_id(arguments, "get_event")
     event_id = str(payload.get("event_id") or "").strip()
     pack_id_hint = str(payload.get("pack_id") or "").strip().lower()
+    source_id_hint = str(payload.get("source_id") or "").strip()
     if not event_id:
         return _jsonrpc_response(
             _tool_result(
                 normalize_data_tool_error("get_event", {
                     "request_id": payload.get("request_id"),
                     "error": {"code": "invalid_event_id", "message": "event_id is required"},
+                }, status_code=400),
+                is_error=True,
+            ),
+            rpc_request_id,
+        )
+    if not pack_id_hint:
+        return _jsonrpc_response(
+            _tool_result(
+                normalize_data_tool_error("get_event", {
+                    "request_id": payload.get("request_id"),
+                    "error": {
+                        "code": "pack_id_required",
+                        "message": "get_event requires the disaster pack_id that returned event_id; call get_data or get_pack to select one pack.",
+                    },
+                }, status_code=400),
+                is_error=True,
+            ),
+            rpc_request_id,
+        )
+    if not source_id_hint:
+        return _jsonrpc_response(
+            _tool_result(
+                normalize_data_tool_error("get_event", {
+                    "request_id": payload.get("request_id"),
+                    "error": {
+                        "code": "source_id_required",
+                        "message": "get_event requires source_id from the get_data result that returned event_id.",
+                    },
                 }, status_code=400),
                 is_error=True,
             ),
@@ -5373,6 +5478,7 @@ async def _execute_get_event_tool(
             get_event_payload,
             event_id,
             pack_id=pack_id_hint or None,
+            source_id=source_id_hint,
             include=include,
             relationship_depth=int(payload.get("relationship_depth") or 1),
             geometry_mode=str(payload.get("geometry_mode") or "current"),
@@ -5512,7 +5618,7 @@ async def mcp_endpoint_info(pack_id: str | None = None):
     elif normalized_pack_id == "data":
         how_to_start = [
             "Call get_catalog with catalog='data', then get_pack for the selected pack.",
-            "Call get_data with exact metric ids and filters; use get_event for one returned event_id.",
+            "Call get_data with exact metric ids and filters; use get_event with the same pack_id, the result's source_id, and one row's exact event_id.",
         ]
     elif normalized_pack_id in {"geography", "reverse-geocoding", "boundaries"}:
         how_to_start = [

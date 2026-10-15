@@ -24,7 +24,6 @@ from mapmover.runtime.reference_exchange import (
     verify_loc_ids,
 )
 from mapmover.runtime.reference_identification import (
-    _dataset_graph_evidence,
     identify_dataset_geography,
     identify_reference_system,
 )
@@ -113,6 +112,23 @@ class ConcurringSystemTests(unittest.TestCase):
         self.assertEqual(payload["status"], "ambiguous")
         self.assertIsNone(payload["recommended_binding"])
         self.assertIn("us_census_geoid", {item["system"] for item in payload["candidates"]})
+
+    def test_declared_admin_level_does_not_probe_other_families(self) -> None:
+        aliases = [
+            {"external_id": "06037", "reference_system": "admin.native_id", "loc_id": "USA-CA-037"},
+            {"external_id": "06037", "reference_system": "usa.census.2025.sldl.geoid",
+             "loc_id": "USA-CA-083-SLDL-06037"},
+        ]
+        with (
+            mock.patch("mapmover.runtime.reference_graph.identify_aliases", return_value=aliases),
+            mock.patch("mapmover.runtime.reference_identification._identity_metadata_for_loc_ids",
+                       return_value={"USA-CA-037": {"loc_id": "USA-CA-037", "admin_level": 2}}) as metadata,
+        ):
+            payload = identify_reference_system(
+                ["06037"], country_scope="USA", expected={"geo_level": "admin_2"},
+            )
+        self.assertEqual(payload["status"], "matched")
+        metadata.assert_called_once_with(["USA-CA-037"])
 
     def test_the_binding_prefers_the_system_carrying_more_evidence(self) -> None:
         """Not the alphabetically first one.
@@ -310,8 +326,8 @@ class GersResolutionTests(unittest.TestCase):
 
         selected = payload["candidates"][0]
         self.assertEqual(selected["header"], "municipality_code")
-        self.assertEqual(selected["catalog"]["recommended_binding"]["country_scope"], "BRA")
-        self.assertEqual(selected["catalog"]["recommended_binding"]["geo_level"], "admin_2")
+        self.assertEqual(selected["catalog"]["status"], "not_checked")
+        self.assertIsNone(selected["catalog"]["recommended_binding"])
 
     def test_dataset_identification_binds_verified_zip_column(self) -> None:
         with mock.patch(
@@ -325,25 +341,25 @@ class GersResolutionTests(unittest.TestCase):
         self.assertEqual(payload["status"], "matched")
         selected = payload["candidates"][0]
         self.assertEqual(payload["recommended_candidate_id"], selected["id"])
-        self.assertEqual(selected["catalog"]["recommended_binding"]["system"], "overlay_zcta")
-        self.assertEqual(selected["catalog"]["recommended_binding"]["country_scope"], "USA")
-        self.assertEqual(selected["catalog"]["recommended_binding"]["geo_level"], "zcta")
+        self.assertEqual(selected["catalog"]["status"], "not_checked")
+        self.assertIsNone(selected["catalog"]["recommended_binding"])
 
     def test_dataset_identification_does_not_bind_unknown_zip(self) -> None:
         payload = identify_dataset_geography([{
             "name": "zip_code", "values": ["99999"], "nonempty_count": 1,
         }])
 
-        self.assertEqual(payload["status"], "unmatched")
-        self.assertIsNone(payload["recommended_candidate_id"])
+        self.assertEqual(payload["status"], "matched")
+        self.assertEqual(payload["candidates"][0]["header"], "zip_code")
+        self.assertEqual(payload["candidates"][0]["catalog"]["status"], "not_checked")
 
     def test_dataset_identification_keeps_county_geoid_distinct_from_zip(self) -> None:
         payload = identify_dataset_geography([{
             "name": "GEOID", "values": ["06037"], "nonempty_count": 1,
         }])
 
-        self.assertEqual(payload["candidates"][0]["catalog"]["recommended_binding"]["system"],
-                         "us_census_geoid")
+        self.assertEqual(payload["candidates"][0]["header"], "GEOID")
+        self.assertIsNone(payload["candidates"][0]["catalog"]["recommended_binding"])
 
     def test_dataset_identification_owns_coordinate_column_selection(self) -> None:
         payload = identify_dataset_geography([
@@ -378,7 +394,7 @@ class GersResolutionTests(unittest.TestCase):
 
         self.assertEqual(payload["candidates"][0]["columns"], ["site_lat", "site_lon"])
 
-    def test_dataset_identification_keeps_global_admin_binding_with_mismatches(self) -> None:
+    def test_dataset_column_selection_does_not_read_reference_graph(self) -> None:
         with mock.patch("mapmover.runtime.reference_identification._reference_graph_candidates") as graph_scan:
             payload = identify_dataset_geography([
                 {"name": "LocationCode", "values": ["AFG", "ALB", "DZA", "CAN", "SEAR"]},
@@ -387,101 +403,20 @@ class GersResolutionTests(unittest.TestCase):
 
         selected = payload["candidates"][0]
         self.assertEqual(selected["header"], "LocationCode")
-        self.assertEqual(selected["catalog"]["status"], "partial_match")
-        self.assertEqual(selected["catalog"]["recommended_binding"]["system"], "geoboundaries.code")
-        self.assertEqual(selected["catalog"]["recommended_binding"]["geo_level"], "admin_0")
-        self.assertIsNone(selected["catalog"]["recommended_binding"]["country_scope"])
-        self.assertEqual(selected["confidenceScore"], 0.8)
+        self.assertEqual(selected["catalog"]["status"], "not_checked")
         self.assertEqual(payload["recommended_candidate_id"], selected["id"])
         graph_scan.assert_not_called()
 
-    def test_dataset_identification_refuses_one_binding_for_mixed_native_scopes(self) -> None:
-        identified = {
-            "ok": True,
-            "status": "matched",
-            "distinct_identifier_count": 4,
-            "candidates": [{
-                "system": "admin.native_id",
-                "match_count": 4,
-                "match_rate": 1.0,
-                "geo_levels": ["admin_2", "admin_5"],
-                "country_scopes": ["AUS", "MEX"],
-            }],
-            "dataset_interpretations": [{
-                "system": "admin.native_id",
-                "geo_level": "admin_5",
-                "confidence_score": 1.0,
-                "verified": True,
-            }],
-            "recommended_binding": {
-                "mode": "reference",
-                "system": "admin.native_id",
-                "geo_level": "admin_5",
-                "country_scope": None,
-            },
-            "warnings": [],
-        }
-        evidence = {
-            "place_code": {
-                "matched": 4,
-                "deepest": 5,
-                "country": "",
-                "system": "admin.native_id",
-                "level": -1,
-                "country_counts": {"AUS": 2, "MEX": 2},
-                "level_counts": {"admin_2": 2, "admin_5": 2},
-            },
-        }
-        with mock.patch(
-            "mapmover.runtime.reference_identification._dataset_graph_evidence",
-            return_value=evidence,
-        ), mock.patch(
-            "mapmover.runtime.reference_identification.identify_reference_system",
-            return_value=identified,
-        ):
-            payload = identify_dataset_geography([{
-                "name": "place_code",
-                "values": ["code-a", "code-b", "code-c", "code-d"],
-            }])
-
-        candidate = payload["candidates"][0]
-        self.assertEqual(candidate["catalog"]["status"], "mixed_geography")
-        self.assertIsNone(candidate["catalog"]["recommended_binding"])
+    def test_dataset_column_selection_requires_choice_for_two_code_columns(self) -> None:
+        with mock.patch("mapmover.runtime.reference_identification.identify_reference_system") as identify:
+            payload = identify_dataset_geography([
+                {"name": "place_code", "values": ["code-a"]},
+                {"name": "district_id", "values": ["code-b"]},
+            ], country_scope="CAN")
+        self.assertEqual(payload["status"], "ambiguous")
         self.assertIsNone(payload["recommended_candidate_id"])
-        self.assertIn(
-            "mixed_dataset_geography",
-            {item["code"] for item in candidate["catalog"]["warnings"]},
-        )
-
-    def test_mixed_country_discovery_stops_before_country_route_files(self) -> None:
-        aliases = [
-            {
-                "external_id": "mx-code",
-                "reference_system": "admin.native_id",
-                "loc_id": "MEX-A-B",
-                "country_scope": "MEX",
-            },
-            {
-                "external_id": "ca-code",
-                "reference_system": "admin.native_id",
-                "loc_id": "CAN-AB-C",
-                "country_scope": "CAN",
-            },
-        ]
-        with mock.patch(
-            "mapmover.runtime.reference_graph.identify_aliases",
-            return_value=aliases,
-        ), mock.patch(
-            "mapmover.runtime.reference_identification._admin_route_metadata_for_loc_ids",
-        ) as route_lookup:
-            evidence = _dataset_graph_evidence([{
-                "name": "place_code",
-                "values": ["mx-code", "ca-code"],
-            }])
-
-        self.assertEqual(evidence["place_code"]["country"], "")
-        self.assertEqual(evidence["place_code"]["level"], -1)
-        route_lookup.assert_not_called()
+        self.assertEqual({item["countryScope"] for item in payload["candidates"]}, {"CAN"})
+        identify.assert_not_called()
 
     def test_global_admin_codes_resolve_without_an_invented_country_scope(self) -> None:
         payload = resolve_references_batch([

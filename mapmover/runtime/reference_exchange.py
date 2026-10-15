@@ -9,6 +9,7 @@ their own ZIP, NWS, tribal, or admin-specific conversion logic.
 from __future__ import annotations
 
 import math
+import re
 from pathlib import Path
 from typing import Any
 
@@ -746,6 +747,42 @@ def _direct_crosswalk_path(record: dict[str, Any]) -> Path | None:
     return DATA_ROOT / path if path else None
 
 
+class CrosswalkRouteError(ValueError):
+    def __init__(self, code: str, message: str):
+        super().__init__(message)
+        self.code = code
+
+
+def _direct_crosswalk_route(
+    records: list[dict[str, Any]], *, source_system: str, target_system: str,
+    crosswalk_id: str | None = None,
+) -> tuple[dict[str, Any] | None, bool, dict[str, str] | None]:
+    """Choose one declared relationship artifact before reading any payload."""
+    matches = []
+    for record in records:
+        if record.get("execution_strategy") not in {"direct_relationship_artifact", "measured_relationship_artifact"}:
+            continue
+        forward = record.get("source_system") == source_system and record.get("target_system") == target_system
+        reverse = record.get("target_system") == source_system and record.get("source_system") == target_system
+        if forward or reverse:
+            matches.append((record, bool(forward)))
+    selected_id = str(crosswalk_id or "").strip()
+    if selected_id:
+        matches = [(record, forward) for record, forward in matches if record.get("crosswalk_id") == selected_id]
+        if not matches:
+            return None, False, {"code": "crosswalk_route_invalid", "message": f"crosswalk_id '{selected_id}' is not published for {source_system} -> {target_system}"}
+    if len(matches) > 1:
+        ids = ", ".join(sorted(str(record.get("crosswalk_id")) for record, _forward in matches))
+        return None, False, {"code": "crosswalk_route_ambiguous", "message": f"{source_system} -> {target_system} has multiple published crosswalks; pass one crosswalk_id: {ids}"}
+    if not matches:
+        return None, False, None
+    record, forward = matches[0]
+    path = _direct_crosswalk_path(record)
+    if path is None or (not is_cloud_mode() and not path.is_file()):
+        return None, False, {"code": "crosswalk_unavailable", "message": f"selected crosswalk '{record.get('crosswalk_id')}' has no available artifact"}
+    return record, forward, None
+
+
 def _direct_crosswalk_matches(
     *, from_system: str, value: str, to_system: str | None, iso3: str, limit: int,
 ) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
@@ -817,88 +854,66 @@ def _shape_direct_crosswalk_rows(
 
 
 def _select_direct_crosswalk_rows(
-    path: Path, *, input_column: str, values: list[str], rank_column: str, limit: int,
+    path: Path, *, input_column: str, normalized_values: list[str], raw_values: list[str],
+    rank_column: str, limit: int,
 ):
-    """Read only the top ranked rows for each requested relationship ID."""
-    requested = list(dict.fromkeys(value for value in values if value))
-    if not requested:
+    """Read canonical and native IDs from one selected artifact in one query."""
+    canonical = list(dict.fromkeys(value for value in normalized_values if value))
+    raw = list(dict.fromkeys(value for value in raw_values if value))
+    if not canonical and not raw:
         return None
-    placeholders = ", ".join("?" for _ in requested)
+    canonical_placeholders = ", ".join("?" for _ in canonical)
+    raw_placeholders = ", ".join("?" for _ in raw)
+    id_column = input_column.removesuffix("_loc_id") + "_id"
     sql = (
-        f"SELECT * FROM read_parquet(?) WHERE {quote_ident(input_column)} IN ({placeholders}) "
+        f"SELECT * FROM read_parquet(?) WHERE "
+        f"{quote_ident(input_column)} IN ({canonical_placeholders}) "
+        f"OR {quote_ident(id_column)} IN ({raw_placeholders}) "
         f"QUALIFY ROW_NUMBER() OVER (PARTITION BY {quote_ident(input_column)} "
         f"ORDER BY {quote_ident(rank_column)} ASC NULLS LAST) <= ?"
     )
-    return run_df(sql, [path_to_uri(path), *requested, limit])
+    return run_df(sql, [path_to_uri(path), *canonical, *raw, limit])
 
 
 def _direct_crosswalk_matches_batch(
     *, from_system: str, values: list[str], to_system: str, iso3: str, limit: int,
+    crosswalk_id: str | None = None, catalog_records: list[dict[str, Any]] | None = None,
 ) -> dict[str, tuple[dict[str, Any], list[dict[str, Any]]]]:
-    """Match a homogeneous conversion group with one scan per candidate artifact."""
+    """Match one selected artifact with one scan for a homogeneous group."""
     source_system = _normalize_system(from_system)
     target_system = _normalize_system(to_system)
     requested = list(dict.fromkeys(str(value or "").strip() for value in values if str(value or "").strip()))
-    unresolved = set(requested)
     matches: dict[str, tuple[dict[str, Any], list[dict[str, Any]]]] = {}
     maximum = max(1, min(int(limit or 10), 100))
-    catalog_records = sorted(
-        _catalog_crosswalks(country_scope=iso3),
-        key=lambda item: str(item.get("source_system") or "") != source_system,
+    record, forward, route_error = _direct_crosswalk_route(
+        catalog_records if catalog_records is not None else _catalog_crosswalks(country_scope=iso3),
+        source_system=source_system, target_system=target_system, crosswalk_id=crosswalk_id,
     )
-    for record in catalog_records:
-        if not unresolved or record.get("execution_strategy") not in {"direct_relationship_artifact", "measured_relationship_artifact"}:
-            continue
-        forward = (
-            str(record.get("source_system") or "") == source_system
-            and str(record.get("target_system") or "") == target_system
-        )
-        reverse = (
-            str(record.get("target_system") or "") == source_system
-            and str(record.get("source_system") or "") == target_system
-        )
-        if not forward and not reverse:
-            continue
-        path = _direct_crosswalk_path(record)
-        if path is None or (not is_cloud_mode() and not path.is_file()):
-            continue
-        input_prefix = "source" if forward else "target"
-        rank_column = f"rank_by_{input_prefix}_area"
-        pending = [value for value in requested if value in unresolved]
-        normalized = {value: _normalize_source_loc_id(source_system, value, iso3) for value in pending}
-        frame = _select_direct_crosswalk_rows(
-            path,
-            input_column=f"{input_prefix}_loc_id",
-            values=list(normalized.values()),
-            rank_column=rank_column,
-            limit=maximum,
-        )
-        raw_rows = [] if frame is None or frame.empty else frame.to_dict(orient="records")
-        by_normalized: dict[str, list[dict[str, Any]]] = {}
-        for raw in raw_rows:
-            by_normalized.setdefault(str(raw.get(f"{input_prefix}_loc_id") or ""), []).append(raw)
-        missing = [value for value in pending if not by_normalized.get(normalized[value])]
-        by_reference: dict[str, list[dict[str, Any]]] = {}
-        if missing:
-            frame = _select_direct_crosswalk_rows(
-                path,
-                input_column=f"{input_prefix}_id",
-                values=missing,
-                rank_column=rank_column,
-                limit=maximum,
-            )
-            for raw in ([] if frame is None or frame.empty else frame.to_dict(orient="records")):
-                by_reference.setdefault(str(raw.get(f"{input_prefix}_id") or ""), []).append(raw)
-        for value in pending:
-            selected = by_normalized.get(normalized[value]) or by_reference.get(value) or []
-            if not selected:
-                continue
+    if route_error:
+        raise CrosswalkRouteError(route_error["code"], route_error["message"])
+    if record is None:
+        return matches
+    input_prefix = "source" if forward else "target"
+    rank_column = f"rank_by_{input_prefix}_area"
+    normalized = {value: _normalize_source_loc_id(source_system, value, iso3) for value in requested}
+    frame = _select_direct_crosswalk_rows(
+        _direct_crosswalk_path(record), input_column=f"{input_prefix}_loc_id",
+        normalized_values=list(normalized.values()), raw_values=requested,
+        rank_column=rank_column, limit=maximum,
+    )
+    rows = [] if frame is None or frame.empty else frame.to_dict(orient="records")
+    by_normalized: dict[str, list[int]] = {}
+    by_reference: dict[str, list[int]] = {}
+    for index, raw in enumerate(rows):
+        by_normalized.setdefault(str(raw.get(f"{input_prefix}_loc_id") or ""), []).append(index)
+        by_reference.setdefault(str(raw.get(f"{input_prefix}_id") or ""), []).append(index)
+    for value in requested:
+        selected_indexes = set(by_normalized.get(normalized[value], []))
+        selected_indexes.update(by_reference.get(value, []))
+        selected = [rows[index] for index in sorted(selected_indexes)]
+        if selected:
             selected.sort(key=lambda raw: (raw.get(rank_column) is None, raw.get(rank_column) or 0))
-            matches[value] = (
-                record,
-                _shape_direct_crosswalk_rows(record, selected[:maximum], forward=forward),
-            )
-            unresolved.discard(value)
+            matches[value] = (record, _shape_direct_crosswalk_rows(record, selected[:maximum], forward=forward))
     return matches
 
 
@@ -1741,8 +1756,8 @@ def geometry_pack_detail(
     if detail == "full":
         base["family"] = coverage_record
         systems = {str(item.get("system") or "") for item in family_systems}
-        base["crosswalks"] = [
-            dict(item) for item in _public_catalog_records(catalog, "crosswalks")
+        crosswalks = [
+            item for item in _public_catalog_records(catalog, "crosswalks")
             if str(item.get("country_code") or "").upper() == selected_country
             and (
                 str(item.get("source_family_id") or "") == family_id
@@ -1750,6 +1765,15 @@ def geometry_pack_detail(
                 or str(item.get("source_system") or "") in systems
                 or str(item.get("target_system") or "") in systems
             )
+        ]
+        base["crosswalk_count"] = len(crosswalks)
+        base["crosswalks"] = [
+            {key: item.get(key) for key in (
+                "crosswalk_id", "source_system", "target_system", "source_family_id",
+                "target_family_id", "relationship_type", "relationship_vintage",
+                "cardinality", "row_count", "publication_status", "callable",
+            ) if item.get(key) is not None}
+            for item in crosswalks
         ]
     else:
         base["family"] = {
@@ -2022,8 +2046,7 @@ def resolve_reference(
         payload = resolve_external_reference(
             system,
             text,
-            # Only an explicit country hint may constrain an external adapter.
-            country_scope=country_hint or None,
+            country_scope=country_hint or iso3 or None,
             source_release=source_release,
             internal_release=internal_release,
             limit=limit,
@@ -2036,6 +2059,29 @@ def resolve_reference(
             payload.setdefault("overture_release", payload.get("source_release"))
             payload.setdefault("spine_vintage", payload.get("internal_release"))
         return _clean_json(payload)
+    if system == "admin.native_id":
+        from .reference_graph import ReferenceRouteUnavailable, identify_aliases
+
+        country = str(iso3 or "").strip().upper()
+        if not re.fullmatch(r"[A-Z]{3}", country):
+            return {"ok": False, "from_system": system, "input": value, "error": {
+                "code": "country_scope_required", "message": "admin.native_id requires one ISO3 country."}}
+        try:
+            rows = identify_aliases([text], iso3=country, reference_system=system, limit=11)
+        except ReferenceRouteUnavailable as exc:
+            return {"ok": False, "from_system": system, "input": value, "error": {
+                "code": "reference_route_unavailable", "message": str(exc)}}
+        loc_ids = sorted({str(row.get("loc_id") or "") for row in rows if row.get("loc_id")})
+        if len(loc_ids) != 1:
+            return {"ok": False, "from_system": system, "input": value, "error": {
+                "code": "reference_ambiguous" if loc_ids else "reference_not_found",
+                "message": "Native identifier maps to multiple places in this country." if loc_ids
+                           else "Native identifier is absent from the selected country index."},
+                "candidate_loc_ids": loc_ids}
+        return _clean_json({"ok": True, "from_system": system, "input": value,
+            "normalized_input": text, "resolved_loc_id": loc_ids[0],
+            "resolved_family": classify_loc_id_family(loc_ids[0]),
+            "match_type": "country_exact_alias_index"})
     if system == "us_census_geoid":
         from .reference_identification import census_geoid_level, census_geoid_to_loc_id
 
@@ -2653,6 +2699,7 @@ def loc_id_references(
             limit=limit_per_system,
         ):
             references.append(_external_edge_reference(adapter.system, edge))
+    selected_crosswalk = False
     if family in {"admin_0", "admin_local", "admin_geometry"} or inferred_level is not None:
         for artifact in _crosswalk_artifacts(target_admin_level=level, iso3=country or None):
             source = str(artifact.get("source_family") or "").strip()
@@ -2662,6 +2709,8 @@ def loc_id_references(
             requested_names = sorted(requested & source_names)
             if requested and not requested_names:
                 continue
+            if requested_names:
+                selected_crosswalk = True
             output_system = requested_names[0] if requested_names else source
             result = resolve_admin_to_family(
                 canonical,
@@ -2685,6 +2734,12 @@ def loc_id_references(
                     "match_rank": overlap.get("match_rank"),
                     "is_primary": overlap.get("is_primary"),
                 })
+    if selected_crosswalk:
+        references = [ref for ref in references if ref.get("system") in requested or ref.get("system") == LOC_ID_SYSTEM]
+        return _clean_json(_attach_public_alias_resolution(
+            {"ok": bool(canonical), "loc_id": canonical, "family": family,
+             "references": references, "reference_count": len(references)}, resolution,
+        ))
     try:
         from .reference_graph import aliases_for_loc_id, relationships_for_loc_id
 
@@ -2751,11 +2806,29 @@ def convert_reference(
     country_hint: str | None = None,
     admin_level_hint: int | None = None,
     as_of: str | None = None,
+    crosswalk_id: str | None = None,
 ) -> dict[str, Any]:
     """Convert a value from one reference system to another through ``loc_id``."""
     source = _normalize_system(from_system)
     target = _normalize_system(to_system)
     requested_source = str(from_system or "").strip().lower().replace("-", "_").replace(" ", "_")
+    known_targets = {LOC_ID_SYSTEM, "admin_local", "admin_geometry", "admin_boundary",
+                     "geoboundaries.code", "historical_country", "water_body",
+                     "marine_eez", "regional_base", "us_census_geoid"}
+    if target not in known_targets and not get_external_adapter(target):
+        country_catalog = load_country_geometry_catalog(str(iso3 or "").upper())
+        known_targets.update(
+            _normalize_system(item.get("system"))
+            for item in country_catalog.get("reference_systems") or []
+            if isinstance(item, dict) and item.get("callable") is True
+        )
+        for item in country_catalog.get("crosswalks") or []:
+            if isinstance(item, dict) and item.get("callable") is True and item.get("publication_status") == "published":
+                known_targets.update(_normalize_system(item.get(key)) for key in ("source_system", "target_system"))
+        if target not in known_targets:
+            return _clean_json({"ok": False, "from_system": source, "input": value,
+                "to_system": target, "results": [], "error": {"code": "unsupported_target_system",
+                "message": f"{target} is not a published target system in {iso3}."}})
     if requested_source in PUBLIC_ZIP_ALIASES and target in {LOC_ID_SYSTEM, "admin_local", "admin_geometry"}:
         resolved = resolve_reference(
             from_system=US_ZCTA_GEOID_SYSTEM,
@@ -2810,14 +2883,22 @@ def convert_reference(
                 "message": f"no {target_adapter.system} reference is published for that loc_id",
             },
         })
-    direct_record, direct_results = _direct_crosswalk_matches(
-        from_system=from_system,
-        value=value,
-        to_system=target,
-        iso3=iso3,
-        limit=limit or 10,
+    records = _catalog_crosswalks(country_scope=iso3)
+    direct_record, _forward, route_error = _direct_crosswalk_route(
+        records, source_system=source, target_system=target, crosswalk_id=crosswalk_id,
     )
-    if direct_record and direct_results:
+    if route_error:
+        return _clean_json({"ok": False, "from_system": source, "input": value, "to_system": target, "error": route_error})
+    if direct_record:
+        direct = _direct_crosswalk_matches_batch(
+            from_system=source, values=[value], to_system=target, iso3=iso3,
+            limit=limit or 10, crosswalk_id=crosswalk_id, catalog_records=records,
+        )
+        match = direct.get(str(value or "").strip())
+        if not match:
+            return _clean_json({"ok": False, "from_system": source, "input": value, "to_system": target,
+                                "error": {"code": "crosswalk_not_found", "message": "No exact row in the selected crosswalk."}})
+        direct_record, direct_results = match
         return _clean_json({
             "ok": True,
             "from_system": _normalize_system(from_system),
@@ -2832,6 +2913,21 @@ def convert_reference(
                 "lineage": direct_record.get("source_material_identity"),
             },
         })
+    known_sources = {
+        LOC_ID_SYSTEM, "admin_local", "admin_geometry", "admin.native_id",
+        ADMIN_SYSTEM, "us_census_geoid", "geoboundaries.code",
+        "historical_country", "water_body", "marine_eez", "regional_base",
+    }
+    if source not in known_sources and not get_external_adapter(source):
+        known_sources.update(
+            _normalize_system(item.get("system"))
+            for item in load_country_geometry_catalog(str(iso3 or "").upper()).get("reference_systems") or []
+            if isinstance(item, dict) and item.get("callable") is True
+        )
+        if source not in known_sources:
+            return _clean_json({"ok": False, "from_system": source, "input": value,
+                "to_system": target, "results": [], "error": {"code": "unsupported_source_system",
+                "message": f"{source} is not a published source system in {iso3}."}})
     resolved = resolve_reference(
         from_system=from_system,
         value=value,
@@ -2888,7 +2984,7 @@ def convert_references_batch(requests: list[dict[str, Any]]) -> list[dict[str, A
     results: list[dict[str, Any] | None] = [None] * len(requests)
     source_requests: list[dict[str, Any]] = []
     source_indexes: list[int] = []
-    direct_groups: dict[tuple[str, str, str, int], list[tuple[int, dict[str, Any]]]] = {}
+    direct_groups: dict[tuple[str, str, str, int, str], list[tuple[int, dict[str, Any]]]] = {}
 
     catalog_by_country: dict[str, list[dict[str, Any]]] = {}
     for index, request in enumerate(requests):
@@ -2902,34 +2998,31 @@ def convert_references_batch(requests: list[dict[str, Any]]) -> list[dict[str, A
         if iso3 not in catalog_by_country:
             catalog_by_country[iso3] = _catalog_crosswalks(country_scope=iso3)
         records = catalog_by_country[iso3]
-        has_direct_pair = any(
-            record.get("execution_strategy") in {"direct_relationship_artifact", "measured_relationship_artifact"}
-            and (
-                (
-                    str(record.get("source_system") or "") == from_system
-                    and str(record.get("target_system") or "") == target
-                )
-                or (
-                    str(record.get("target_system") or "") == from_system
-                    and str(record.get("source_system") or "") == target
-                )
-            )
-            for record in records
+        selected_id = str(request.get("crosswalk_id") or "").strip()
+        direct_record, _forward, route_error = _direct_crosswalk_route(
+            records, source_system=from_system, target_system=target, crosswalk_id=selected_id,
         )
-        if has_direct_pair:
-            key = (from_system, target, iso3, int(request.get("limit") or 10))
+        if route_error:
+            results[index] = _clean_json({"ok": False, "from_system": from_system,
+                                          "input": request.get("value"), "to_system": target,
+                                          "error": route_error})
+            continue
+        if direct_record:
+            key = (from_system, target, iso3, int(request.get("limit") or 10), selected_id)
             direct_groups.setdefault(key, []).append((index, request))
             continue
         source_indexes.append(index)
         source_requests.append({key: value for key, value in request.items() if key != "to_system"})
 
-    for (from_system, target, iso3, limit), members in direct_groups.items():
+    for (from_system, target, iso3, limit, selected_id), members in direct_groups.items():
         direct = _direct_crosswalk_matches_batch(
             from_system=from_system,
             values=[str(request.get("value") or "") for _index, request in members],
             to_system=target,
             iso3=iso3,
             limit=limit,
+            crosswalk_id=selected_id,
+            catalog_records=catalog_by_country[iso3],
         )
         for index, request in members:
             value = str(request.get("value") or "").strip()
@@ -2951,8 +3044,10 @@ def convert_references_batch(requests: list[dict[str, Any]]) -> list[dict[str, A
                     },
                 })
                 continue
-            source_indexes.append(index)
-            source_requests.append({key: value for key, value in request.items() if key != "to_system"})
+            results[index] = _clean_json({
+                "ok": False, "from_system": from_system, "input": request.get("value"), "to_system": target,
+                "error": {"code": "crosswalk_not_found", "message": "No exact row in the selected crosswalk."},
+            })
 
     resolved_sources = resolve_references_batch(source_requests) if source_requests else []
     reverse_groups: dict[tuple[Any, ...], list[tuple[int, dict[str, Any], dict[str, Any], str]]] = {}

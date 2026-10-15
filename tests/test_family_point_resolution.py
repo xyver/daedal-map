@@ -2,16 +2,28 @@ import unittest
 from unittest.mock import patch
 
 import pandas as pd
-from shapely.geometry import Polygon, mapping
+from shapely.geometry import Polygon, box, mapping
 
 from mapmover.runtime.family_point_resolution import (
     family_artifacts,
     normalize_requested_family,
     resolve_family_points,
+    shallow_scope,
 )
 
 
 class FamilyPointResolutionTests(unittest.TestCase):
+    def test_shallow_scope_uses_one_admin_route_index(self):
+        rows = pd.DataFrame([{"loc_id": "USA-TX-201", "admin_level": 2,
+                              "admin_1_loc_id": "USA-TX"}])
+        with (
+            patch("mapmover.runtime.family_point_resolution.layout_available", return_value=True),
+            patch("mapmover.runtime.family_point_resolution.load_route_rows_by_loc_ids",
+                  return_value=rows) as route,
+        ):
+            self.assertEqual(shallow_scope("USA-TX-201"), ("USA", "USA-TX", None))
+        route.assert_called_once_with("USA", ["USA-TX-201"])
+
     def test_manifest_source_family_names_route_to_canonical_catalog_families(self):
         manifest = {"artifacts": [
             {"family": "named_geographical_feature", "role": "query_exact_predicate_index", "path": "named.index.parquet", "rows": 2},
@@ -100,6 +112,63 @@ class FamilyPointResolutionTests(unittest.TestCase):
         self.assertEqual(results[0]["postal_area"]["matches"][0]["loc_id"], "USA-POSTAL-1")
         self.assertEqual(results[1]["postal_area"]["status"], "no_point_overlap")
         self.assertEqual(results[1]["postal_area"]["matches"], [])
+
+    def test_declared_point_index_routes_shapes_without_graph_discovery(self):
+        catalog = {
+            "runtime_query_layouts": {"family_points": {"USA": {"watershed": {
+                "country": "USA", "family": "watershed",
+                "source_release_id": "usa_test", "index_path": "point_index.parquet",
+            }}}},
+            "country_profiles": [{"country_code": "USA", "active_release": {"release_id": "usa_test"}}],
+        }
+        candidates = pd.DataFrame([{
+            "point_position": 0, "loc_id": "USA-WBD-HUC2-12",
+            "shape_path": "geometry/countries/USA/shapes/shallow.parquet",
+            "geometry_loc_id": "USA-WBD-HUC2-12", "family": "watershed",
+        }])
+        shapes = pd.DataFrame([{
+            "loc_id": "USA-WBD-HUC2-12", "name": "Texas-Gulf Region",
+            "family": "watershed", "geometry": mapping(box(0, 0, 2, 2)),
+        }])
+        with (
+            patch("mapmover.runtime.family_point_resolution.load_geometry_catalog", return_value=catalog),
+            patch("mapmover.runtime.family_point_resolution.country_capability_record",
+                  return_value={"available_family_ids": ["watershed"]}),
+            patch("mapmover.runtime.family_point_resolution.family_artifacts", return_value={}),
+            patch("mapmover.runtime.family_point_resolution.parquet_available", return_value=True),
+            patch("mapmover.runtime.family_point_resolution.read_bbox_candidates_for_points",
+                  return_value=candidates),
+            patch("mapmover.runtime.family_point_resolution.load_routed_family_geometry",
+                  return_value=shapes) as routed,
+            patch("mapmover.runtime.family_point_resolution.load_reference_graph_geometry") as graph,
+        ):
+            result = resolve_family_points("USA", ["watershed"], [{"lon": 1, "lat": 1}])[0]["watershed"]
+        self.assertEqual(result["status"], "matched")
+        self.assertEqual(result["matches"][0]["loc_id"], "USA-WBD-HUC2-12")
+        routed.assert_called_once()
+        graph.assert_not_called()
+
+    def test_declared_point_index_missing_file_fails_closed(self):
+        catalog = {
+            "runtime_query_layouts": {"family_points": {"USA": {"watershed": {
+                "country": "USA", "family": "watershed",
+                "source_release_id": "usa_test", "index_path": "missing.parquet",
+            }}}},
+            "country_profiles": [{"country_code": "USA", "active_release": {"release_id": "usa_test"}}],
+        }
+        with (
+            patch("mapmover.runtime.family_point_resolution.load_geometry_catalog", return_value=catalog),
+            patch("mapmover.runtime.family_point_resolution.country_capability_record",
+                  return_value={"available_family_ids": ["watershed"]}),
+            patch("mapmover.runtime.family_point_resolution.family_artifacts", return_value={}),
+            patch("mapmover.runtime.family_point_resolution.parquet_available", return_value=False),
+            patch("mapmover.runtime.family_point_resolution.read_bbox_candidates_for_points") as read,
+            patch("mapmover.runtime.family_point_resolution.load_reference_graph_geometry") as graph,
+        ):
+            result = resolve_family_points("USA", ["watershed"], [{"lon": 1, "lat": 1}])[0]["watershed"]
+        self.assertEqual(result["status"], "family_lookup_error")
+        read.assert_not_called()
+        graph.assert_not_called()
 
     def test_zero_bbox_candidates_do_not_open_shape_bank(self):
         with (

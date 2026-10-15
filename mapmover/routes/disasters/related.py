@@ -578,6 +578,7 @@ def _query_exact_event_projected(
     identifier_value: str,
     *,
     include_geometry: bool = False,
+    exact_only: bool = False,
 ) -> pd.DataFrame:
     """Resolve one event while projecting away shape columns by default."""
     parquet_path, _metadata = _resolve_exact_event_parquet_for_candidate(candidate)
@@ -587,7 +588,7 @@ def _query_exact_event_projected(
     if include_geometry:
         columns.extend(EVENT_GEOMETRY_COLUMNS)
     variants = [identifier_value]
-    if isinstance(identifier_value, str):
+    if not exact_only and isinstance(identifier_value, str):
         for variant in (identifier_value.lower(), identifier_value.upper()):
             if variant not in variants:
                 variants.append(variant)
@@ -607,6 +608,7 @@ def _resolve_event_record(
     identifier_value: str,
     *,
     pack_id: str | None = None,
+    source_id: str | None = None,
     include_geometry: bool = False,
 ) -> tuple[dict, dict] | None:
     normalized_identifier = str(identifier_value or "").strip()
@@ -616,6 +618,27 @@ def _resolve_event_record(
         str(pack_id).strip().lower() if pack_id else None,
         identifier_value=normalized_identifier,
     )
+    if source_id is not None:
+        normalized_source_id = str(source_id).strip()
+        if not pack_id or not normalized_source_id:
+            raise ValueError("Exact event lookup requires both pack_id and source_id.")
+        candidates = [candidate for candidate in candidates if candidate["source_id"] == normalized_source_id]
+        if len(candidates) != 1:
+            raise ValueError(f"Event source '{normalized_source_id}' is not published in pack '{pack_id}'.")
+        candidate = candidates[0]
+        df = _query_exact_event_projected(
+            candidate, "event_id", normalized_identifier,
+            include_geometry=include_geometry, exact_only=True,
+        )
+        if df.empty:
+            return None
+        row = {
+            str(key): _json_safe_event_value(value)
+            for key, value in df.iloc[0].to_dict().items()
+            if _json_safe_event_value(value) is not None
+        }
+        row.setdefault("event_id", normalized_identifier)
+        return candidate, row
     if not pack_id:
         hinted_packs, strict_hint = _classify_exact_event_identifier(normalized_identifier)
         if hinted_packs:
@@ -946,6 +969,7 @@ def get_event_payload(
     event_id: str,
     *,
     pack_id: str | None = None,
+    source_id: str | None = None,
     include: list[str] | None = None,
     relationship_depth: int = 1,
     geometry_mode: str = "current",
@@ -956,6 +980,7 @@ def get_event_payload(
     resolved = _resolve_event_record(
         event_id,
         pack_id=pack_id,
+        source_id=source_id,
         include_geometry="geometry" in requested,
     )
     if resolved is None:
@@ -1001,7 +1026,7 @@ def get_event_payload(
     payload["next_steps"] = {
         key: {
             "tool": "get_event",
-            "arguments": {"event_id": canonical_event_id, "pack_id": resolved_pack_id, "include": [key]},
+            "arguments": {"event_id": canonical_event_id, "pack_id": resolved_pack_id, "source_id": candidate.get("source_id"), "include": [key]},
         }
         for key, available in payload["available"].items()
         if available and key not in requested

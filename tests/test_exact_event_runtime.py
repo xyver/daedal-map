@@ -91,6 +91,44 @@ class ExactEventRuntimeTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "Event lookup could not complete for source\\(s\\): floods"):
                 _resolve_event_record("DFO-1", pack_id="floods")
 
+    def test_routed_event_queries_only_declared_source_once(self) -> None:
+        import pandas as pd
+
+        sources = [
+            {"pack_id": "floods", "source_id": "floods", "id_fields": ("event_id",)},
+            {"pack_id": "floods", "source_id": "noaa_storm_events_floods", "id_fields": ("event_id",)},
+        ]
+        with (
+            patch("mapmover.routes.disasters.related._get_exact_event_candidates", return_value=sources),
+            patch("mapmover.routes.disasters.related._query_exact_event_projected", return_value=pd.DataFrame()) as query,
+        ):
+            result = _resolve_event_record("DFO-1", pack_id="floods", source_id="floods")
+        self.assertIsNone(result)
+        query.assert_called_once_with(sources[0], "event_id", "DFO-1", include_geometry=False, exact_only=True)
+
+    def test_invalid_event_source_fails_before_parquet_lookup(self) -> None:
+        with (
+            patch("mapmover.routes.disasters.related._get_exact_event_candidates", return_value=[]),
+            patch("mapmover.routes.disasters.related._query_exact_event_projected") as query,
+        ):
+            with self.assertRaisesRegex(ValueError, "not published in pack"):
+                _resolve_event_record("DFO-1", pack_id="floods", source_id="wrong")
+        query.assert_not_called()
+
+    def test_routed_event_miss_reads_one_exact_parquet_filter(self) -> None:
+        import pandas as pd
+
+        candidate = {"pack_id": "floods", "source_id": "floods", "id_fields": ("event_id",)}
+        with (
+            patch("mapmover.routes.disasters.related._get_exact_event_candidates", return_value=[candidate]),
+            patch("mapmover.routes.disasters.related._resolve_exact_event_parquet_for_candidate", return_value=("events.parquet", {})),
+            patch("mapmover.routes.disasters.related.select_rows", return_value=pd.DataFrame()) as read,
+        ):
+            result = _resolve_event_record("DFO-1", pack_id="floods", source_id="floods")
+        self.assertIsNone(result)
+        read.assert_called_once()
+        self.assertEqual(read.call_args.kwargs["exact_filters"], {"event_id": "DFO-1"})
+
     def test_event_relationships_filter_on_event_ids_not_geographic_loc_ids(self) -> None:
         import pandas as pd
 

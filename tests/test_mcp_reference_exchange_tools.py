@@ -209,7 +209,7 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         self.assertFalse(result["data_packs"][0]["exact_rows_verified"])
         self.assertEqual(result["available_geometry_families"][0]["pack_id"], "postal_area")
 
-    def test_dataset_geography_tool_selects_country_admin_binding(self) -> None:
+    def test_dataset_geography_tool_selects_column_without_binding(self) -> None:
         payload = _tool_call(
             self.client,
             "identify_dataset_geography",
@@ -224,8 +224,8 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
 
         selected = payload["candidates"][0]
         self.assertEqual(selected["header"], "municipality_code")
-        self.assertEqual(selected["catalog"]["recommended_binding"]["country_scope"], "BRA")
-        self.assertEqual(selected["catalog"]["recommended_binding"]["geo_level"], "admin_2")
+        self.assertEqual(selected["catalog"]["status"], "not_checked")
+        self.assertIsNone(selected["catalog"]["recommended_binding"])
 
     def test_dataset_geography_ignores_disconnect_monitor_taskgroup_failure(self) -> None:
         columns = [
@@ -1755,6 +1755,16 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         self.assertEqual(payload["next_step"]["tool"], "get_pack")
         self.assertEqual(payload["next_step"]["arguments"]["country_scope"], "<ISO3 from countries>")
 
+    def test_country_family_full_detail_stays_metadata_sized(self) -> None:
+        payload = _tool_call(
+            self.client, "get_pack",
+            {"catalog": "geometry", "pack_id": "administrative", "detail": "full", "country_scope": "CAN"},
+        )
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["crosswalk_count"], len(payload["crosswalks"]))
+        self.assertLess(len(json.dumps(payload).encode("utf-8")), 200_000)
+        self.assertTrue(all("artifact_path" not in row for row in payload["crosswalks"]))
+
     def test_geometry_facade_get_pack_requires_a_selected_family(self) -> None:
         payload = _tool_call(self.client, "get_pack", {}, path="/mcp/boundaries")
 
@@ -1785,7 +1795,7 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         payload = _tool_call(
             self.client,
             "convert_reference",
-            {"from_system": "loc_id", "value": "USA-CA"},
+            {"iso3": "USA", "from_system": "loc_id", "value": "USA-CA"},
         )
 
         self.assertTrue(payload["ok"])
@@ -2085,6 +2095,7 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
             self.client,
             "convert_reference",
             {
+                "iso3": "USA",
                 "from_system": "zip",
                 "value": "00601",
                 "target_admin_level": "admin_2",
@@ -2101,7 +2112,7 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         payload = _tool_call(
             self.client,
             "convert_reference",
-            {"from_system": "iso3166_3", "value": "YUG", "as_of": "2025"},
+            {"iso3": "GLOBAL", "from_system": "iso3166_3", "value": "YUG", "as_of": "2025"},
         )
 
         self.assertTrue(payload["ok"])
@@ -2118,6 +2129,7 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
             "convert_reference",
             {
                 "batch_id": "refs-1",
+                "iso3": "USA",
                 "from_system": "zip",
                 "target_admin_level": "admin_2",
                 "items": [
@@ -2148,19 +2160,112 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
             payload = _tool_call(
                 self.client,
                 "convert_reference",
-                {"from_system": "zip", "items": [{"value": "00601"}]},
+                {"iso3": "USA", "from_system": "zip", "items": [{"value": "00601"}]},
             )
 
         self.assertEqual(payload["converted_count"], 1)
         batch_mock.assert_called_once()
         self.assertEqual(batch_mock.call_args.args[0][0]["value"], "00601")
 
+    def test_convert_reference_passes_exact_crosswalk_id_to_runtime(self) -> None:
+        with mock.patch(
+            "mapmover.runtime.reference_exchange.convert_reference",
+            return_value={"ok": True, "results": [{"value": "USA-PR-001"}]},
+        ) as convert_mock:
+            payload = _tool_call(
+                self.client, "convert_reference",
+                {"iso3": "USA", "from_system": "zip", "value": "00601", "to_system": "admin_3", "crosswalk_id": "tract-a"},
+            )
+        self.assertTrue(payload["ok"])
+        self.assertEqual(convert_mock.call_args.kwargs["crosswalk_id"], "tract-a")
+
+    def test_convert_reference_rejects_mixed_scope_before_runtime(self) -> None:
+        with mock.patch("mapmover.routes.mcp._convert_reference_items") as convert_mock:
+            payload = _tool_call(
+                self.client, "convert_reference",
+                {"iso3": "DEU", "from_system": "admin_boundary", "items": [
+                    {"value": "Koeln", "country_hint": "DEU"},
+                    {"value": "Kamloops", "iso3": "CAN", "country_hint": "CAN"},
+                ]},
+            )
+        self.assertEqual(payload["error"]["code"], "mixed_scope_pack")
+        convert_mock.assert_not_called()
+
+    def test_convert_reference_requires_explicit_scope_before_runtime(self) -> None:
+        with mock.patch("mapmover.routes.mcp._convert_reference_item") as convert_mock:
+            payload = _tool_call(
+                self.client, "convert_reference", {"from_system": "zip", "value": "00601"},
+            )
+        self.assertEqual(payload["error"]["code"], "scope_pack_required")
+        convert_mock.assert_not_called()
+
+    def test_convert_reference_rejects_mixed_system_routes_before_runtime(self) -> None:
+        with mock.patch("mapmover.routes.mcp._convert_reference_items") as convert_mock:
+            payload = _tool_call(
+                self.client, "convert_reference",
+                {"iso3": "USA", "items": [
+                    {"from_system": "zip", "value": "00601"},
+                    {"from_system": "us_census_geoid", "value": "72001"},
+                ]},
+            )
+        self.assertEqual(payload["error"]["code"], "mixed_conversion_route")
+        convert_mock.assert_not_called()
+
+    def test_convert_reference_rejects_oversized_result_plan_before_runtime(self) -> None:
+        with mock.patch("mapmover.routes.mcp._convert_reference_items") as convert_mock:
+            payload = _tool_call(
+                self.client, "convert_reference",
+                {"iso3": "USA", "from_system": "zip", "limit": 100,
+                 "items": [{"value": "00601"} for _ in range(251)]},
+            )
+        self.assertEqual(payload["error"]["code"], "conversion_plan_too_large")
+        convert_mock.assert_not_called()
+
+    def test_convert_reference_rejects_foreign_loc_id_before_runtime(self) -> None:
+        with mock.patch("mapmover.routes.mcp._convert_reference_item") as convert_mock:
+            payload = _tool_call(
+                self.client, "convert_reference",
+                {"iso3": "USA", "from_system": "loc_id", "value": "CAN-BC"},
+            )
+        self.assertEqual(payload["error"]["code"], "scope_value_mismatch")
+        convert_mock.assert_not_called()
+
+    def test_convert_reference_requires_marine_pack_for_marine_system(self) -> None:
+        with mock.patch("mapmover.routes.mcp._convert_reference_item") as convert_mock:
+            payload = _tool_call(
+                self.client, "convert_reference",
+                {"iso3": "AUS", "from_system": "marine_eez", "value": "EEZ-AUS"},
+            )
+        self.assertEqual(payload["error"]["code"], "scope_system_mismatch")
+        convert_mock.assert_not_called()
+
+    def test_convert_reference_accepts_declared_global_pack(self) -> None:
+        with mock.patch(
+            "mapmover.runtime.reference_exchange.convert_reference",
+            return_value={"ok": True, "results": [{"value": "AUS"}]},
+        ) as convert_mock:
+            payload = _tool_call(
+                self.client, "convert_reference",
+                {"iso3": "GLOBAL", "from_system": "geoboundaries.code", "value": "AUS"},
+            )
+        self.assertTrue(payload["ok"])
+        self.assertEqual(convert_mock.call_args.kwargs["iso3"], "GLOBAL")
+
+    def test_convert_reference_global_pack_rejects_country_subregion(self) -> None:
+        with mock.patch("mapmover.routes.mcp._convert_reference_item") as convert_mock:
+            payload = _tool_call(
+                self.client, "convert_reference",
+                {"iso3": "GLOBAL", "from_system": "loc_id", "value": "USA-CA"},
+            )
+        self.assertEqual(payload["error"]["code"], "scope_value_mismatch")
+        convert_mock.assert_not_called()
+
     def test_convert_reference_uses_per_tool_batch_limit_override(self) -> None:
         with mock.patch.dict("os.environ", {"MCP_TOOL_BATCH_LIMIT_CONVERT_REFERENCE": "1"}):
             payload = _tool_call(
                 self.client,
                 "convert_reference",
-                {"from_system": "zip", "items": [{"value": "00601"}, {"value": "00602"}]},
+                {"iso3": "USA", "from_system": "zip", "items": [{"value": "00601"}, {"value": "00602"}]},
             )
 
         self.assertEqual(payload["limit"], 1)
@@ -2179,7 +2284,7 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
             payload = _tool_call(
                 self.client,
                 "convert_reference",
-                {"from_system": "zip", "value": "not-real", "target_admin_level": "admin_2"},
+                {"iso3": "USA", "from_system": "zip", "value": "not-real", "target_admin_level": "admin_2"},
             )
 
         self.assertFalse(payload["ok"])
@@ -2192,6 +2297,7 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
             self.client,
             "convert_reference",
             {
+                "iso3": "USA",
                 "from_system": "zip",
                 "value": "00601",
                 "to_system": "nws_fire",
@@ -2211,6 +2317,7 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
             "convert_reference",
             {
                 "batch_id": "conversions-1",
+                "iso3": "USA",
                 "from_system": "zip",
                 "to_system": "nws_fire",
                 "target_admin_level": "admin_2",
@@ -2238,6 +2345,7 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
                 self.client,
                 "convert_reference",
                 {
+                    "iso3": "USA",
                     "from_system": "zip",
                     "to_system": "nws_fire",
                     "items": [{"value": "00601"}],
@@ -2259,7 +2367,7 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
             payload = _tool_call(
                 self.client,
                 "convert_reference",
-                {"from_system": "zip", "value": "not-real", "to_system": "nws_fire", "target_admin_level": "admin_2"},
+                {"iso3": "USA", "from_system": "zip", "value": "not-real", "to_system": "nws_fire", "target_admin_level": "admin_2"},
             )
 
         self.assertFalse(payload["ok"])
@@ -2273,6 +2381,7 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
                 self.client,
                 "convert_reference",
                 {
+                    "iso3": "USA",
                     "from_system": "zip",
                     "value": "10001",
                     "to_system": "huc",
@@ -2762,10 +2871,17 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
             mock.patch("mapmover.routes.mcp.is_local_loopback_request", return_value=True),
             mock.patch("mapmover.routes.mcp.log_api_query_event"),
         ):
-            payload = _tool_call(self.client, "identify_reference_system", {"identifiers": identifiers})
+            payload = _tool_call(self.client, "identify_reference_system", {"identifiers": identifiers, "country_scope": "USA"})
 
         self.assertNotEqual((payload.get("error") or {}).get("code"), "too_many_items")
         self.assertEqual(payload.get("identifier_count"), 101)
+
+    def test_identify_reference_system_requires_country_before_runtime(self) -> None:
+        with mock.patch("mapmover.runtime.reference_identification.identify_reference_system") as identify:
+            payload = _tool_call(self.client, "identify_reference_system", {"identifiers": ["06037"]})
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["error"]["code"], "country_scope_required")
+        identify.assert_not_called()
 
     def test_create_conversion_job_local_loopback_bypasses_hosted_cap(self) -> None:
         items = [{"value": "00601"} for _ in range(7501)]
@@ -3090,7 +3206,7 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
             payload = _tool_call(
                 self.client,
                 "identify_reference_system",
-                {"identifiers": [f"{index:011d}" for index in range(101)]},
+                {"identifiers": [f"{index:011d}" for index in range(101)], "country_scope": "USA"},
             )
 
         self.assertEqual(payload["error"]["code"], "too_many_items")
@@ -3115,7 +3231,7 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
             payload = _tool_call(
                 self.client,
                 "identify_reference_system",
-                {"question": "Are these 2020 census tract GEOIDs: 02013000100 and 02016000100?"},
+                {"question": "Are these 2020 census tract GEOIDs: 02013000100 and 02016000100?", "country_scope": "USA"},
             )
 
         self.assertFalse(payload["ok"])

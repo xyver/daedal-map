@@ -17,18 +17,25 @@ from typing import Any, Iterable
 from shapely.geometry import Point, shape
 
 from ..catalog_cache_policy import control_catalog_cache_epoch
+from ..duckdb_helpers import parquet_available
 from ..paths import DATA_ROOT
 from ..runtime_config import force_remote_data_reads, get_data_plane_mode
 from .geometry_catalog import load_geometry_catalog
+from .admin_spine_query import layout_available, load_route_rows_by_loc_ids
 from .geometry_inventory import country_capability_record
 from .geometry_predicate_query import read_bbox_candidates_for_points
 from .published_artifacts import read_artifact_json
-from .reference_geometry_bank import load_reference_graph_geometry
-from .reference_graph import identity
+from .reference_geometry_bank import load_reference_graph_geometry, load_routed_family_geometry
 
 
 PREDICATE_ROLE = "query_exact_predicate_index"
 EXACT_ROLE = "query_exact_geometry"
+POINT_INDEX_COLUMNS = (
+    "loc_id", "shape_path", "geometry_bank", "geometry_loc_id", "frame_id",
+    "name", "family", "subtype", "parent_loc_id", "native_id", "source_id",
+    "source_system", "source_vintage", "source_release", "valid_from",
+    "valid_to", "validity_status",
+)
 
 # Representation manifests retain a few publisher-facing family labels that
 # predate the public geometry catalog.  Route those physical labels through
@@ -56,14 +63,25 @@ def normalize_requested_family(value: Any) -> tuple[str, dict[str, str] | None]:
 def shallow_scope(shallow_loc_id: str) -> tuple[str, str | None, dict[str, str] | None]:
     """Validate a canonical Admin 1-3 loc_id and find its Admin 1 owner."""
     requested = str(shallow_loc_id or "").strip().upper()
-    node = identity(requested)
-    if not node:
+    country = requested.split("-", 1)[0]
+    if "-" not in requested or len(country) != 3 or not country.isalpha():
+        return "", None, {
+            "code": "invalid_shallow_loc_id",
+            "message": "shallow_loc_id must be a canonical administrative loc_id returned by resolve_point.",
+        }
+    if not layout_available(country):
+        return "", None, {
+            "code": "shallow_scope_unavailable",
+            "message": "The selected country's admitted admin route index is unavailable.",
+        }
+    rows = load_route_rows_by_loc_ids(country, [requested])
+    if len(rows) != 1:
         return "", None, {
             "code": "invalid_shallow_loc_id",
             "message": "shallow_loc_id must be a canonical administrative loc_id returned by resolve_point.",
         }
     try:
-        level = int(node.get("admin_level"))
+        level = int(rows.iloc[0]["admin_level"])
     except (TypeError, ValueError):
         level = -1
     if level < 1 or level > 3:
@@ -71,17 +89,13 @@ def shallow_scope(shallow_loc_id: str) -> tuple[str, str | None, dict[str, str] 
             "code": "invalid_shallow_loc_id",
             "message": "shallow_loc_id must identify an Admin 1, 2, or 3 result from resolve_point.",
         }
-    country = requested.split("-", 1)[0]
-    current = node
-    while int(current.get("admin_level")) > 1:
-        parent_id = str(current.get("parent_loc_id") or "").strip()
-        current = identity(parent_id) if parent_id else None
-        if not current:
-            return "", None, {
-                "code": "shallow_scope_unresolved",
-                "message": "The Admin 1 owner of shallow_loc_id could not be resolved.",
-            }
-    return country, str(current.get("loc_id") or "").strip(), None
+    owner = str(rows.iloc[0].get("admin_1_loc_id") or "").strip()
+    if not owner or not owner.startswith(f"{country}-"):
+        return "", None, {
+            "code": "shallow_scope_unresolved",
+            "message": "The Admin 1 owner of shallow_loc_id could not be resolved.",
+        }
+    return country, owner, None
 
 
 def _manifest_relative_path(country: str) -> str:
@@ -210,9 +224,17 @@ def resolve_family_points(
     if not requested or not point_rows:
         return results
 
-    capability = country_capability_record(load_geometry_catalog(), country) or {}
+    catalog = load_geometry_catalog()
+    capability = country_capability_record(catalog, country) or {}
     available = set(capability.get("available_family_ids") or [])
     artifacts = family_artifacts(country)
+    point_layouts = ((catalog.get("runtime_query_layouts") or {}).get("family_points") or {})
+    country_layouts = point_layouts.get(country) or {}
+    active_release = next((
+        str((item.get("active_release") or {}).get("release_id") or "")
+        for item in catalog.get("country_profiles") or []
+        if item.get("country_code") == country
+    ), "")
 
     for family in requested:
         if family not in available:
@@ -225,9 +247,10 @@ def resolve_family_points(
             continue
 
         family_files = artifacts.get(family) or {}
+        selected_layout = country_layouts.get(family) or {}
         predicate_paths = family_files.get("predicate_paths") or []
         exact_paths = family_files.get("exact_paths") or []
-        if not predicate_paths or not exact_paths:
+        if not selected_layout and (not predicate_paths or not exact_paths):
             for result in results:
                 result[family] = {
                     "family": family,
@@ -243,24 +266,51 @@ def resolve_family_points(
         started = time.perf_counter()
         candidates_by_point: list[set[str]] = [set() for _ in point_rows]
         try:
-            for relative_path in predicate_paths:
+            if selected_layout:
+                index_path = str(selected_layout.get("index_path") or "").strip()
+                if (selected_layout.get("country") != country
+                        or selected_layout.get("family") != family
+                        or selected_layout.get("source_release_id") != active_release
+                        or not index_path):
+                    raise ValueError("Declared family point route is incomplete or mismatched")
+                if not parquet_available(DATA_ROOT / Path(index_path)):
+                    raise FileNotFoundError("Declared family point index is unavailable")
                 candidates = read_bbox_candidates_for_points(
-                    DATA_ROOT / Path(relative_path),
-                    point_rows,
-                    columns=["loc_id"],
+                    DATA_ROOT / Path(index_path), point_rows,
+                    columns=POINT_INDEX_COLUMNS,
                 )
-                for row in candidates.to_dict("records"):
+                candidate_rows = candidates.to_dict("records")
+                identity_rows: dict[str, dict[str, Any]] = {}
+                for row in candidate_rows:
                     position = int(row.get("point_position"))
                     loc_id = str(row.get("loc_id") or "").strip()
                     if 0 <= position < len(point_rows) and loc_id:
                         candidates_by_point[position].add(loc_id)
-
-            candidate_ids = sorted(set().union(*candidates_by_point)) if candidates_by_point else []
+                        identity_rows.setdefault(loc_id, row)
+                shape_paths = {
+                    str(row.get("shape_path") or "") for row in identity_rows.values()
+                }
+                if not all(shape_paths) or len(shape_paths) > 3:
+                    raise ValueError("family_point_shape_budget_exceeded")
+                shape_records = load_routed_family_geometry(list(identity_rows.values())).to_dict("records")
+            else:
+                for relative_path in predicate_paths:
+                    candidates = read_bbox_candidates_for_points(
+                        DATA_ROOT / Path(relative_path),
+                        point_rows,
+                        columns=["loc_id"],
+                    )
+                    for row in candidates.to_dict("records"):
+                        position = int(row.get("point_position"))
+                        loc_id = str(row.get("loc_id") or "").strip()
+                        if 0 <= position < len(point_rows) and loc_id:
+                            candidates_by_point[position].add(loc_id)
+                candidate_ids = sorted(set().union(*candidates_by_point)) if candidates_by_point else []
+                shape_records = (
+                    load_reference_graph_geometry(candidate_ids).to_dict("records")
+                    if candidate_ids else []
+                )
             shapes_by_id: dict[str, tuple[dict[str, Any], Any]] = {}
-            shape_records = (
-                load_reference_graph_geometry(candidate_ids).to_dict("records")
-                if candidate_ids else []
-            )
             for row in shape_records:
                 loc_id = str(row.get("loc_id") or "").strip()
                 if not loc_id or not row.get("geometry"):
@@ -288,7 +338,12 @@ def resolve_family_points(
                     "family": family,
                     "status": "family_lookup_error",
                     "matches": [],
-                    "error": {"code": "family_lookup_failed", "message": str(exc)},
+                    "error": {
+                        "code": "family_point_shape_budget_exceeded"
+                        if str(exc) == "family_point_shape_budget_exceeded"
+                        else "family_lookup_failed",
+                        "message": str(exc),
+                    },
                 }
     return results
 

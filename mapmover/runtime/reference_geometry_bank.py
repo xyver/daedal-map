@@ -117,17 +117,23 @@ def _read_shape_partition(path: Path, loc_ids: list[str]) -> pd.DataFrame:
     else:
         geometry_expression = '"geometry"'
     selected = ", ".join(f'"{column}"' for column in ordinary)
-    placeholders = ", ".join("?" for _ in loc_ids)
-    sql = (
-        f"SELECT {selected}, {geometry_expression} "
-        f"FROM read_parquet(?) WHERE \"loc_id\" IN ({placeholders})"
-    )
+    # DuckDB's multi-value IN and OR-equality filters scan most row groups in
+    # these sorted exact-shape banks. Separate exact BETWEEN clauses use the
+    # file's loc_id min/max statistics and skip unrelated geometry row groups.
+    # Bound SQL size for bulk callers while retaining this same route.
+    unique_ids = sorted(set(loc_ids))
     try:
-        return run_df(
-            sql,
-            [path_to_uri(path), *loc_ids],
-            raw_geoparquet=geometry_expression.startswith('"geometry" AS'),
-        )
+        chunks = []
+        for start in range(0, len(unique_ids), 64):
+            selected_ids = unique_ids[start:start + 64]
+            predicate = " OR ".join('(\"loc_id\" BETWEEN ? AND ?)' for _ in selected_ids)
+            sql = f"SELECT {selected}, {geometry_expression} FROM read_parquet(?) WHERE {predicate}"
+            chunks.append(run_df(
+                sql,
+                [path_to_uri(path), *(value for loc_id in selected_ids for value in (loc_id, loc_id))],
+                raw_geoparquet=geometry_expression.startswith('"geometry" AS'),
+            ))
+        return pd.concat(chunks, ignore_index=True) if len(chunks) > 1 else chunks[0]
     except Exception as exc:
         if "Out of Memory" not in str(exc):
             raise
@@ -402,3 +408,43 @@ def load_reference_graph_geometry(
             keep.insert(0, "loc_id")
         return frame[keep].copy()
     return frame
+
+
+def load_routed_family_geometry(candidate_rows: list[dict[str, Any]]) -> pd.DataFrame:
+    """Read exact shapes from a release-pinned family point index.
+
+    The index already carries the graph identity and exact partition route, so
+    this path never performs graph discovery or probes unrelated shape banks.
+    """
+    if not candidate_rows:
+        return pd.DataFrame()
+    by_path: dict[Path, dict[str, list[dict[str, Any]]]] = {}
+    root = DATA_ROOT.resolve()
+    for identity in candidate_rows:
+        relative = Path(str(identity.get("shape_path") or "").replace("\\", "/"))
+        if relative.is_absolute() or ".." in relative.parts or relative.suffix != ".parquet":
+            raise ValueError("Invalid family point shape route")
+        path = (DATA_ROOT / relative).resolve()
+        if not path.is_relative_to(root):
+            raise ValueError("Family point shape route leaves the data root")
+        geometry_id = str(identity.get("geometry_loc_id") or identity.get("loc_id") or "").strip()
+        if not geometry_id:
+            raise ValueError("Family point identity has no geometry loc_id")
+        by_path.setdefault(path, {}).setdefault(geometry_id, []).append(identity)
+    normalized: list[dict[str, Any]] = []
+    for path, identities_by_geometry_id in by_path.items():
+        if not parquet_available(path):
+            raise FileNotFoundError(f"Family point shape route is unavailable: {path}")
+        rows = _read_shape_partition(path, sorted(identities_by_geometry_id))
+        source_crs = _geoparquet_crs(str(path))
+        for row in rows.to_dict("records"):
+            for identity in identities_by_geometry_id.get(str(row.get("loc_id")), []):
+                selected_frame = str(identity.get("frame_id") or "")
+                if selected_frame and str(row.get("frame_id") or "") != selected_frame:
+                    continue
+                identity_row = dict(identity)
+                identity_row["geography_family"] = identity_row.get("family")
+                item = _normalized_row(row, identity_row, source_crs=source_crs)
+                if item is not None:
+                    normalized.append(item)
+    return pd.DataFrame(_merge_frame_parts(normalized))

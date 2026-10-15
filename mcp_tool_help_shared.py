@@ -86,23 +86,23 @@ TOOL_GUIDANCE: dict[str, dict[str, Any]] = {
         ["reference system", "source vintage", "geometry bank ids", "validation scope"],
     ),
     "identify_dataset_geography": _g(
-        ["You have bounded samples from several table columns and need DaedalMap to select and identify the geography."],
-        ["Uploading the complete source file", "Pre-classifying systems in browser code", "Returning polygons", "Converting every row"],
+        ["You have bounded samples from several table columns and need to select a recognized geography column or coordinate pair quickly."],
+        ["Uploading the complete source file", "Opening identifier indexes", "Inferring the reference system", "Converting every row"],
         {"columns": [{"name": "municipality_code", "values": ["1200013", "1200054"]}], "dataset_context": {"file_name": "population.csv", "row_count": 200}},
-        ["status", "candidates", "recommended_candidate_id", "recommended_binding"],
-        ["identify_reference_system", "convert_reference", "resolve_point"],
-        ["selected input column", "reference system", "country scope", "admin level", "sample match rate"],
+        ["status", "candidates", "recommended_candidate_id"],
+        ["identify_reference_system", "resolve_point"],
+        ["selected input column", "coordinate pair", "country supplied by caller"],
     ),
     "convert_reference": _g(
         [
-            "You need an outside reference expressed as loc_id, or one reference system expressed in another through loc_id.",
+            "You need an outside reference expressed as loc_id, or one reference system expressed in another through loc_id; declare one iso3 country, GLOBAL, or MARINE for the whole call.",
             "You have an admin or city name: use from_system admin_boundary with a country_hint. Send the parent with the name ('Springfield, Illinois') or a subdivision hint (USA-IL); the shallowest matching level wins, and equal matches return candidates.",
         ],
-        ["Resolving coordinates", "Discarding one-to-many weights"],
+        ["Resolving coordinates", "Discarding one-to-many weights", "Guessing among multiple published crosswalk IDs"],
         [
-            {"from_system": "admin_boundary", "value": "Springfield, Illinois", "country_hint": "USA"},
-            {"from_system": "admin_boundary", "items": [{"value": "Koeln", "country_hint": "DEU"}, {"value": "Kamloops", "country_hint": "CAN"}]},
-            {"from_system": "zip", "value": "00601", "to_system": "nws_fire"},
+            {"iso3": "USA", "from_system": "admin_boundary", "value": "Springfield, Illinois", "country_hint": "USA"},
+            {"from_system": "admin_boundary", "iso3": "DEU", "items": [{"value": "Koeln", "country_hint": "DEU"}, {"value": "Bonn", "country_hint": "DEU"}]},
+            {"iso3": "USA", "from_system": "zip", "value": "00601", "to_system": "nws_fire"},
         ],
         ["from.resolved_loc_id", "from.match_type", "from.candidates", "results", "relationship_type", "weight"],
         ["get_loc_id_info", "get_geometry"],
@@ -125,9 +125,9 @@ TOOL_GUIDANCE: dict[str, dict[str, Any]] = {
         ["bank_id", "geometry_vintage", "source", "license", "release_id"]
     ),
     "get_event": _g(
-        ["You have an exact event_id from get_data and need to inspect or traverse that event."],
+        ["You have the pack_id used for get_data, its result's source_id, and one exact event_id from its row."],
         ["Searching broadly for events", "Unbounded graph traversal", "Loading geometry implicitly"],
-        {"event_id": "USA-HRCN-2022301N07140", "pack_id": "hurricanes", "include": ["relationships", "observations"]},
+        {"event_id": "USA-HRCN-2022301N07140", "pack_id": "hurricanes", "source_id": "hurricanes", "include": ["relationships", "observations"]},
         ["event", "available", "relationships", "affected_places", "observations", "geometry"],
         ["get_data"], ["source event id", "relationship source/method", "companion-layer provenance"]
     ),
@@ -354,7 +354,7 @@ TOPIC_TOOLS: dict[str, tuple[str, ...]] = {
 TOPIC_SUMMARIES = {
     "overview": "Enter the loc_id universe through a resolution or onboarding tool, then use loc_id-based discovery, data, geometry, and relationship tools.",
     "data": "Use get_catalog to select a data pack, get_pack to learn its fields and routing, then query rows with loc_id-based region filters.",
-    "disasters": "Use get_data to find event rows and stable event_ids, then get_event to inspect one event's relationships, affected places, native observations, or explicit geometry.",
+    "disasters": "Use get_data to find event rows, then pass the same pack_id, the result's source_id, and one row's exact event_id to get_event.",
     "custom_data": "Identify geography from bounded samples, confirm the reference system, then convert a bounded identifier batch through loc_id.",
 }
 

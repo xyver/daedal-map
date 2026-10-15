@@ -198,9 +198,62 @@ class ReferenceExchangeRuntimeTests(unittest.TestCase):
 
         scan.assert_called_once()
         self.assertEqual(scan.call_args.kwargs["input_column"], "source_loc_id")
-        self.assertEqual(scan.call_args.kwargs["values"], ["USA-Z-00601", "USA-Z-00602"])
+        self.assertEqual(scan.call_args.kwargs["normalized_values"], ["USA-Z-00601", "USA-Z-00602"])
+        self.assertEqual(scan.call_args.kwargs["raw_values"], ["00601", "00602"])
         fallback.assert_not_called()
         self.assertEqual([row["loc_id"] for row in results], ["USA-Z-00601", "USA-Z-00602"])
+
+    def test_ambiguous_direct_route_fails_before_payload_read(self) -> None:
+        records = [
+            {"crosswalk_id": crosswalk_id, "source_system": "overlay_zcta", "target_system": "admin_3",
+             "execution_strategy": "direct_relationship_artifact", "artifact_path": f"test/{crosswalk_id}.parquet"}
+            for crosswalk_id in ("tract-a", "tract-b")
+        ]
+        with (
+            mock.patch.object(reference_exchange, "_catalog_crosswalks", return_value=records),
+            mock.patch.object(reference_exchange, "_select_direct_crosswalk_rows") as scan,
+            mock.patch.object(reference_exchange, "resolve_reference") as other_route,
+        ):
+            result = convert_reference(from_system="zip", value="00601", to_system="admin_3", iso3="USA")
+        self.assertEqual(result["error"]["code"], "crosswalk_route_ambiguous")
+        self.assertIn("tract-a", result["error"]["message"])
+        scan.assert_not_called()
+        other_route.assert_not_called()
+
+    def test_direct_route_miss_does_not_try_another_reader(self) -> None:
+        record = {"crosswalk_id": "one", "source_system": "overlay_zcta", "target_system": "admin_2",
+                  "execution_strategy": "direct_relationship_artifact", "artifact_path": "test/one.parquet"}
+        with (
+            mock.patch.object(reference_exchange, "_catalog_crosswalks", return_value=[record]),
+            mock.patch.object(reference_exchange, "is_cloud_mode", return_value=True),
+            mock.patch.object(reference_exchange, "_select_direct_crosswalk_rows", return_value=pd.DataFrame()) as scan,
+            mock.patch.object(reference_exchange, "resolve_reference") as other_route,
+        ):
+            result = convert_reference(from_system="zip", value="00601", to_system="admin_2", iso3="USA")
+        self.assertEqual(result["error"]["code"], "crosswalk_not_found")
+        scan.assert_called_once()
+        other_route.assert_not_called()
+
+    def test_unknown_crosswalk_id_fails_before_payload_read(self) -> None:
+        record = {"crosswalk_id": "one", "source_system": "overlay_zcta", "target_system": "admin_2",
+                  "execution_strategy": "direct_relationship_artifact", "artifact_path": "test/one.parquet"}
+        with (
+            mock.patch.object(reference_exchange, "_catalog_crosswalks", return_value=[record]),
+            mock.patch.object(reference_exchange, "_select_direct_crosswalk_rows") as scan,
+        ):
+            result = convert_reference(from_system="zip", value="00601", to_system="admin_2",
+                                       iso3="USA", crosswalk_id="wrong")
+        self.assertEqual(result["error"]["code"], "crosswalk_route_invalid")
+        scan.assert_not_called()
+
+    def test_direct_crosswalk_combines_canonical_and_raw_ids_in_one_sql_read(self) -> None:
+        with mock.patch.object(reference_exchange, "run_df", return_value=pd.DataFrame()) as read:
+            reference_exchange._select_direct_crosswalk_rows(
+                "one.parquet", input_column="source_loc_id", normalized_values=["USA-Z-00601"],
+                raw_values=["00601"], rank_column="rank_by_source_area", limit=5,
+            )
+        read.assert_called_once()
+        self.assertIn('"source_loc_id" IN (?) OR "source_id" IN (?)', read.call_args.args[0])
 
     def test_global_admin0_batch_uses_compact_identity_index_once(self) -> None:
         requests = [
@@ -280,6 +333,36 @@ class ReferenceExchangeRuntimeTests(unittest.TestCase):
         self.assertEqual(results[0]["admin_level"], "admin_1")
         self.assertFalse(results[1]["ok"])
         self.assertEqual(results[1]["error"]["code"], "admin_spine_match_not_found")
+
+    def test_single_native_admin_conversion_uses_country_index_only(self) -> None:
+        aliases = [{"reference_system": "admin.native_id", "external_id": "35204616019",
+                    "loc_id": "CAN-ON-3520-005-4616-019"}]
+        with (
+            mock.patch("mapmover.runtime.reference_graph.identify_aliases", return_value=aliases) as identify,
+            mock.patch("mapmover.runtime.reference_graph.resolve_alias", side_effect=AssertionError("broad graph route")),
+        ):
+            payload = convert_reference(from_system="admin.native_id", value="35204616019", iso3="CAN")
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["results"][0]["value"], "CAN-ON-3520-005-4616-019")
+        identify.assert_called_once_with(
+            ["35204616019"], iso3="CAN", reference_system="admin.native_id", limit=11,
+        )
+
+    def test_unknown_conversion_source_fails_before_reference_graph(self) -> None:
+        with mock.patch("mapmover.runtime.reference_graph.resolve_alias", side_effect=AssertionError("graph search")):
+            payload = convert_reference(
+                from_system="not_a_published_system", value="abc", to_system="admin_2", iso3="CAN",
+            )
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["error"]["code"], "unsupported_source_system")
+
+    def test_unknown_conversion_target_fails_before_source_lookup(self) -> None:
+        with mock.patch("mapmover.runtime.reference_graph.identify_aliases", side_effect=AssertionError("source lookup")):
+            payload = convert_reference(
+                from_system="admin.native_id", value="35204616019", to_system="not_published", iso3="CAN",
+            )
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["error"]["code"], "unsupported_target_system")
 
     def test_supersession_notice_keeps_requested_geometry_primary(self) -> None:
         notice = geometry_supersession_notice(
@@ -678,6 +761,7 @@ class ReferenceExchangeRuntimeTests(unittest.TestCase):
             to_system="admin_3",
             iso3="USA",
             limit=5,
+            crosswalk_id="usa_overlay_zcta_to_admin_3_census_2020_67b4fdf2",
         )
 
         self.assertTrue(payload["ok"])

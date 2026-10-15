@@ -407,6 +407,7 @@ class DataHelperTelemetryTests(unittest.TestCase):
                 {
                     "event_id": "USA-HRCN-example",
                     "pack_id": "hurricanes",
+                    "source_id": "hurricanes",
                     "include": ["relationships"],
                 },
             )
@@ -431,12 +432,42 @@ class DataHelperTelemetryTests(unittest.TestCase):
             envelope = _tool_call_envelope(
                 self.client,
                 "get_event",
-                {"event_id": "USA-HRCN-example", "pack_id": "hurricanes"},
+                {"event_id": "USA-HRCN-example", "pack_id": "hurricanes", "source_id": "hurricanes"},
             )
 
         self.assertTrue(envelope["result"]["isError"])
         self.assertEqual(envelope["result"]["structuredContent"]["error"]["code"], "event_lookup_failed")
         self.assertEqual(analytics_mock.call_args.kwargs["error_code"], "event_lookup_failed")
+
+    def test_get_event_without_pack_id_fails_before_lookup(self) -> None:
+        with mock.patch("mapmover.routes.mcp.get_event_payload") as lookup:
+            envelope = _tool_call_envelope(
+                self.client,
+                "get_event",
+                {"event_id": "DZA-FLOOD-DFO-1"},
+            )
+
+        self.assertTrue(envelope["result"]["isError"])
+        self.assertEqual(
+            envelope["result"]["structuredContent"]["error"]["code"],
+            "pack_id_required",
+        )
+        lookup.assert_not_called()
+
+    def test_get_event_without_source_id_fails_before_lookup(self) -> None:
+        with mock.patch("mapmover.routes.mcp.get_event_payload") as lookup:
+            envelope = _tool_call_envelope(
+                self.client,
+                "get_event",
+                {"pack_id": "floods", "event_id": "DZA-FLOOD-DFO-1"},
+            )
+
+        self.assertTrue(envelope["result"]["isError"])
+        self.assertEqual(
+            envelope["result"]["structuredContent"]["error"]["code"],
+            "source_id_required",
+        )
+        lookup.assert_not_called()
 
     def test_get_event_paid_pack_uses_shared_commercial_gate(self) -> None:
         event_payload = {
@@ -459,7 +490,7 @@ class DataHelperTelemetryTests(unittest.TestCase):
             envelope = _tool_call_envelope(
                 self.client,
                 "get_event",
-                {"event_id": "USA-HRCN-example", "pack_id": "hurricanes"},
+                {"event_id": "USA-HRCN-example", "pack_id": "hurricanes", "source_id": "hurricanes"},
             )
 
         result = envelope["result"]["structuredContent"]
@@ -480,7 +511,7 @@ class DataHelperTelemetryTests(unittest.TestCase):
             envelope = _tool_call_envelope(
                 self.client,
                 "get_event",
-                {"event_id": "USA-EQ-example", "pack_id": "earthquakes"},
+                {"event_id": "USA-EQ-example", "pack_id": "earthquakes", "source_id": "earthquakes_events"},
             )
 
         self.assertEqual(
@@ -516,7 +547,7 @@ class DataHelperTelemetryTests(unittest.TestCase):
             envelope = _tool_call_envelope(
                 self.client,
                 "get_event",
-                {"event_id": "USA-HRCN-example", "pack_id": "hurricanes"},
+                {"event_id": "USA-HRCN-example", "pack_id": "hurricanes", "source_id": "hurricanes"},
             )
 
         self.assertFalse(envelope["result"].get("isError", False))
@@ -1010,6 +1041,7 @@ class TrustedArtifactBypassTests(unittest.TestCase):
                 {
                     "event_id": "USA-HRCN-example",
                     "pack_id": "hurricanes",
+                    "source_id": "hurricanes",
                     "include": ["geometry"],
                     "limit": 3,
                 },
@@ -1119,6 +1151,7 @@ class TrustedArtifactBypassTests(unittest.TestCase):
                 self.client,
                 "convert_reference",
                 {
+                    "iso3": "USA",
                     "from_system": "admin.native_id",
                     "items": [{"value": str(index)} for index in range(3)],
                 },
