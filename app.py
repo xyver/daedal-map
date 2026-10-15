@@ -306,13 +306,14 @@ async def lifespan(app: FastAPI):
     logger.info("Startup complete - data catalog and order processor initialized")
     from mapmover.memory_logging import start_memory_logging
     stop_memory_logging = start_memory_logging()
+    stop_catalog_refresh = threading.Event()
 
     # Fire pre-warmers in background threads so startup is not blocked.
     # In cloud mode this populates DuckDB httpfs metadata cache, our in-memory
     # DataFrame cache, and the geometry cache so cold object-storage fetches do not hit
     # the first user requests.
     try:
-        from mapmover.control_catalog_prewarm import prewarm_control_catalogs
+        from mapmover.control_catalog_prewarm import maintain_app_catalogs, prewarm_control_catalogs
         from mapmover.data_loading import prewarm_api_catalog
         from mapmover.duckdb_helpers import is_cloud_mode, prewarm_disaster_sources
         from mapmover.geometry_handlers import prewarm_geometry
@@ -330,6 +331,7 @@ async def lifespan(app: FastAPI):
             # process is healthy.
             if os.environ.get("PREWARM_DISASTERS", "0").strip().lower() in {"1", "true", "yes", "on"}:
                 tasks.append("disasters")
+        prewarm_started_monotonic = time.monotonic()
         begin_prewarm(tasks)
 
         def prewarm_control_then_public_catalog() -> None:
@@ -356,6 +358,13 @@ async def lifespan(app: FastAPI):
             name="prewarm-api-catalog",
         )
         t_api_catalog.start()
+        threading.Thread(
+            target=maintain_app_catalogs,
+            args=(stop_catalog_refresh,),
+            kwargs={"startup_monotonic": prewarm_started_monotonic},
+            daemon=True,
+            name="maintain-app-catalogs",
+        ).start()
         if is_cloud_mode():
             t_geom = threading.Thread(
                 target=run_prewarm_task,
@@ -406,6 +415,7 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
+        stop_catalog_refresh.set()
         stop_memory_logging()
 
 

@@ -30,6 +30,7 @@ from .geometry_storage_layout import country_catalog_relative
 
 CATALOG_PATH = GEOMETRY_DIR / "geometry_catalog.json"
 CROSSWALK_CATALOG_PATH = GEOMETRY_DIR / "crosswalk_catalog.json"
+_geometry_catalog_prefetch: tuple[int, dict[str, Any]] | None = None
 
 
 def _empty_country_catalog(country: str) -> dict[str, Any]:
@@ -116,7 +117,27 @@ def _load_geometry_catalog_cached(_epoch: int) -> dict[str, Any]:
 
 def load_geometry_catalog() -> dict[str, Any]:
     """Load the sole runtime authority, revalidating its cloud object periodically."""
-    return _load_geometry_catalog_cached(_catalog_cache_epoch())
+    epoch = _catalog_cache_epoch()
+    prefetched = _geometry_catalog_prefetch
+    if prefetched and prefetched[0] == epoch:
+        return prefetched[1]
+    return _load_geometry_catalog_cached(epoch)
+
+
+def refresh_geometry_catalog() -> dict[str, Any]:
+    """Prefetch the next catalog epoch without changing the current geometry view."""
+    global _geometry_catalog_prefetch
+    if _is_cloud_mode():
+        payload = _fetch_geometry_catalog_from_s3()
+    else:
+        payload = json.loads(CATALOG_PATH.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict) or not any(
+        payload.get(key) for key in ("geometry_banks", "geometry_products", "country_profiles", "geometry_collections")
+    ):
+        raise RuntimeError("geometry catalog refresh returned no records")
+    catalog = _merge_crosswalks(payload)
+    _geometry_catalog_prefetch = (_catalog_cache_epoch() + 1, catalog)
+    return catalog
 
 
 @lru_cache(maxsize=128)
@@ -152,6 +173,8 @@ def load_country_geometry_catalog(country_scope: str) -> dict[str, Any]:
 
 
 def clear_geometry_catalog_cache() -> None:
+    global _geometry_catalog_prefetch
+    _geometry_catalog_prefetch = None
     _load_geometry_catalog_cached.cache_clear()
     _load_country_geometry_catalog_cached.cache_clear()
     _named_index.cache_clear()

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from unittest import mock
 from pathlib import Path
+import asyncio
 
 import pytest
 
@@ -15,6 +16,7 @@ from mapmover.ops_feed_registry import OPS_FEED_REGISTRY_CACHE_TTL_SECONDS
 from mapmover.routes import mcp, system
 from mapmover.pack_state import build_active_catalog
 from mapmover.runtime import geometry_catalog
+from mapmover import control_catalog_prewarm
 
 
 @pytest.fixture(autouse=True)
@@ -134,6 +136,24 @@ def test_lite_pack_load_skips_source_metadata_and_has_separate_cache() -> None:
     assert full["sources"][0]["temporal_coverage"]["end"] == "2026"
 
 
+def test_forced_pack_refresh_keeps_lite_payload_and_accepts_missing_generated_detail() -> None:
+    published = {
+        "packs": [_published_pack("new_pack")],
+        "sources": [{"source_id": "new_pack_source", "pack_id": "new_pack", "temporal_coverage": {"end": "2025"}}],
+    }
+    with (
+        mock.patch.object(data_loading, "load_catalog", return_value=published),
+        mock.patch.object(data_loading, "_load_json_from_runtime_or_s3", return_value=None),
+        mock.patch.object(data_loading, "load_source_metadata", return_value={"temporal_coverage": {"end": "2026"}}) as metadata,
+    ):
+        full = data_loading.load_api_pack_detail("new_pack", force_refresh=True)
+        lite = data_loading.load_api_pack_detail("new_pack", hydrate_source_metadata=False)
+        metadata.assert_called_once_with("new_pack_source")
+
+    assert full["sources"][0]["temporal_coverage"]["end"] == "2026"
+    assert lite["sources"][0]["temporal_coverage"]["end"] == "2025"
+
+
 def test_agent_catalog_prewarm_reports_missing_required_metadata() -> None:
     with (
         mock.patch.object(data_loading, "load_api_catalog", return_value={"packs": [{"pack_id": "demo"}]}),
@@ -141,6 +161,75 @@ def test_agent_catalog_prewarm_reports_missing_required_metadata() -> None:
     ):
         with pytest.raises(RuntimeError, match="no guide"):
             data_loading.prewarm_api_catalog()
+
+
+def test_forced_published_refresh_keeps_old_cache_on_fetch_failure() -> None:
+    old = {"sources": [{"source_id": "existing"}], "packs": []}
+    with (
+        mock.patch.object(data_loading, "_catalog_cache", old),
+        mock.patch.object(data_loading, "_catalog_cache_time", 1.0e12),
+        mock.patch.object(data_loading, "get_data_plane_mode", return_value="cloud"),
+        mock.patch.object(data_loading, "_fetch_json_from_s3", side_effect=OSError("R2 unavailable")),
+    ):
+        with pytest.raises(RuntimeError, match="refresh failed"):
+            data_loading.load_catalog(force_refresh=True)
+        assert data_loading._catalog_cache is old
+
+
+def test_app_refresh_uses_force_reads_without_clearing_serving_caches() -> None:
+    with (
+        mock.patch.object(control_catalog_prewarm, "load_catalog", return_value={"sources": [{}]}) as published,
+        mock.patch.object(control_catalog_prewarm, "load_full_catalog", return_value={"sources": [{}]}) as wip,
+        mock.patch.object(control_catalog_prewarm, "refresh_geometry_catalog", return_value={"geometry_banks": [{}]}) as geometry,
+        mock.patch.object(control_catalog_prewarm, "load_ops_feed_records", return_value=[{}]) as feeds,
+        mock.patch.object(control_catalog_prewarm, "load_api_catalog", return_value={"packs": [{"pack_id": "demo"}]}) as agent,
+        mock.patch.object(control_catalog_prewarm, "load_api_guide", return_value={"title": "Guide"}) as guide,
+        mock.patch.object(control_catalog_prewarm, "load_api_pack_detail", return_value={"pack_id": "demo"}) as detail,
+    ):
+        counts = control_catalog_prewarm.refresh_app_catalogs()
+    assert counts == {"published": 1, "wip": 1, "geometry": 1, "ops_feeds": 1, "agent_packs": 1}
+    published.assert_called_once_with(force_refresh=True)
+    wip.assert_called_once_with(force_refresh=True)
+    geometry.assert_called_once_with()
+    feeds.assert_called_once_with(force_refresh=True)
+    agent.assert_called_once_with(force_refresh=True)
+    guide.assert_called_once_with(force_refresh=True)
+    detail.assert_called_once_with("demo", force_refresh=True)
+
+
+def test_geometry_prefetch_is_visible_only_in_next_epoch() -> None:
+    geometry_catalog.clear_geometry_catalog_cache()
+    current = {"geometry_banks": [{"bank_id": "old"}]}
+    upcoming = {"geometry_banks": [{"bank_id": "new"}]}
+    with (
+        mock.patch.object(geometry_catalog, "_catalog_cache_epoch", return_value=10) as epoch,
+        mock.patch.object(geometry_catalog, "_load_geometry_catalog_cached", return_value=current),
+        mock.patch.object(geometry_catalog, "_is_cloud_mode", return_value=True),
+        mock.patch.object(geometry_catalog, "_fetch_geometry_catalog_from_s3", return_value=upcoming),
+    ):
+        geometry_catalog.refresh_geometry_catalog()
+        assert geometry_catalog.load_geometry_catalog() is current
+        epoch.return_value = 11
+        assert geometry_catalog.load_geometry_catalog()["geometry_banks"][0]["bank_id"] == "new"
+    geometry_catalog.clear_geometry_catalog_cache()
+
+
+def test_readiness_reports_stale_app_catalog_generation() -> None:
+    with (
+        mock.patch.object(system, "prewarm_readiness", return_value={"state": "ready"}),
+        mock.patch.object(control_catalog_prewarm, "app_catalog_refresh_status", return_value={"state": "error", "age_seconds": 301}),
+    ):
+        response = asyncio.run(system.readiness_check())
+    assert response.status_code == 503
+
+
+def test_readiness_waits_for_catalog_refresh_monitor() -> None:
+    with (
+        mock.patch.object(system, "prewarm_readiness", return_value={"state": "ready"}),
+        mock.patch.object(control_catalog_prewarm, "app_catalog_refresh_status", return_value={"state": "not_started", "age_seconds": None}),
+    ):
+        response = asyncio.run(system.readiness_check())
+    assert response.status_code == 503
 
 
 def test_new_catalog_pack_detail_does_not_require_generated_pack_file() -> None:

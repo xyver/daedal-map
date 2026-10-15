@@ -291,7 +291,7 @@ def _load_json_from_runtime_or_s3(relative_path: str, *, use_agent_prefix: bool 
     return None
 
 
-def load_catalog():
+def load_catalog(*, force_refresh: bool = False):
     """
     Load the unified catalog.json file.
     Cached with a 5-minute TTL. In cloud mode, fetches directly from S3 into memory
@@ -306,22 +306,26 @@ def load_catalog():
         return load_full_catalog()
 
     now = time.time()
-    if _catalog_cache is not None and (now - _catalog_cache_time) < _CATALOG_TTL_SECONDS:
+    if not force_refresh and _catalog_cache is not None and (now - _catalog_cache_time) < _CATALOG_TTL_SECONDS:
         return build_active_catalog(_catalog_cache, catalog_surface=_requested_product_surface())
 
     runtime_mode = get_data_plane_mode()
 
     if runtime_mode == "cloud":
-        if (now - _catalog_missing_time) < _CATALOG_MISS_TTL_SECONDS and _catalog_cache is None:
+        if not force_refresh and (now - _catalog_missing_time) < _CATALOG_MISS_TTL_SECONDS and _catalog_cache is None:
             return {"sources": [], "total_sources": 0}
         try:
             raw_catalog = _fetch_json_from_s3("catalog.json")
+            if force_refresh and not ((raw_catalog or {}).get("sources") or (raw_catalog or {}).get("packs")):
+                raise RuntimeError("published catalog refresh returned no records")
+            active_catalog = build_active_catalog(raw_catalog, catalog_surface=_requested_product_surface())
             _catalog_cache = raw_catalog
             _catalog_cache_time = now
-            active_catalog = build_active_catalog(raw_catalog, catalog_surface=_requested_product_surface())
             logger.debug(f"Loaded catalog.json from S3 with {len(raw_catalog.get('sources', []))} sources")
             return active_catalog
         except Exception as e:
+            if force_refresh:
+                raise RuntimeError("published catalog refresh failed") from e
             logger.warning(f"catalog.json S3 fetch failed: {e}")
             local_catalog_path = None if force_remote_data_reads() else get_catalog_path()
             if local_catalog_path and local_catalog_path.exists():
@@ -363,18 +367,22 @@ def load_catalog():
         return {"sources": [], "total_sources": 0}
 
 
-def load_api_catalog() -> dict:
+def load_api_catalog(*, force_refresh: bool = False) -> dict:
     global _api_catalog_cache, _api_catalog_cache_time, _api_catalog_missing_time
 
     now = time.time()
-    if _api_catalog_cache is not None and (now - _api_catalog_cache_time) < _API_CATALOG_TTL_SECONDS:
+    if not force_refresh and _api_catalog_cache is not None and (now - _api_catalog_cache_time) < _API_CATALOG_TTL_SECONDS:
         return _api_catalog_cache
-    if _api_catalog_cache is None and (now - _api_catalog_missing_time) < _CATALOG_MISS_TTL_SECONDS:
+    if not force_refresh and _api_catalog_cache is None and (now - _api_catalog_missing_time) < _CATALOG_MISS_TTL_SECONDS:
         return {"catalog_version": "1.0", "generated_at": None, "source_mode": "agent_catalog", "pack_count": 0, "packs": []}
 
     payload = _load_json_from_runtime_or_s3("api_catalog.json", use_agent_prefix=True)
+    if force_refresh and (not isinstance(payload, dict) or not payload.get("packs")):
+        raise RuntimeError("Agent Catalog refresh could not read api_catalog.json")
     payload = _merge_api_catalog_with_published(payload)
     if not payload.get("packs"):
+        if force_refresh:
+            raise RuntimeError("Agent Catalog refresh returned no packs")
         _api_catalog_missing_time = now
         return {"catalog_version": "1.0", "generated_at": None, "source_mode": "agent_catalog", "pack_count": 0, "packs": []}
 
@@ -384,17 +392,21 @@ def load_api_catalog() -> dict:
     return payload
 
 
-def load_api_guide() -> dict:
+def load_api_guide(*, force_refresh: bool = False) -> dict:
     global _api_guide_cache, _api_guide_cache_time, _api_guide_missing_time
 
     now = time.time()
-    if _api_guide_cache is not None and (now - _api_guide_cache_time) < _API_CATALOG_TTL_SECONDS:
+    if not force_refresh and _api_guide_cache is not None and (now - _api_guide_cache_time) < _API_CATALOG_TTL_SECONDS:
         return _api_guide_cache
-    if _api_guide_cache is None and (now - _api_guide_missing_time) < _CATALOG_MISS_TTL_SECONDS:
+    if not force_refresh and _api_guide_cache is None and (now - _api_guide_missing_time) < _CATALOG_MISS_TTL_SECONDS:
         return {}
 
     payload = _load_json_from_runtime_or_s3("guide.json", use_agent_prefix=True)
+    if not payload and force_refresh:
+        raise RuntimeError("Agent Catalog refresh could not read guide.json")
     if payload is None:
+        if force_refresh:
+            raise RuntimeError("Agent Catalog refresh could not read guide.json")
         _api_guide_missing_time = now
         return {}
 
@@ -404,7 +416,9 @@ def load_api_guide() -> dict:
     return payload
 
 
-def load_api_pack_detail(pack_id: str, *, hydrate_source_metadata: bool = True) -> dict | None:
+def load_api_pack_detail(
+    pack_id: str, *, hydrate_source_metadata: bool = True, force_refresh: bool = False,
+) -> dict | None:
     global _api_pack_cache, _api_pack_cache_time, _api_pack_missing_time
 
     pack_id = str(pack_id or "").strip()
@@ -415,9 +429,9 @@ def load_api_pack_detail(pack_id: str, *, hydrate_source_metadata: bool = True) 
     cache_key = (pack_id, hydrate_source_metadata)
     cached = _api_pack_cache.get(cache_key)
     cached_time = _api_pack_cache_time.get(cache_key, 0.0)
-    if cached is not None and (now - cached_time) < _API_CATALOG_TTL_SECONDS:
+    if not force_refresh and cached is not None and (now - cached_time) < _API_CATALOG_TTL_SECONDS:
         return cached
-    if cached is None and (now - _api_pack_missing_time.get(pack_id, 0.0)) < _CATALOG_MISS_TTL_SECONDS:
+    if not force_refresh and cached is None and (now - _api_pack_missing_time.get(pack_id, 0.0)) < _CATALOG_MISS_TTL_SECONDS:
         return None
 
     payload = _load_json_from_runtime_or_s3(f"packs/{pack_id}.json", use_agent_prefix=True)
@@ -445,13 +459,19 @@ def load_api_pack_detail(pack_id: str, *, hydrate_source_metadata: bool = True) 
         if isinstance(source, dict) and str(source.get("source_id") or "") in source_ids
     ]
 
+    lite_payload = deepcopy(payload) if hydrate_source_metadata else payload
     if hydrate_source_metadata:
         payload = _hydrate_api_pack_detail_from_source_metadata(payload)
     if isinstance(payload, dict):
         payload["paid_data_calls"] = _pack_is_paid(pack_id)
+    if isinstance(lite_payload, dict):
+        lite_payload["paid_data_calls"] = payload["paid_data_calls"]
 
     _api_pack_cache[cache_key] = payload
     _api_pack_cache_time[cache_key] = now
+    if hydrate_source_metadata:
+        _api_pack_cache[(pack_id, False)] = lite_payload
+        _api_pack_cache_time[(pack_id, False)] = now
     return payload
 
 
@@ -616,27 +636,31 @@ def _hydrate_api_pack_detail_from_source_metadata(payload: dict | None) -> dict 
     return hydrated
 
 
-def load_full_catalog():
+def load_full_catalog(*, force_refresh: bool = False):
     """Load the WIP/full catalog without active-pack filtering."""
     global _full_catalog_cache, _full_catalog_cache_time, _full_catalog_missing_time
 
     now = time.time()
-    if _full_catalog_cache is not None and (now - _full_catalog_cache_time) < _CATALOG_TTL_SECONDS:
+    if not force_refresh and _full_catalog_cache is not None and (now - _full_catalog_cache_time) < _CATALOG_TTL_SECONDS:
         return _full_catalog_cache
 
     runtime_mode = get_data_plane_mode()
 
     if runtime_mode == "cloud":
-        if (now - _full_catalog_missing_time) < _CATALOG_MISS_TTL_SECONDS and _full_catalog_cache is None:
+        if not force_refresh and (now - _full_catalog_missing_time) < _CATALOG_MISS_TTL_SECONDS and _full_catalog_cache is None:
             fallback = load_catalog()
             return fallback or {"sources": [], "total_sources": 0}
         try:
             raw_catalog = _fetch_json_from_s3("wip_catalog.json")
+            if force_refresh and not ((raw_catalog or {}).get("sources") or (raw_catalog or {}).get("packs")):
+                raise RuntimeError("WIP catalog refresh returned no records")
             _full_catalog_cache = raw_catalog
             _full_catalog_cache_time = now
             logger.debug(f"Loaded wip_catalog.json from S3 with {len(raw_catalog.get('sources', []))} sources")
             return raw_catalog
         except Exception as e:
+            if force_refresh:
+                raise RuntimeError("WIP catalog refresh failed") from e
             logger.warning(f"wip_catalog.json S3 fetch failed, falling back to local/runtime catalogs: {e}")
             local_wip_path = None if force_remote_data_reads() else get_wip_catalog_path()
             if local_wip_path and local_wip_path.exists():

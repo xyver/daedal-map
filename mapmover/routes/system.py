@@ -2204,15 +2204,22 @@ async def health_check():
 
 @router.get("/health/ready")
 async def readiness_check():
-    """Return 200 only after this process has completed its startup pre-warm."""
+    """Report startup and ongoing catalog warmth for the VPS heartbeat."""
+    from mapmover.control_catalog_prewarm import app_catalog_refresh_status
+
     readiness = prewarm_readiness()
-    ready = readiness.get("state") == "ready"
+    catalog_refresh = app_catalog_refresh_status()
+    refresh_age = catalog_refresh.get("age_seconds")
+    ready = readiness.get("state") == "ready" and isinstance(refresh_age, (int, float)) and (
+        refresh_age < CONTROL_CATALOG_CACHE_TTL_SECONDS
+    )
     return JSONResponse(
         status_code=200 if ready else 503,
         content={
             "status": "ready" if ready else "warming",
             "service": "county-map-api",
             "prewarm": readiness,
+            "catalog_refresh": catalog_refresh,
         },
     )
 

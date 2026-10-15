@@ -218,14 +218,14 @@ def validate_ops_feed_registry(payload: Any, *, strict: bool = True) -> list[str
     return errors
 
 
-def load_ops_feed_records(path: Path | None = None) -> list[dict]:
+def load_ops_feed_records(path: Path | None = None, *, force_refresh: bool = False) -> list[dict]:
     """Return valid logical feed records, failing closed for malformed rows."""
     global _OPS_FEED_REGISTRY_CACHE
     if path is None:
         now = time.monotonic()
         with _OPS_FEED_REGISTRY_CACHE_LOCK:
             cached = _OPS_FEED_REGISTRY_CACHE
-            if cached is not None and cached[0] > now:
+            if not force_refresh and cached is not None and cached[0] > now:
                 return cached[1]
 
     try:
