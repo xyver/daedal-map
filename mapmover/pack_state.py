@@ -437,7 +437,12 @@ def build_active_catalog(full_catalog: dict, state: dict | None = None, catalog_
         or any(source_id in active_source_ids for source_id in (pack.get("source_ids") or []))
     ]
     active_catalog["total_packs"] = len(active_catalog["packs"])
-    active_catalog["overlay_tree"] = _build_overlay_tree_for_sources(active_sources)
+    # API/MCP callers use source and pack records, not the Explore overlay
+    # tree. Building that tree fetches metadata for every source on a cold
+    # catalog refresh, delaying even one-pack lookups and access checks.
+    active_catalog["overlay_tree"] = (
+        {} if catalog_surface == "api" else _build_overlay_tree_for_sources(active_sources)
+    )
     active_catalog["runtime_pack_state"] = {
         "catalog_mode": state.get("catalog_mode", "unmanaged_data_root"),
         "installed_pack_ids": get_installed_pack_ids(state),

@@ -13,6 +13,7 @@ from mapmover.catalog_cache_policy import (
 )
 from mapmover.ops_feed_registry import OPS_FEED_REGISTRY_CACHE_TTL_SECONDS
 from mapmover.routes import mcp, system
+from mapmover.pack_state import build_active_catalog
 from mapmover.runtime import geometry_catalog
 
 
@@ -46,6 +47,26 @@ def test_all_runtime_control_catalogs_share_one_ttl() -> None:
     assert geometry_catalog.control_catalog_cache_epoch is control_catalog_cache_epoch
     assert OPS_FEED_REGISTRY_CACHE_TTL_SECONDS == CONTROL_CATALOG_CACHE_TTL_SECONDS
     assert system._PUBLIC_PACK_CATALOG_TTL_SECONDS == CONTROL_CATALOG_CACHE_TTL_SECONDS
+
+
+def test_api_catalog_build_does_not_fetch_explore_overlay_metadata() -> None:
+    catalog = {"sources": [{
+        "source_id": "earthquakes_events", "pack_id": "earthquakes",
+        "catalog_surfaces": ["api", "explore"],
+        "overlay": {"path": "disasters/earthquakes"},
+    }], "packs": []}
+    state = {"catalog_mode": "unmanaged_data_root", "installed_packs": []}
+    with (
+        mock.patch("mapmover.pack_state.load_pack_state", return_value=state),
+        mock.patch.object(data_loading, "load_source_metadata", return_value={}) as metadata,
+    ):
+        api_catalog = build_active_catalog(catalog, catalog_surface="api")
+        assert api_catalog["sources"][0]["source_id"] == "earthquakes_events"
+        assert api_catalog["overlay_tree"] == {}
+        metadata.assert_not_called()
+        explore_catalog = build_active_catalog(catalog, catalog_surface="explore")
+        assert explore_catalog["overlay_tree"]
+        metadata.assert_called_once_with("earthquakes_events")
 
 
 def test_normal_catalog_owns_agent_pack_admission_and_current_facts() -> None:
