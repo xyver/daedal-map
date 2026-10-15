@@ -76,7 +76,7 @@ class MemoryHistoryTests(unittest.TestCase):
             self.assertIn('memory_logging_started', text)
             self.assertIn('memory_sample', text)
             self.assertEqual(history._FILE_HANDLER.maxBytes, 10 * 1024 * 1024)
-            self.assertEqual(history._FILE_HANDLER.backupCount, 6)
+            self.assertEqual(history._FILE_HANDLER.backupCount, 90)
             history.logger.removeHandler(history._FILE_HANDLER)
             history._FILE_HANDLER.close()
             history._FILE_HANDLER = None

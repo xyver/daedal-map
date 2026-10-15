@@ -20,6 +20,7 @@ if not logger.handlers:
 _EPOCH = uuid.uuid4().hex
 _START = time.monotonic()
 _FILE_HANDLER = None
+_MEMORY_LOG_BACKUPS = 90  # About 900 MiB; headroom for a month as sample size grows.
 
 
 def _ensure_file_log():
@@ -34,7 +35,8 @@ def _ensure_file_log():
     try:
         path = Path(configured)
         path.parent.mkdir(parents=True, exist_ok=True)
-        handler = RotatingFileHandler(path, maxBytes=10 * 1024 * 1024, backupCount=6, encoding='utf-8')
+        handler = RotatingFileHandler(path, maxBytes=10 * 1024 * 1024,
+                                      backupCount=_MEMORY_LOG_BACKUPS, encoding='utf-8')
         handler.setFormatter(logging.Formatter('%(message)s'))
         logger.addHandler(handler)
         _FILE_HANDLER = handler
