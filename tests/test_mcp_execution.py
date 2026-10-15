@@ -7,6 +7,15 @@ from mapmover import mcp_execution
 
 
 class MCPExecutionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_create_job_keeps_its_longer_execution_budget(self):
+        with mock.patch.object(mcp_execution, "_JOB_TIMEOUT_SECONDS", 7):
+            with mock.patch.object(mcp_execution.asyncio, "wait_for", wraps=asyncio.wait_for) as wait:
+                self.assertEqual(
+                    await mcp_execution.run_mcp_blocking("create_geometry_export", lambda: "done"),
+                    "done",
+                )
+        self.assertEqual(wait.call_args.kwargs["timeout"], 7)
+
     async def test_blocking_work_does_not_block_event_loop(self):
         gate = threading.Event()
         started = threading.Event()

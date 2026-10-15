@@ -54,6 +54,8 @@ _MAX_WORKERS = _env_int("MCP_EXECUTION_MAX_WORKERS", 2)
 # A slow object-store read must produce a tool error before interactive clients
 # abandon the request. Timed-out work still holds its slot until it exits.
 _DEFAULT_TIMEOUT_SECONDS = _env_int("MCP_EXECUTION_TIMEOUT_SECONDS", 30)
+_JOB_TIMEOUT_SECONDS = _env_int("MCP_EXECUTION_JOB_TIMEOUT_SECONDS", 120)
+_LONG_JOB_TOOLS = frozenset({"create_geometry_export", "create_conversion_job"})
 _CAPACITY_WAIT_SECONDS = _env_float("MCP_EXECUTION_CAPACITY_WAIT_SECONDS", 2.0)
 _EXECUTOR = ThreadPoolExecutor(max_workers=_MAX_WORKERS, thread_name_prefix="mcp-tool")
 _CAPACITY = threading.BoundedSemaphore(_MAX_WORKERS)
@@ -118,7 +120,10 @@ async def run_mcp_blocking(
     future.add_done_callback(_release_capacity)
 
     wrapped = asyncio.wrap_future(future)
-    budget = max(0.001, float(timeout_seconds or _DEFAULT_TIMEOUT_SECONDS))
+    default_budget = (
+        _JOB_TIMEOUT_SECONDS if tool_name in _LONG_JOB_TOOLS else _DEFAULT_TIMEOUT_SECONDS
+    )
+    budget = max(0.001, float(timeout_seconds if timeout_seconds is not None else default_budget))
     try:
         return await asyncio.wait_for(asyncio.shield(wrapped), timeout=budget)
     except asyncio.TimeoutError as exc:
