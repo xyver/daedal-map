@@ -329,7 +329,9 @@ def _guard_mcp_execution(tool_name: str):
                     "execution_failure_kind": "timeout" if timeout else "capacity",
                     "execution_active_workers": status["active_workers"],
                     "execution_max_workers": status["max_workers"],
-                    "execution_timeout_seconds": status["default_timeout_seconds"] if timeout else None,
+                    "execution_timeout_seconds": (
+                        exc.timeout_seconds or status["default_timeout_seconds"]
+                    ) if timeout else None,
                     "retry_after_seconds": retry_after,
                     "railway_replica_id": str(os.getenv("RAILWAY_REPLICA_ID", "") or "").strip() or None,
                     "railway_replica_region": str(os.getenv("RAILWAY_REPLICA_REGION", "") or "").strip() or None,
@@ -3039,12 +3041,15 @@ async def _execute_point_lookup_tool(
                     execution_tool_name, resolve_marine_points, valid_points,
                 )
             else:
+                stop_event = threading.Event()
                 family_results = await run_mcp_blocking(
                     execution_tool_name,
                     resolve_family_points,
                     country_scope or "",
                     [requested_family],
                     valid_points,
+                    stop_event=stop_event,
+                    cancellation_event=stop_event,
                 )
             resolver_stages["family_resolver_ms"] = _elapsed_ms(family_started)
 
@@ -3293,12 +3298,15 @@ async def _execute_point_lookup_tool(
                     [{"lon": lon, "lat": lat}],
                 )
             else:
+                stop_event = threading.Event()
                 resolved_families = await run_mcp_blocking(
                     execution_tool_name,
                     resolve_family_points,
                     country_scope or "",
                     [requested_family],
                     [{"lon": lon, "lat": lat}],
+                    stop_event=stop_event,
+                    cancellation_event=stop_event,
                 )
             family_result = (
                 (resolved_families[0] or {}).get(requested_family) or {}
@@ -5458,7 +5466,10 @@ async def _execute_get_event_tool(
                 rpc_request_id,
             )
         if pack_id_hint:
-            hinted_access = _pack_material_effective_access(request, pack_id_hint)
+            hinted_access = await run_mcp_blocking(
+                "get_event", _pack_material_effective_access, request, pack_id_hint,
+                timeout_seconds=5,
+            )
             if not hinted_access.get("allow") or (
                 hinted_access.get("settlement_required") and not commercial_access_enabled()
             ):
@@ -5522,7 +5533,10 @@ async def _execute_get_event_tool(
             rpc_request_id,
         )
     result_pack_id = str(result.get("pack_id") or payload.get("pack_id") or "").strip().lower()
-    effective_access = _pack_material_effective_access(request, result_pack_id)
+    effective_access = await run_mcp_blocking(
+        "get_event", _pack_material_effective_access, request, result_pack_id,
+        timeout_seconds=5,
+    )
     commercial_context, access_error = await _authorize_material_tool(
         request,
         tool_name="get_event",

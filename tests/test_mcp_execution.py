@@ -41,7 +41,7 @@ class MCPExecutionTests(unittest.IsolatedAsyncioTestCase):
                 )
             self.assertEqual(
                 mcp_execution.execution_status(),
-                {"max_workers": 1, "active_workers": 1, "default_timeout_seconds": 120},
+                {"max_workers": 1, "active_workers": 1, "default_timeout_seconds": 30},
             )
             with self.assertRaises(mcp_execution.MCPExecutionCapacityError):
                 await mcp_execution.run_mcp_blocking(

@@ -9,6 +9,7 @@ not part of this path.
 from __future__ import annotations
 
 import json
+import threading
 import time
 from functools import lru_cache
 from pathlib import Path
@@ -215,6 +216,8 @@ def resolve_family_points(
     country: str,
     families: Iterable[str],
     points: Iterable[dict[str, Any]],
+    *,
+    stop_event: threading.Event | None = None,
 ) -> list[dict[str, dict[str, Any]]]:
     """Resolve a point batch, returning one explicit outcome per family/point."""
     country = str(country or "").strip().upper()
@@ -237,6 +240,8 @@ def resolve_family_points(
     ), "")
 
     for family in requested:
+        if stop_event is not None and stop_event.is_set():
+            return results
         if family not in available:
             for result in results:
                 result[family] = {
@@ -287,6 +292,8 @@ def resolve_family_points(
                     if 0 <= position < len(point_rows) and loc_id:
                         candidates_by_point[position].add(loc_id)
                         identity_rows.setdefault(loc_id, row)
+                if stop_event is not None and stop_event.is_set():
+                    return results
                 shape_paths = {
                     str(row.get("shape_path") or "") for row in identity_rows.values()
                 }
@@ -295,6 +302,8 @@ def resolve_family_points(
                 shape_records = load_routed_family_geometry(list(identity_rows.values())).to_dict("records")
             else:
                 for relative_path in predicate_paths:
+                    if stop_event is not None and stop_event.is_set():
+                        return results
                     candidates = read_bbox_candidates_for_points(
                         DATA_ROOT / Path(relative_path),
                         point_rows,
@@ -306,6 +315,8 @@ def resolve_family_points(
                         if 0 <= position < len(point_rows) and loc_id:
                             candidates_by_point[position].add(loc_id)
                 candidate_ids = sorted(set().union(*candidates_by_point)) if candidates_by_point else []
+                if stop_event is not None and stop_event.is_set():
+                    return results
                 shape_records = (
                     load_reference_graph_geometry(candidate_ids).to_dict("records")
                     if candidate_ids else []

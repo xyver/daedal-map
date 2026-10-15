@@ -1,4 +1,5 @@
 import unittest
+import threading
 from unittest.mock import patch
 
 import pandas as pd
@@ -13,6 +14,30 @@ from mapmover.runtime.family_point_resolution import (
 
 
 class FamilyPointResolutionTests(unittest.TestCase):
+    def test_cancelled_predicate_route_stops_before_next_file_or_shapes(self):
+        stop_event = threading.Event()
+
+        def first_read(*args, **kwargs):
+            stop_event.set()
+            return pd.DataFrame(columns=["point_position", "loc_id"])
+
+        with (
+            patch("mapmover.runtime.family_point_resolution.load_geometry_catalog", return_value={}),
+            patch("mapmover.runtime.family_point_resolution.country_capability_record",
+                  return_value={"available_family_ids": ["watershed"]}),
+            patch("mapmover.runtime.family_point_resolution.family_artifacts", return_value={
+                "watershed": {"predicate_paths": ["first.parquet", "second.parquet"],
+                              "exact_paths": ["shapes.parquet"]},
+            }),
+            patch("mapmover.runtime.family_point_resolution.read_bbox_candidates_for_points",
+                  side_effect=first_read) as read,
+            patch("mapmover.runtime.family_point_resolution.load_reference_graph_geometry") as shapes,
+        ):
+            resolve_family_points("USA", ["watershed"], [{"lon": 1, "lat": 1}],
+                                  stop_event=stop_event)
+        read.assert_called_once()
+        shapes.assert_not_called()
+
     def test_shallow_scope_uses_one_admin_route_index(self):
         rows = pd.DataFrame([{"loc_id": "USA-TX-201", "admin_level": 2,
                               "admin_1_loc_id": "USA-TX"}])
