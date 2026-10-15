@@ -391,11 +391,26 @@ def resolve_artifact_path(
     lane: ArtifactLane = "published",
     max_bytes: int | None = None,
 ) -> Path | None:
+    """Resolve a bounded verified artifact, tracing MCP cache time when applicable."""
+    from mapmover.mcp_execution import mcp_stage
+
+    with mcp_stage("artifact_cache_resolution"):
+        return _resolve_artifact_path_impl(relative_path, lane=lane, max_bytes=max_bytes)
+
+
+def _resolve_artifact_path_impl(
+    relative_path: str | Path,
+    *,
+    lane: ArtifactLane = "published",
+    max_bytes: int | None = None,
+) -> Path | None:
     """Return a verified local artifact, hydrating it when safely bounded.
 
     Any cache, metadata, or hydration failure returns ``None`` so callers can
     fall back to the authoritative object-store read.
     """
+    from mapmover.mcp_execution import record_mcp_artifact_error, record_mcp_artifact_io
+
     ref = artifact_ref(relative_path, lane=lane)
     if not _cache_eligible(ref):
         return None
@@ -416,8 +431,10 @@ def resolve_artifact_path(
                     entries[key] = entry
                     _write_index(entries)
                     _CACHE_STATS["disk_hits"] += 1
+                    record_mcp_artifact_io("cache_hits")
                     return local_path
                 _CACHE_STATS["disk_misses"] += 1
+                record_mcp_artifact_io("cache_misses")
                 if entry:
                     _remove_entry(entries, key)
                 if not _evict_for(entries, int(remote["bytes"]), keep_key=key):
@@ -481,9 +498,12 @@ def resolve_artifact_path(
                 _VERIFIED_FILES[str(local_path.resolve())] = (stat.st_size, stat.st_mtime_ns, entry["sha256"])
                 _CACHE_STATS["hydrations"] += 1
                 _CACHE_STATS["hydrated_bytes"] += written
+                record_mcp_artifact_io("hydrated_bytes", written)
             return local_path
-        except Exception:
+        except Exception as exc:
             _CACHE_STATS["errors"] += 1
+            record_mcp_artifact_io("cache_errors")
+            record_mcp_artifact_error(exc)
             return None
 
 
@@ -495,8 +515,12 @@ def resolve_data_artifact_uri(
     max_bytes: int | None = None,
 ) -> str:
     """Resolve a DATA_ROOT artifact to verified local storage or its S3 URI."""
+    from mapmover.mcp_execution import record_mcp_artifact_io
+
     relative = relative_data_path(path, data_root=data_root)
     local = resolve_artifact_path(relative, lane=lane, max_bytes=max_bytes)
+    if local is None:
+        record_mcp_artifact_io("remote_uris")
     return str(local) if local is not None else artifact_ref(relative, lane=lane).uri
 
 

@@ -296,6 +296,9 @@ def load_reference_graph_geometry(
     as_of: date | None = None,
 ) -> pd.DataFrame:
     """Load shapes for graph identities whose bank owns a shape partition."""
+    from mapmover.mcp_execution import mark_mcp_stage, record_mcp_file
+
+    mark_mcp_stage("family_graph_identity")
     requested = list(dict.fromkeys(str(item).strip() for item in loc_ids if str(item).strip()))
     if not requested:
         return pd.DataFrame(columns=columns or [])
@@ -322,11 +325,13 @@ def load_reference_graph_geometry(
                 geometry_loc_id, [],
             ).append(identity_row)
 
+    mark_mcp_stage("family_graph_shape_partitions")
     normalized: list[dict[str, Any]] = []
     for bank_root, bank_ids in by_bank.items():
         bank_ids = list(dict.fromkeys(bank_ids))
         identities_by_geometry_id = bank_identities[bank_root]
         if bank_root.suffix.lower() == ".parquet":
+            record_mcp_file(bank_root)
             shape_rows = _read_single_file_bank(bank_root, bank_ids)
             source_crs = _geoparquet_crs(str(bank_root.resolve()))
             for row in shape_rows.to_dict("records"):
@@ -341,6 +346,7 @@ def load_reference_graph_geometry(
         direct_partitions = _direct_admin_partitions(bank_root, bank_ids)
         if direct_partitions:
             for partition, partition_ids in direct_partitions.items():
+                record_mcp_file(partition)
                 shape_rows = _read_single_file_bank(partition, partition_ids)
                 source_crs = _geoparquet_crs(str(partition.resolve()))
                 for row in shape_rows.to_dict("records"):
@@ -353,6 +359,7 @@ def load_reference_graph_geometry(
                             normalized.append(item)
             continue
         versions_path = bank_root / "identity_versions.parquet"
+        record_mcp_file(versions_path)
         version_rows = select_rows(
             versions_path,
             columns=IDENTITY_VERSION_COLUMNS,
@@ -388,6 +395,7 @@ def load_reference_graph_geometry(
                     if item is not None:
                         normalized.append(item)
         for partition, partition_ids in partitions.items():
+            record_mcp_file(partition)
             shape_rows = _read_shape_partition(partition, partition_ids)
             source_crs = _geoparquet_crs(str(partition.resolve()))
             for row in shape_rows.to_dict("records"):
@@ -418,6 +426,7 @@ def load_routed_family_geometry(candidate_rows: list[dict[str, Any]]) -> pd.Data
     """
     if not candidate_rows:
         return pd.DataFrame()
+    from mapmover.mcp_execution import record_mcp_file
     by_path: dict[Path, dict[str, list[dict[str, Any]]]] = {}
     root = DATA_ROOT.resolve()
     for identity in candidate_rows:
@@ -435,6 +444,7 @@ def load_routed_family_geometry(candidate_rows: list[dict[str, Any]]) -> pd.Data
     for path, identities_by_geometry_id in by_path.items():
         if not parquet_available(path):
             raise FileNotFoundError(f"Family point shape route is unavailable: {path}")
+        record_mcp_file(path)
         rows = _read_shape_partition(path, sorted(identities_by_geometry_id))
         source_crs = _geoparquet_crs(str(path))
         for row in rows.to_dict("records"):

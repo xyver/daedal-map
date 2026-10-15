@@ -14,9 +14,13 @@ unbounded background pile while keeping health and unrelated app routes alive.
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import logging
 import os
 import threading
+import time
 from concurrent.futures import Future, ThreadPoolExecutor
+from contextlib import contextmanager
 from functools import partial
 from typing import Any, Callable, TypeVar
 
@@ -61,6 +65,108 @@ _EXECUTOR = ThreadPoolExecutor(max_workers=_MAX_WORKERS, thread_name_prefix="mcp
 _CAPACITY = threading.BoundedSemaphore(_MAX_WORKERS)
 _STATE_LOCK = threading.Lock()
 _ACTIVE_WORKERS = 0
+_TRACE_LOCAL = threading.local()
+_LOGGER = logging.getLogger(__name__)
+
+
+class _ExecutionTrace:
+    def __init__(self, tool_name: str, work_name: str, capacity_wait_ms: int, diagnostic_id: str | None) -> None:
+        self.tool_name = tool_name
+        self.work_name = work_name
+        self.capacity_wait_ms = capacity_wait_ms
+        self.request_tag = hashlib.sha256(str(diagnostic_id).encode("utf-8")).hexdigest()[:12] if diagnostic_id else None
+        self.started = time.monotonic()
+        self.stage = "worker_started"
+        self.stage_started = self.started
+        self.stage_durations_ms: dict[str, int] = {}
+        self.files: set[str] = set()
+        self.io: dict[str, int] = {}
+        self.last_artifact_error: str | None = None
+        self.timed_out = False
+        self.lock = threading.Lock()
+
+    def snapshot(self) -> dict[str, Any]:
+        with self.lock:
+            now = time.monotonic()
+            stage_ms = round((now - self.stage_started) * 1000)
+            durations = dict(self.stage_durations_ms)
+            durations[self.stage] = durations.get(self.stage, 0) + stage_ms
+            return {
+                "tool": self.tool_name,
+                "work": self.work_name,
+                "request_tag": self.request_tag,
+                "capacity_wait_ms": self.capacity_wait_ms,
+                "stage": self.stage,
+                "stage_ms": stage_ms,
+                "stage_durations_ms": durations,
+                "worker_ms": round((now - self.started) * 1000),
+                "selected_files": len(self.files),
+                "artifact_io": dict(self.io),
+                "last_artifact_error": self.last_artifact_error,
+            }
+
+
+def mark_mcp_stage(stage: str) -> None:
+    """Record a bounded, non-sensitive worker stage for timeout diagnostics."""
+    trace = getattr(_TRACE_LOCAL, "trace", None)
+    if trace is not None:
+        with trace.lock:
+            now = time.monotonic()
+            trace.stage_durations_ms[trace.stage] = trace.stage_durations_ms.get(trace.stage, 0) + round(
+                (now - trace.stage_started) * 1000
+            )
+            trace.stage = stage
+            trace.stage_started = now
+
+
+def record_mcp_file(path: Any) -> None:
+    """Count unique files selected by the current MCP worker, without logging paths."""
+    trace = getattr(_TRACE_LOCAL, "trace", None)
+    if trace is not None:
+        with trace.lock:
+            trace.files.add(str(path))
+
+
+def record_mcp_artifact_io(kind: str, amount: int = 1) -> None:
+    trace = getattr(_TRACE_LOCAL, "trace", None)
+    if trace is not None:
+        with trace.lock:
+            trace.io[kind] = trace.io.get(kind, 0) + amount
+
+
+def record_mcp_artifact_error(error: BaseException) -> None:
+    trace = getattr(_TRACE_LOCAL, "trace", None)
+    if trace is not None:
+        with trace.lock:
+            trace.last_artifact_error = type(error).__name__
+
+
+@contextmanager
+def mcp_stage(stage: str):
+    trace = getattr(_TRACE_LOCAL, "trace", None)
+    if trace is None:
+        yield
+        return
+    with trace.lock:
+        previous = trace.stage
+    mark_mcp_stage(stage)
+    try:
+        yield
+    finally:
+        mark_mcp_stage(previous)
+
+
+def _execute_traced(trace: _ExecutionTrace, function: Callable[..., T], *args: Any, **kwargs: Any) -> T:
+    _TRACE_LOCAL.trace = trace
+    try:
+        return function(*args, **kwargs)
+    finally:
+        snapshot = trace.snapshot()
+        if trace.timed_out:
+            _LOGGER.warning("MCP timed-out worker finished: %s", snapshot)
+        elif snapshot["worker_ms"] >= 5000:
+            _LOGGER.warning("MCP slow worker finished: %s", snapshot)
+        _TRACE_LOCAL.trace = None
 
 
 def _increment_active_workers() -> None:
@@ -88,6 +194,7 @@ async def run_mcp_blocking(
     timeout_seconds: float | None = None,
     capacity_wait_seconds: float | None = None,
     cancellation_event: threading.Event | None = None,
+    diagnostic_id: str | None = None,
     **kwargs: Any,
 ) -> T:
     """Run synchronous tool work off-loop with fail-fast bounded capacity.
@@ -101,7 +208,8 @@ async def run_mcp_blocking(
         0.0,
         float(_CAPACITY_WAIT_SECONDS if capacity_wait_seconds is None else capacity_wait_seconds),
     )
-    deadline = asyncio.get_running_loop().time() + wait_budget
+    wait_started = asyncio.get_running_loop().time()
+    deadline = wait_started + wait_budget
     while not _CAPACITY.acquire(blocking=False):
         remaining = deadline - asyncio.get_running_loop().time()
         if remaining <= 0:
@@ -112,7 +220,12 @@ async def run_mcp_blocking(
     _increment_active_workers()
 
     try:
-        future = _EXECUTOR.submit(partial(function, *args, **kwargs))
+        trace = _ExecutionTrace(
+            tool_name, getattr(function, "__name__", type(function).__name__),
+            round((asyncio.get_running_loop().time() - wait_started) * 1000),
+            diagnostic_id,
+        )
+        future = _EXECUTOR.submit(partial(_execute_traced, trace, function, *args, **kwargs))
     except BaseException:
         _decrement_active_workers()
         _CAPACITY.release()
@@ -127,6 +240,8 @@ async def run_mcp_blocking(
     try:
         return await asyncio.wait_for(asyncio.shield(wrapped), timeout=budget)
     except asyncio.TimeoutError as exc:
+        trace.timed_out = True
+        _LOGGER.warning("MCP worker timed out: %s", trace.snapshot())
         if cancellation_event is not None:
             cancellation_event.set()
         raise MCPExecutionTimeoutError(

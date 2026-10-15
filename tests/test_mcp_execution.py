@@ -109,6 +109,43 @@ class MCPExecutionTests(unittest.IsolatedAsyncioTestCase):
             )
         self.assertTrue(cancellation.wait(timeout=1))
 
+    async def test_timeout_reports_worker_stage_and_selected_file_count(self):
+        gate = threading.Event()
+        started = threading.Event()
+
+        def worker():
+            mcp_execution.mark_mcp_stage("family_exact_shapes")
+            mcp_execution.record_mcp_file("private/shape.parquet")
+            with mcp_execution.mcp_stage("artifact_cache_resolution"):
+                mcp_execution.record_mcp_artifact_io("cache_misses")
+                mcp_execution.record_mcp_artifact_error(OSError("secret path"))
+                started.set()
+                gate.wait(timeout=1)
+
+        with mock.patch.object(mcp_execution, "_LOGGER") as logger:
+            try:
+                task = asyncio.create_task(
+                    mcp_execution.run_mcp_blocking(
+                        "resolve_deep_point", worker, timeout_seconds=0.05,
+                        diagnostic_id="caller-private-id",
+                    )
+                )
+                await asyncio.to_thread(started.wait, 1)
+                with self.assertRaises(mcp_execution.MCPExecutionTimeoutError):
+                    await task
+                snapshot = logger.warning.call_args.args[1]
+                self.assertEqual(snapshot["stage"], "artifact_cache_resolution")
+                self.assertEqual(snapshot["selected_files"], 1)
+                self.assertEqual(snapshot["artifact_io"], {"cache_misses": 1})
+                self.assertEqual(snapshot["last_artifact_error"], "OSError")
+                self.assertNotIn("secret path", str(snapshot))
+                self.assertIn("family_exact_shapes", snapshot["stage_durations_ms"])
+                self.assertEqual(len(snapshot["request_tag"]), 12)
+                self.assertNotIn("caller-private-id", str(snapshot))
+                self.assertNotIn("private/shape.parquet", str(snapshot))
+            finally:
+                gate.set()
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -581,7 +581,11 @@ def _query_exact_event_projected(
     exact_only: bool = False,
 ) -> pd.DataFrame:
     """Resolve one event while projecting away shape columns by default."""
+    from mapmover.mcp_execution import mark_mcp_stage, record_mcp_file
+
+    mark_mcp_stage("event_exact_row")
     parquet_path, _metadata = _resolve_exact_event_parquet_for_candidate(candidate)
+    record_mcp_file(parquet_path)
     columns = list(EVENT_SUMMARY_COLUMNS)
     if identifier_field not in columns:
         columns.append(identifier_field)
@@ -611,6 +615,9 @@ def _resolve_event_record(
     source_id: str | None = None,
     include_geometry: bool = False,
 ) -> tuple[dict, dict] | None:
+    from mapmover.mcp_execution import mark_mcp_stage
+
+    mark_mcp_stage("event_candidate_catalog")
     normalized_identifier = str(identifier_value or "").strip()
     if not normalized_identifier:
         return None
@@ -976,6 +983,8 @@ def get_event_payload(
     limit: int = 100,
 ) -> dict | None:
     """Return one event plus explicitly requested companion layers."""
+    from mapmover.mcp_execution import mark_mcp_stage
+
     requested = {str(value or "").strip().lower() for value in (include or []) if str(value or "").strip()}
     resolved = _resolve_event_record(
         event_id,
@@ -1010,16 +1019,20 @@ def get_event_payload(
         "included": sorted(requested),
     }
     if "relationships" in requested:
+        mark_mcp_stage("event_relationships")
         payload["relationships"] = _event_relationship_rows(
             canonical_event_id, depth=relationship_depth, limit=limit,
         )
     if "affected_places" in requested:
+        mark_mcp_stage("event_affected_places")
         payload["affected_places"] = _event_affected_places(
             candidate, canonical_event_id, limit=limit,
         )
     if "observations" in requested:
+        mark_mcp_stage("event_observations")
         payload["observations"] = _event_observations(candidate, row, limit=limit)
     if "geometry" in requested:
+        mark_mcp_stage("event_geometry")
         payload["geometry"] = _event_geometry(
             candidate, geometry_row, mode=geometry_mode, limit=limit,
         )

@@ -220,6 +220,9 @@ def resolve_family_points(
     stop_event: threading.Event | None = None,
 ) -> list[dict[str, dict[str, Any]]]:
     """Resolve a point batch, returning one explicit outcome per family/point."""
+    from mapmover.mcp_execution import mark_mcp_stage, record_mcp_file
+
+    mark_mcp_stage("family_catalog")
     country = str(country or "").strip().upper()
     requested = list(dict.fromkeys(str(item).strip() for item in families if str(item).strip()))
     point_rows = list(points)
@@ -272,6 +275,7 @@ def resolve_family_points(
         candidates_by_point: list[set[str]] = [set() for _ in point_rows]
         try:
             if selected_layout:
+                mark_mcp_stage("family_index_candidates")
                 index_path = str(selected_layout.get("index_path") or "").strip()
                 if (selected_layout.get("country") != country
                         or selected_layout.get("family") != family
@@ -280,6 +284,7 @@ def resolve_family_points(
                     raise ValueError("Declared family point route is incomplete or mismatched")
                 if not parquet_available(DATA_ROOT / Path(index_path)):
                     raise FileNotFoundError("Declared family point index is unavailable")
+                record_mcp_file(index_path)
                 candidates = read_bbox_candidates_for_points(
                     DATA_ROOT / Path(index_path), point_rows,
                     columns=POINT_INDEX_COLUMNS,
@@ -299,11 +304,16 @@ def resolve_family_points(
                 }
                 if not all(shape_paths) or len(shape_paths) > 3:
                     raise ValueError("family_point_shape_budget_exceeded")
+                mark_mcp_stage("family_exact_shapes")
+                for shape_path in shape_paths:
+                    record_mcp_file(shape_path)
                 shape_records = load_routed_family_geometry(list(identity_rows.values())).to_dict("records")
             else:
+                mark_mcp_stage("family_predicate_candidates")
                 for relative_path in predicate_paths:
                     if stop_event is not None and stop_event.is_set():
                         return results
+                    record_mcp_file(relative_path)
                     candidates = read_bbox_candidates_for_points(
                         DATA_ROOT / Path(relative_path),
                         point_rows,
@@ -317,10 +327,12 @@ def resolve_family_points(
                 candidate_ids = sorted(set().union(*candidates_by_point)) if candidates_by_point else []
                 if stop_event is not None and stop_event.is_set():
                     return results
+                mark_mcp_stage("family_graph_exact_shapes")
                 shape_records = (
                     load_reference_graph_geometry(candidate_ids).to_dict("records")
                     if candidate_ids else []
                 )
+            mark_mcp_stage("family_shape_decode_and_cover")
             shapes_by_id: dict[str, tuple[dict[str, Any], Any]] = {}
             for row in shape_records:
                 loc_id = str(row.get("loc_id") or "").strip()

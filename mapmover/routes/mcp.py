@@ -1060,7 +1060,11 @@ def _material_caller_context(request: Request) -> tuple[Any, bool, bool]:
 
 
 def _pack_material_effective_access(request: Request, pack_id: str) -> dict[str, Any]:
+    from mapmover.mcp_execution import mark_mcp_stage
+
+    mark_mcp_stage("event_caller_access")
     caller, trusted, local = _material_caller_context(request)
+    mark_mcp_stage("event_pack_policy")
     return pack_effective_access(
         pack_id,
         caller_authenticated=bool(caller.auth_user_id),
@@ -3017,6 +3021,7 @@ async def _execute_point_lookup_tool(
                     execution_tool_name,
                     resolve_points_to_locations,
                     valid_points,
+                    diagnostic_id=request_id,
                     include_geometry=include_geometry,
                     timing_ms=resolver_stages,
                     target_admin_level=target_admin_level,
@@ -3039,6 +3044,7 @@ async def _execute_point_lookup_tool(
             if requested_family == "marine":
                 family_results = await run_mcp_blocking(
                     execution_tool_name, resolve_marine_points, valid_points,
+                    diagnostic_id=request_id,
                 )
             else:
                 stop_event = threading.Event()
@@ -3048,6 +3054,7 @@ async def _execute_point_lookup_tool(
                     country_scope or "",
                     [requested_family],
                     valid_points,
+                    diagnostic_id=request_id,
                     stop_event=stop_event,
                     cancellation_event=stop_event,
                 )
@@ -3275,6 +3282,7 @@ async def _execute_point_lookup_tool(
                 execution_tool_name,
                 resolve_points_to_locations,
                 [{"lon": lon, "lat": lat}],
+                diagnostic_id=request_id,
                 include_geometry=False,
                 timing_ms=resolver_stages,
                 target_admin_level=target_admin_level,
@@ -3296,6 +3304,7 @@ async def _execute_point_lookup_tool(
                     execution_tool_name,
                     resolve_marine_points,
                     [{"lon": lon, "lat": lat}],
+                    diagnostic_id=request_id,
                 )
             else:
                 stop_event = threading.Event()
@@ -3305,6 +3314,7 @@ async def _execute_point_lookup_tool(
                     country_scope or "",
                     [requested_family],
                     [{"lon": lon, "lat": lat}],
+                    diagnostic_id=request_id,
                     stop_event=stop_event,
                     cancellation_event=stop_event,
                 )
@@ -5469,6 +5479,7 @@ async def _execute_get_event_tool(
             hinted_access = await run_mcp_blocking(
                 "get_event", _pack_material_effective_access, request, pack_id_hint,
                 timeout_seconds=5,
+                diagnostic_id=str(payload.get("request_id") or ""),
             )
             if not hinted_access.get("allow") or (
                 hinted_access.get("settlement_required") and not commercial_access_enabled()
@@ -5494,6 +5505,7 @@ async def _execute_get_event_tool(
             relationship_depth=int(payload.get("relationship_depth") or 1),
             geometry_mode=str(payload.get("geometry_mode") or "current"),
             limit=requested_limit,
+            diagnostic_id=str(payload.get("request_id") or ""),
         )
     except (MCPExecutionCapacityError, MCPExecutionTimeoutError):
         raise
@@ -5536,6 +5548,7 @@ async def _execute_get_event_tool(
     effective_access = await run_mcp_blocking(
         "get_event", _pack_material_effective_access, request, result_pack_id,
         timeout_seconds=5,
+        diagnostic_id=str(payload.get("request_id") or ""),
     )
     commercial_context, access_error = await _authorize_material_tool(
         request,
