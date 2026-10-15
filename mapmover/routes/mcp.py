@@ -589,7 +589,7 @@ def _facade_tools_cached(pack_id: str | None, _epoch: int, free_limits: tuple[in
             )
         if name == "get_data":
             definition["description"] = definition["description"].replace(
-                "Disaster event rows include stable event_id values; pass pack_id, source_id, and event_id to get_event. ",
+                "Disaster event rows include stable event_id values for get_event drill-down. ",
                 "",
             )
         if name in {"resolve_point", "convert_reference", "get_data"}:
