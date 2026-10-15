@@ -493,7 +493,7 @@ class DataHelperTelemetryTests(unittest.TestCase):
         self.assertTrue(result["payment_required"])
         self.assertEqual(result["error"]["code"], "payment_required")
         commercial_gate.assert_awaited_once()
-        lookup.assert_called_once()
+        lookup.assert_not_called()
 
     def test_get_event_disabled_paid_pack_skips_event_lookup(self) -> None:
         with (
@@ -551,6 +551,33 @@ class DataHelperTelemetryTests(unittest.TestCase):
         authorize.assert_awaited_once()
         lookup.assert_called_once()
         settle.assert_awaited_once()
+
+    def test_get_event_missing_paid_event_releases_reservation(self) -> None:
+        with (
+            mock.patch("mapmover.routes.mcp.get_event_payload", return_value=None),
+            mock.patch(
+                "mapmover.routes.mcp._pack_material_effective_access",
+                return_value={"allow": True, "settlement_required": True, "access_lane": "metered"},
+            ),
+            mock.patch(
+                "mapmover.routes.mcp._authorize_material_tool",
+                new_callable=mock.AsyncMock,
+                return_value=({"settlement_id": "test-settlement"}, None),
+            ),
+            mock.patch(
+                "mapmover.routes.mcp._release_failed_material_access",
+                new_callable=mock.AsyncMock,
+            ) as release,
+            mock.patch("mapmover.routes.mcp._settle_paid_batch_tool", new_callable=mock.AsyncMock) as settle,
+        ):
+            envelope = _tool_call_envelope(
+                self.client,
+                "get_event",
+                {"event_id": "missing", "pack_id": "earthquakes", "source_id": "earthquakes_events"},
+            )
+        self.assertEqual(envelope["result"]["structuredContent"]["error"]["code"], "event_not_found")
+        release.assert_awaited_once()
+        settle.assert_not_awaited()
 
 
 class CatalogDrivenPackFacadeTests(unittest.TestCase):

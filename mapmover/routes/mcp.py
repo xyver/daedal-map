@@ -1050,6 +1050,33 @@ async def _settle_paid_batch_tool(
     return settled, payload, meter_receipt
 
 
+async def _release_failed_material_access(
+    commercial_context: dict[str, Any] | None,
+    *,
+    request_id: str,
+) -> None:
+    """Release a pre-read paid reservation when no material was delivered."""
+    if not commercial_context or not commercial_context.get("settlement_id"):
+        return
+    import asyncio
+
+    from mapmover.api_query_commercial import settle_commercial_access
+
+    try:
+        settled, _payload = await asyncio.to_thread(
+            settle_commercial_access,
+            request_id,
+            str(commercial_context["settlement_id"]),
+            success=False,
+            request_fingerprint=str(commercial_context.get("request_fingerprint") or ""),
+            caller_binding=str(commercial_context.get("caller_binding") or ""),
+        )
+        if not settled:
+            logger.warning("failed to release paid material reservation")
+    except Exception as exc:
+        logger.warning("failed to release paid material reservation: %s", type(exc).__name__)
+
+
 def _material_caller_context(request: Request) -> tuple[Any, bool, bool]:
     caller = request_caller_identity(
         request, ip_hash=hash_ip_for_analytics(get_client_ip(request))
@@ -5409,6 +5436,8 @@ async def _execute_get_event_tool(
     event_id = str(payload.get("event_id") or "").strip()
     pack_id_hint = str(payload.get("pack_id") or "").strip().lower()
     source_id_hint = str(payload.get("source_id") or "").strip()
+    commercial_context: dict[str, Any] | None = None
+    commercial_request_id = str(payload.get("request_id") or event_id)
     if not event_id:
         return _jsonrpc_response(
             _tool_result(
@@ -5475,26 +5504,22 @@ async def _execute_get_event_tool(
                 ),
                 rpc_request_id,
             )
-        if pack_id_hint:
-            hinted_access = await run_mcp_blocking(
-                "get_event", _pack_material_effective_access, request, pack_id_hint,
-                timeout_seconds=5,
-                diagnostic_id=str(payload.get("request_id") or ""),
-            )
-            if not hinted_access.get("allow") or (
-                hinted_access.get("settlement_required") and not commercial_access_enabled()
-            ):
-                _commercial_context, access_error = await _authorize_material_tool(
-                    request,
-                    tool_name="get_event",
-                    effective_access=hinted_access,
-                    item_count=1,
-                    request_id=str(payload.get("request_id") or event_id),
-                )
-                if access_error is not None:
-                    access_error["request_id"] = payload.get("request_id")
-                    access_error["pack_id"] = pack_id_hint
-                    return _jsonrpc_response(_tool_result(access_error, is_error=True), rpc_request_id)
+        hinted_access = await run_mcp_blocking(
+            "get_event", _pack_material_effective_access, request, pack_id_hint,
+            timeout_seconds=5,
+            diagnostic_id=str(payload.get("request_id") or ""),
+        )
+        commercial_context, access_error = await _authorize_material_tool(
+            request,
+            tool_name="get_event",
+            effective_access=hinted_access,
+            item_count=1,
+            request_id=commercial_request_id,
+        )
+        if access_error is not None:
+            access_error["request_id"] = payload.get("request_id")
+            access_error["pack_id"] = pack_id_hint
+            return _jsonrpc_response(_tool_result(access_error, is_error=True), rpc_request_id)
         result = await run_mcp_blocking(
             "get_event",
             get_event_payload,
@@ -5508,8 +5533,10 @@ async def _execute_get_event_tool(
             diagnostic_id=str(payload.get("request_id") or ""),
         )
     except (MCPExecutionCapacityError, MCPExecutionTimeoutError):
+        await _release_failed_material_access(commercial_context, request_id=commercial_request_id)
         raise
     except (ValueError, TypeError) as exc:
+        await _release_failed_material_access(commercial_context, request_id=commercial_request_id)
         return _jsonrpc_response(
             _tool_result(
                 normalize_data_tool_error("get_event", {
@@ -5521,6 +5548,7 @@ async def _execute_get_event_tool(
             rpc_request_id,
         )
     except Exception as exc:
+        await _release_failed_material_access(commercial_context, request_id=commercial_request_id)
         logger.exception("get_event failed for %s", event_id)
         return _jsonrpc_response(
             _tool_result(
@@ -5533,6 +5561,7 @@ async def _execute_get_event_tool(
             rpc_request_id,
         )
     if result is None:
+        await _release_failed_material_access(commercial_context, request_id=commercial_request_id)
         return _jsonrpc_response(
             _tool_result(
                 normalize_data_tool_error("get_event", {
@@ -5545,22 +5574,18 @@ async def _execute_get_event_tool(
             rpc_request_id,
         )
     result_pack_id = str(result.get("pack_id") or payload.get("pack_id") or "").strip().lower()
-    effective_access = await run_mcp_blocking(
-        "get_event", _pack_material_effective_access, request, result_pack_id,
-        timeout_seconds=5,
-        diagnostic_id=str(payload.get("request_id") or ""),
-    )
-    commercial_context, access_error = await _authorize_material_tool(
-        request,
-        tool_name="get_event",
-        effective_access=effective_access,
-        item_count=1,
-        request_id=str(payload.get("request_id") or event_id),
-    )
-    if access_error is not None:
-        access_error["request_id"] = payload.get("request_id")
-        access_error["pack_id"] = result_pack_id or None
-        return _jsonrpc_response(_tool_result(access_error, is_error=True), rpc_request_id)
+    if result_pack_id != pack_id_hint:
+        await _release_failed_material_access(commercial_context, request_id=commercial_request_id)
+        return _jsonrpc_response(
+            _tool_result({
+                "request_id": payload.get("request_id"),
+                "error": {
+                    "code": "event_pack_mismatch",
+                    "message": "The event belongs to a different pack than the requested pack_id.",
+                },
+            }, is_error=True),
+            rpc_request_id,
+        )
     settlement_payload = None
     if commercial_context is not None:
         settled, settlement_payload, meter_receipt = await _settle_paid_batch_tool(

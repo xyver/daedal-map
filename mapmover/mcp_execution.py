@@ -137,8 +137,16 @@ def record_mcp_artifact_io(kind: str, amount: int = 1) -> None:
 def record_mcp_artifact_error(error: BaseException) -> None:
     trace = getattr(_TRACE_LOCAL, "trace", None)
     if trace is not None:
+        error_name = type(error).__name__
+        if error_name == "ClientError":
+            response = getattr(error, "response", None)
+            if isinstance(response, dict):
+                error_details = response.get("Error") or {}
+                code = str(error_details.get("Code") or "") if isinstance(error_details, dict) else ""
+                if code.isalnum() and len(code) <= 40:
+                    error_name = f"ClientError:{code}"
         with trace.lock:
-            trace.last_artifact_error = type(error).__name__
+            trace.last_artifact_error = error_name
 
 
 @contextmanager

@@ -7,6 +7,19 @@ from mapmover import mcp_execution
 
 
 class MCPExecutionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_artifact_client_error_trace_records_only_code(self):
+        class ClientError(Exception):
+            response = {"Error": {"Code": "NoSuchKey", "Message": "private object path"}}
+
+        trace = mcp_execution._ExecutionTrace("test_tool", "worker", 0, None)
+        mcp_execution._TRACE_LOCAL.trace = trace
+        try:
+            mcp_execution.record_mcp_artifact_error(ClientError("private object path"))
+            self.assertEqual(trace.snapshot()["last_artifact_error"], "ClientError:NoSuchKey")
+            self.assertNotIn("private object path", str(trace.snapshot()))
+        finally:
+            del mcp_execution._TRACE_LOCAL.trace
+
     async def test_create_job_keeps_its_longer_execution_budget(self):
         with mock.patch.object(mcp_execution, "_JOB_TIMEOUT_SECONDS", 7):
             with mock.patch.object(mcp_execution.asyncio, "wait_for", wraps=asyncio.wait_for) as wait:
