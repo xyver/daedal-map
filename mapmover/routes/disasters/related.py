@@ -624,6 +624,7 @@ def _resolve_event_record(
             if strict_hint:
                 candidates = [entry for entry in candidates if entry["pack_id"] in hinted]
 
+    failed_sources: set[str] = set()
     for candidate in candidates:
         for identifier_field in candidate.get("id_fields") or ("event_id",):
             try:
@@ -634,6 +635,7 @@ def _resolve_event_record(
                     include_geometry=include_geometry,
                 )
             except Exception as exc:
+                failed_sources.add(str(candidate.get("source_id") or "unknown"))
                 logger.warning(
                     "Projected event lookup failed for %s.%s=%s: %s",
                     candidate.get("source_id"), identifier_field, normalized_identifier, exc,
@@ -649,6 +651,11 @@ def _resolve_event_record(
             exact_value = str(row.get(identifier_field) or normalized_identifier).strip()
             row.setdefault("event_id", exact_value)
             return candidate, row
+    if failed_sources:
+        raise RuntimeError(
+            "Event lookup could not complete for source(s): "
+            + ", ".join(sorted(failed_sources))
+        )
     return None
 
 

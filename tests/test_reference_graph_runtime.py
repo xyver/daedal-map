@@ -266,6 +266,7 @@ class ReferenceGraphRuntimeTests(unittest.TestCase):
         }]).to_parquet(self.root / "identity_routes.parquet", index=False)
         with (
             mock.patch.object(reference_graph, "_connection") as connection,
+            mock.patch.object(reference_graph, "global_reference_graph_root", return_value=None),
             mock.patch("mapmover.geometry_handlers.get_selection_geometry_metadata") as geometry,
         ):
             infos = get_location_infos(["TST-MISSING"], graph_authoritative=True)

@@ -8,6 +8,7 @@ from mapmover.routes.disasters.related import (
     _classify_exact_event_identifier,
     _event_relationship_rows,
     _get_exact_event_candidates,
+    _resolve_event_record,
     get_event_payload,
 )
 
@@ -77,6 +78,18 @@ class ExactEventRuntimeTests(unittest.TestCase):
         affected_places.assert_not_called()
         observations.assert_not_called()
         geometry.assert_not_called()
+
+    def test_event_source_failure_is_not_reported_as_missing_event(self) -> None:
+        candidate = {"pack_id": "floods", "source_id": "floods", "id_fields": ("event_id",)}
+        with (
+            patch("mapmover.routes.disasters.related._get_exact_event_candidates", return_value=[candidate]),
+            patch(
+                "mapmover.routes.disasters.related._query_exact_event_projected",
+                side_effect=OSError("published Parquet unavailable"),
+            ),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "Event lookup could not complete for source\\(s\\): floods"):
+                _resolve_event_record("DFO-1", pack_id="floods")
 
     def test_event_relationships_filter_on_event_ids_not_geographic_loc_ids(self) -> None:
         import pandas as pd
