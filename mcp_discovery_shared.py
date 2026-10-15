@@ -229,8 +229,8 @@ def filter_data_catalog_payload(
     return result
 
 
-def full_catalog_payload(payload: Any, pack_details: dict[str, Any]) -> Any:
-    """Return all pack cards plus their metric ids, without raw policy records."""
+def full_catalog_payload(payload: Any) -> Any:
+    """Project metric IDs already indexed in the published catalog."""
     if not isinstance(payload, dict):
         return payload
     def project(items: Any) -> list[dict[str, Any]]:
@@ -239,19 +239,13 @@ def full_catalog_payload(payload: Any, pack_details: dict[str, Any]) -> Any:
             if not isinstance(item, dict):
                 continue
             row = _compact_pack_row(item)
-            pack_id = str(row.get("pack_id") or "")
-            detail = pack_details.get(pack_id)
-            if isinstance(detail, dict):
-                metrics = detail.get("metrics")
-                if isinstance(metrics, dict):
-                    row["metrics"] = list(metrics)
-                elif isinstance(metrics, list):
-                    row["metrics"] = [
-                        value.get("metric_id") or value.get("id") or value
-                        if isinstance(value, dict) else value
-                        for value in metrics
-                    ]
-                row.update(_copy_present(detail, ("query_dimensions", "supported_query_shapes")))
+            row["metrics"] = list(item.get("metric_ids") or [])
+            row["query_dimensions"] = {
+                "data": "single_or_variable_within_pack",
+                "location": "single_or_variable",
+                "time": "single_or_variable",
+            }
+            row.update(_copy_present(item, ("supported_query_shapes",)))
             projected.append(row)
         return projected
 

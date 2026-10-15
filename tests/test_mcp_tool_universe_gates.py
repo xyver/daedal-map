@@ -311,15 +311,10 @@ class DataHelperTelemetryTests(unittest.TestCase):
         read_catalog.assert_called_once_with(detail="lite", country_scope="CAN")
 
     def test_get_catalog_data_full_adds_metric_inventory_and_pack_next_step(self) -> None:
-        catalog = {"packs": [{"pack_id": "demo", "title": "Demo"}]}
-        detail = {
-            "pack_id": "demo",
-            "metrics": {"population": "People"},
-            "query_dimensions": {"filterable_fields": ["loc_id"]},
-        }
+        catalog = {"packs": [{"pack_id": "demo", "title": "Demo", "metric_ids": ["population"]}]}
         with (
             mock.patch("mapmover.routes.mcp.load_api_catalog", return_value=catalog),
-            mock.patch("mapmover.routes.mcp.load_api_pack_detail", return_value=detail),
+            mock.patch("mapmover.routes.mcp.load_api_pack_detail") as load_detail,
         ):
             envelope = _tool_call_envelope(
                 self.client,
@@ -331,6 +326,7 @@ class DataHelperTelemetryTests(unittest.TestCase):
         self.assertEqual(result["detail"], "full")
         self.assertEqual(result["packs"][0]["metrics"], ["population"])
         self.assertEqual(result["packs"][0]["next_call"]["tool"], "get_pack")
+        load_detail.assert_not_called()
 
     def test_get_pack_lite_points_to_published_execution_tool(self) -> None:
         detail = {

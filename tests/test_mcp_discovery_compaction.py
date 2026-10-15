@@ -153,8 +153,7 @@ class MCPDiscoveryCompactionTests(unittest.TestCase):
 
     def test_catalog_full_adds_metric_ids_but_not_raw_policy(self) -> None:
         result = full_catalog_payload(
-            {"packs": [{"pack_id": "demo", "title": "Demo"}]},
-            {"demo": {"metrics": {"population": "People"}, "query_dimensions": {"filterable_fields": ["loc_id"]}}},
+            {"packs": [{"pack_id": "demo", "title": "Demo", "metric_ids": ["population"]}]},
         )
 
         self.assertEqual(result["detail"], "full")

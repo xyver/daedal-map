@@ -97,6 +97,52 @@ def test_normal_catalog_owns_agent_pack_admission_and_current_facts() -> None:
     assert result["packs"][0]["material_policy"]["permission"] == "paid"
 
 
+def test_full_catalog_metric_ids_come_from_published_sources() -> None:
+    published = {
+        "packs": [_published_pack("new_pack")],
+        "sources": [
+            {"source_id": "new_pack_source", "pack_id": "new_pack", "data_type": "events", "metrics": {"magnitude": {}}},
+            {"source_id": "retired_source", "pack_id": "retired_pack", "metrics": {"stale": {}}},
+        ],
+    }
+    with (
+        mock.patch.object(data_loading, "load_catalog", return_value=published),
+        mock.patch.object(data_loading, "_load_json_from_runtime_or_s3", return_value={"packs": []}),
+    ):
+        result = data_loading.load_api_catalog()
+
+    assert result["packs"][0]["metric_ids"] == ["event_count", "magnitude"]
+    assert len(result["packs"]) == 1
+
+
+def test_lite_pack_load_skips_source_metadata_and_has_separate_cache() -> None:
+    published = {
+        "packs": [_published_pack("new_pack")],
+        "sources": [{"source_id": "new_pack_source", "pack_id": "new_pack", "temporal_coverage": {"end": "2025"}}],
+    }
+    with (
+        mock.patch.object(data_loading, "load_catalog", return_value=published),
+        mock.patch.object(data_loading, "_load_json_from_runtime_or_s3", return_value=None),
+        mock.patch.object(data_loading, "load_source_metadata", return_value={"temporal_coverage": {"end": "2026"}}) as metadata,
+    ):
+        lite = data_loading.load_api_pack_detail("new_pack", hydrate_source_metadata=False)
+        metadata.assert_not_called()
+        full = data_loading.load_api_pack_detail("new_pack")
+        metadata.assert_called_once_with("new_pack_source")
+
+    assert lite["sources"][0]["temporal_coverage"]["end"] == "2025"
+    assert full["sources"][0]["temporal_coverage"]["end"] == "2026"
+
+
+def test_agent_catalog_prewarm_reports_missing_required_metadata() -> None:
+    with (
+        mock.patch.object(data_loading, "load_api_catalog", return_value={"packs": [{"pack_id": "demo"}]}),
+        mock.patch.object(data_loading, "load_api_guide", return_value={}),
+    ):
+        with pytest.raises(RuntimeError, match="no guide"):
+            data_loading.prewarm_api_catalog()
+
+
 def test_new_catalog_pack_detail_does_not_require_generated_pack_file() -> None:
     pack = _published_pack("new_pack")
     published = {

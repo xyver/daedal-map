@@ -3720,9 +3720,9 @@ def _loc_id_catalog_context(loc_id: str, info: dict[str, Any]) -> dict[str, Any]
     )
     data_packs: dict[str, dict[str, Any]] = {}
     try:
-        from mapmover.data_loading import get_catalog_packs, load_catalog
+        from mapmover.data_loading import _load_agent_api_catalog, get_catalog_packs
 
-        catalog = load_catalog() or {}
+        catalog = _load_agent_api_catalog() or {}
         pack_rows = {
             str(pack.get("pack_id") or ""): pack
             for pack in get_catalog_packs(catalog)
@@ -6052,16 +6052,7 @@ async def mcp_endpoint(request: Request, pack_id: str | None = None):
             except ValueError as exc:
                 return _jsonrpc_error(request_id, -32602, str(exc))
             if detail == "full":
-                detail_rows = [
-                    *(payload.get("packs") or []),
-                    *(payload.get("uncertain_packs") or []),
-                ]
-                pack_details = {
-                    str(item.get("pack_id") or ""): load_api_pack_detail(str(item.get("pack_id") or ""))
-                    for item in detail_rows
-                    if isinstance(item, dict) and item.get("pack_id")
-                }
-                payload = full_catalog_payload(payload, pack_details)
+                payload = full_catalog_payload(payload)
             else:
                 payload = compact_catalog_payload(payload)
             payload = _augment_catalog_with_tool_families(payload, normalized_pack_id)
@@ -6194,7 +6185,7 @@ async def mcp_endpoint(request: Request, pack_id: str | None = None):
                     if not payload.get("ok") else None
                 ),
             )
-        payload = load_api_pack_detail(pack_id)
+        payload = load_api_pack_detail(pack_id, hydrate_source_metadata=detail == "full")
         if not payload:
             return _finish_data_helper(
                 request,

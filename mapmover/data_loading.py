@@ -76,8 +76,8 @@ _api_catalog_missing_time = 0.0
 _api_guide_cache = None
 _api_guide_cache_time = 0.0
 _api_guide_missing_time = 0.0
-_api_pack_cache: dict[str, dict] = {}
-_api_pack_cache_time: dict[str, float] = {}
+_api_pack_cache: dict[tuple[str, bool], dict] = {}
+_api_pack_cache_time: dict[tuple[str, bool], float] = {}
 _api_pack_missing_time: dict[str, float] = {}
 # MCP discovery follows the same five-minute publication window as catalog.json.
 # The generated Agent Catalog adds descriptions and examples, but it must never
@@ -118,7 +118,21 @@ def _effective_pack_pricing_sets() -> tuple[list[str], list[str]]:
 def _merge_api_catalog_with_published(payload: dict | None) -> dict:
     """Keep Agent Catalog prose, but let catalog.json own pack admission/facts."""
     generated = deepcopy(payload) if isinstance(payload, dict) else {}
-    published = get_catalog_packs(_load_agent_api_catalog())
+    live_catalog = _load_agent_api_catalog()
+    published = get_catalog_packs(live_catalog)
+    metric_ids_by_pack: dict[str, set[str]] = {}
+    for source in live_catalog.get("sources") or []:
+        if not isinstance(source, dict):
+            continue
+        pack_id = str(source.get("pack_id") or "").strip()
+        metrics = source.get("metrics")
+        if not pack_id:
+            continue
+        metric_ids = metric_ids_by_pack.setdefault(pack_id, set())
+        if isinstance(metrics, dict):
+            metric_ids.update(str(key) for key in metrics if str(key))
+        if str(source.get("data_type") or "").strip() == "events":
+            metric_ids.add("event_count")
     generated_by_id = {
         str(pack.get("pack_id") or "").strip(): pack
         for pack in (generated.get("packs") or [])
@@ -133,7 +147,11 @@ def _merge_api_catalog_with_published(payload: dict | None) -> dict:
             continue
         # Current catalog fields win. Generated discovery may contribute richer
         # examples/schema but cannot retain a retired pack or stale release fact.
-        packs.append({**deepcopy(generated_by_id.get(pack_id) or {}), **deepcopy(live_pack)})
+        packs.append({
+            **deepcopy(generated_by_id.get(pack_id) or {}),
+            **deepcopy(live_pack),
+            "metric_ids": sorted(metric_ids_by_pack.get(pack_id, set())),
+        })
     generated["packs"] = packs
     generated["pack_count"] = len(packs)
     generated["source_mode"] = "catalog.json+agent_catalog"
@@ -386,7 +404,7 @@ def load_api_guide() -> dict:
     return payload
 
 
-def load_api_pack_detail(pack_id: str) -> dict | None:
+def load_api_pack_detail(pack_id: str, *, hydrate_source_metadata: bool = True) -> dict | None:
     global _api_pack_cache, _api_pack_cache_time, _api_pack_missing_time
 
     pack_id = str(pack_id or "").strip()
@@ -394,8 +412,9 @@ def load_api_pack_detail(pack_id: str) -> dict | None:
         return None
 
     now = time.time()
-    cached = _api_pack_cache.get(pack_id)
-    cached_time = _api_pack_cache_time.get(pack_id, 0.0)
+    cache_key = (pack_id, hydrate_source_metadata)
+    cached = _api_pack_cache.get(cache_key)
+    cached_time = _api_pack_cache_time.get(cache_key, 0.0)
     if cached is not None and (now - cached_time) < _API_CATALOG_TTL_SECONDS:
         return cached
     if cached is None and (now - _api_pack_missing_time.get(pack_id, 0.0)) < _CATALOG_MISS_TTL_SECONDS:
@@ -426,12 +445,13 @@ def load_api_pack_detail(pack_id: str) -> dict | None:
         if isinstance(source, dict) and str(source.get("source_id") or "") in source_ids
     ]
 
-    payload = _hydrate_api_pack_detail_from_source_metadata(payload)
+    if hydrate_source_metadata:
+        payload = _hydrate_api_pack_detail_from_source_metadata(payload)
     if isinstance(payload, dict):
         payload["paid_data_calls"] = _pack_is_paid(pack_id)
 
-    _api_pack_cache[pack_id] = payload
-    _api_pack_cache_time[pack_id] = now
+    _api_pack_cache[cache_key] = payload
+    _api_pack_cache_time[cache_key] = now
     return payload
 
 
@@ -1098,17 +1118,17 @@ def clear_metadata_cache():
 
 def prewarm_api_catalog() -> None:
     """Load Agent Catalog discovery artifacts into cache at startup."""
-    try:
-        catalog = load_api_catalog()
-        pack_count = len((catalog or {}).get("packs", []))
-        load_api_guide()
-        for pack in (catalog or {}).get("packs", []):
-            pack_id = pack.get("pack_id")
-            if pack_id:
-                load_api_pack_detail(pack_id)
-        logger.info("Agent Catalog prewarm complete: %d packs loaded", pack_count)
-    except Exception as exc:
-        logger.warning("Agent Catalog prewarm failed: %s", exc)
+    catalog = load_api_catalog()
+    packs = (catalog or {}).get("packs") or []
+    if not packs:
+        raise RuntimeError("Agent Catalog prewarm returned no packs")
+    if not load_api_guide():
+        raise RuntimeError("Agent Catalog prewarm returned no guide")
+    for pack in packs:
+        pack_id = pack.get("pack_id")
+        if pack_id and not load_api_pack_detail(pack_id):
+            raise RuntimeError(f"Agent Catalog prewarm could not load pack {pack_id}")
+    logger.info("Agent Catalog prewarm complete: %d packs loaded", len(packs))
 
 
 def clear_api_discovery_cache():

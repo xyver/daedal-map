@@ -1730,11 +1730,9 @@ def _build_v1_guide_payload() -> dict:
 
 
 def prewarm_public_pack_catalog() -> None:
-    try:
-        _build_public_pack_list(mcp_only=False)
-        logger.info("Pre-warmed public pack catalog")
-    except Exception as exc:
-        logger.warning("Public pack catalog prewarm failed: %s", exc)
+    if not _build_public_pack_list(mcp_only=False):
+        raise RuntimeError("Public pack catalog prewarm returned no packs")
+    logger.info("Pre-warmed public pack catalog")
 
 
 def _current_agent_pack_ids() -> list[str]:
