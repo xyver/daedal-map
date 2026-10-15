@@ -422,6 +422,10 @@ class DataHelperTelemetryTests(unittest.TestCase):
     def test_get_event_logs_its_typed_failure(self) -> None:
         with (
             mock.patch("mapmover.routes.mcp.get_event_payload", side_effect=RuntimeError("source unavailable")),
+            mock.patch(
+                "mapmover.routes.mcp._pack_material_effective_access",
+                return_value={"allow": True, "settlement_required": False, "access_lane": "free"},
+            ),
             mock.patch("mapmover.routes.mcp.log_api_query_event") as analytics_mock,
         ):
             envelope = _tool_call_envelope(
@@ -441,7 +445,7 @@ class DataHelperTelemetryTests(unittest.TestCase):
             "event": {"event_id": "USA-HRCN-example"},
         }
         with (
-            mock.patch("mapmover.routes.mcp.get_event_payload", return_value=event_payload),
+            mock.patch("mapmover.routes.mcp.get_event_payload", return_value=event_payload) as lookup,
             mock.patch(
                 "mapmover.routes.mcp._pack_material_effective_access",
                 return_value={"allow": True, "settlement_required": True, "access_lane": "metered"},
@@ -462,6 +466,64 @@ class DataHelperTelemetryTests(unittest.TestCase):
         self.assertTrue(result["payment_required"])
         self.assertEqual(result["error"]["code"], "payment_required")
         commercial_gate.assert_awaited_once()
+        lookup.assert_called_once()
+
+    def test_get_event_disabled_paid_pack_skips_event_lookup(self) -> None:
+        with (
+            mock.patch("mapmover.routes.mcp.get_event_payload") as lookup,
+            mock.patch(
+                "mapmover.routes.mcp._pack_material_effective_access",
+                return_value={"allow": True, "settlement_required": True, "access_lane": "metered"},
+            ),
+            mock.patch("mapmover.routes.mcp.commercial_access_enabled", return_value=False),
+        ):
+            envelope = _tool_call_envelope(
+                self.client,
+                "get_event",
+                {"event_id": "USA-EQ-example", "pack_id": "earthquakes"},
+            )
+
+        self.assertEqual(
+            envelope["result"]["structuredContent"]["error"]["code"],
+            "commercial_access_unavailable",
+        )
+        lookup.assert_not_called()
+
+    def test_get_event_authorized_paid_pack_looks_up_and_settles_once(self) -> None:
+        event_payload = {
+            "event_id": "USA-HRCN-example",
+            "pack_id": "hurricanes",
+            "event": {"event_id": "USA-HRCN-example"},
+        }
+        with (
+            mock.patch("mapmover.routes.mcp.get_event_payload", return_value=event_payload) as lookup,
+            mock.patch(
+                "mapmover.routes.mcp._pack_material_effective_access",
+                return_value={"allow": True, "settlement_required": True, "access_lane": "metered"},
+            ),
+            mock.patch("mapmover.routes.mcp.commercial_access_enabled", return_value=True),
+            mock.patch(
+                "mapmover.routes.mcp._authorize_material_tool",
+                new_callable=mock.AsyncMock,
+                return_value=({"settlement_id": "test-settlement"}, None),
+            ) as authorize,
+            mock.patch(
+                "mapmover.routes.mcp._settle_paid_batch_tool",
+                new_callable=mock.AsyncMock,
+                return_value=(True, {"context": {}}, {"metered_items": 1}),
+            ) as settle,
+        ):
+            envelope = _tool_call_envelope(
+                self.client,
+                "get_event",
+                {"event_id": "USA-HRCN-example", "pack_id": "hurricanes"},
+            )
+
+        self.assertFalse(envelope["result"].get("isError", False))
+        self.assertEqual(envelope["result"]["structuredContent"]["event_id"], "USA-HRCN-example")
+        authorize.assert_awaited_once()
+        lookup.assert_called_once()
+        settle.assert_awaited_once()
 
 
 class CatalogDrivenPackFacadeTests(unittest.TestCase):

@@ -5313,6 +5313,7 @@ async def _execute_get_event_tool(
 ) -> Response:
     payload = _ensure_request_id(arguments, "get_event")
     event_id = str(payload.get("event_id") or "").strip()
+    pack_id_hint = str(payload.get("pack_id") or "").strip().lower()
     if not event_id:
         return _jsonrpc_response(
             _tool_result(
@@ -5351,11 +5352,27 @@ async def _execute_get_event_tool(
                 ),
                 rpc_request_id,
             )
+        if pack_id_hint:
+            hinted_access = _pack_material_effective_access(request, pack_id_hint)
+            if not hinted_access.get("allow") or (
+                hinted_access.get("settlement_required") and not commercial_access_enabled()
+            ):
+                _commercial_context, access_error = await _authorize_material_tool(
+                    request,
+                    tool_name="get_event",
+                    effective_access=hinted_access,
+                    item_count=1,
+                    request_id=str(payload.get("request_id") or event_id),
+                )
+                if access_error is not None:
+                    access_error["request_id"] = payload.get("request_id")
+                    access_error["pack_id"] = pack_id_hint
+                    return _jsonrpc_response(_tool_result(access_error, is_error=True), rpc_request_id)
         result = await run_mcp_blocking(
             "get_event",
             get_event_payload,
             event_id,
-            pack_id=str(payload.get("pack_id") or "").strip().lower() or None,
+            pack_id=pack_id_hint or None,
             include=include,
             relationship_depth=int(payload.get("relationship_depth") or 1),
             geometry_mode=str(payload.get("geometry_mode") or "current"),
@@ -5391,7 +5408,7 @@ async def _execute_get_event_tool(
             _tool_result(
                 normalize_data_tool_error("get_event", {
                     "request_id": payload.get("request_id"),
-                    "pack_id": str(payload.get("pack_id") or "").strip().lower() or None,
+                    "pack_id": pack_id_hint or None,
                     "error": {"code": "event_not_found", "message": f"Event '{event_id}' was not found."},
                 }, status_code=404),
                 is_error=True,
