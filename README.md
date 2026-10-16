@@ -48,22 +48,22 @@ then `get_data` for data. Setup for other clients is in the
 
 Discovery and small geography lookups are free. Larger point/reference batches
 and some data packs are metered: a paid call returns its exact price before any
-charge and is paid from account credit with an API key. `get_catalog` reports
-the access lane for each pack.
+charge and is paid from account credit with an API key. `get_pack` reports
+the access lane for the selected data pack.
 
 ## Tools
 
 | Job | Tools |
 |---|---|
 | Learn the model | `get_tool_help` with a topic or exact tool name |
-| Find what exists | `get_catalog`, then `get_pack` for one selected data pack or geometry family |
+| Find what exists | `get_catalog`, then `get_pack` for a data pack or `get_geography` for a geometry family or scope |
 | Query maintained data | `get_data` with a `pack_id`, exact metrics, and structured filters |
 | Inspect one disaster event | `get_event` with an exact `event_id` returned by `get_data` |
 | Coordinates to places | `resolve_point`, then `resolve_deep_point` when Admin 4-6 or one deeper family is needed |
 | Identify a column of codes | `identify_dataset_geography`, `identify_reference_system` |
 | Translate codes between systems | `convert_reference` |
 | Inspect and relate places | `get_loc_id_info`, `compare_geographies` |
-| Retrieve shapes | `get_geometry` |
+| Retrieve shapes | `get_shape` with exact loc_ids |
 
 Each tool takes strict JSON arguments. The calling model turns a user's
 question into those arguments, and the server returns typed errors with

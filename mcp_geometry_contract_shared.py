@@ -32,7 +32,7 @@ GEOMETRY_TOOL_IDS = frozenset({
     "identify_reference_system",
     "convert_reference",
     "compare_geographies",
-    "get_geometry",
+    "get_shape",
 })
 
 _ERROR_PROPERTY = {
@@ -161,11 +161,10 @@ def geometry_tool_output_schema(tool_name: str) -> dict[str, Any] | None:
                 "found_count": {"type": "integer", "minimum": 0},
                 "missing_count": {"type": "integer", "minimum": 0},
                 "results": {"type": "array", "items": _RESULT_ITEM},
-                "hierarchy": {"type": "object"},
-                "references": {"type": "object"},
-                "data_packs": {"type": "array"},
-                "geometry_families": {"type": "array"},
-                "next_calls": {"type": "array"},
+                "connections": {"type": "array", "items": {"type": "object"}},
+                "connection_count": {"type": "integer", "minimum": 0},
+                "connection_limit": {"type": "integer", "minimum": 1},
+                "has_more": {"type": "boolean"},
             },
         )
     if name in {"identify_dataset_geography", "identify_reference_system"}:
@@ -202,18 +201,20 @@ def geometry_tool_output_schema(tool_name: str) -> dict[str, Any] | None:
             properties={
                 "spatial_relation": {"type": ["string", "object", "null"]},
                 "temporal_relation": {"type": ["string", "object", "null"]},
+                "relationship_basis": {"type": "string"},
+                "graph_evidence": {"type": "array", "items": {"type": "object"}},
+                "geometry_loaded": {"type": "boolean"},
                 "item_count": {"type": "integer", "minimum": 0},
                 "compared_count": {"type": "integer", "minimum": 0},
                 "failed_count": {"type": "integer", "minimum": 0},
                 "results": {"type": "array", "items": _RESULT_ITEM},
             },
         )
-    if name == "get_geometry":
+    if name == "get_shape":
         return _result_schema(
             success_variants=[["ok", "selection", "items"]],
             properties={
-                "selection": {"type": "string", "enum": ["exact_loc_ids", "admin_scope"]},
-                "scope": {"type": ["object", "null"]},
+                "selection": {"type": "string", "enum": ["exact_loc_ids"]},
                 "include_polygon": {"type": "boolean"},
                 "requested": {"type": "integer", "minimum": 0},
                 "available": {"type": "integer", "minimum": 0},
@@ -236,7 +237,7 @@ def geometry_tool_publication_meta(tool_name: str) -> dict[str, Any] | None:
         "identify_reference_system": "geography_identification",
         "convert_reference": "reference_conversion",
         "compare_geographies": "geography_relationship",
-        "get_geometry": "geometry",
+        "get_shape": "geometry",
     }
     input_families = {
         "resolve_point": "coordinate",
@@ -246,7 +247,7 @@ def geometry_tool_publication_meta(tool_name: str) -> dict[str, Any] | None:
         "identify_reference_system": "identifier_samples",
         "convert_reference": "reference",
         "compare_geographies": "loc_id_pair",
-        "get_geometry": "loc_id_selection",
+        "get_shape": "loc_id_selection",
     }
     limits = {
         "free": tool_free_item_limit(name),

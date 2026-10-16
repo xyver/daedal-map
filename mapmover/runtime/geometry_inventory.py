@@ -280,9 +280,8 @@ def country_capability_record(catalog: dict[str, Any], country_scope: str) -> di
         and str(item.get("release_status") or "") in {"approved_for_publication", "published"}
     ), {})
     program = resolved.get("program") or {}
-    # Shape eligibility is derived from the already-published representation
-    # manifest. It is a property on the existing family cards, not a second
-    # registry or another caller-facing allowlist.
+    # Shape eligibility is derived from published geometry banks. It is a
+    # property on existing family cards, not a second caller-facing registry.
     from .family_point_resolution import family_artifacts
 
     shape_artifacts = family_artifacts(country_code)

@@ -17,13 +17,14 @@ from mapmover.mcp_execution import MCPExecutionCapacityError, MCPExecutionTimeou
 from mapmover.runtime.reference_exchange import (
     get_geometry_availability,
     get_geometry_references,
+    geography_detail,
+    load_geometry_catalog,
     read_geometry_catalog,
 )
 from mapmover.runtime.geometry_tool_jobs import estimate_conversion_job
 from mapmover.routes.mcp import (
     _geometry_lineage_analytics_metadata,
     _jsonrpc_response,
-    _loc_id_catalog_context,
     _tool_rate_limit_for_tier,
     _tool_result,
     router as mcp_router,
@@ -152,7 +153,7 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         self.assertIn("convert_reference", tool_names)
         self.assertIn("compare_geographies", tool_names)
         self.assertNotIn("check_geometry", tool_names)
-        self.assertIn("get_geometry", tool_names)
+        self.assertIn("get_shape", tool_names)
         self.assertIn("compare_geographies", tool_names)
         self.assertIn("resolve_point", tool_names)
         self.assertIn("resolve_deep_point", tool_names)
@@ -164,50 +165,84 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         self.assertNotIn("loc_id_hierarchy", tool_names)
         self.assertNotIn("family_to_admin", tool_names)
         self.assertNotIn("admin_to_family", tool_names)
-
         catalog_tool = next(
             tool for tool in envelope["result"]["tools"]
             if tool["name"] == "get_catalog"
         )
         self.assertEqual(catalog_tool["inputSchema"]["properties"]["catalog"]["enum"], ["data", "geometry"])
 
-    def test_loc_id_catalog_context_uses_catalog_metadata_without_shape_reads(self) -> None:
-        catalog = {
-            "sources": [
-                {
-                    "pack_id": "usa_demo",
-                    "scope": "USA",
-                    "geographic_level": "admin_1",
-                    "geographic_coverage": {"countries": None, "admin_levels": [1]},
-                },
-                {
-                    "pack_id": "can_demo",
-                    "scope": "CAN",
-                    "geographic_level": "admin_1",
-                    "geographic_coverage": {"countries": None, "admin_levels": [1]},
-                },
-            ],
-        }
+    def test_loc_id_info_returns_only_direct_graph_connections(self) -> None:
+        edges = [
+            {"relationship_id": "water-1", "source_loc_id": "CAN-WATER-1", "target_loc_id": "CAN-BC",
+             "source_family": "watershed", "target_family": "admin_1", "relationship_type": "official_membership"},
+            {"relationship_id": "forest-1", "source_loc_id": "CAN-FOREST-1", "target_loc_id": "CAN-BC",
+             "source_family": "forest", "target_family": "admin_1", "relationship_type": "strict_parent"},
+        ]
         with (
-            mock.patch("mapmover.data_loading.load_catalog", return_value=catalog),
-            mock.patch("mapmover.data_loading.get_catalog_packs", return_value=[
-                {"pack_id": "usa_demo", "pack_name": "USA Demo"},
-                {"pack_id": "can_demo", "pack_name": "Canada Demo"},
-            ]),
-            mock.patch(
-                "mapmover.runtime.reference_exchange.geometry_catalog_discovery",
-                return_value={"families": [{"pack_id": "postal_area", "countries": ["USA"]}]},
-            ),
+            mock.patch("mapmover.runtime.loc_id_graph_info.indexed_public_alias_candidates", return_value={}),
+            mock.patch("mapmover.runtime.loc_id_graph_info.identities", return_value=[
+                {"loc_id": "CAN-BC", "name": "British Columbia", "family": "admin_1"},
+            ]) as identities,
+            mock.patch("mapmover.runtime.loc_id_graph_info.relationships_for_loc_id", return_value=edges) as relationships,
+            mock.patch("mapmover.data_loading._load_agent_api_catalog", side_effect=AssertionError("data catalog read")),
+            mock.patch("mapmover.runtime.reference_exchange.loc_id_references", side_effect=AssertionError("external reference read")),
         ):
-            result = _loc_id_catalog_context(
-                "USA-TX",
-                {"iso3": "USA", "admin_level": 1, "family": "administrative"},
-            )
+            payload = _tool_call(self.client, "get_loc_id_info", {"loc_id": "CAN-BC"})
+        identities.assert_called_once_with(["CAN-BC"], require_route=True)
+        relationships.assert_called_once_with("CAN-BC", limit=51)
+        self.assertEqual(payload["connection_count"], 2)
+        self.assertEqual({row["loc_id"] for row in payload["connections"]}, {"CAN-WATER-1", "CAN-FOREST-1"})
+        self.assertFalse(payload["has_more"])
+        self.assertNotIn("availability", payload)
+        self.assertNotIn("references", payload)
 
-        self.assertEqual([row["pack_id"] for row in result["data_packs"]], ["usa_demo"])
-        self.assertTrue(result["data_packs"][0]["exact_grain_available"])
-        self.assertFalse(result["data_packs"][0]["exact_rows_verified"])
-        self.assertEqual(result["available_geometry_families"][0]["pack_id"], "postal_area")
+    def test_loc_id_info_caps_country_connections(self) -> None:
+        edges = [{"source_loc_id": f"CAN-CHILD-{index}", "target_loc_id": "CAN",
+                  "source_family": "admin_1", "relationship_type": "strict_parent"} for index in range(51)]
+        with (
+            mock.patch("mapmover.runtime.loc_id_graph_info.indexed_public_alias_candidates", return_value={}),
+            mock.patch("mapmover.runtime.loc_id_graph_info.identities", return_value=[{"loc_id": "CAN", "name": "Canada"}]),
+            mock.patch("mapmover.runtime.loc_id_graph_info.relationships_for_loc_id", return_value=edges),
+        ):
+            payload = _tool_call(self.client, "get_loc_id_info", {"loc_id": "CAN"})
+        self.assertEqual(payload["connection_count"], 50)
+        self.assertTrue(payload["has_more"])
+        self.assertEqual(payload["connection_limit"], 50)
+
+    def test_loc_id_info_alias_and_missing_identity(self) -> None:
+        alias = "CAN-PUBLIC-PLACE"
+        target = "CAN-BC-PLACE-1"
+        with (
+            mock.patch("mapmover.runtime.loc_id_graph_info.indexed_public_alias_candidates", return_value={
+                alias: [{"loc_id": target}],
+            }),
+            mock.patch("mapmover.runtime.loc_id_graph_info.identities", return_value=[{"loc_id": target, "name": "Place"}]),
+            mock.patch("mapmover.runtime.loc_id_graph_info.relationships_for_loc_id", return_value=[]),
+        ):
+            payload = _tool_call(self.client, "get_loc_id_info", {"loc_ids": [alias, "CAN-MISSING"]})
+        self.assertEqual(payload["results"][0]["loc_id"], target)
+        self.assertEqual(payload["results"][0]["requested_loc_id"], alias)
+        self.assertEqual(payload["results"][1]["error"]["code"], "not_found")
+
+    def test_loc_id_info_invalid_selected_relationship_route_fails_closed(self) -> None:
+        with (
+            mock.patch("mapmover.runtime.loc_id_graph_info.indexed_public_alias_candidates", return_value={}),
+            mock.patch("mapmover.runtime.loc_id_graph_info.identities", return_value=[{"loc_id": "CAN-BC"}]),
+            mock.patch("mapmover.runtime.loc_id_graph_info.relationships_for_loc_id", side_effect=RuntimeError(
+                'Referenced column "source_loc_id" not found in FROM clause!'
+            )),
+        ):
+            payload = _tool_call(self.client, "get_loc_id_info", {"loc_id": "CAN-BC"})
+        self.assertEqual(payload["error"]["code"], "reference_route_unavailable")
+        self.assertIn("graph release/index needs repair", payload["error"]["message"])
+
+    def test_loc_id_info_rejects_old_selectors(self) -> None:
+        for arguments in ({"loc_id": "CAN-BC", "include_references": True},
+                          {"loc_id": "CAN-BC", "as_of": "2020"},
+                          {"loc_id": "CAN-BC", "loc_ids": ["CAN-BC"]}):
+            with self.subTest(arguments=arguments):
+                envelope = _mcp_call(self.client, "tools/call", {"name": "get_loc_id_info", "arguments": arguments})
+                self.assertEqual(envelope["error"]["code"], -32602)
 
     def test_dataset_geography_tool_selects_column_without_binding(self) -> None:
         payload = _tool_call(
@@ -278,6 +313,14 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
 
         self.assertEqual(envelope["result"]["serverInfo"]["name"], "com.daedalmap/geography")
         self.assertEqual(envelope["result"]["serverInfo"]["version"], "1.6.2")
+        instructions = envelope["result"]["instructions"]
+        self.assertIn("When the only place input is coordinates, call resolve_point first", instructions)
+        self.assertIn("Use that returned country and shallow loc_id stack", instructions)
+        self.assertIn("use convert_reference for scoped names or outside identifiers", instructions)
+        self.assertIn("identify_dataset_geography", instructions)
+        self.assertIn("identify_reference_system", instructions)
+        self.assertIn("These identification tools prepare a binding", instructions)
+        self.assertIn("Keep all relevant returned loc_ids", instructions)
 
     def test_browser_mcp_metadata_is_bounded_and_reaches_usage_analytics(self) -> None:
         caller = CallerIdentity(
@@ -400,9 +443,8 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         self.assertIn("known_loc_ids_to_shapes", workflow_names)
         self.assertNotIn("shapes_and_exports", workflow_names)
         self.assertEqual(payload["start_here"][0]["tool"], "get_catalog")
-        self.assertEqual(payload["start_here"][0]["arguments"]["catalog"], "geometry")
-        self.assertEqual(payload["start_here"][0]["arguments"]["detail"], "lite")
-        self.assertEqual(payload["start_here"][0]["arguments"]["country_scope"], "<ISO3 when known>")
+        self.assertEqual(payload["start_here"][0]["arguments"], {"catalog": "geometry"})
+        self.assertEqual(payload["start_here"][1]["tool"], "get_geography")
         self.assertIn("administrative_spine", payload["concepts"])
         self.assertIn("reference_families", payload["concepts"])
         deep_workflow = next(
@@ -428,7 +470,7 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
 
         self.assertNotIn("check_geometry", tool_names)
         self.assertNotIn("check_geometries", tool_names)
-        self.assertIn("get_geometry", tool_names)
+        self.assertIn("get_shape", tool_names)
         self.assertNotIn("get_boundary", tool_names)
         self.assertNotIn("resolve_point", tool_names)
         self.assertTrue(_RETAINED_INTERNAL_GEOMETRY_TOOLS.isdisjoint(tool_names))
@@ -594,7 +636,7 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
             payload = _tool_call(
                 self.client,
                 "resolve_point",
-                {"points": [{"lon": 0, "lat": 0} for _ in range(101)], "target_admin_level": "admin_2"},
+                {"points": [{"lon": 0, "lat": 0} for _ in range(101)]},
             )
 
         self.assertTrue(payload["payment_required"])
@@ -628,6 +670,31 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         )
         self.assertEqual(payload["error"]["code"], "shallow_point_contract_violation")
 
+    def test_shallow_point_rejects_depth_selector_before_resolution(self) -> None:
+        with mock.patch("mapmover.geometry_handlers.resolve_points_to_locations") as resolver:
+            payload = _tool_call(
+                self.client, "resolve_point",
+                {"lat": 34.0, "lon": -118.2, "target_admin_level": "admin_2"},
+            )
+        self.assertEqual(payload["error"]["code"], "shallow_point_contract_violation")
+        resolver.assert_not_called()
+
+    def test_point_tools_reject_nested_selectors_and_invalid_coordinates(self) -> None:
+        for tool, extra in (("resolve_point", {}), ("resolve_deep_point", {"shallow_loc_id": "USA-CA"})):
+            with self.subTest(tool=tool):
+                with mock.patch("mapmover.geometry_handlers.resolve_points_to_locations") as resolver:
+                    nested = _tool_call(
+                        self.client, tool,
+                        {**extra, "points": [{"lat": 34.0, "lon": -118.2, "country_scope": "USA"}]},
+                    )
+                    invalid = _tool_call(
+                        self.client, tool,
+                        {**extra, "points": [{"lat": 91.0, "lon": -118.2}]},
+                    )
+                self.assertEqual(nested["error"]["code"], "point_contract_violation")
+                self.assertEqual(invalid["error"]["code"], "invalid_point_coordinate")
+                resolver.assert_not_called()
+
     def test_deep_point_requires_one_shallow_loc_id(self) -> None:
         payload = _tool_call(
             self.client,
@@ -638,6 +705,17 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
             },
         )
         self.assertEqual(payload["error"]["code"], "invalid_shallow_loc_id")
+
+    def test_deep_point_rejects_extra_scope_and_missing_coordinate(self) -> None:
+        with mock.patch("mapmover.runtime.family_point_resolution.shallow_scope") as scope:
+            extra = _tool_call(
+                self.client, "resolve_deep_point",
+                {"lat": 34.0, "lon": -118.2, "shallow_loc_id": "USA-CA", "country_scope": "USA"},
+            )
+            missing = _tool_call(self.client, "resolve_deep_point", {"shallow_loc_id": "USA-CA"})
+        self.assertEqual(extra["error"]["code"], "deep_point_contract_violation")
+        self.assertEqual(missing["error"]["code"], "point_selection_required")
+        scope.assert_not_called()
 
     def test_point_tools_enforce_disjoint_admin_ranges(self) -> None:
         shallow = _tool_call(
@@ -656,7 +734,7 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
             },
         )
 
-        self.assertEqual(shallow["error"]["code"], "shallow_admin_level_required")
+        self.assertEqual(shallow["error"]["code"], "shallow_point_contract_violation")
         self.assertEqual(deep["error"]["code"], "deep_admin_level_required")
 
     def test_standard_bulk_passes_admin3_io_ceiling_without_country_scope(self) -> None:
@@ -689,7 +767,7 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         self.assertFalse(resolver.call_args.kwargs["include_marine_context"])
         self.assertTrue(resolver.call_args.kwargs["shallow_banks_only"])
 
-    def test_shallow_point_marine_context_is_explicit_opt_in(self) -> None:
+    def test_shallow_point_rejects_marine_context_selector(self) -> None:
         with (
             mock.patch(
                 "mapmover.geometry_handlers.resolve_points_to_locations",
@@ -697,13 +775,14 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
             ) as resolver,
             mock.patch("mapmover.routes.mcp.log_api_query_event"),
         ):
-            _tool_call(
+            payload = _tool_call(
                 self.client,
                 "resolve_point",
                 {"lat": 49.2827, "lon": -123.1207, "include_marine_context": True},
             )
 
-        self.assertTrue(resolver.call_args.kwargs["include_marine_context"])
+        self.assertEqual(payload["error"]["code"], "shallow_point_contract_violation")
+        resolver.assert_not_called()
 
     def test_deep_points_derive_admin_1_partition_from_shallow_loc_id(self) -> None:
         def fake_resolve(points, include_geometry=False, **_kwargs):
@@ -805,7 +884,7 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
             payload = _tool_call(
                 self.client,
                 "resolve_point",
-                {"points": [{"lon": -118.2, "lat": 34.0} for _ in range(101)], "target_admin_level": "admin_2"},
+                {"points": [{"lon": -118.2, "lat": 34.0} for _ in range(101)]},
             )
         self.assertEqual(payload["point_count"], 101)
         self.assertEqual(payload["resolved_count"], 101)
@@ -843,7 +922,7 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
             payload = _tool_call(
                 self.client,
                 "resolve_point",
-                {"points": [{"lon": 0, "lat": 0} for _ in range(101)], "target_admin_level": "admin_2"},
+                {"points": [{"lon": 0, "lat": 0} for _ in range(101)]},
             )
 
         self.assertEqual(payload["error"]["code"], "commercial_access_unavailable")
@@ -883,7 +962,7 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
             payload = _tool_call(
                 self.client,
                 "resolve_point",
-                {"points": [{"lon": 0, "lat": 0} for _ in range(101)], "target_admin_level": "admin_2"},
+                {"points": [{"lon": 0, "lat": 0} for _ in range(101)]},
             )
 
         self.assertEqual(payload["point_count"], 101)
@@ -921,7 +1000,7 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
                 payload = _tool_call(
                     self.client,
                     "resolve_point",
-                    {"points": [{"lon": 0, "lat": 0, "row_index": index} for index in range(101)], "target_admin_level": "admin_2"},
+                    {"points": [{"lon": 0, "lat": 0, "row_index": index} for index in range(101)]},
                     headers={"Authorization": "Bearer tok_test_bypass"},
                 )
 
@@ -947,7 +1026,7 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
                 payload = _tool_call(
                     self.client,
                     "resolve_point",
-                    {"points": [{"lon": 0, "lat": 0} for _ in range(3)], "target_admin_level": "admin_2"},
+                    {"points": [{"lon": 0, "lat": 0} for _ in range(3)]},
                 )
 
         self.assertEqual(payload["limits"]["free_batch_limit"], 2)
@@ -993,7 +1072,6 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
                     "resolve_point",
                     {
                         "points": [{"lon": 0, "lat": 0} for _ in range(3)],
-                        "target_admin_level": "admin_2",
                     },
                 )
             clear_access_policy_cache()
@@ -1013,7 +1091,7 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
             payload = _tool_call(
                 self.client,
                 "resolve_point",
-                {"points": [{"lon": 0, "lat": 0} for _ in range(4)], "target_admin_level": "admin_2"},
+                {"points": [{"lon": 0, "lat": 0} for _ in range(4)]},
             )
         self.assertFalse(payload["payment_required"])
         self.assertEqual(payload["error"]["code"], "interactive_limit_exceeded")
@@ -1138,7 +1216,7 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
             ),
             mock.patch("mapmover.routes.mcp.log_api_query_event") as analytics_mock,
         ):
-            payload = _tool_call(self.client, "get_geometry", {"loc_id": "USA-NOPE"})
+            payload = _tool_call(self.client, "get_shape", {"loc_id": "USA-NOPE"})
 
         self.assertFalse(payload["ok"])
         self.assertEqual(payload["error"]["code"], "not_found")
@@ -1166,7 +1244,7 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         ):
             payload = _tool_call(
                 self.client,
-                "get_geometry",
+                "get_shape",
                 {"batch_id": "geo-1", "loc_ids": ["USA-CA-037", "USA-NOPE"]},
             )
 
@@ -1175,7 +1253,7 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         self.assertEqual(payload["requested"], 2)
         self.assertEqual(payload["items"][0]["loc_id"], "USA-CA-037")
         analytics = analytics_mock.call_args.kwargs
-        self.assertEqual(analytics["source_id"], "get_geometry")
+        self.assertEqual(analytics["source_id"], "get_shape")
         self.assertEqual(analytics["capability_id"], "geometry_lookup")
         self.assertEqual(analytics["row_count"], 2)
         self.assertEqual(analytics["query_granularity"], "bulk_2")
@@ -1194,9 +1272,8 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         self.assertIn("points", tools["resolve_point"]["inputSchema"]["properties"])
         self.assertIn("lat", tools["resolve_point"]["inputSchema"]["properties"])
         self.assertIn("lon", tools["resolve_point"]["inputSchema"]["properties"])
-        self.assertFalse(
-            tools["resolve_point"]["inputSchema"]["properties"]["include_marine_context"]["default"]
-        )
+        self.assertNotIn("include_marine_context", tools["resolve_point"]["inputSchema"]["properties"])
+        self.assertNotIn("target_admin_level", tools["resolve_point"]["inputSchema"]["properties"])
         self.assertNotIn("lookup_mode", tools["resolve_point"]["inputSchema"]["properties"])
         self.assertNotIn("country_scope", tools["resolve_point"]["inputSchema"]["properties"])
         self.assertIn("shallow_loc_id", tools["resolve_deep_point"]["inputSchema"]["properties"])
@@ -1207,86 +1284,69 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         self.assertNotIn("resolve_points", tools)
         self.assertNotIn("resolve_deep_points", tools)
         self.assertNotIn("lookup_mode", tools["resolve_deep_point"]["inputSchema"]["properties"])
-        self.assertNotIn("include_info", tools["get_geometry"]["inputSchema"]["properties"])
-        self.assertNotIn("detail", tools["get_geometry"]["inputSchema"]["properties"])
-        self.assertIn("scope", tools["get_geometry"]["inputSchema"]["properties"])
-        self.assertIn("one WGS84 coordinate or a bounded point array", tools["resolve_point"]["description"])
-        self.assertIn("navigation and enrichment tool", tools["get_loc_id_info"]["description"])
-        self.assertIn("as_of", tools["get_loc_id_info"]["inputSchema"]["properties"])
-        self.assertIn("Use get_loc_id_info for hierarchy", tools["get_geometry"]["description"])
-        self.assertIn("never substituted", tools["get_geometry"]["description"])
+        coordinate_fields = {"lat", "lon", "lng", "latitude", "longitude", "point", "points", "coordinates"}
+        for name, tool in tools.items():
+            if name in {"resolve_point", "resolve_deep_point"}:
+                continue
+            schema = tool["inputSchema"]
+            self.assertTrue(schema.get("additionalProperties") is False, name)
+            self.assertFalse(coordinate_fields & schema.get("properties", {}).keys(), name)
+        self.assertNotIn("include_info", tools["get_shape"]["inputSchema"]["properties"])
+        self.assertNotIn("detail", tools["get_shape"]["inputSchema"]["properties"])
+        self.assertNotIn("scope", tools["get_shape"]["inputSchema"]["properties"])
+        self.assertIn("bare WGS84 coordinate or bounded point array", tools["resolve_point"]["description"])
+
+    def test_point_help_matches_discovery_and_rejects_unsupported_selectors(self) -> None:
+        tools = {
+            tool["name"]: tool
+            for tool in _mcp_call(self.client, "tools/list")["result"]["tools"]
+        }
+        for name in ("resolve_point", "resolve_deep_point"):
+            with self.subTest(name=name):
+                help_payload = _tool_call(self.client, "get_tool_help", {"tool_name": name})
+                self.assertEqual(help_payload["input_schema"], tools[name]["inputSchema"])
+                self.assertFalse(help_payload["input_schema"]["additionalProperties"])
+                self.assertTrue(help_payload["examples"])
+        shallow_help = _tool_call(self.client, "get_tool_help", {"tool_name": "resolve_point"})
+        self.assertNotIn("target_admin_level", shallow_help["input_schema"]["properties"])
+        self.assertNotIn("include_marine_context", shallow_help["input_schema"]["properties"])
+        self.assertIn("directly recorded loc_id connections", tools["get_loc_id_info"]["description"])
+        self.assertNotIn("as_of", tools["get_loc_id_info"]["inputSchema"]["properties"])
+        self.assertIn("exact existing loc_ids", tools["get_shape"]["description"])
+        self.assertIn("never substituted", tools["get_shape"]["description"])
         self.assertNotIn("check_geometry", tools)
-        self.assertIn("fast preflight", tools["get_geometry"]["description"])
+        self.assertIn("include_polygon=true", tools["get_shape"]["description"])
 
-    def test_loc_id_info_returns_date_review_alert_when_as_of_is_requested(self) -> None:
-        review = {
-            "as_of": "2026-06-15", "date_review_required": True,
-            "status": "coarse_release_boundary",
-            "date_evidence_url": "https://example.org/source-date",
-        }
-        info = {"loc_id": "DEU-11", "name": "Berlin", "admin_level": 1,
-                "parent_id": "DEU", "iso3": "DEU", "has_polygon": True}
-        with (
-            mock.patch("mapmover.runtime.reference_graph.indexed_public_alias_candidates", return_value={}),
-            mock.patch("mapmover.geometry_handlers.get_location_infos", return_value=[info]),
-            mock.patch("mapmover.routes.mcp._loc_id_catalog_context", return_value={}),
-            mock.patch("mapmover.runtime.source_release_review.review_loc_id",
-                       return_value=review) as review_call,
+    def test_non_resolver_rejects_coordinate_input_with_point_next_step(self) -> None:
+        for tool_name, arguments in (
+            ("get_shape", {"loc_id": "USA-CA", "lat": 34.0, "lon": -118.0}),
+            ("get_loc_id_info", {"point": {"lat": 34.0, "lon": -118.0}}),
+            ("get_data", {"pack_id": "test", "points": [{"lat": 34.0, "lon": -118.0}]}),
+            ("compare_geographies", {"coordinates": [-118.0, 34.0]}),
         ):
-            result = _tool_call(
-                self.client, "get_loc_id_info",
-                {"loc_id": "DEU-11", "as_of": "2026-06-15"},
-            )
-        self.assertEqual(result["date_review"], review)
-        self.assertTrue(result["date_review_required"])
-        self.assertEqual(result["date_review_notice"], "Double-check date")
-        review_call.assert_called_once_with("DEU-11", "2026-06-15")
+            with self.subTest(tool=tool_name):
+                envelope = _mcp_call(
+                    self.client, "tools/call", {"name": tool_name, "arguments": arguments},
+                    path="/mcp",
+                )
+                self.assertEqual(envelope["error"]["code"], -32602)
+                self.assertEqual(envelope["error"]["data"]["error"]["code"], "point_resolution_required")
+                self.assertEqual(envelope["error"]["data"]["next_step"]["tool"], "resolve_point")
 
-    def test_get_geometry_tool_resolves_an_admin_scope_before_shape_read(self) -> None:
-        scope_result = {
-            "ok": True,
-            "parent_loc_id": "USA-TX",
-            "admin_level": 2,
-            "total_count": 2,
-            "loc_ids": ["USA-TX-201", "USA-TX-453"],
-        }
+    def test_get_shape_rejects_admin_scope_before_shape_read(self) -> None:
         with (
             mock.patch(
                 "mapmover.runtime.geometry_tool_jobs.resolve_geometry_selection",
-                return_value=(["USA-TX-201", "USA-TX-453"], scope_result),
             ) as selection_mock,
             mock.patch(
                 "mapmover.runtime.reference_exchange.get_geometry_references",
-                return_value={
-                    "ok": True,
-                    "requested": 2,
-                    "available": 2,
-                    "missing": 0,
-                    "results": [
-                        {"ok": True, "loc_id": "USA-TX-201", "has_shape": True},
-                        {"ok": True, "loc_id": "USA-TX-453", "has_shape": True},
-                    ],
-                },
             ) as geometry_mock,
-            mock.patch(
-                "mapmover.routes.mcp._geometry_material_effective_access",
-                return_value={"allow": True, "settlement_required": False, "access_lane": "free"},
-            ),
-            mock.patch("mapmover.routes.mcp.log_api_query_event"),
         ):
-            payload = _tool_call(
-                self.client,
-                "get_geometry",
-                {"scope": {"parent_loc_id": "USA-TX", "admin_level": "admin_2"}},
-            )
-
-        selection_mock.assert_called_once()
-        geometry_mock.assert_called_once_with(
-            ["USA-TX-201", "USA-TX-453"], include_polygon=False, include_info=False,
-        )
-        self.assertEqual(payload["selection"], "admin_scope")
-        self.assertEqual(payload["scope"]["parent_loc_id"], "USA-TX")
-        self.assertEqual(payload["requested"], 2)
+            envelope = _mcp_call(self.client, "tools/call", {"name": "get_shape", "arguments":
+                                 {"scope": {"parent_loc_id": "USA-TX", "admin_level": "admin_2"}}})
+        self.assertEqual(envelope["error"]["code"], -32602)
+        selection_mock.assert_not_called()
+        geometry_mock.assert_not_called()
 
     def test_paid_geometry_is_challenged_before_polygon_read(self) -> None:
         with (
@@ -1311,7 +1371,7 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         ):
             payload = _tool_call(
                 self.client,
-                "get_geometry",
+                "get_shape",
                 {"loc_id": "USA-TX-201", "include_polygon": True},
             )
 
@@ -1327,7 +1387,7 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         ):
             payload = _tool_call(
                 self.client,
-                "get_geometry",
+                "get_shape",
                 {"loc_ids": loc_ids, "include_polygon": True},
             )
 
@@ -1339,7 +1399,7 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
     def test_get_geometry_polygon_limit_is_authored_in_the_access_registry(self) -> None:
         from tool_access_shared import tool_sub_limit
 
-        policy = tool_sub_limit("get_geometry", "polygons")
+        policy = tool_sub_limit("get_shape", "polygons")
 
         self.assertEqual(policy["free_item_limit"], 100)
         self.assertEqual(policy["limit_env"], "MCP_TOOL_POLYGON_BATCH_LIMIT_GET_GEOMETRY")
@@ -1365,7 +1425,7 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
             ):
                 payload = _tool_call(
                     self.client,
-                    "get_geometry",
+                    "get_shape",
                     {"loc_ids": ["USA-CA-037", "USA-NY-061", "USA-IL-031"]},
                     headers={"Authorization": "Bearer tok_test_bypass"},
                 )
@@ -1375,360 +1435,6 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         analytics = analytics_mock.call_args.kwargs
         self.assertEqual(analytics["payment_rail"], "trusted_artifact")
         self.assertIsNotNone(analytics["artifact_token_id"])
-
-    def test_loc_id_info_can_include_references(self) -> None:
-        with (
-            mock.patch("mapmover.runtime.reference_graph.indexed_public_alias_candidates", return_value={}),
-            mock.patch(
-                "mapmover.geometry_handlers.get_location_infos",
-                return_value=[{
-                    "loc_id": "USA-AK-282",
-                    "name": "Yakutat",
-                    "admin_level": 2,
-                    "parent_id": "USA-AK",
-                    "family": "admin",
-                    "subtype": "county_and_equivalent",
-                    "iso3": "USA",
-                    "centroid": {"lon": -140, "lat": 59},
-                    "bbox": [-142, 58, -138, 60],
-                    "has_polygon": True,
-                    "source_vintage": "2021",
-                    "source_system": "test_authority",
-                    "release_id": "test-release-2021",
-                    "children_count": 0,
-                    "children_by_level": "{}",
-                    "descendants_count": 0,
-                }],
-            ),
-            mock.patch(
-                "mapmover.runtime.reference_exchange.loc_id_references",
-                return_value={"ok": True, "references": [{"system": "overlay_nws_fire_weather_zone", "value": "USA-NWSFZ-AKZ317"}]},
-            ) as references_mock,
-        ):
-            payload = _tool_call(
-                self.client,
-                "get_loc_id_info",
-                {"loc_id": "USA-AK-282", "include_references": True, "systems": ["nws_fire"]},
-            )
-
-        references_mock.assert_called_once()
-        self.assertEqual(payload["loc_id"], "USA-AK-282")
-        self.assertEqual(payload["subtype"], "county_and_equivalent")
-        self.assertEqual(payload["source_vintage"], "2021")
-        self.assertEqual(payload["release_id"], "test-release-2021")
-        self.assertEqual(payload["reference_count"], 1)
-        self.assertEqual(payload["references"]["references"][0]["system"], "overlay_nws_fire_weather_zone")
-
-    def test_loc_id_info_returns_requested_history_before_successor_prompt(self) -> None:
-        with (
-            mock.patch("mapmover.runtime.reference_graph.indexed_public_alias_candidates", return_value={}),
-            mock.patch("mapmover.geometry_handlers.get_location_infos", return_value=[{
-                "loc_id": "USA-CT-OLD",
-                "name": "Historical Connecticut county",
-                "admin_level": 2,
-                "iso3": "USA",
-                "valid_to": "2022-12-31",
-                "superseded_by": "USA-CT-NEW",
-                "has_polygon": True,
-            }]),
-        ):
-            payload = _tool_call(
-                self.client,
-                "get_loc_id_info",
-                {"loc_id": "USA-CT-OLD"},
-            )
-
-        self.assertEqual(payload["loc_id"], "USA-CT-OLD")
-        self.assertEqual(payload["name"], "Historical Connecticut county")
-        self.assertEqual(payload["supersession"]["successor_loc_id"], "USA-CT-NEW")
-        self.assertFalse(payload["supersession"]["successor_included"])
-
-    def test_loc_id_info_accepts_preferred_public_alias_and_returns_canonical_id(self) -> None:
-        with (
-            mock.patch(
-                "mapmover.runtime.reference_graph.indexed_public_alias_candidates",
-                return_value={"USA-PLACE-SPRINGFIELD-IL": [{
-                    "loc_id": "USA-IL-167-PLACE-12345",
-                    "reference_system": "public.usa.place.v2",
-                }]},
-            ),
-            mock.patch(
-                "mapmover.geometry_handlers.get_location_infos",
-                return_value=[{
-                    "loc_id": "USA-IL-167-PLACE-12345", "name": "Springfield",
-                    "family": "place_or_municipality", "iso3": "USA",
-                }],
-            ) as info_mock,
-        ):
-            payload = _tool_call(
-                self.client,
-                "get_loc_id_info",
-                {"loc_id": "USA-PLACE-SPRINGFIELD-IL"},
-            )
-
-        expected_call = mock.call(["USA-IL-167-PLACE-12345"], include_memberships=False, graph_authoritative=True)
-        self.assertEqual(info_mock.call_args_list.count(expected_call), 1)
-        self.assertEqual(payload["loc_id"], "USA-IL-167-PLACE-12345")
-        self.assertEqual(payload["requested_loc_id"], "USA-PLACE-SPRINGFIELD-IL")
-        self.assertTrue(payload["resolved_from_public_alias"])
-
-    def test_loc_id_info_batch_fetches_unique_metadata_once(self) -> None:
-        def resolve(loc_id: str) -> dict:
-            return {
-                "ok": True,
-                "requested_loc_id": loc_id,
-                "loc_id": loc_id,
-                "resolved_from_public_alias": False,
-            }
-
-        infos = [
-            {"loc_id": "USA-CA-037", "name": "Los Angeles County", "admin_level": 2, "iso3": "USA"},
-            {"loc_id": "USA-NY-061", "name": "New York County", "admin_level": 2, "iso3": "USA"},
-        ]
-        with (
-            mock.patch(
-                "mapmover.runtime.reference_exchange.resolve_loc_id_input",
-                side_effect=resolve,
-            ) as resolve_mock,
-            mock.patch("mapmover.runtime.reference_graph.indexed_public_alias_candidates", return_value={}),
-            mock.patch(
-                "mapmover.geometry_handlers.get_location_infos",
-                return_value=infos,
-            ) as info_mock,
-            mock.patch(
-                "mapmover.routes.mcp._loc_id_catalog_context",
-                return_value={"coverage_scope": "USA"},
-            ) as catalog_context_mock,
-        ):
-            payload = _tool_call(
-                self.client,
-                "get_loc_id_info",
-                {"loc_ids": ["USA-CA-037", "USA-NY-061", "USA-CA-037"]},
-            )
-
-        self.assertEqual(payload["found_count"], 3)
-        resolve_mock.assert_not_called()
-        info_mock.assert_called_once_with(
-            ["USA-CA-037", "USA-NY-061"],
-            include_memberships=False,
-            fallback=False,
-            graph_authoritative=True,
-        )
-        catalog_context_mock.assert_called_once()
-        self.assertEqual(
-            [result["loc_id"] for result in payload["results"]],
-            ["USA-CA-037", "USA-NY-061", "USA-CA-037"],
-        )
-
-    def test_loc_id_info_batch_serializes_parquet_timestamp(self) -> None:
-        with (
-            mock.patch("mapmover.runtime.reference_graph.indexed_public_alias_candidates", return_value={}),
-            mock.patch("mapmover.geometry_handlers.get_location_infos", return_value=[{
-                "loc_id": "USA-VA-059", "name": "Fairfax County", "admin_level": 2,
-                "iso3": "USA", "valid_from": pd.Timestamp("2020-01-01"),
-            }]),
-            mock.patch("mapmover.routes.mcp._loc_id_catalog_context", return_value={}),
-        ):
-            payload = _tool_call(self.client, "get_loc_id_info", {"loc_ids": ["USA-VA-059"]})
-
-        self.assertEqual(payload["found_count"], 1)
-        self.assertEqual(payload["results"][0]["valid_from"], "2020-01-01T00:00:00")
-
-    def test_loc_id_info_indexed_alias_skips_public_id_metadata_probe(self) -> None:
-        alias = "USA-POSTAL-EXAMPLE"
-        target = "USA-VA-059-POSTAL-22030"
-        with (
-            mock.patch(
-                "mapmover.runtime.reference_graph.indexed_public_alias_candidates",
-                return_value={alias: [{
-                    "external_id": alias, "loc_id": target,
-                    "reference_system": "public.usa.postal.v2", "country_scope": "USA",
-                }]},
-            ),
-            mock.patch(
-                "mapmover.geometry_handlers.get_location_infos",
-                return_value=[{"loc_id": target, "name": "Example", "iso3": "USA"}],
-            ) as infos,
-            mock.patch("mapmover.routes.mcp._loc_id_catalog_context", return_value={}),
-            mock.patch("mapmover.runtime.reference_exchange.resolve_loc_id_inputs") as fallback,
-        ):
-            payload = _tool_call(self.client, "get_loc_id_info", {"loc_ids": [alias]})
-
-        self.assertEqual(payload["found_count"], 1)
-        self.assertEqual(payload["results"][0]["loc_id"], target)
-        self.assertTrue(payload["results"][0]["resolved_from_public_alias"])
-        infos.assert_called_once_with([target], include_memberships=False, graph_authoritative=True)
-        fallback.assert_not_called()
-
-    def test_loc_id_info_missing_alias_index_returns_explicit_error_without_metadata_scan(self) -> None:
-        with (
-            mock.patch("mapmover.runtime.reference_graph.indexed_public_alias_candidates", return_value=None),
-            mock.patch("mapmover.geometry_handlers.get_location_infos") as infos,
-            mock.patch("mapmover.runtime.reference_exchange.resolve_loc_id_inputs") as resolver,
-        ):
-            payload = _tool_call(self.client, "get_loc_id_info", {"loc_ids": ["USA-VA-059"]})
-
-        self.assertEqual(payload["results"][0]["error"]["code"], "reference_route_unavailable")
-        infos.assert_not_called()
-        resolver.assert_not_called()
-
-    def test_loc_id_info_single_missing_alias_index_does_not_use_legacy_reader(self) -> None:
-        with (
-            mock.patch("mapmover.runtime.reference_graph.indexed_public_alias_candidates", return_value=None),
-            mock.patch("mapmover.geometry_handlers.get_location_infos") as infos,
-            mock.patch("mapmover.geometry_handlers.get_location_info") as legacy,
-        ):
-            payload = _tool_call(self.client, "get_loc_id_info", {"loc_id": "USA-VA-059"})
-
-        self.assertEqual(payload["error"]["code"], "reference_route_unavailable")
-        infos.assert_not_called()
-        legacy.assert_not_called()
-
-    def test_loc_id_info_exact_identity_miss_is_checked_once(self) -> None:
-        missing = "USA-VA-NOT-PUBLISHED"
-        with (
-            mock.patch("mapmover.runtime.reference_graph.indexed_public_alias_candidates", return_value={}),
-            mock.patch("mapmover.geometry_handlers.get_location_infos", return_value=[{
-                "loc_id": missing, "error": "no identity in the active reference graph",
-            }]) as infos,
-        ):
-            payload = _tool_call(self.client, "get_loc_id_info", {"loc_ids": [missing]})
-
-        self.assertEqual(payload["results"][0]["error"]["code"], "not_found")
-        infos.assert_called_once_with(
-            [missing], include_memberships=False, fallback=False, graph_authoritative=True,
-        )
-
-    def test_loc_id_info_indexed_alias_fails_closed(self) -> None:
-        ambiguous = "USA-PUBLIC-AMBIG"
-        missing = "USA-PUBLIC-MISSING-TARGET"
-        rows = {
-            ambiguous: [
-                {"loc_id": "USA-A", "reference_system": "public.usa.test"},
-                {"loc_id": "USA-B", "reference_system": "public.usa.test"},
-            ],
-            missing: [{"loc_id": "USA-NO-IDENTITY", "reference_system": "public.usa.test"}],
-        }
-        with (
-            mock.patch("mapmover.runtime.reference_graph.indexed_public_alias_candidates", return_value=rows),
-            mock.patch("mapmover.geometry_handlers.get_location_infos", return_value=[{
-                "loc_id": "USA-NO-IDENTITY", "error": "no geometry metadata found",
-            }]),
-        ):
-            payload = _tool_call(self.client, "get_loc_id_info", {"loc_ids": [ambiguous, missing]})
-
-        self.assertEqual(payload["results"][0]["error"]["code"], "ambiguous_public_loc_id")
-        self.assertEqual(payload["results"][1]["error"]["code"], "invalid_public_loc_id_target")
-
-    def test_loc_id_info_rejects_ambiguous_preferred_public_alias(self) -> None:
-        with (
-            mock.patch(
-                "mapmover.runtime.reference_graph.indexed_public_alias_candidates",
-                return_value={"USA-PLACE-SPRINGFIELD": [
-                    {"loc_id": "USA-IL-167-PLACE-12345", "reference_system": "public.usa.place.v2"},
-                    {"loc_id": "USA-MO-077-PLACE-67890", "reference_system": "public.usa.place.v2"},
-                ]},
-            ),
-            mock.patch("mapmover.geometry_handlers.get_location_infos") as info_mock,
-        ):
-            payload = _tool_call(
-                self.client,
-                "get_loc_id_info",
-                {"loc_id": "USA-PLACE-SPRINGFIELD"},
-            )
-
-        info_mock.assert_not_called()
-        self.assertEqual(payload["error"]["code"], "ambiguous_public_loc_id")
-        self.assertIsNone(payload["canonical_loc_id"])
-
-    def test_loc_id_info_hierarchy_follows_stored_country_parentage(self) -> None:
-        rows = {
-            "CAN-BC-5915004": {
-                "loc_id": "CAN-BC-5915004",
-                "name": "Surrey",
-                "admin_level": 3,
-                "parent_id": "CAN-BC-5915",
-                "family": "admin_boundary",
-                "iso3": "CAN",
-            },
-            "CAN-BC-5915": {
-                "loc_id": "CAN-BC-5915",
-                "name": "Greater Vancouver",
-                "admin_level": 2,
-                "parent_id": "CAN-BC",
-                "family": "admin_boundary",
-                "iso3": "CAN",
-            },
-            "CAN-BC": {
-                "loc_id": "CAN-BC",
-                "name": "British Columbia",
-                "admin_level": 1,
-                "parent_id": "CAN",
-                "family": "admin_boundary",
-                "iso3": "CAN",
-            },
-            "CAN": {
-                "loc_id": "CAN",
-                "name": "Canada",
-                "admin_level": 0,
-                "parent_id": None,
-                "family": "admin_boundary",
-                "iso3": "CAN",
-            },
-        }
-        with (
-            mock.patch("mapmover.runtime.reference_graph.indexed_public_alias_candidates", return_value={}),
-            mock.patch("mapmover.geometry_handlers.get_location_infos", side_effect=lambda loc_ids, **_: [rows[loc_ids[0]]]),
-            mock.patch("mapmover.geometry_handlers.get_location_info") as legacy,
-        ):
-            payload = _tool_call(
-                self.client,
-                "get_loc_id_info",
-                {"loc_id": "CAN-BC-5915004", "include_hierarchy": True},
-            )
-
-        self.assertEqual(payload["hierarchy"]["relationship_mode"], "strict_stored_parent")
-        self.assertEqual(payload["hierarchy"]["parent"], "CAN-BC-5915")
-        self.assertEqual(payload["hierarchy"]["ancestors"], ["CAN-BC-5915", "CAN-BC", "CAN"])
-        legacy.assert_not_called()
-
-    def test_loc_id_info_hierarchy_parent_miss_stops_at_exact_route(self) -> None:
-        child = {"loc_id": "CAN-BC-5915004", "name": "Surrey", "parent_id": "CAN-BC-5915", "iso3": "CAN"}
-        missing_parent = {"loc_id": "CAN-BC-5915", "error": "no identity in the active reference graph"}
-        with (
-            mock.patch("mapmover.runtime.reference_graph.indexed_public_alias_candidates", return_value={}),
-            mock.patch("mapmover.geometry_handlers.get_location_infos", side_effect=[[child], [missing_parent]]) as infos,
-            mock.patch("mapmover.geometry_handlers.get_location_info") as legacy,
-        ):
-            payload = _tool_call(self.client, "get_loc_id_info", {
-                "loc_id": "CAN-BC-5915004", "include_hierarchy": True,
-            })
-
-        self.assertEqual(payload["hierarchy"]["ancestors"], ["CAN-BC-5915"])
-        self.assertEqual(payload["hierarchy"]["ancestor_rows"], [{"loc_id": "CAN-BC-5915"}])
-        self.assertEqual(infos.call_count, 2)
-        legacy.assert_not_called()
-
-    def test_loc_id_info_references_batch_uses_smaller_guard(self) -> None:
-        with (
-            mock.patch.dict("os.environ", {"MCP_TOOL_REFERENCES_BATCH_LIMIT_LOC_ID_INFO": "2"}),
-            mock.patch("mapmover.routes.mcp.log_api_query_event") as analytics_mock,
-        ):
-            payload = _tool_call(
-                self.client,
-                "get_loc_id_info",
-                {
-                    "loc_ids": ["USA-CA-037", "USA-NY-061", "USA-AK-282"],
-                    "include_references": True,
-                },
-            )
-
-        self.assertEqual(payload["limit"], 2)
-        self.assertEqual(payload["error"]["code"], "too_many_loc_ids_for_references")
-        analytics = analytics_mock.call_args.kwargs
-        self.assertEqual(analytics["decision"], "deny")
-        self.assertEqual(analytics["error_code"], "too_many_loc_ids_for_references")
-        self.assertEqual(analytics["metadata"]["batch_limit"], 2)
 
     def test_tool_rate_limit_uses_per_tool_override(self) -> None:
         with mock.patch.dict(
@@ -1743,52 +1449,86 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
             self.assertEqual(_tool_rate_limit_for_tier("resolve_point", "free"), (4, 30))
             self.assertEqual(_tool_rate_limit_for_tier("resolve_point", "plus"), (40, 30))
 
-    def test_get_pack_geometry_family_lists_countries_before_country_detail(self) -> None:
+    def test_get_geography_family_lists_scopes(self) -> None:
         payload = _tool_call(
             self.client,
-            "get_pack",
-            {"catalog": "geometry", "pack_id": "postal_area", "detail": "lite"},
+            "get_geography",
+            {"family_id": "postal_area"},
         )
-
-        self.assertEqual(payload["pack_id"], "postal_area")
-        self.assertEqual(payload["countries"], ["CAN", "USA"])
-        self.assertEqual(payload["next_step"]["tool"], "get_pack")
-        self.assertEqual(payload["next_step"]["arguments"]["country_scope"], "<ISO3 from countries>")
+        self.assertEqual({row["scope_id"] for row in payload["coverage"]}, {"CAN", "USA"})
 
     def test_country_family_full_detail_stays_metadata_sized(self) -> None:
         payload = _tool_call(
-            self.client, "get_pack",
-            {"catalog": "geometry", "pack_id": "administrative", "detail": "full", "country_scope": "CAN"},
+            self.client, "get_geography", {"scope_id": "CAN", "year": 2014},
         )
         self.assertTrue(payload["ok"])
-        self.assertEqual(payload["crosswalk_count"], len(payload["crosswalks"]))
+        self.assertEqual(payload["admin_spine"]["active_admin_depth"], 5)
         self.assertLess(len(json.dumps(payload).encode("utf-8")), 200_000)
-        self.assertTrue(all("artifact_path" not in row for row in payload["crosswalks"]))
+        self.assertTrue(all(row["edition_index_status"] == "available" for row in payload["coverage"]))
+        self.assertTrue(all(row["year_selection"]["selected_edition_year"] is None
+                            or row["year_selection"]["selected_edition_year"] <= 2014
+                            for row in payload["coverage"]))
 
-    def test_geometry_facade_get_pack_requires_a_selected_family(self) -> None:
-        payload = _tool_call(self.client, "get_pack", {}, path="/mcp/boundaries")
+    def test_geography_year_selection_uses_admitted_editions_only(self) -> None:
+        catalog = dict(load_geometry_catalog())
+        catalog["family_edition_index"] = [
+            {"scope_id": "CAN", "family_id": "health_region", "edition_year": 2011,
+             "authority": "A", "publication_status": "published"},
+            {"scope_id": "CAN", "family_id": "health_region", "edition_year": 2011,
+             "authority": "B", "publication_status": "published"},
+            {"scope_id": "CAN", "family_id": "health_region", "edition_year": 2013,
+             "authority": "candidate", "publication_status": "candidate"},
+            {"scope_id": "CAN", "family_id": "health_region", "edition_year": 2016,
+             "authority": "C", "publication_status": "published"},
+        ]
+        with mock.patch("mapmover.runtime.reference_exchange.load_geometry_catalog", return_value=catalog):
+            rows = geography_detail(scope_id="CAN", year=2014)["coverage"]
+            row = next(item for item in rows if item["family_id"] == "health_region")
+            self.assertEqual(row["year_selection"]["selected_edition_year"], 2011)
+            self.assertEqual(row["year_selection"]["status"], "previous_available")
+            self.assertTrue(row["year_selection"]["double_check"])
+            self.assertEqual({item["authority"] for item in row["year_selection"]["editions"]}, {"A", "B"})
+            earlier = geography_detail(scope_id="CAN", year=2010)["coverage"]
+            row = next(item for item in earlier if item["family_id"] == "health_region")
+            self.assertEqual(row["year_selection"]["status"], "no_previous_edition")
+            defaulted = geography_detail(scope_id="CAN")
+            row = next(item for item in defaulted["coverage"] if item["family_id"] == "health_region")
+            self.assertTrue(defaulted["year_defaulted"])
+            self.assertEqual(row["year_selection"]["requested_year"], defaulted["requested_year"])
+            self.assertEqual(row["year_selection"]["selected_edition_year"],
+                             max(value for value in (2011, 2016) if value <= defaulted["requested_year"]))
 
-        self.assertFalse(payload["ok"])
-        self.assertEqual(payload["error"]["code"], "geometry_family_required")
-        self.assertEqual(payload["guidance"]["next_call"], {
-            "tool": "get_catalog", "arguments": {"catalog": "geometry"},
-        })
+    def test_get_pack_rejects_geometry_selector(self) -> None:
+        envelope = _mcp_call(self.client, "tools/call", {"name": "get_pack", "arguments":
+                             {"pack_id": "postal_area"}}, path="/mcp/boundaries")
+        self.assertEqual(envelope["error"]["code"], -32602)
 
-    def test_get_pack_geometry_download_links_selected_family_and_raw_catalog(self) -> None:
+    def test_discovery_contracts_reject_extra_fields_before_lookup(self) -> None:
+        for name, arguments in (
+            ("get_catalog", {"catalog": "geometry", "country_scope": "CAN"}),
+            ("get_pack", {"pack_id": "earthquakes", "catalog": "data"}),
+            ("get_geography", {"scope_id": "CAN", "family_id": "administrative"}),
+            ("get_geography", {"scope_id": "CAN", "year": "2014"}),
+            ("get_shape", {"loc_id": "CAN", "scope": {"parent_loc_id": "CAN", "admin_level": 1}}),
+        ):
+            with self.subTest(name=name, arguments=arguments):
+                envelope = _mcp_call(self.client, "tools/call", {"name": name, "arguments": arguments})
+                self.assertEqual(envelope["error"]["code"], -32602)
+
+    def test_geography_unknown_id_is_typed_and_metadata_only(self) -> None:
+        with mock.patch("mapmover.runtime.reference_exchange.get_geometry_references") as shape_read:
+            payload = _tool_call(self.client, "get_geography", {"scope_id": "ZZZ"})
+        self.assertEqual(payload["error"]["code"], "scope_not_found")
+        shape_read.assert_not_called()
+
+    def test_geometry_catalog_lists_families_scopes_and_download_url(self) -> None:
         payload = _tool_call(
             self.client,
-            "get_pack",
-            {"catalog": "geometry", "pack_id": "postal_area", "detail": "download"},
+            "get_catalog", {"catalog": "geometry"},
         )
-
-        self.assertEqual(
-            payload["download_url"],
-            "https://app.daedalmap.com/api/v1/packs/postal_area/download",
-        )
-        self.assertEqual(
-            payload["catalog_download_url"],
-            "https://app.daedalmap.com/api/v1/geometry/catalog/download",
-        )
+        self.assertTrue(any(row["family_id"] == "postal_area" for row in payload["families"]))
+        self.assertTrue(any(row["scope_id"] == "MARINE" for row in payload["scopes"]))
+        self.assertEqual(payload["download_url"], "https://app.daedalmap.com/api/v1/geometry/catalog/download")
         self.assertNotIn("geometry_banks", payload)
 
     def test_convert_reference_defaults_to_loc_id(self) -> None:
@@ -1802,23 +1542,14 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         self.assertEqual(payload["to_system"], "daedalmap.loc_id")
         self.assertEqual(payload["results"], [{"system": "daedalmap.loc_id", "value": "USA-CA"}])
 
-    def test_get_pack_uses_global_domain_for_non_country_release_units(self) -> None:
+    def test_get_geography_uses_global_domain_for_non_country_release_units(self) -> None:
         payload = _tool_call(
             self.client,
-            "get_pack",
-            {
-                "catalog": "geometry",
-                "pack_id": "marine_jurisdiction",
-                "release_unit": "MARINE",
-                "detail": "lite",
-            },
+            "get_geography", {"scope_id": "MARINE"},
         )
-
         self.assertTrue(payload["ok"])
-        self.assertEqual(payload["countries"], [])
-        self.assertEqual(payload["release_unit"], "MARINE")
-        self.assertEqual(payload["release_units"][0]["kind"], "global_domain")
-        self.assertEqual(payload["release_units"][0]["domain_type"], "marine")
+        self.assertTrue(any(row["family_id"] == "marine_jurisdiction" for row in payload["coverage"]))
+        self.assertEqual(payload["admin_spine"]["release_unit_kind"], "global_domain")
 
     def test_read_geometry_catalog_returns_agent_summary(self) -> None:
         with mock.patch(
@@ -2395,13 +2126,14 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         self.assertEqual(analytics_mock.call_args.kwargs["decision"], "deny")
         self.assertEqual(analytics_mock.call_args.kwargs["error_code"], "unsupported_target_system")
 
-    def test_compare_geographies_tool_returns_spatial_and_temporal_relationship(self) -> None:
+    def test_compare_geographies_tool_returns_graph_and_temporal_relationship(self) -> None:
         expected = {
             "ok": True,
             "temporal_relation": "coexistent",
             "spatial_relation": "overlaps",
-            "left_area_share": 0.18,
-            "right_area_share": 0.03,
+            "relationship_basis": "selected_reference_graph",
+            "geometry_loaded": False,
+            "graph_evidence": [{"relationship_type": "overlaps", "source_area_share": 0.18}],
         }
         with (
             mock.patch("mapmover.runtime.geography_relationships.compare_geographies", return_value=expected) as compare_mock,
@@ -2414,7 +2146,7 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
             )
 
         self.assertEqual(payload["spatial_relation"], "overlaps")
-        self.assertEqual(payload["left_area_share"], 0.18)
+        self.assertEqual(payload["graph_evidence"][0]["source_area_share"], 0.18)
         compare_mock.assert_called_once_with(
             "USA-Z-90001",
             "USA-TRIBAL-1823",
@@ -2429,8 +2161,8 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         with mock.patch(
             "mapmover.runtime.geography_relationships.compare_geographies_batch",
             return_value=[
-                {"ok": True, "spatial_relation": "disjoint"},
-                {"ok": True, "spatial_relation": "disjoint"},
+                {"ok": True, "spatial_relation": "unknown"},
+                {"ok": True, "spatial_relation": "unknown"},
             ],
         ) as compare_mock:
             payload = _tool_call(
@@ -2451,6 +2183,16 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         self.assertEqual([row["row_index"] for row in payload["results"]], ["one", "two"])
         compare_mock.assert_called_once()
         self.assertEqual(len(compare_mock.call_args.args[0]), 2)
+
+    def test_compare_geographies_rejects_undeclared_and_mixed_inputs(self) -> None:
+        for arguments in (
+            {"left_loc_id": "USA", "right_loc_id": "CAN", "coordinates": [0, 0]},
+            {"left_loc_id": "USA", "right_loc_id": "CAN", "items": [{"left_loc_id": "USA", "right_loc_id": "CAN"}]},
+            {"items": [{"left_loc_id": "USA", "right_loc_id": "CAN", "geometry": True}]},
+        ):
+            with self.subTest(arguments=arguments):
+                envelope = _mcp_call(self.client, "tools/call", {"name": "compare_geographies", "arguments": arguments})
+                self.assertEqual(envelope["error"]["code"], -32602)
 
     def test_resolve_loc_id_scope_uses_geometry_index(self) -> None:
         with (

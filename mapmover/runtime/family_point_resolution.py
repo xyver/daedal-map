@@ -1,36 +1,28 @@
 """Resolve points against explicitly requested canonical geometry families.
 
 The selected release's family point layout is the bounded physical route.
-Older local authoring uses compact representation predicates; published
-catalog banks supply legacy hosted paths until a release selects its point
-layout. Crosswalks are deliberately not part of this path.
+Published catalog banks supply the current point route until a release selects
+its compact point layout. Crosswalks are deliberately not part of this path.
 """
 
 from __future__ import annotations
 
-import json
 import threading
 import time
-from functools import lru_cache
 from pathlib import Path
 from typing import Any, Iterable
 
 from shapely.geometry import Point, shape
 
-from ..catalog_cache_policy import control_catalog_cache_epoch
 from ..duckdb_helpers import parquet_available
 from ..paths import DATA_ROOT
-from ..runtime_config import force_remote_data_reads, get_data_plane_mode
 from .geometry_catalog import load_geometry_catalog
 from .admin_spine_query import layout_available, load_route_rows_by_loc_ids
 from .geometry_inventory import country_capability_record
 from .geometry_predicate_query import read_bbox_candidates_for_points
-from .published_artifacts import read_artifact_json
 from .reference_geometry_bank import load_reference_graph_geometry, load_routed_family_geometry
 
 
-PREDICATE_ROLE = "query_exact_predicate_index"
-EXACT_ROLE = "query_exact_geometry"
 POINT_INDEX_COLUMNS = (
     "loc_id", "shape_path", "geometry_bank", "geometry_loc_id", "frame_id",
     "name", "family", "subtype", "parent_loc_id", "native_id", "source_id",
@@ -38,9 +30,7 @@ POINT_INDEX_COLUMNS = (
     "valid_to", "validity_status",
 )
 
-# Representation manifests retain a few publisher-facing family labels that
-# predate the public geometry catalog.  Route those physical labels through
-# the catalog's canonical family ids at the manifest boundary.
+# Published bank labels can predate canonical public family ids.
 MANIFEST_FAMILY_ALIASES = {
     "map_grid": "reference_grid",
     "named_geographical_feature": "named_feature",
@@ -99,71 +89,9 @@ def shallow_scope(shallow_loc_id: str) -> tuple[str, str | None, dict[str, str] 
     return country, owner, None
 
 
-def _manifest_relative_path(country: str) -> str:
-    return f"geometry/countries/{country}/downloadable_inputs/representation_manifest.json"
-
-
-@lru_cache(maxsize=32)
-def _representation_manifest_cached(country: str, _epoch: int) -> dict[str, Any]:
-    # The hosted published catalog excludes downloadable_inputs. Family paths
-    # are already declared by its geometry banks, so probing this build-only
-    # manifest adds a guaranteed object-store 404 to every country lookup.
-    if get_data_plane_mode() == "cloud":
-        return {}
-    relative = _manifest_relative_path(country)
-    local_path = DATA_ROOT / Path(relative)
-    if get_data_plane_mode() != "cloud" and not force_remote_data_reads():
-        try:
-            payload = json.loads(local_path.read_text(encoding="utf-8"))
-            return payload if isinstance(payload, dict) else {}
-        except (OSError, json.JSONDecodeError):
-            pass
-    try:
-        payload = read_artifact_json(relative, lane="active")
-        return payload if isinstance(payload, dict) else {}
-    except Exception:
-        return {}
-
-
-def representation_manifest(country: str) -> dict[str, Any]:
-    country = str(country or "").strip().upper()
-    if len(country) != 3 or not country.isalpha():
-        return {}
-    return _representation_manifest_cached(country, control_catalog_cache_epoch())
-
-
 def family_artifacts(country: str) -> dict[str, dict[str, Any]]:
-    """Return current predicate/exact artifacts grouped by canonical family."""
+    """Return published bank paths grouped by canonical family."""
     grouped: dict[str, dict[str, Any]] = {}
-    for artifact in representation_manifest(country).get("artifacts") or []:
-        if not isinstance(artifact, dict):
-            continue
-        physical_family = str(artifact.get("family") or "").strip()
-        family = MANIFEST_FAMILY_ALIASES.get(physical_family, physical_family)
-        role = str(artifact.get("role") or "").strip()
-        path = str(artifact.get("path") or "").strip()
-        if not family or not path or role not in {PREDICATE_ROLE, EXACT_ROLE}:
-            continue
-        card = grouped.setdefault(family, {"predicate_paths": [], "exact_paths": [], "shape_count": 0})
-        key = "predicate_paths" if role == PREDICATE_ROLE else "exact_paths"
-        card[key].append(path)
-        if role == PREDICATE_ROLE:
-            try:
-                card["shape_count"] += int(artifact.get("rows") or 0)
-            except (TypeError, ValueError):
-                pass
-
-    # Hosted publication deliberately excludes ``downloadable_inputs`` build
-    # state.  Every admitted exact family bank already carries the same bbox
-    # columns as the compact predicate derivative, so it is a valid (if less
-    # compact) predicate source when the representation manifest is absent.
-    # This keeps family lookup available from the published catalog closure
-    # instead of making a downloadable-package sidecar a runtime dependency.
-    manifest_backed = {
-        family for family, card in grouped.items()
-        if card["predicate_paths"] and card["exact_paths"]
-    }
-    fallback_families: set[str] = set()
     catalog = load_geometry_catalog()
     for bank in catalog.get("geometry_banks") or []:
         if not isinstance(bank, dict):
@@ -182,12 +110,7 @@ def family_artifacts(country: str) -> dict[str, dict[str, Any]]:
         path = str(bank.get("geometry_path") or "").strip().replace("\\", "/")
         if not family or family.startswith("admin_") or not path.lower().endswith(".parquet"):
             continue
-        if family in manifest_backed:
-            continue
-        if family not in fallback_families:
-            grouped[family] = {"predicate_paths": [], "exact_paths": [], "shape_count": 0}
-            fallback_families.add(family)
-        card = grouped[family]
+        card = grouped.setdefault(family, {"predicate_paths": [], "exact_paths": [], "shape_count": 0})
         if path not in card["predicate_paths"]:
             card["predicate_paths"].append(path)
         if path not in card["exact_paths"]:
@@ -261,6 +184,18 @@ def resolve_family_points(
 
         family_files = artifacts.get(family) or {}
         selected_layout = country_layouts.get(family) or {}
+        if selected_layout.get("schema_version") == "0.3.0":
+            for result in results:
+                result[family] = {
+                    "family": family,
+                    "status": "family_lookup_error",
+                    "matches": [],
+                    "error": {
+                        "code": "temporal_selector_unavailable",
+                        "message": "The selected multi-frame point route requires an admitted edition selector and runtime consumer.",
+                    },
+                }
+            continue
         predicate_paths = family_files.get("predicate_paths") or []
         exact_paths = family_files.get("exact_paths") or []
         if not selected_layout and (not predicate_paths or not exact_paths):
@@ -314,6 +249,9 @@ def resolve_family_points(
                     record_mcp_file(shape_path)
                 shape_records = load_routed_family_geometry(list(identity_rows.values())).to_dict("records")
             else:
+                # MCP_UPGRADE_REMOVE: published bank + reference-graph point route.
+                # Delete after every selected family has a release-owned point
+                # index and the frame selector passes local and hosted parity.
                 mark_mcp_stage("family_predicate_candidates")
                 for relative_path in predicate_paths:
                     if stop_event is not None and stop_event.is_set():

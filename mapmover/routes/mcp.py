@@ -94,11 +94,11 @@ from tool_access_shared import (
 
 router = APIRouter()
 
-MCP_PACK_READ_TOOLS = {"get_tool_help", "get_catalog", "get_pack"}
+MCP_PACK_READ_TOOLS = {"get_tool_help", "get_catalog", "get_pack", "get_geography"}
 MCP_GEOMETRY_READ_TOOLS = {
     "resolve_point", "resolve_deep_point",
     "get_loc_id_info", "identify_dataset_geography", "identify_reference_system",
-    "convert_reference", "compare_geographies", "get_geometry",
+    "convert_reference", "compare_geographies", "get_shape",
     "resolve_loc_id_scope", "estimate_geometry_package", "estimate_conversion_job",
     "get_job_status",
 }
@@ -416,7 +416,7 @@ PRODUCT_FACADE_PROFILES = {
 }
 PRODUCT_FACADE_TOOL_NAMES = {
     "free": frozenset({
-        "get_tool_help", "get_catalog", "get_pack", "resolve_point",
+        "get_tool_help", "get_catalog", "get_pack", "get_geography", "resolve_point",
         "get_loc_id_info", "identify_reference_system", "identify_dataset_geography",
         "convert_reference", "compare_geographies", "get_data",
     }),
@@ -446,6 +446,7 @@ DATA_HELPER_CAPABILITIES: dict[str, str] = {
         "get_tool_help",
         "get_catalog",
         "get_pack",
+        "get_geography",
         "get_event",
     )
 }
@@ -1122,8 +1123,8 @@ def _geometry_material_effective_access(
         permissions, publication_cleared = set(), False
     return resolve_effective_access(
         resource_kind="tool",
-        resource_id="get_geometry",
-        authored_pricing=tool_profile("get_geometry").get("pricing") or "by_material",
+        resource_id="get_shape",
+        authored_pricing=tool_profile("get_shape").get("pricing") or "by_material",
         license_permissions=permissions,
         publication_cleared=publication_cleared,
         caller_authenticated=bool(caller.auth_user_id),
@@ -1811,10 +1812,10 @@ def get_server_description(pack_id: str | None = None) -> str:
         return (
             f"{PACK_SERVER_PROFILES[normalized]['description']} Safety: {AGENT_SAFETY_NOTICE} {coverage_prefix}"
             "The calling LLM translates the user's natural-language request into strict tool JSON; geometry execution tools do not accept prose unless a schema explicitly says they do. Call get_tool_help before an unfamiliar tool. On error, inspect error, warnings, guidance, and clarification; ask the user only when clarification.required is true. "
-            "Start with free discovery: call get_catalog with catalog='geometry' to see each family and the countries where it exists. Then call get_pack for one family; add country_scope only when country-specific systems, versions, vintages, levels, and artifacts are needed. A listed family-country pair is the capability signal. "
-            "Call resolve_point with either one coordinate or a point array for the deepest available compact shallow chain (global baseline through Admin 2; adopted country banks may reach Admin 3) without opening deep partitions. Then call resolve_deep_point with one coordinate or a scoped point array, a returned shallow_loc_id, and one family. family defaults to administrative; other shape-backed families use direct point lookup. "
-            "When the caller asks for details about that chain, pass its stack loc_ids to get_loc_id_info; use get_geometry only for shapes and compare_geographies only for overlap, topology, validity, or successor questions. Mixed-vintage point context is not strict parentage. "
-            "For a user dataset with unknown or informally declared geography keys, pass bounded scalar column samples to identify_dataset_geography; the caller may filter transport noise but must not choose the geography itself. Use identify_reference_system only when one identifier column is already selected. For a known outside geography code, name, or bounded identifier batch, call convert_reference and omit to_system to return loc_id. For bounded administrative shapes, use get_geometry with exact loc_ids or its supported scope input. "
+            "Start with free discovery: call get_catalog with catalog='geometry' to see each family and the countries where it exists. Then call get_geography with one family_id or scope_id to inspect coverage and admitted edition years. A listed family-country pair is the capability signal. Edition years alone do not prove effective-year coverage. "
+            "When the only place input is coordinates, call resolve_point first to learn the country and the deepest available compact shallow chain (global baseline through Admin 2; adopted country banks may reach Admin 3) without opening deep partitions. Use that returned country and shallow loc_id stack to scope later place-specific calls. Call resolve_deep_point only when deeper containment is requested, with the original coordinate or scoped point array, a returned shallow_loc_id, and one family. family defaults to administrative; other shape-backed families use direct point lookup within the selected country. "
+            "When the caller asks what other loc_ids connect directly to the returned chain, pass up to 10 stack loc_ids to get_loc_id_info; each result returns at most 50 selected-graph edges and a has_more flag. Use get_shape only for shapes and compare_geographies only for overlap, topology, validity, or successor questions. Mixed-vintage point context is not strict parentage. "
+            "For a user dataset with unknown or informally declared geography keys, pass bounded scalar column samples to identify_dataset_geography; the caller may filter transport noise but must not choose the geography itself. Use identify_reference_system only when one identifier column is already selected. For a known outside geography code, name, or bounded identifier batch, call convert_reference and omit to_system to return loc_id. These identification tools prepare a binding; use convert_reference for scoped names or outside identifiers. Keep all relevant returned loc_ids when place identity overlaps. Pass canonical loc_ids to geography readers and place-filtered data calls. For bounded administrative shapes, use get_shape with exact loc_ids. "
             "Future estimate/create/status builder contracts remain implemented internally but are not public MCP tools until durable job and artifact delivery is ready."
         )
     if not normalized:
@@ -2471,8 +2472,78 @@ def _read_resource(uri: str, pack_id: str | None = None) -> dict[str, Any] | Non
     return None
 
 
+def _get_data_input_error(arguments: dict[str, Any]) -> str | None:
+    """Validate the public MCP query shape before the shared HTTP executor."""
+    if not isinstance(arguments.get("pack_id"), str) or not arguments["pack_id"].strip():
+        return "pack_id must be one nonempty published data pack ID from get_pack"
+    metrics = arguments.get("metrics")
+    if (not isinstance(metrics, list) or not metrics
+            or any(not isinstance(value, str) or not value.strip() for value in metrics)
+            or len(metrics) != len(set(metrics))):
+        return "metrics must be a nonempty array of unique metric IDs from get_pack"
+    filters = arguments.get("filters")
+    if not isinstance(filters, dict):
+        return "filters must be an object; use region_ids, time, equals, or compare"
+    region_ids = filters.get("region_ids")
+    if region_ids is not None and (not isinstance(region_ids, list) or not region_ids
+            or any(not isinstance(value, str) or not value.strip() for value in region_ids)
+            or len(region_ids) != len(set(region_ids))):
+        return "filters.region_ids must be a nonempty array of unique loc_ids"
+    time_filter = filters.get("time")
+    if time_filter is not None:
+        if not isinstance(time_filter, dict) or not any(key in time_filter for key in ("value", "start", "end")):
+            return "filters.time requires value, start, or end"
+        if any(type(value) not in {str, int} or (isinstance(value, str) and not value.strip())
+               for key, value in time_filter.items() if key in {"value", "start", "end"}):
+            return "filters.time values must be nonempty dates or integer years"
+        if "granularity" in time_filter and (not isinstance(time_filter["granularity"], str)
+                                             or time_filter["granularity"] not in {"daily", "weekly", "monthly", "yearly", "timestamp"}):
+            return "filters.time.granularity is unsupported"
+    equals = filters.get("equals")
+    if equals is not None and not isinstance(equals, dict):
+        return "filters.equals must be an object of published field/value pairs"
+    compare = filters.get("compare")
+    if compare is not None:
+        if not isinstance(compare, list):
+            return "filters.compare must be an array"
+        for item in compare:
+            if (not isinstance(item, dict) or not isinstance(item.get("field"), str)
+                    or not item["field"].strip() or not isinstance(item.get("op"), str)
+                    or item["op"] not in {"=", "!=", ">", ">=", "<", "<="}
+                    or "value" not in item):
+                return "filters.compare items require field, supported op, and value"
+    sort = arguments.get("sort")
+    if sort is not None:
+        entries = sort if isinstance(sort, list) else [sort]
+        if not entries or any(not isinstance(item, dict)
+                              or not isinstance(item.get("field"), str) or not item["field"].strip()
+                              or not isinstance(item.get("direction", "asc"), str)
+                              or item.get("direction", "asc") not in {"asc", "desc"}
+                              for item in entries):
+            return "sort requires a published field and optional asc/desc direction"
+    limit = arguments.get("limit")
+    if limit is not None and (type(limit) is not int or not 1 <= limit <= 500):
+        return "limit must be an integer from 1 to 500"
+    output = arguments.get("output")
+    if output is not None and (not isinstance(output, dict)
+                               or output.get("format", "rows") != "rows"
+                               or type(output.get("include_provenance", False)) is not bool):
+        return "output supports format=rows and boolean include_provenance only"
+    return None
+
+
 async def _execute_paid_tool(request: Request, tool_name: str, arguments: dict[str, Any], rpc_request_id: Any) -> Response:
     payload = _ensure_request_id(arguments, tool_name)
+
+    if tool_name == "get_data" and (input_error := _get_data_input_error(arguments)):
+        return _jsonrpc_response(
+            _tool_result(normalize_data_tool_error("get_data", {
+                "request_id": payload.get("request_id"),
+                "pack_id": payload.get("pack_id"),
+                "error": {"code": "invalid_data_request", "message": input_error},
+            }, status_code=400), is_error=True),
+            rpc_request_id,
+        )
 
     response = await execute_query_dataset_payload(request, payload)
 
@@ -2568,6 +2639,30 @@ def _point_tool_contract_error(request_id: str, rpc_request_id: Any, *, code: st
     )
 
 
+def _point_tool_unexpected_fields(payload: dict[str, Any], *, deep: bool) -> list[str]:
+    allowed = {"lat", "lon", "points", "batch_id", "request_id"}
+    if deep:
+        allowed.update({"shallow_loc_id", "family", "target_admin_level"})
+    return sorted(set(payload) - allowed)
+
+
+def _point_tool_coordinate_error(payload: dict[str, Any]) -> tuple[str, str] | None:
+    points = payload.get("points") if "points" in payload else [payload]
+    if not isinstance(points, list) or not points:
+        return "invalid_points", "points must be a nonempty array"
+    for index, point in enumerate(points):
+        if not isinstance(point, dict):
+            return "invalid_point", f"point {index} must be an object"
+        unexpected = set(point) - {"lat", "lon", "row_index", "id"} if "points" in payload else set()
+        if unexpected:
+            return "point_contract_violation", f"point {index} has unsupported fields: {', '.join(sorted(unexpected))}"
+        for field, maximum in (("lat", 90), ("lon", 180)):
+            value = point.get(field)
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or abs(value) > maximum:
+                return "invalid_point_coordinate", f"point {index} requires a finite {field} between {-maximum} and {maximum}"
+    return None
+
+
 @_guard_mcp_execution("resolve_point")
 async def _execute_resolve_point_tool(request: Request, arguments: dict[str, Any], rpc_request_id: Any) -> Response:
     """Execute the one-or-many public Admin0-3 point contract."""
@@ -2582,28 +2677,21 @@ async def _execute_resolve_point_tool(request: Request, arguments: dict[str, Any
             code="point_selection_required",
             message="resolve_point requires either one top-level lat/lon pair or a points array, but not both.",
         )
-    legacy_fields = sorted(
-        {"lookup_mode", "country_scope", "admin_1_scope", "country_hint", "bulk_preset", "family"}
-        .intersection(payload)
-    )
-    if legacy_fields:
+    unexpected = _point_tool_unexpected_fields(payload, deep=False)
+    if unexpected:
         return _point_tool_contract_error(
             request_id,
             rpc_request_id,
             code="shallow_point_contract_violation",
             message=(
-                "resolve_point is shallow and accepts coordinates only. Use "
-                "resolve_deep_point with shallow_loc_id for Admin 4-6 or one explicit family lookup."
+                "resolve_point accepts coordinates and tracing IDs only; unsupported fields: "
+                + ", ".join(unexpected)
+                + ". Use resolve_deep_point with shallow_loc_id and the original coordinate for deeper lookup."
             ),
         )
-    target_admin_level = _point_lookup_target_admin_level(payload)
-    if target_admin_level is not None and target_admin_level > 3:
-        return _point_tool_contract_error(
-            request_id,
-            rpc_request_id,
-            code="shallow_admin_level_required",
-            message="resolve_point accepts only Admin 0-3 targets. Use resolve_deep_point for Admin 4-6.",
-        )
+    coordinate_error = _point_tool_coordinate_error(payload)
+    if coordinate_error:
+        return _point_tool_contract_error(request_id, rpc_request_id, code=coordinate_error[0], message=coordinate_error[1])
     payload["lookup_mode"] = "standard"
     return await _execute_point_lookup_tool(
         request, payload, rpc_request_id, execution_tool_name="resolve_point"
@@ -2624,6 +2712,17 @@ async def _execute_resolve_deep_point_tool(request: Request, arguments: dict[str
             code="point_selection_required",
             message="resolve_deep_point requires either one top-level lat/lon pair or a points array, but not both.",
         )
+    unexpected = _point_tool_unexpected_fields(payload, deep=True)
+    if unexpected:
+        return _point_tool_contract_error(
+            request_id,
+            rpc_request_id,
+            code="deep_point_contract_violation",
+            message="resolve_deep_point does not accept fields: " + ", ".join(unexpected),
+        )
+    coordinate_error = _point_tool_coordinate_error(payload)
+    if coordinate_error:
+        return _point_tool_contract_error(request_id, rpc_request_id, code=coordinate_error[0], message=coordinate_error[1])
     shallow_loc_id = str(payload.pop("shallow_loc_id", "") or "").strip().upper()
     from mapmover.runtime.family_point_resolution import normalize_requested_family, shallow_scope
 
@@ -3433,6 +3532,16 @@ def _parse_children_by_level(value: Any) -> Any:
 @_guard_mcp_execution("get_loc_id_info")
 async def _execute_get_loc_id_info_tool(request: Request, arguments: dict[str, Any], rpc_request_id: Any) -> Response:
     started_at = time.perf_counter()
+    allowed = {"loc_id", "loc_ids", "batch_id", "request_id"}
+    unknown = set(arguments) - allowed
+    if unknown or ("loc_id" in arguments) == ("loc_ids" in arguments):
+        return _jsonrpc_error(rpc_request_id, -32602, "use exactly one of loc_id or loc_ids; no other fields are accepted")
+    if "loc_id" in arguments and (not isinstance(arguments["loc_id"], str) or not arguments["loc_id"].strip()):
+        return _jsonrpc_error(rpc_request_id, -32602, "loc_id must be one nonempty string")
+    if "loc_ids" in arguments and (not isinstance(arguments["loc_ids"], list)
+                                   or not 1 <= len(arguments["loc_ids"]) <= 10
+                                   or any(not isinstance(value, str) or not value.strip() for value in arguments["loc_ids"])):
+        return _jsonrpc_error(rpc_request_id, -32602, "loc_ids must contain 1 to 10 nonempty strings")
     payload = _ensure_request_id(arguments, "get_loc_id_info")
     request_id = str(payload.get("request_id") or "")
     batch_id = str(payload.get("batch_id") or "").strip() or None
@@ -3458,44 +3567,8 @@ async def _execute_get_loc_id_info_tool(request: Request, arguments: dict[str, A
                 rpc_request_id,
             )
         loc_ids = [str(value or "").strip() for value in raw_loc_ids if str(value or "").strip()]
-        limit = _tool_batch_item_limit("get_loc_id_info")
+        limit = min(_tool_batch_item_limit("get_loc_id_info"), 10)
         trusted_token, trusted_token_id = _trusted_artifact_access(request)
-        if bool(payload.get("include_references")):
-            references_limit = (
-                _parse_env_int_optional("MCP_TOOL_REFERENCES_BATCH_LIMIT_LOC_ID_INFO")
-                or int(tool_sub_limit("get_loc_id_info", "references").get("free_item_limit") or 25)
-            )
-            if len(loc_ids) > references_limit and trusted_token is None and not is_local_loopback_request(request):
-                error_payload = _batch_error_payload(
-                    request_id=request_id,
-                    batch_id=batch_id,
-                    code="too_many_loc_ids_for_references",
-                    message=f"get_loc_id_info with include_references accepts at most {references_limit} loc_ids per call",
-                    limit=references_limit,
-                    loc_id_count=len(loc_ids),
-                )
-                _log_mcp_tool_usage_event(
-                    request,
-                    request_id=request_id or batch_id or "",
-                    tool_name="get_loc_id_info",
-                    capability_id="loc_id_metadata",
-                    decision="deny",
-                    started_at=started_at,
-                    row_count=len(loc_ids),
-                    query_granularity=f"bulk_{len(loc_ids)}",
-                    response_payload=error_payload,
-                    error_code="too_many_loc_ids_for_references",
-                    metadata={
-                        "event": "loc_id_metadata",
-                        "tool_mode": "bulk",
-                        "quantity": len(loc_ids),
-                        "loc_id_count": len(loc_ids),
-                        "batch_id": batch_id,
-                        "batch_limit": references_limit,
-                        "include_references": True,
-                    },
-                )
-                return _jsonrpc_response(_tool_result(error_payload, is_error=True), rpc_request_id)
         if len(loc_ids) > limit and trusted_token is None and not is_local_loopback_request(request):
             error_payload = _batch_error_payload(
                 request_id=request_id,
@@ -3557,8 +3630,6 @@ async def _execute_get_loc_id_info_tool(request: Request, arguments: dict[str, A
                 "batch_id": batch_id,
                 "found_count": result_payload["found_count"],
                 "missing_count": result_payload["missing_count"],
-                "include_hierarchy": bool(payload.get("include_hierarchy")),
-                "include_references": bool(payload.get("include_references")),
                 **_compute_metadata(
                     response_payload=result_payload,
                     stages=stages,
@@ -3635,8 +3706,6 @@ async def _execute_get_loc_id_info_tool(request: Request, arguments: dict[str, A
             "quantity": 1,
             "loc_id": loc_id,
             "loc_id_count": 1,
-            "include_hierarchy": bool(payload.get("include_hierarchy")),
-            "include_references": bool(payload.get("include_references")),
             **_compute_metadata(response_payload=result, stages=stages, input_count=1, output_count=1),
         },
     )
@@ -3644,412 +3713,9 @@ async def _execute_get_loc_id_info_tool(request: Request, arguments: dict[str, A
 
 
 def _get_loc_id_info_items(loc_ids: list[str], payload: dict[str, Any]) -> list[dict[str, Any]]:
-    from mapmover.geometry_handlers import get_location_infos
-    from mapmover.runtime.reference_graph import ReferenceRouteUnavailable, indexed_public_alias_candidates
+    from mapmover.runtime.loc_id_graph_info import graph_info_items
 
-    requested = [str(loc_id or "").strip().upper() for loc_id in loc_ids]
-    unique_requested = list(dict.fromkeys(requested))
-
-    def route_error(message: str) -> list[dict[str, Any]]:
-        return [{
-            "loc_id": loc_id, "requested_loc_id": loc_id,
-            "error": {"code": "reference_route_unavailable", "message": message},
-        } for loc_id in requested]
-
-    try:
-        indexed_aliases = indexed_public_alias_candidates(unique_requested)
-    except Exception as exc:
-        return route_error(f"preferred-public alias index could not be read: {type(exc).__name__}")
-    if indexed_aliases is None:
-        return route_error("preferred-public alias index is absent or stale")
-    # Published aliases already have an exact index hit. Probing their public
-    # strings through geometry and identity routes first can exhaust the MCP
-    # execution window before the canonical target is ever read.
-    direct_ids = [loc_id for loc_id in unique_requested if not indexed_aliases.get(loc_id)]
-    try:
-        direct_infos = get_location_infos(
-            direct_ids,
-            include_memberships=False,
-            fallback=False,
-            graph_authoritative=True,
-        ) if direct_ids else []
-    except ReferenceRouteUnavailable as exc:
-        return route_error(str(exc))
-    direct_info_by_loc_id = {
-        loc_id: info
-        for loc_id, info in zip(direct_ids, direct_infos)
-        if isinstance(info, dict) and not info.get("error")
-    }
-    # Retain direct misses too, so an absent identity is never queried again.
-    direct_lookup_by_loc_id = dict(zip(direct_ids, direct_infos))
-    resolutions: dict[str, dict[str, Any]] = {}
-    for loc_id in unique_requested:
-        alias_rows = indexed_aliases.get(loc_id) or []
-        if alias_rows:
-            targets = sorted({str(row.get("loc_id") or "").strip() for row in alias_rows if str(row.get("loc_id") or "").strip()})
-            systems = sorted({str(row.get("reference_system") or "").strip() for row in alias_rows if str(row.get("reference_system") or "").strip()})
-            if len(targets) != 1:
-                resolutions[loc_id] = {
-                    "ok": False, "status": "ambiguous", "requested_loc_id": loc_id,
-                    "loc_id": None, "candidate_loc_ids": targets, "reference_systems": systems,
-                    "error": {"code": "ambiguous_public_loc_id", "message": "preferred public loc_id resolves to more than one canonical identity"},
-                }
-            else:
-                resolutions[loc_id] = {
-                    "ok": True, "status": "resolved", "requested_loc_id": loc_id,
-                    "loc_id": targets[0], "resolved_from_public_alias": True,
-                    "public_alias": loc_id, "reference_system": systems[0] if len(systems) == 1 else None,
-                    "reference_systems": systems,
-                }
-        else:
-            resolutions[loc_id] = {
-                "ok": True, "status": "unchanged", "requested_loc_id": loc_id,
-                "loc_id": loc_id, "resolved_from_public_alias": False,
-            }
-    canonical_ids = list(dict.fromkeys(
-        str(resolution.get("loc_id") or requested_id)
-        for requested_id, resolution in resolutions.items()
-        if resolution.get("ok")
-    ))
-    alias_target_ids = [
-        canonical_id for canonical_id in canonical_ids
-        if canonical_id not in direct_lookup_by_loc_id
-    ]
-    try:
-        target_infos = get_location_infos(
-            alias_target_ids,
-            include_memberships=False,
-            graph_authoritative=True,
-        ) if alias_target_ids else []
-    except ReferenceRouteUnavailable as exc:
-        return route_error(str(exc))
-    info_by_loc_id = dict(direct_lookup_by_loc_id)
-    info_by_loc_id.update(zip(alias_target_ids, target_infos))
-    for loc_id, resolution in resolutions.items():
-        if not resolution.get("resolved_from_public_alias") or not indexed_aliases.get(loc_id):
-            continue
-        target = str(resolution.get("loc_id") or "")
-        info = info_by_loc_id.get(target)
-        if isinstance(info, dict) and not info.get("error"):
-            continue
-        resolutions[loc_id] = {
-            **resolution, "ok": False, "status": "invalid_target", "loc_id": None,
-            "candidate_loc_ids": [target],
-            "error": {"code": "invalid_public_loc_id_target", "message": "preferred public loc_id points to an identity absent from the active graph"},
-        }
-    catalog_context_cache: dict[tuple[str, str, str], dict[str, Any]] = {}
-    return [
-        _get_loc_id_info_item(
-            loc_id,
-            payload,
-            public_resolution=resolutions[loc_id],
-            preloaded_info=info_by_loc_id.get(str(resolutions[loc_id].get("loc_id") or loc_id)),
-            use_preloaded=True,
-            catalog_context_cache=catalog_context_cache,
-        )
-        for loc_id in requested
-    ]
-
-
-def _loc_id_catalog_context(loc_id: str, info: dict[str, Any]) -> dict[str, Any]:
-    """Return catalog-only availability hints without scanning data or shapes."""
-    iso3 = str(info.get("iso3") or str(loc_id).split("-", 1)[0] or "").strip().upper()
-    raw_admin_level = str(info.get("admin_level") or "").strip().lower()
-    admin_level = (
-        f"admin_{raw_admin_level}"
-        if raw_admin_level.isdigit()
-        else raw_admin_level.replace("admin ", "admin_").replace("admin-", "admin_")
-    )
-    data_packs: dict[str, dict[str, Any]] = {}
-    try:
-        from mapmover.data_loading import _load_agent_api_catalog, get_catalog_packs
-
-        catalog = _load_agent_api_catalog() or {}
-        pack_rows = {
-            str(pack.get("pack_id") or ""): pack
-            for pack in get_catalog_packs(catalog)
-            if str(pack.get("pack_id") or "")
-        }
-        for source in catalog.get("sources") or []:
-            if not isinstance(source, dict):
-                continue
-            pack_id = str(source.get("pack_id") or "").strip()
-            if not pack_id:
-                continue
-            coverage = source.get("geographic_coverage") if isinstance(source.get("geographic_coverage"), dict) else {}
-            countries = {
-                str(value or "").strip().upper()
-                for value in coverage.get("countries") or []
-                if str(value or "").strip()
-            }
-            common_missing = {
-                str(value or "").strip().upper()
-                for value in coverage.get("common_missing") or []
-                if str(value or "").strip()
-            }
-            uncommon = {
-                str(value or "").strip().upper()
-                for value in coverage.get("uncommonly_included") or []
-                if str(value or "").strip()
-            }
-            scope = str(source.get("scope") or "").strip().lower()
-            if countries and iso3 not in countries:
-                continue
-            if not countries:
-                source_country = str(source.get("country_code") or source.get("iso3") or scope).strip().upper()
-                if re.fullmatch(r"[A-Z]{3}", source_country) and source_country != iso3:
-                    continue
-                if iso3 in common_missing and iso3 not in uncommon:
-                    continue
-            levels = source.get("geographic_levels") if isinstance(source.get("geographic_levels"), list) else [source.get("geographic_level")]
-            levels = [*levels, *[
-                f"admin_{level}"
-                for level in coverage.get("admin_levels") or []
-                if str(level).strip()
-            ]]
-            row = data_packs.setdefault(pack_id, {
-                "pack_id": pack_id,
-                "geographic_levels": set(),
-                "matching_source_count": 0,
-            })
-            row["matching_source_count"] += 1
-            row["geographic_levels"].update(str(level) for level in levels if level)
-        for pack_id, row in data_packs.items():
-            pack = pack_rows.get(pack_id) or {}
-            row["title"] = pack.get("pack_name") or pack.get("title")
-            row["geographic_levels"] = sorted(row["geographic_levels"])
-            row["exact_grain_available"] = admin_level in {
-                str(level).strip().lower() for level in row["geographic_levels"]
-            } if admin_level else None
-            row["coverage_basis"] = "published_catalog_country_scope"
-            row["exact_rows_verified"] = False
-            row["next_call"] = {
-                "tool": "get_pack",
-                "arguments": {"catalog": "data", "pack_id": pack_id, "detail": "lite"},
-            }
-    except Exception:
-        data_packs = {}
-
-    geometry_families: list[dict[str, Any]] = []
-    if iso3:
-        try:
-            from mapmover.runtime.reference_exchange import geometry_catalog_discovery
-
-            discovery = geometry_catalog_discovery(detail="lite", country_scope=iso3)
-            for family in discovery.get("families") or []:
-                geometry_families.append({
-                    key: family.get(key)
-                    for key in ("pack_id", "label", "short_label", "countries", "release_units")
-                    if family.get(key) is not None
-                })
-        except Exception:
-            geometry_families = []
-
-    ordered_packs = sorted(data_packs.values(), key=lambda row: str(row.get("pack_id") or ""))
-    return {
-        "coverage_scope": iso3 or None,
-        "coverage_semantics": "Catalog candidates only; call get_pack/get_data to verify metrics and exact rows for this loc_id.",
-        "data_pack_count": len(ordered_packs),
-        "data_packs": ordered_packs,
-        "own_geometry_family": info.get("family"),
-        "available_geometry_family_count": len(geometry_families),
-        "available_geometry_families": geometry_families,
-        "next_calls": {
-            "data": {"tool": "get_catalog", "arguments": {"catalog": "data", "detail": "lite"}},
-            "geometry": {"tool": "get_geometry", "arguments": {"loc_id": loc_id, "include_polygon": False}},
-            "relationships": {"tool": "compare_geographies", "arguments": {"left_loc_id": loc_id, "right_loc_id": "<other loc_id>"}},
-        },
-    }
-
-
-def _get_loc_id_info_item(
-    loc_id: str,
-    payload: dict[str, Any],
-    *,
-    public_resolution: dict[str, Any] | None = None,
-    preloaded_info: dict[str, Any] | None = None,
-    use_preloaded: bool = False,
-    catalog_context_cache: dict[tuple[str, str, str], dict[str, Any]] | None = None,
-) -> dict[str, Any]:
-    requested_loc_id = str(loc_id or "").strip().upper()
-    if public_resolution is None:
-        try:
-            from mapmover.runtime.reference_exchange import resolve_loc_id_input
-
-            public_resolution = resolve_loc_id_input(requested_loc_id)
-        except Exception:
-            public_resolution = {
-                "ok": True,
-                "requested_loc_id": requested_loc_id,
-                "loc_id": requested_loc_id,
-                "resolved_from_public_alias": False,
-            }
-    if not public_resolution.get("ok"):
-        result = {
-            "loc_id": requested_loc_id,
-            "requested_loc_id": requested_loc_id,
-            "canonical_loc_id": None,
-            "error": public_resolution.get("error") or {
-                "code": "public_loc_id_resolution_failed",
-                "message": "preferred public loc_id could not be resolved safely",
-            },
-        }
-        if public_resolution.get("candidate_loc_ids"):
-            result["candidate_loc_ids"] = public_resolution.get("candidate_loc_ids")
-        return result
-    canonical_loc_id = str(public_resolution.get("loc_id") or requested_loc_id)
-    from mapmover.geometry_handlers import get_location_info
-
-    if use_preloaded:
-        info = preloaded_info
-    else:
-        try:
-            # MCP returns hierarchy only when explicitly requested and never exposes
-            # popup memberships. Avoid a second ancestor-metadata read whose result
-            # would otherwise be discarded from the response.
-            info = get_location_info(canonical_loc_id, include_memberships=False)
-        except Exception as exc:
-            return {"loc_id": canonical_loc_id, "error": {"code": "info_failed", "message": str(exc)}}
-    if not isinstance(info, dict) or info.get("error"):
-        return {
-            "loc_id": canonical_loc_id,
-            "error": {"code": "not_found", "message": str((info or {}).get("error") or f"no record found for loc_id '{canonical_loc_id}'")},
-        }
-    result = {
-        "loc_id": info.get("loc_id") or canonical_loc_id,
-        "name": info.get("name"),
-        "admin_level": info.get("admin_level"),
-        "parent_id": info.get("parent_id"),
-        "family": info.get("family"),
-        "subtype": info.get("subtype"),
-        "iso3": info.get("iso3"),
-        "centroid": info.get("centroid"),
-        "bbox": info.get("bbox"),
-        "has_polygon": info.get("has_polygon"),
-        "valid_from": info.get("valid_from"),
-        "valid_to": info.get("valid_to"),
-        "geometry_vintage": info.get("geometry_vintage"),
-        "source_vintage": info.get("source_vintage"),
-        "source_id": info.get("source_id"),
-        "source_system": info.get("source_system"),
-        "geometry_source": info.get("geometry_source"),
-        "bank_id": info.get("bank_id"),
-        "release_id": info.get("release_id"),
-        "children_count": info.get("children_count"),
-        "children_by_level": _parse_children_by_level(info.get("children_by_level")),
-        "descendants_count": info.get("descendants_count"),
-    }
-    as_of = payload.get("as_of")
-    if as_of is not None:
-        try:
-            from mapmover.runtime.source_release_review import review_loc_id
-
-            result["date_review"] = review_loc_id(canonical_loc_id, as_of)
-            result["date_review_required"] = bool(result["date_review"]["date_review_required"])
-            if result["date_review_required"]:
-                result["date_review_notice"] = "Double-check date"
-        except (TypeError, ValueError) as exc:
-            return {"loc_id": canonical_loc_id,
-                    "error": {"code": "invalid_as_of_or_source_metadata", "message": str(exc)}}
-    context_key = (
-        str(result.get("iso3") or str(result["loc_id"]).split("-", 1)[0]).strip().upper(),
-        str(result.get("admin_level") or "").strip().lower(),
-        str(result.get("family") or "").strip().lower(),
-    )
-    if catalog_context_cache is not None:
-        if context_key not in catalog_context_cache:
-            catalog_context_cache[context_key] = _loc_id_catalog_context(str(result["loc_id"]), result)
-        availability = catalog_context_cache[context_key]
-    else:
-        availability = _loc_id_catalog_context(str(result["loc_id"]), result)
-    result["availability"] = availability
-    data_packs = availability.get("data_packs") or []
-    geometry_families = availability.get("available_geometry_families") or []
-    first_data_call = (data_packs[0].get("next_call") if data_packs else None)
-    recommended_next_call = first_data_call or availability.get("next_calls", {}).get("geometry")
-    result["job_summary"] = {
-        "question": "What maintained data and geometry can I use for this place?",
-        "data_pack_count": len(data_packs),
-        "data_pack_ids": [row.get("pack_id") for row in data_packs if row.get("pack_id")],
-        "geometry_family_count": len(geometry_families),
-        "geometry_family_ids": [row.get("pack_id") for row in geometry_families if row.get("pack_id")],
-        "recommended_next_call": recommended_next_call,
-        "coverage_warning": "Catalog candidates are not proof that an exact data row exists for this loc_id and time.",
-    }
-    try:
-        from mapmover.runtime.reference_exchange import geometry_supersession_notice
-
-        supersession = geometry_supersession_notice(canonical_loc_id, info)
-        if supersession:
-            result["supersession"] = supersession
-    except Exception:
-        # Optional successor guidance must never hide requested historical data.
-        pass
-    if public_resolution.get("resolved_from_public_alias"):
-        result.update({
-            "requested_loc_id": requested_loc_id,
-            "resolved_from_public_alias": True,
-            "public_alias": public_resolution.get("public_alias") or requested_loc_id,
-            "public_alias_reference_system": public_resolution.get("reference_system"),
-        })
-    if bool(payload.get("include_hierarchy")):
-        try:
-            from mapmover.geometry_handlers import get_location_infos
-
-            ancestors: list[str] = []
-            ancestor_rows: list[dict[str, Any]] = []
-            seen = {str(result["loc_id"])}
-            current_parent = str(result.get("parent_id") or "").strip()
-            while current_parent and current_parent not in seen and len(ancestors) < 32:
-                seen.add(current_parent)
-                ancestors.append(current_parent)
-                parent_info = get_location_infos(
-                    [current_parent], include_memberships=False, graph_authoritative=True,
-                )[0]
-                if not isinstance(parent_info, dict) or parent_info.get("error"):
-                    ancestor_rows.append({"loc_id": current_parent})
-                    break
-                ancestor_rows.append(
-                    {
-                        "loc_id": parent_info.get("loc_id") or current_parent,
-                        "name": parent_info.get("name"),
-                        "admin_level": parent_info.get("admin_level"),
-                        "source_vintage": parent_info.get("source_vintage"),
-                        "release_id": parent_info.get("release_id"),
-                    }
-                )
-                current_parent = str(parent_info.get("parent_id") or "").strip()
-            result["hierarchy"] = {
-                "relationship_mode": "strict_stored_parent",
-                "parent": result.get("parent_id"),
-                "ancestors": ancestors,
-                "ancestor_rows": ancestor_rows,
-                "admin_level": result.get("admin_level"),
-            }
-        except Exception as exc:
-            result["hierarchy_error"] = {"code": "hierarchy_failed", "message": str(exc)}
-    if bool(payload.get("include_references")):
-        systems = payload.get("systems")
-        if systems is not None and not isinstance(systems, list):
-            result["references_error"] = {"code": "invalid_systems", "message": "systems must be an array when provided"}
-        else:
-            try:
-                from mapmover.runtime.reference_exchange import loc_id_references
-
-                references = loc_id_references(
-                    str(result["loc_id"]),
-                    systems=systems,
-                    iso3=payload.get("iso3"),
-                    target_admin_level=payload.get("target_admin_level"),
-                    min_share=_normalize_crosswalk_share(payload.get("min_share")),
-                    limit_per_system=_normalize_crosswalk_limit(payload.get("limit_per_system")) or 10,
-                )
-                result["references"] = references
-                if isinstance(references.get("references"), list):
-                    result["reference_count"] = len(references.get("references") or [])
-            except Exception as exc:
-                result["references_error"] = {"code": "loc_id_references_failed", "message": str(exc)}
-    return result
+    return graph_info_items(loc_ids)
 
 
 def _normalize_tool_error(value: Any, *, default_code: str, default_message: str) -> dict[str, str]:
@@ -4515,6 +4181,7 @@ def _compare_geographies_item(payload: dict[str, Any]) -> dict[str, Any]:
         return {"ok": False, "error": {"code": "invalid_comparison", "message": "left_loc_id and right_loc_id are required"}}
     try:
         from mapmover.runtime.geography_relationships import compare_geographies
+        from mapmover.runtime.reference_graph import ReferenceRouteUnavailable
 
         return compare_geographies(
             left_loc_id,
@@ -4524,6 +4191,8 @@ def _compare_geographies_item(payload: dict[str, Any]) -> dict[str, Any]:
             right_as_of=payload.get("right_as_of"),
             include_successors=bool(payload.get("include_successors", True)),
         )
+    except ReferenceRouteUnavailable as exc:
+        return {"ok": False, "error": {"code": "reference_route_unavailable", "message": str(exc)}}
     except ValueError as exc:
         return {"ok": False, "error": {"code": "invalid_temporal_selector", "message": str(exc)}}
     except Exception as exc:
@@ -4604,6 +4273,40 @@ def _compare_geographies_items(items: list[Any], base_payload: dict[str, Any]) -
 @_guard_mcp_execution("compare_geographies")
 async def _execute_compare_geographies_tool(request: Request, arguments: dict[str, Any], rpc_request_id: Any) -> Response:
     started_at = time.perf_counter()
+    allowed = {"left_loc_id", "right_loc_id", "as_of", "left_as_of", "right_as_of",
+               "include_successors", "items", "batch_id", "request_id"}
+    unknown = set(arguments) - allowed
+    if unknown:
+        return _jsonrpc_error(rpc_request_id, -32602, f"compare_geographies does not accept: {', '.join(sorted(unknown))}")
+    if any(key in arguments and not isinstance(arguments[key], str)
+           for key in ("as_of", "left_as_of", "right_as_of", "batch_id", "request_id")):
+        return _jsonrpc_error(rpc_request_id, -32602, "date selectors and tracing IDs must be strings")
+    if "include_successors" in arguments and type(arguments["include_successors"]) is not bool:
+        return _jsonrpc_error(rpc_request_id, -32602, "include_successors must be boolean")
+    if "items" in arguments:
+        if any(key in arguments for key in ("left_loc_id", "right_loc_id")):
+            return _jsonrpc_error(rpc_request_id, -32602, "use either one loc_id pair or items, not both")
+        rows = arguments["items"]
+        if not isinstance(rows, list) or not rows:
+            return _jsonrpc_error(rpc_request_id, -32602, "items must be a nonempty array")
+        allowed_item = {"left_loc_id", "right_loc_id", "as_of", "left_as_of",
+                        "right_as_of", "include_successors", "row_index", "id"}
+        for row in rows:
+            if not isinstance(row, dict) or set(row) - allowed_item:
+                return _jsonrpc_error(rpc_request_id, -32602, "each item must contain only declared comparison fields")
+            if any(not isinstance(row.get(key), str) or not row[key].strip()
+                   for key in ("left_loc_id", "right_loc_id")):
+                return _jsonrpc_error(rpc_request_id, -32602, "each item requires two nonempty loc_ids")
+            if any(key in row and not isinstance(row[key], str)
+                   for key in ("as_of", "left_as_of", "right_as_of")):
+                return _jsonrpc_error(rpc_request_id, -32602, "item date selectors must be strings")
+            if "include_successors" in row and type(row["include_successors"]) is not bool:
+                return _jsonrpc_error(rpc_request_id, -32602, "item include_successors must be boolean")
+            if any(key in row and type(row[key]) not in (int, str) for key in ("row_index", "id")):
+                return _jsonrpc_error(rpc_request_id, -32602, "item row_index and id must be strings or integers")
+    elif any(not isinstance(arguments.get(key), str) or not arguments[key].strip()
+             for key in ("left_loc_id", "right_loc_id")):
+        return _jsonrpc_error(rpc_request_id, -32602, "compare_geographies requires two nonempty loc_ids")
     payload = _ensure_request_id(arguments, "compare_geographies")
     request_id = str(payload.get("request_id") or "")
     items = payload.get("items") if "items" in payload else None
@@ -4698,15 +4401,28 @@ async def _execute_compare_geographies_tool(request: Request, arguments: dict[st
     return _jsonrpc_response(_tool_result(result, is_error=not ok), rpc_request_id)
 
 
-@_guard_mcp_execution("get_geometry")
+@_guard_mcp_execution("get_shape")
 async def _execute_get_geometry_tool(request: Request, arguments: dict[str, Any], rpc_request_id: Any) -> Response:
     started_at = time.perf_counter()
-    payload = _ensure_request_id(arguments, "get_geometry")
+    unknown = set(arguments) - {"loc_id", "loc_ids", "include_polygon", "batch_id", "request_id"}
+    if unknown:
+        return _jsonrpc_error(rpc_request_id, -32602, f"get_shape does not accept: {', '.join(sorted(unknown))}")
+    if "include_polygon" in arguments and type(arguments["include_polygon"]) is not bool:
+        return _jsonrpc_error(rpc_request_id, -32602, "include_polygon must be boolean")
+    if any(key in arguments and not isinstance(arguments[key], str) for key in ("request_id", "batch_id")):
+        return _jsonrpc_error(rpc_request_id, -32602, "request_id and batch_id must be strings")
+    if "loc_id" in arguments and (not isinstance(arguments["loc_id"], str) or not arguments["loc_id"].strip()):
+        return _jsonrpc_error(rpc_request_id, -32602, "loc_id must be a nonempty string")
+    if "loc_ids" in arguments:
+        ids = arguments["loc_ids"]
+        if not isinstance(ids, list) or not ids or any(not isinstance(value, str) or not value.strip() for value in ids) or len(ids) != len(set(ids)):
+            return _jsonrpc_error(rpc_request_id, -32602, "loc_ids must be a nonempty array of unique nonempty strings")
+    payload = _ensure_request_id(arguments, "get_shape")
     request_id = str(payload.get("request_id") or "")
     batch_id = str(payload.get("batch_id") or "").strip() or None
     include_polygon = bool(payload.get("include_polygon", False))
-    base_limit = _tool_batch_item_limit("get_geometry")
-    polygon_policy = tool_sub_limit("get_geometry", "polygons")
+    base_limit = _tool_batch_item_limit("get_shape")
+    polygon_policy = tool_sub_limit("get_shape", "polygons")
     polygon_limit_env = str(polygon_policy.get("limit_env") or "").strip()
     polygon_limit = (
         (_parse_env_int_optional(polygon_limit_env) if polygon_limit_env else None)
@@ -4719,13 +4435,12 @@ async def _execute_get_geometry_tool(request: Request, arguments: dict[str, Any]
         1 for present in (
             bool(str(payload.get("loc_id") or "").strip()),
             isinstance(payload.get("loc_ids"), list),
-            isinstance(payload.get("scope"), dict),
         ) if present
     )
     if selector_count != 1:
         return _jsonrpc_error(
             rpc_request_id, -32602,
-            "get_geometry requires exactly one selector: loc_id, loc_ids, or scope",
+            "get_shape requires exactly one selector: loc_id or loc_ids",
         )
     try:
         from mapmover.runtime.geometry_tool_jobs import resolve_geometry_selection
@@ -4749,7 +4464,7 @@ async def _execute_get_geometry_tool(request: Request, arguments: dict[str, Any]
         _log_mcp_tool_usage_event(
             request,
             request_id=request_id or batch_id or "",
-            tool_name="get_geometry",
+            tool_name="get_shape",
             capability_id="geometry_lookup",
             decision="deny",
             started_at=started_at,
@@ -4771,7 +4486,7 @@ async def _execute_get_geometry_tool(request: Request, arguments: dict[str, Any]
             request_id=request_id,
             batch_id=batch_id,
             code="too_many_loc_ids",
-            message=f"get_geometry selection contains {requested_count} loc_ids; this response mode accepts at most {limit}",
+            message=f"get_shape selection contains {requested_count} loc_ids; this response mode accepts at most {limit}",
             limit=limit,
             loc_id_count=requested_count,
         )
@@ -4782,7 +4497,7 @@ async def _execute_get_geometry_tool(request: Request, arguments: dict[str, Any]
         _log_mcp_tool_usage_event(
             request,
             request_id=request_id or batch_id or "",
-            tool_name="get_geometry",
+            tool_name="get_shape",
             capability_id="geometry_lookup",
             decision="deny",
             started_at=started_at,
@@ -4856,7 +4571,7 @@ async def _execute_get_geometry_tool(request: Request, arguments: dict[str, Any]
         )
         commercial_context, access_error = await _authorize_material_tool(
             request,
-            tool_name="get_geometry",
+            tool_name="get_shape",
             effective_access=effective_access,
             item_count=len(loc_ids),
             request_id=request_id or batch_id or "",
@@ -4869,7 +4584,7 @@ async def _execute_get_geometry_tool(request: Request, arguments: dict[str, Any]
     try:
         runtime_started = time.perf_counter()
         result = await run_mcp_blocking(
-            "get_geometry",
+            "get_shape",
             get_geometry_references,
             loc_ids,
             include_polygon=include_polygon,
@@ -4881,19 +4596,19 @@ async def _execute_get_geometry_tool(request: Request, arguments: dict[str, Any]
     except Exception as exc:
         error_payload = _batch_error_payload(
             request_id=request_id, batch_id=batch_id,
-            code="get_geometry_failed", message=str(exc), loc_id_count=len(loc_ids),
+            code="get_shape_failed", message=str(exc), loc_id_count=len(loc_ids),
         )
         _log_mcp_tool_usage_event(
             request,
             request_id=request_id or batch_id or "",
-            tool_name="get_geometry",
+            tool_name="get_shape",
             capability_id="geometry_lookup",
             decision="deny",
             started_at=started_at,
             row_count=len(loc_ids),
             query_granularity="scope" if scope_result else ("single" if len(loc_ids) == 1 else f"bulk_{len(loc_ids)}"),
             response_payload=error_payload,
-            error_code="get_geometry_failed",
+            error_code="get_shape_failed",
             metadata={"event": "geometry_lookup", "tool_mode": "scope" if scope_result else ("single" if len(loc_ids) == 1 else "bulk"), "quantity": len(loc_ids), "include_polygon": include_polygon},
         )
         return _jsonrpc_response(_tool_result(error_payload, is_error=True), rpc_request_id)
@@ -4948,7 +4663,7 @@ async def _execute_get_geometry_tool(request: Request, arguments: dict[str, Any]
         )
         _unused_context, access_error = await _authorize_material_tool(
             request,
-            tool_name="get_geometry",
+            tool_name="get_shape",
             effective_access=effective_access,
             item_count=available_count,
             request_id=request_id or batch_id or "",
@@ -4962,7 +4677,7 @@ async def _execute_get_geometry_tool(request: Request, arguments: dict[str, Any]
         if not is_error:
             settled, settlement_payload, meter_receipt = await _settle_paid_batch_tool(
                 commercial_context,
-                tool_name="get_geometry",
+                tool_name="get_shape",
                 request_id=request_id or batch_id or "",
                 requested_items=requested_count,
                 successful_items=available_count,
@@ -4984,7 +4699,7 @@ async def _execute_get_geometry_tool(request: Request, arguments: dict[str, Any]
             # was returned.
             settled, settlement_payload, _meter_receipt = await _settle_paid_batch_tool(
                 commercial_context,
-                tool_name="get_geometry",
+                tool_name="get_shape",
                 request_id=request_id or batch_id or "",
                 requested_items=requested_count,
                 successful_items=0,
@@ -5006,7 +4721,7 @@ async def _execute_get_geometry_tool(request: Request, arguments: dict[str, Any]
     _log_mcp_tool_usage_event(
         request,
         request_id=request_id or batch_id or "",
-        tool_name="get_geometry",
+        tool_name="get_shape",
         capability_id="geometry_lookup",
         decision="deny" if is_error else "allow",
         started_at=started_at,
@@ -5437,6 +5152,23 @@ async def _execute_get_event_tool(
     arguments: dict[str, Any],
     rpc_request_id: Any,
 ) -> Response:
+    if "include" in arguments:
+        include_value = arguments["include"]
+        allowed_layers = {"relationships", "affected_places", "observations", "geometry"}
+        if (not isinstance(include_value, list)
+                or any(not isinstance(value, str) or value not in allowed_layers for value in include_value)
+                or len(include_value) != len(set(include_value))):
+            return _jsonrpc_error(rpc_request_id, -32602, "get_event include must be a unique array of published companion layers")
+    if "relationship_depth" in arguments and (type(arguments["relationship_depth"]) is not int
+                                               or not 1 <= arguments["relationship_depth"] <= 2):
+        return _jsonrpc_error(rpc_request_id, -32602, "get_event relationship_depth must be 1 or 2")
+    if "geometry_mode" in arguments and (not isinstance(arguments["geometry_mode"], str)
+                                         or arguments["geometry_mode"] not in {"current", "timeline"}):
+        return _jsonrpc_error(rpc_request_id, -32602, "get_event geometry_mode must be current or timeline")
+    if "limit" in arguments and (type(arguments["limit"]) is not int or not 1 <= arguments["limit"] <= 500):
+        return _jsonrpc_error(rpc_request_id, -32602, "get_event limit must be an integer from 1 to 500")
+    if "request_id" in arguments and not isinstance(arguments["request_id"], str):
+        return _jsonrpc_error(rpc_request_id, -32602, "get_event request_id must be a string")
     payload = _ensure_request_id(arguments, "get_event")
     event_id = str(payload.get("event_id") or "").strip()
     pack_id_hint = str(payload.get("pack_id") or "").strip().lower()
@@ -5668,7 +5400,7 @@ async def mcp_endpoint_info(pack_id: str | None = None):
         return JSONResponse({"error": "Pack MCP facade not found"}, status_code=404)
     if normalized_pack_id == "free":
         how_to_start = [
-            "Call get_catalog, then get_pack for the selected family or free data pack.",
+            "Call get_catalog, then get_geography for a selected family or get_pack for a data pack.",
             "Use identify_reference_system and convert_reference to reach loc_id, then get_loc_id_info or convert_reference to a destination system.",
             "Use get_data for free packs only; this endpoint never charges account credit.",
         ]
@@ -5680,10 +5412,10 @@ async def mcp_endpoint_info(pack_id: str | None = None):
     elif normalized_pack_id in {"geography", "reverse-geocoding", "boundaries"}:
         how_to_start = [
             "Call get_tool_help with topic='geometry' for the family workflow.",
-            "Call get_catalog with catalog='geometry', then get_pack for one selected family.",
+            "Call get_catalog with catalog='geometry', then get_geography for one family or scope.",
             "Call get_tool_help with an exact name from tools/list before an unfamiliar tool.",
             "Use resolve_point for coordinates or identify_reference_system and convert_reference for outside identifiers.",
-            "Use get_geometry with include_polygon=false for a lightweight availability check.",
+            "Use get_shape with include_polygon=false for a lightweight availability check.",
         ]
     else:
         how_to_start = [
@@ -5884,6 +5616,48 @@ async def mcp_endpoint(request: Request, pack_id: str | None = None):
         return _jsonrpc_error(request_id, -32601, f"Tool '{tool_name}' not found")
     if not _tool_allowed_for_facade(tool_name, normalized_pack_id):
         return _jsonrpc_error(request_id, -32601, f"Tool '{tool_name}' is not available on this MCP facade")
+    if tool_name not in {"resolve_point", "resolve_deep_point"}:
+        coordinate_fields = {"lat", "lon", "lng", "latitude", "longitude", "point", "points", "coordinates"}
+        supplied_coordinates = sorted(coordinate_fields.intersection(arguments))
+        if supplied_coordinates:
+            return _jsonrpc_error(
+                request_id,
+                -32602,
+                f"Tool '{tool_name}' accepts loc_ids or its declared identifiers, not coordinates; call resolve_point first.",
+                data={
+                    "error": {
+                        "code": "point_resolution_required",
+                        "message": "Resolve coordinates to a loc_id before calling this tool.",
+                    },
+                    "rejected_fields": supplied_coordinates,
+                    "next_step": {"tool": "resolve_point"},
+                },
+            )
+    if tool_name in {"get_data", "get_event"}:
+        schema = (_tool_definition(tool_name) or {}).get("inputSchema") or {}
+        unexpected = sorted(set(arguments) - set(schema.get("properties") or {}))
+        if tool_name == "get_data" and isinstance(arguments.get("filters"), dict):
+            filter_schema = ((schema.get("properties") or {}).get("filters") or {})
+            allowed_filters = set(filter_schema.get("properties") or {})
+            unexpected.extend(f"filters.{key}" for key in sorted(set(arguments["filters"]) - allowed_filters))
+            time_filter = arguments["filters"].get("time")
+            if isinstance(time_filter, dict):
+                allowed_time = set(((filter_schema.get("properties") or {}).get("time") or {}).get("properties") or {})
+                unexpected.extend(f"filters.time.{key}" for key in sorted(set(time_filter) - allowed_time))
+            for index, item in enumerate(arguments["filters"].get("compare") or []):
+                if isinstance(item, dict):
+                    allowed_compare = {"field", "op", "value"}
+                    unexpected.extend(f"filters.compare[{index}].{key}" for key in sorted(set(item) - allowed_compare))
+        if tool_name == "get_data" and isinstance(arguments.get("output"), dict):
+            allowed_output = set((((schema.get("properties") or {}).get("output") or {}).get("properties") or {}))
+            unexpected.extend(f"output.{key}" for key in sorted(set(arguments["output"]) - allowed_output))
+        if unexpected:
+            return _jsonrpc_error(
+                request_id, -32602,
+                f"Tool '{tool_name}' does not accept: {', '.join(unexpected)}. Call get_tool_help for its exact input schema.",
+                data={"error": {"code": "unexpected_tool_fields", "rejected_fields": unexpected},
+                      "next_step": {"tool": "get_tool_help", "arguments": {"tool_name": tool_name}}},
+            )
     if normalized_pack_id == "free":
         gate_started_at = time.perf_counter()
         free_denial = _free_facade_gate(request, tool_name, arguments)
@@ -5956,7 +5730,7 @@ async def mcp_endpoint(request: Request, pack_id: str | None = None):
                         {
                             "name": "external_reference_through_loc_id",
                             "steps": [
-                                "inspect the family with get_catalog and get_pack",
+                                "inspect the family with get_catalog and get_geography",
                                 "call identify_reference_system when the source system is unknown",
                                 "call convert_reference to obtain loc_id",
                                 "call get_loc_id_info or convert_reference from loc_id to another system",
@@ -6053,206 +5827,71 @@ async def mcp_endpoint(request: Request, pack_id: str | None = None):
         )
 
     if tool_name == "get_catalog":
-        rate_limit_response = _live_tool_rate_limit_response(request, tool_name, request_id)
-        if rate_limit_response:
-            return rate_limit_response
-        geometry_facades = set(tool_family_ids()) | set(tool_family_alias_ids())
-        default_catalog = "geometry" if normalized_pack_id in geometry_facades else "data"
-        catalog = str(arguments.get("catalog") or default_catalog).strip().lower()
-        detail = str(arguments.get("detail") or "lite").strip().lower()
-        country_scope = str(arguments.get("country_scope") or "").strip().upper()
-        loc_id = str(arguments.get("loc_id") or "").strip().upper()
-        time_range = arguments.get("time_range")
-        if catalog not in {"data", "geometry"}:
-            return _jsonrpc_error(request_id, -32602, "catalog must be 'data' or 'geometry'")
+        if set(arguments) != {"catalog"} or arguments.get("catalog") not in {"data", "geometry"}:
+            return _jsonrpc_error(request_id, -32602, "get_catalog requires only catalog='data' or catalog='geometry'")
+        catalog = arguments["catalog"]
         if normalized_pack_id == "data" and catalog != "data":
             return _jsonrpc_error(request_id, -32602, "This MCP facade exposes catalog='data' only")
-        if detail not in {"lite", "full", "download"}:
-            return _jsonrpc_error(request_id, -32602, "detail must be 'lite', 'full', or 'download'")
-        if country_scope and (catalog != "geometry" or detail == "download"):
-            return _jsonrpc_error(request_id, -32602, "country_scope is only valid for catalog='geometry' with detail='lite' or 'full'")
-        if (loc_id or time_range not in (None, {}, "")) and (catalog != "data" or detail == "download"):
-            return _jsonrpc_error(request_id, -32602, "loc_id and time_range are only valid for catalog='data' with detail='lite' or 'full'")
-        if detail == "download":
-            payload = catalog_download_payload(catalog)
-        elif catalog == "geometry":
-            from mapmover.runtime.reference_exchange import geometry_catalog_discovery
-
-            payload = geometry_catalog_discovery(
-                detail=detail,
-                country_scope=country_scope or None,
-            )
-        else:
-            payload = load_api_catalog() or {"packs": []}
-            payload = _filter_catalog_payload_for_facade(payload, normalized_pack_id)
-            try:
-                payload = filter_data_catalog_payload(
-                    payload,
-                    loc_id=loc_id or None,
-                    time_range=time_range,
-                    detail=detail,
-                )
-            except ValueError as exc:
-                return _jsonrpc_error(request_id, -32602, str(exc))
-            if detail == "full":
-                payload = full_catalog_payload(payload)
-            else:
-                payload = compact_catalog_payload(payload)
-            payload = _augment_catalog_with_tool_families(payload, normalized_pack_id)
-            payload["catalog"] = "data"
-            payload["detail"] = detail
-        if isinstance(payload, dict) and "resolved_query" not in payload:
-            payload["resolved_query"] = _resolved_query(tool_name, arguments)
-        result_status = str(payload.get("result_status") or "") if isinstance(payload, dict) else ""
-        return _finish_data_helper(
-            request,
-            tool_name=tool_name,
-            started_at=helper_started_at,
-            payload=payload,
-            rpc_request_id=request_id,
-            row_count=_payload_row_count(payload),
-            analytics_metadata={
-                "resolved_query": payload.get("resolved_query") if isinstance(payload, dict) else None,
-                "catalog_result_status": result_status or None,
-                "catalog_empty_or_partial": result_status in {"empty", "partial"},
-            },
-        )
-
-    if tool_name == "get_pack":
         rate_limit_response = _live_tool_rate_limit_response(request, tool_name, request_id)
         if rate_limit_response:
             return rate_limit_response
-        pack_id = str(arguments.get("pack_id") or "").strip()
-        detail = str(arguments.get("detail") or "lite").strip().lower()
-        requested_catalog = str(arguments.get("catalog") or "").strip().lower()
-        country_scope = str(arguments.get("country_scope") or "").strip().upper()
-        release_unit = str(arguments.get("release_unit") or "").strip().upper()
-        if detail not in {"lite", "full", "download"}:
-            return _jsonrpc_error(request_id, -32602, "detail must be 'lite', 'full', or 'download'")
-        if requested_catalog and requested_catalog not in {"data", "geometry"}:
-            return _jsonrpc_error(request_id, -32602, "catalog must be 'data' or 'geometry'")
-        geometry_ids = set(tool_family_ids()) | set(tool_family_alias_ids())
-        facade_is_geometry = normalized_pack_id in geometry_ids
-        if not pack_id and facade_is_geometry:
-            return _finish_data_helper(
-                request,
-                tool_name=tool_name,
-                started_at=helper_started_at,
-                payload={
-                    "ok": False,
-                    "catalog": "geometry",
-                    "error": {
-                        "code": "geometry_family_required",
-                        "message": "Choose one published geometry family and supply its pack_id.",
-                    },
-                    "guidance": {
-                        "action": "discover_geometry_families",
-                        "next_call": {"tool": "get_catalog", "arguments": {"catalog": "geometry"}},
-                    },
-                },
-                rpc_request_id=request_id,
-                is_error=True,
-                error_code="geometry_family_required",
-            )
-        pack_id = pack_id or (normalized_pack_id if normalized_pack_id not in PRODUCT_FACADE_PROFILES else "") or ""
-        if not pack_id:
-            return _jsonrpc_error(request_id, -32602, "pack_id is required")
-        inferred_catalog = "geometry" if facade_is_geometry or pack_id.lower() in geometry_ids else "data"
-        selected_catalog = requested_catalog or inferred_catalog
-        if normalized_pack_id == "data" and selected_catalog != "data":
-            return _jsonrpc_error(request_id, -32602, "This MCP facade exposes data packs only")
-        if normalized_pack_id and normalized_pack_id not in PRODUCT_FACADE_PROFILES and not facade_is_geometry and pack_id.lower() != normalized_pack_id:
-            return _jsonrpc_error(request_id, -32602, f"Pack '{pack_id}' is not available on this MCP facade")
-        if requested_catalog == "data" and inferred_catalog == "geometry":
-            return _jsonrpc_error(
-                request_id,
-                -32602,
-                f"Pack '{pack_id}' belongs to catalog='geometry', not catalog='data'",
-            )
-        if country_scope and selected_catalog != "geometry":
-            return _jsonrpc_error(request_id, -32602, "country_scope is only valid for catalog='geometry'")
-        if release_unit and selected_catalog != "geometry":
-            return _jsonrpc_error(request_id, -32602, "release_unit is only valid for catalog='geometry'")
-        if country_scope and release_unit:
-            return _jsonrpc_error(request_id, -32602, "country_scope and release_unit cannot be combined")
-        if selected_catalog == "geometry":
-            from mapmover.runtime.reference_exchange import geometry_pack_detail
+        if catalog == "geometry":
+            from mapmover.runtime.reference_exchange import geography_directory
+            payload = geography_directory()
+        else:
+            source = _filter_catalog_payload_for_facade(load_api_catalog() or {"packs": []}, normalized_pack_id)
+            payload = {
+                "ok": True, "catalog": "data",
+                "packs": [{"pack_id": row.get("pack_id"), "name": row.get("pack_name") or row.get("pack_id"),
+                           "description": str(row.get("description") or "")[:200]}
+                          for row in source.get("packs") or [] if isinstance(row, dict) and row.get("pack_id")],
+                "download_url": CATALOG_DOWNLOADS["data"]["download_url"],
+            }
+        payload["resolved_query"] = _resolved_query(tool_name, arguments)
+        return _finish_data_helper(request, tool_name=tool_name, started_at=helper_started_at,
+                                   payload=payload, rpc_request_id=request_id, row_count=_payload_row_count(payload))
 
-            if detail == "download":
-                family_payload = geometry_pack_detail(
-                    pack_id,
-                    country_scope=country_scope or None,
-                    release_unit=release_unit or None,
-                    detail="lite",
-                )
-                if not family_payload.get("ok"):
-                    return _finish_data_helper(
-                        request,
-                        tool_name=tool_name,
-                        started_at=helper_started_at,
-                        payload=family_payload,
-                        rpc_request_id=request_id,
-                        is_error=True,
-                        error_code=str((family_payload.get("error") or {}).get("code") or "pack_not_found"),
-                    )
-                payload = {
-                    "ok": True,
-                    "catalog": "geometry",
-                    "kind": "geometry_family",
-                    "pack_id": family_payload["pack_id"],
-                    "country_scope": country_scope or None,
-                    "release_unit": release_unit or None,
-                    "detail": "download",
-                    "download_url": f"{APP_ORIGIN}/api/v1/packs/{family_payload['pack_id']}/download",
-                    "catalog_download_url": CATALOG_DOWNLOADS["geometry"]["download_url"],
-                    "media_type": "application/json",
-                    "usage": "Download this family's complete public metadata, or use catalog_download_url for the complete raw geometry catalog.",
-                    "next_step": family_payload.get("next_step"),
-                }
-            else:
-                payload = geometry_pack_detail(
-                    pack_id,
-                    country_scope=country_scope or None,
-                    release_unit=release_unit or None,
-                    detail=detail,
-                )
-            return _finish_data_helper(
-                request,
-                tool_name=tool_name,
-                started_at=helper_started_at,
-                payload=payload,
-                rpc_request_id=request_id,
-                is_error=not bool(payload.get("ok")),
-                error_code=(
-                    str((payload.get("error") or {}).get("code") or "pack_not_found")
-                    if not payload.get("ok") else None
-                ),
-            )
-        payload = load_api_pack_detail(pack_id, hydrate_source_metadata=detail == "full")
+    if tool_name == "get_geography":
+        keys = set(arguments)
+        if keys - {"family_id", "scope_id", "year"} or ("family_id" in keys) == ("scope_id" in keys):
+            return _jsonrpc_error(request_id, -32602, "get_geography requires exactly one of family_id or scope_id; optional year")
+        year = arguments.get("year")
+        if year is not None and (type(year) is not int or not 1 <= year <= 9999):
+            return _jsonrpc_error(request_id, -32602, "year must be an integer from 1 to 9999")
+        selector = arguments.get("family_id") if "family_id" in keys else arguments.get("scope_id")
+        if not isinstance(selector, str) or not selector.strip():
+            return _jsonrpc_error(request_id, -32602, "family_id or scope_id must be a nonempty string")
+        rate_limit_response = _live_tool_rate_limit_response(request, tool_name, request_id)
+        if rate_limit_response:
+            return rate_limit_response
+        from mapmover.runtime.reference_exchange import geography_detail
+        payload = geography_detail(family_id=arguments.get("family_id"), scope_id=arguments.get("scope_id"), year=year)
+        return _finish_data_helper(request, tool_name=tool_name, started_at=helper_started_at,
+                                   payload=payload, rpc_request_id=request_id, is_error=not payload.get("ok"),
+                                   error_code=(payload.get("error") or {}).get("code"))
+
+    if tool_name == "get_pack":
+        if set(arguments) != {"pack_id"} or not isinstance(arguments.get("pack_id"), str) or not arguments["pack_id"].strip():
+            return _jsonrpc_error(request_id, -32602, "get_pack requires only a nonempty data pack_id")
+        pack_id = arguments["pack_id"].strip()
+        if pack_id.lower() in set(tool_family_ids()) | set(tool_family_alias_ids()):
+            return _jsonrpc_error(request_id, -32602, "Geometry families use get_geography(family_id=...) instead of get_pack")
+        if normalized_pack_id and normalized_pack_id not in PRODUCT_FACADE_PROFILES and normalized_pack_id not in set(tool_family_ids()) | set(tool_family_alias_ids()) and pack_id.lower() != normalized_pack_id:
+            return _jsonrpc_error(request_id, -32602, f"Pack '{pack_id}' is not available on this MCP facade")
+        rate_limit_response = _live_tool_rate_limit_response(request, tool_name, request_id)
+        if rate_limit_response:
+            return rate_limit_response
+        payload = load_api_pack_detail(pack_id, hydrate_source_metadata=True)
         if not payload:
-            return _finish_data_helper(
-                request,
-                tool_name=tool_name,
-                started_at=helper_started_at,
-                payload={"error": "Pack not found", "pack_id": pack_id},
-                rpc_request_id=request_id,
-                is_error=True,
-                error_code="pack_not_found",
-            )
-        payload = (
-            pack_download_payload(pack_id, catalog="data", payload=payload)
-            if detail == "download"
-            else mcp_full_pack_detail(payload, catalog="data")
-            if detail == "full"
-            else compact_pack_detail(payload, catalog="data")
-        )
-        return _finish_data_helper(
-            request,
-            tool_name=tool_name,
-            started_at=helper_started_at,
-            payload=payload,
-            rpc_request_id=request_id,
-        )
+            from mapmover.runtime.reference_exchange import geography_directory
+            if pack_id.lower() in {item["family_id"] for item in geography_directory()["families"]}:
+                return _jsonrpc_error(request_id, -32602, "Geometry families use get_geography(family_id=...) instead of get_pack")
+            return _finish_data_helper(request, tool_name=tool_name, started_at=helper_started_at,
+                                       payload={"error": "Pack not found", "pack_id": pack_id},
+                                       rpc_request_id=request_id, is_error=True, error_code="pack_not_found")
+        payload = mcp_full_pack_detail(payload, catalog="data")
+        return _finish_data_helper(request, tool_name=tool_name, started_at=helper_started_at,
+                                   payload=payload, rpc_request_id=request_id)
 
     if tool_name == "get_live_earthquake_events":
         rate_limit_response = _live_tool_rate_limit_response(request, tool_name, request_id)
@@ -6318,7 +5957,7 @@ async def mcp_endpoint(request: Request, pack_id: str | None = None):
             return rate_limit_response
         return await _execute_compare_geographies_tool(request, arguments, request_id)
 
-    if tool_name == "get_geometry":
+    if tool_name == "get_shape":
         rate_limit_response = _live_tool_rate_limit_response(request, tool_name, request_id)
         if rate_limit_response:
             return rate_limit_response
@@ -6373,7 +6012,7 @@ async def mcp_endpoint(request: Request, pack_id: str | None = None):
             return _jsonrpc_error(
                 request_id,
                 -32602,
-                "Geometry families are not row-query packs. Call get_pack(catalog='geometry') and use its focused next_step tool.",
+                "Geometry families are not row-query packs. Call get_geography with a family_id or scope_id.",
             )
 
     return await _execute_paid_tool(request, tool_name, arguments, request_id)

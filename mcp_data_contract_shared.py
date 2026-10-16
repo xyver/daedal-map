@@ -23,7 +23,7 @@ from tool_access_shared import (
 )
 
 
-DATA_DISCOVERY_TOOL_IDS = frozenset({"get_catalog", "get_pack"})
+DATA_DISCOVERY_TOOL_IDS = frozenset({"get_catalog", "get_pack", "get_geography"})
 DATA_QUERY_TOOL_IDS = frozenset({
     "get_data",
 })
@@ -39,8 +39,9 @@ DATA_TOOL_IDS = frozenset().union(
 )
 
 DATA_TOOL_DESCRIPTIONS = {
-    "get_catalog": "Discover data packs or geometry families progressively: lite selection, full metric/query inventory, or a raw catalog download URL. Choose one result and call get_pack next.",
-    "get_pack": "Inspect one selected data pack or geometry family progressively: lite starter contract, full MCP query metadata, or a raw metadata download URL. Use its next_step to retrieve data or call the preferred geometry tool.",
+    "get_catalog": "Choose data or geometry to list published pack IDs or family and scope IDs. The response includes a complete catalog download URL. Use get_pack for data or get_geography for geometry.",
+    "get_pack": "Inspect one exact data pack ID for its metrics, time coverage, and query metadata before get_data.",
+    "get_geography": "Inspect one published geometry family across scopes or one scope across families. Returns coverage and known editions from catalog metadata only. Optional year selects the latest admitted edition no later than that year when the selected catalog has an edition index; an unavailable index is reported explicitly.",
     "get_data": "Retrieve rows from one selected published data pack using exact metrics, loc_id-based region filters, time/metric filters, sorting, and a row limit. Disaster event rows include stable event_id values for get_event drill-down. A parent administrative loc_id selects matching descendant rows at the pack's published grain. Call get_pack first; geometry families use their focused next-step tools.",
     "get_live_earthquake_events": "Fetch recent preliminary USGS earthquake events in the shared data-result shape. Use get_data with pack_id='earthquakes' for canonical enriched history.",
     "get_live_volcano_events": "Fetch recent preliminary Smithsonian/GVP eruption updates in the shared data-result shape. Use get_data with pack_id='volcanoes' for canonical history.",
@@ -116,7 +117,7 @@ def data_tool_output_schema(tool_name: str) -> dict[str, Any] | None:
         )
     if name == "get_catalog":
         return _result_schema(
-            success_required=["catalog", "detail"],
+            success_required=["catalog"],
             properties={
                 "catalog": {"type": "string", "enum": ["data", "geometry"]},
                 "detail": {"type": "string", "enum": ["lite", "full", "download"]},
@@ -124,6 +125,13 @@ def data_tool_output_schema(tool_name: str) -> dict[str, Any] | None:
                 "generated_at": {"type": ["string", "null"]},
                 "pack_count": {"type": "integer", "minimum": 0},
                 "packs": {"type": "array", "items": {"type": "object"}},
+                "families": {"type": "array", "items": {"type": "object"}},
+                "scopes": {"type": "array", "items": {"type": "object"}},
+                "uncertain_packs": {"type": "array", "items": {"type": "object"}},
+                "uncertain_count": {"type": "integer", "minimum": 0},
+                "excluded_count": {"type": "integer", "minimum": 0},
+                "result_status": {"type": "string"},
+                "resolved_query": {"type": "object"},
                 "tool_families": {"type": "array", "items": {"type": "object"}},
                 "download_url": {"type": "string"},
             },
@@ -132,7 +140,7 @@ def data_tool_output_schema(tool_name: str) -> dict[str, Any] | None:
         return _result_schema(
             success_required=["catalog", "pack_id", "detail"],
             properties={
-                "catalog": {"type": "string", "enum": ["data", "geometry"]},
+                "catalog": {"type": "string", "enum": ["data"]},
                 "pack_id": {"type": "string"},
                 "detail": {"type": "string", "enum": ["lite", "full", "download"]},
                 "sources": {"type": "array", "items": {"type": "object"}},
@@ -140,6 +148,18 @@ def data_tool_output_schema(tool_name: str) -> dict[str, Any] | None:
                 "download_url": {"type": "string"},
                 "full_call": {"type": "object"},
                 "download_call": {"type": "object"},
+            },
+        )
+    if name == "get_geography":
+        return _result_schema(
+            success_required=["catalog", "coverage"],
+            properties={
+                "catalog": {"type": "string", "enum": ["geometry"]},
+                "family_id": {"type": ["string", "null"]},
+                "scope_id": {"type": ["string", "null"]},
+                "requested_year": {"type": ["integer", "null"]},
+                "coverage": {"type": "array", "items": {"type": "object"}},
+                "admin_spine": {"type": "object"},
             },
         )
     if name in DATA_RELATIONSHIP_TOOL_IDS:
@@ -190,7 +210,7 @@ def data_tool_publication_meta(tool_name: str) -> dict[str, Any] | None:
         access["price_micro_usd"] = tool_price_micro_usd(name)
     if name in DATA_DISCOVERY_TOOL_IDS:
         result_family = "catalog"
-        input_family = "none" if name == "get_catalog" else "pack_selector"
+        input_family = "catalog_selector" if name == "get_catalog" else "geography_selector" if name == "get_geography" else "pack_selector"
     elif name in DATA_QUERY_TOOL_IDS | DATA_LIVE_TOOL_IDS:
         result_family = "rows"
         input_family = "structured_query" if name in DATA_QUERY_TOOL_IDS else "live_window"
@@ -326,10 +346,14 @@ def normalize_data_tool_error(
             "arguments": {"catalog": "data", "detail": "lite"},
         }
     elif code == "event_not_found" and pack_id:
+        error["retry_hint"] = (
+            "Call get_pack for this pack's exact metrics and filters, then get_data "
+            "to obtain a current source_id and event_id before retrying get_event."
+        )
         next_step = {
-            "action": "find_current_event_id",
+            "action": "inspect_pack_then_find_event",
             "tool": "get_pack",
-            "arguments": {"pack_id": pack_id, "detail": "lite"},
+            "arguments": {"pack_id": pack_id, "detail": "full"},
         }
     else:
         next_step = {

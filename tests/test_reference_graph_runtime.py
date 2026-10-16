@@ -26,6 +26,7 @@ from mapmover.runtime.reference_graph import (
     identities,
     identify_aliases,
     public_alias_reference_systems,
+    relationships_between_loc_ids,
     relationships_for_loc_id,
     resolve_public_loc_id,
     resolve_public_loc_ids,
@@ -244,6 +245,54 @@ class ReferenceGraphRuntimeTests(unittest.TestCase):
         self.assertEqual(identity("TST-A-001")["family"], "test_sidechain")
         self.assertTrue(any(row["external_id"] == "001" for row in aliases_for_loc_id("TST-A-001")))
         self.assertEqual(relationships_for_loc_id("TST-A-001")[0]["target_loc_id"], "TST-B-002")
+
+    def test_exact_pair_reads_declared_graph_route_without_shape_columns(self) -> None:
+        statements: list[str] = []
+        real_connection = reference_graph._connection
+
+        class RecordingConnection:
+            def __init__(self):
+                self.connection = real_connection()
+
+            def execute(self, statement, parameters=None):
+                statements.append(statement)
+                return self.connection.execute(statement, parameters or [])
+
+            def close(self):
+                self.connection.close()
+
+        with mock.patch.object(reference_graph, "_connection", side_effect=RecordingConnection):
+            rows = relationships_between_loc_ids("TST-A-001", "TST-B-002")
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["relationship_type"], "spatial_overlap")
+        pair_queries = [statement for statement in statements if "source_loc_id = ? AND target_loc_id = ?" in statement]
+        self.assertTrue(pair_queries)
+        self.assertTrue(all("SELECT *" not in statement for statement in pair_queries))
+        self.assertTrue(all("geometry" not in statement.lower() for statement in pair_queries))
+        self.assertEqual(relationships_between_loc_ids("TST-A-001", "TST-MISSING"), [])
+
+    def test_referenced_parent_partition_exposes_direct_graph_edges(self) -> None:
+        spine = self.root / "admin_spine.parquet"
+        pd.DataFrame([
+            {"loc_id": "TST-A-001", "parent_id": "TST-B-002", "admin_level": 2,
+             "parent_admin_level": 1, "source_system": "test_admin", "valid_from": "2020-01-01"},
+            {"loc_id": "TST-C-003", "parent_id": "TST-A-001", "admin_level": 3,
+             "parent_admin_level": 2, "source_system": "test_admin", "valid_from": "2020-01-01"},
+        ]).to_parquet(spine, index=False)
+        pd.DataFrame([{
+            "partition_id": "strict_parent:test", "semantic_type": "strict_parent",
+            "evidence_class": "admin_spine_parent_column", "source_family": "test_sidechain",
+            "target_family": "test_sidechain", "path": str(spine), "sha256": "test",
+            "index_path": "", "index_sha256": "", "row_count": 2,
+            "payload_mode": "referenced_partition", "strict_parent": True, "succession": False,
+        }]).to_parquet(self.root / "relationship_partitions.parquet", index=False)
+        edges = relationships_for_loc_id("TST-A-001")
+        self.assertEqual({(row["source_loc_id"], row["target_loc_id"]) for row in edges}, {
+            ("TST-A-001", "TST-B-002"), ("TST-C-003", "TST-A-001"),
+        })
+        self.assertTrue(all(row["relationship_type"] == "strict_parent" for row in edges))
+        pair = relationships_between_loc_ids("TST-A-001", "TST-B-002")
+        self.assertEqual(pair[0]["relationship_type"], "strict_parent")
 
     def test_exact_identity_route_miss_does_not_scan_all_partitions(self) -> None:
         pd.DataFrame([{

@@ -44,45 +44,52 @@ TOOL_GUIDANCE: dict[str, dict[str, Any]] = {
         ["purpose", "input_schema", "interaction_contract", "examples", "access", "recommended_next_calls", "available_on_facades"],
     ),
     "get_catalog": _g(
-        ["You need to discover currently published data packs or geometry families and their country coverage."],
-        ["Querying pack rows", "Inspecting one selected family-country release"],
-        {"catalog": "geometry", "detail": "lite"}, ["packs", "families", "countries", "download"], ["get_pack"]
+        ["You need the published data pack IDs or geometry family and scope IDs."],
+        ["Querying rows", "Inspecting one selected family or scope"],
+        {"catalog": "geometry"}, ["packs", "families", "scopes", "download_url"], ["get_pack", "get_geography"]
     ),
     "get_pack": _g(
-        ["You selected one data pack or geometry family and need its metadata and live contract before calling it."],
-        ["Executing a dataset query", "Fetching geometry"],
-        {"catalog": "geometry", "pack_id": "postal_area", "detail": "lite"},
-        ["catalog", "pack_id", "detail", "countries", "reference_systems", "release", "next_step", "download_url"],
-        ["get_data", "convert_reference", "get_geometry", "get_tool_help"], ["source metadata", "release/freshness fields"]
+        ["You selected one data pack and need its metrics, time coverage, and query contract."],
+        ["Executing a dataset query", "Inspecting geometry families"],
+        {"pack_id": "earthquakes"},
+        ["catalog", "pack_id", "sources", "metrics", "next_step", "download_url"],
+        ["get_data"], ["source metadata", "release/freshness fields"]
+    ),
+    "get_geography": _g(
+        ["You know one geometry family ID or scope ID and need its published coverage and known edition years."],
+        ["Fetching shapes", "Treating a vintage label as proven effective coverage"],
+        [{"scope_id": "CAN"}, {"family_id": "administrative", "year": 2014}],
+        ["family_id", "scope_id", "coverage", "admin_spine", "edition_years", "selected_year", "double_check"],
+        ["get_loc_id_info", "resolve_point", "get_shape"]
     ),
     "resolve_point": _g(
         ["You have one WGS84 coordinate or a bounded point array and need the deepest available first-pass administrative loc_id chain (global baseline through Admin 2; adopted country banks may reach Admin 3)."],
-        ["Resolving names or outside codes", "Returning polygons", "Resolving Admin 4-6"],
+        ["Resolving names or outside codes", "Returning polygons", "Resolving Admin 4-6", "Selecting a family, country, Admin level, or Marine context"],
         {"lat": 49.2827, "lon": -123.1207},
         ["deepest_resolved_loc_id", "stack", "resolution_mode", "available_deeper_admin_levels"],
-        ["resolve_deep_point", "get_loc_id_info", "get_geometry"]
+        ["resolve_deep_point", "get_loc_id_info", "get_shape"]
     ),
     "resolve_deep_point": _g(
         ["A shallow lookup returned an Admin 1-3 loc_id and one coordinate or scoped point array needs deeper administrative detail or one shape-backed family."],
-        ["First-pass country discovery", "Multiple families", "Returning polygons", "Cross-scope point arrays"],
+        ["First-pass country discovery", "A coordinate without shallow_loc_id", "Multiple families", "Returning polygons", "Cross-scope point arrays"],
         {"lat": 34.0522, "lon": -118.2437, "shallow_loc_id": "USA-CA-037", "family": "postal_area"},
         ["shallow_loc_id", "family", "family_result"],
-        ["get_loc_id_info", "get_geometry"]
+        ["get_loc_id_info", "get_shape"]
     ),
     "get_loc_id_info": _g(
-        ["You already have loc_id values and need identity, catalog coverage, geometry-family availability, hierarchy, lifecycle, or attached references."],
-        ["Returning full polygons", "Calculating pairwise overlap"],
-        {"loc_id": "CAN-BC", "include_hierarchy": True},
-        ["loc_id", "parent_id", "hierarchy", "valid_from", "valid_to", "supersession", "references"],
-        ["get_geometry", "compare_geographies"],
-        ["source_system", "source_vintage", "release_id", "bank_id"]
+        ["You have a known loc_id and want its directly recorded connections to other loc_ids in the selected reference graph."],
+        ["Country-wide family discovery", "External identifier conversion", "Returning polygons", "Expanding all descendants"],
+        {"loc_id": "CAN-BC"},
+        ["loc_id", "family", "connections", "connection_count", "has_more"],
+        ["get_geography", "convert_reference", "get_shape"],
+        ["relationship type", "relationship vintage", "authority"]
     ),
     "identify_reference_system": _g(
         ["You have unknown geography identifiers or want to verify a declared system, level, vintage, and matching shape bank."],
         ["Passing the user's prose question as arguments", "Converting every dataset row", "Returning polygons", "Claiming full-dataset validation from a sample"],
         {"identifiers": ["06073000100", "06073000201"], "expected": {"system": "us_census_geoid", "geo_level": "tract", "vintage": "2020"}, "country_scope": "USA"},
         ["status", "candidates", "match_rate", "geometry_available_count", "geometry_bank_ids", "recommended_binding"],
-        ["convert_reference", "get_geometry"],
+        ["convert_reference", "get_shape"],
         ["reference system", "source vintage", "geometry bank ids", "validation scope"],
     ),
     "identify_dataset_geography": _g(
@@ -105,22 +112,22 @@ TOOL_GUIDANCE: dict[str, dict[str, Any]] = {
             {"iso3": "USA", "from_system": "zip", "value": "00601", "to_system": "nws_fire"},
         ],
         ["from.resolved_loc_id", "from.match_type", "from.candidates", "results", "relationship_type", "weight"],
-        ["get_loc_id_info", "get_geometry"],
+        ["get_loc_id_info", "get_shape"],
         ["source and target systems", "bridge vintage", "relationship method", "artifact id"]
     ),
     "compare_geographies": _g(
-        ["You have two loc_ids and need supported containment/common-ancestry or temporal-validity evidence."],
-        ["Resolving names", "Treating deeper topology, overlap, or successor fields as a stable public guarantee"],
+        ["You have two known loc_ids and need recorded relationship or temporal-validity evidence."],
+        ["Resolving names", "Computing polygon intersections", "Treating a missing graph edge as no_overlap"],
         {"left_loc_id": "CAN-BC", "right_loc_id": "CAN"},
-        ["spatial_relation", "temporal_relation", "containment", "common_ancestor"],
-        ["get_loc_id_info", "get_geometry"],
-        ["left.bank_id", "right.bank_id", "geometry vintages", "calculation method"]
+        ["spatial_relation", "temporal_relation", "relationship_basis", "graph_evidence", "common_ancestor_loc_id"],
+        ["get_loc_id_info", "get_shape"],
+        ["graph relationship type", "relationship vintage", "identity validity", "no_overlap only for an explicit negative edge", "unknown when unpublished"]
     ),
-    "get_geometry": _g(
-        ["You have exact loc_ids, or one administrative parent and target level, and need a fast shape-availability check, bbox, centroid, or opt-in polygons."],
-        ["Identifying unknown geography", "Resolving names", "Inferring independent families from admin ancestry", "Bulk export packaging"],
-        {"scope": {"parent_loc_id": "USA-TX", "admin_level": "admin_2"}, "include_polygon": False},
-        ["selection", "scope", "requested", "available", "missing", "items"],
+    "get_shape": _g(
+        ["You have exact loc_ids and need shape availability, bbox, centroid, or opt-in polygons."],
+        ["Identifying unknown geography", "Resolving names", "Selecting a historical edition by year (not yet supported)", "Inferring independent families from admin ancestry", "Bulk export packaging"],
+        {"loc_id": "USA-TX", "include_polygon": False},
+        ["selection", "requested", "available", "missing", "items"],
         ["get_loc_id_info"],
         ["bank_id", "geometry_vintage", "source", "license", "release_id"]
     ),
@@ -133,9 +140,9 @@ TOOL_GUIDANCE: dict[str, dict[str, Any]] = {
     ),
     "get_data": _g(
         ["You selected a published data pack and need its canonical rows or supported aggregate metrics."],
-        ["Calling geometry tool families", "Passing internal source_id values", "Guessing metrics without get_pack", "Unbounded event scans"],
+        ["Calling geometry tool families", "Passing internal source_id values", "Passing direct filter fields outside filters.equals or filters.compare", "Guessing metrics without get_pack", "Unbounded event scans"],
         {"pack_id": "currency", "metrics": ["local_per_usd"], "filters": {"region_ids": ["CAN"], "time": {"start": "2024-01-01", "end": "2024-01-31"}}},
-        ["rows", "row_count", "source_id", "pack_id", "filters_applied", "provenance"], ["get_pack"], ["source metadata", "release/freshness", "license"]
+        ["rows", "row_count", "source_id", "pack_id", "filters_applied", "provenance"], ["get_event", "get_pack"], ["source metadata", "release/freshness", "license"]
     ),
 }
 
@@ -164,15 +171,15 @@ GEOMETRY_WRONG_INPUT_FIRST_CALL: dict[str, list[dict[str, str]]] = {
     "convert_reference": [
         {"when": "coordinate", "tool": "resolve_point"},
         {"when": "dataset whose geography column is unknown", "tool": "identify_dataset_geography"},
-        {"when": "unknown country family or reference system", "tool": "get_pack"},
+        {"when": "unknown country family or reference system", "tool": "get_geography"},
     ],
     "compare_geographies": [
         {"when": "outside identifiers or names", "tool": "convert_reference"},
     ],
-    "get_geometry": [
+    "get_shape": [
         {"when": "coordinate", "tool": "resolve_point"},
         {"when": "outside identifier or place name", "tool": "convert_reference"},
-        {"when": "loc_id identity or hierarchy details", "tool": "get_loc_id_info"},
+        {"when": "loc_id identity or directly recorded graph connections", "tool": "get_loc_id_info"},
     ],
 }
 
@@ -202,20 +209,20 @@ def geometry_topic_help_payload(
         "tool_name": "get_tool_help",
         "help_topic": "geometry",
         "summary": "Start here before using DaedalMap geometry tools. The tools resolve coordinates and identifiers onto loc_id, inspect geography, and return bounded shape results.",
-        "core_rule": "Learn the durable geometry model here, then use get_catalog to select a canonical family and get_pack to inspect its country-specific systems before constructing an execution call.",
+        "core_rule": "Learn the durable geometry model here, then use get_catalog to select a canonical family and get_geography to inspect its scope and family coverage before constructing an execution call.",
         "coverage": capabilities,
         "start_here": [
             {
                 "step": 1,
                 "tool": "get_catalog",
-                "arguments": {"catalog": "geometry", "detail": "lite", "country_scope": "<ISO3 when known>"},
-                "purpose": "Discover canonical families and the countries where each currently exists. Omit country_scope for the global family directory.",
+                "arguments": {"catalog": "geometry"},
+                "purpose": "List published family and scope IDs.",
             },
             {
                 "step": 2,
-                "tool": "get_pack",
-                "arguments": {"catalog": "geometry", "pack_id": "<selected family>", "country_scope": "<ISO3 when detail is needed>", "detail": "lite"},
-                "purpose": "Read broad country availability, or add country_scope for that country's systems and release details.",
+                "tool": "get_geography",
+                "arguments": {"family_id": "<selected family>"},
+                "purpose": "List scopes for one family; use scope_id instead to list one scope's families and Admin spine coverage.",
             },
             {
                 "step": 3,
@@ -232,11 +239,11 @@ def geometry_topic_help_payload(
             "loc_id": "The stable DaedalMap geography identifier shared by geometry and data tools.",
             "administrative_spine": {
                 "rule": "Each country selects one complete, nested administrative hierarchy. Countries have different depths and native tier names.",
-                "discovery": "Use get_catalog(catalog='geometry', detail='lite', country_scope='<ISO3>') for the active depth and current query guidance.",
+                "discovery": "Use get_geography(scope_id='<ISO3>') for the active depth and current query guidance.",
             },
             "reference_families": {
                 "rule": "Postal areas, places, watersheds, electoral districts, Indigenous regions, weather zones, water bodies, and other families are independent reference systems unless the catalog says they belong to the selected spine.",
-                "discovery": "Use get_catalog(catalog='geometry') to choose a family, then get_pack for its countries. Add country_scope to get_pack only for that country's systems, vintages, levels, and artifacts.",
+                "discovery": "Use get_catalog(catalog='geometry') to choose a family, then get_geography(family_id=...) for its scopes, or get_geography(scope_id=...) for that scope's families and known vintage labels.",
             },
             "catalog_authority": "Coverage is generated from admitted releases. Do not assume that every country has the same depth, families, or physical query layout.",
             "query_cost": "Opening and searching geometry partitions is the main cold-path cost. Item count still matters, but calls aligned with the catalog's query guidance are usually faster than calls spread across unrelated regions or families.",
@@ -278,7 +285,7 @@ def geometry_topic_help_payload(
         "workflows": [
             {
                 "name": "coordinates_to_geography",
-                "steps": ["resolve_point", "get_loc_id_info only when details are requested", "get_geometry only when shape availability or shapes are requested"],
+                "steps": ["resolve_point", "get_loc_id_info only when details are requested", "get_shape only when shape availability or shapes are requested"],
             },
             {
                 "name": "shallow_administrative_points",
@@ -286,7 +293,6 @@ def geometry_topic_help_payload(
                     "tool": "resolve_point",
                     "arguments": {
                         "points": [{"lat": 45.039641, "lon": -103.313618}],
-                        "target_admin_level": 3,
                     },
                 },
                 "steps": ["confirm coverage", "send points from one country", "reuse the returned loc_id chain"],
@@ -306,7 +312,7 @@ def geometry_topic_help_payload(
                 "steps": [
                     "separate administrative loc_ids from independent reference-family loc_ids",
                     "group them according to the country catalog entry and family",
-                    "call get_geometry once per group with include_polygon=false for availability, bbox, and centroid",
+                    "call get_shape once per exact-ID group with include_polygon=false for availability, bbox, and centroid",
                     "repeat with include_polygon=true only when polygon coordinates are needed",
                 ],
             },
@@ -316,11 +322,11 @@ def geometry_topic_help_payload(
             },
             {
                 "name": "one_external_reference",
-                "steps": ["get_catalog when the family is unknown", "get_pack for family/country details", "convert_reference through loc_id"],
+                "steps": ["get_catalog when the family is unknown", "get_geography for family/scope coverage", "convert_reference through loc_id"],
             },
             {
                 "name": "relationships_and_time",
-                "steps": ["get_loc_id_info for available data/geometry plus identity and hierarchy", "compare_geographies for supported pairwise containment/common ancestry and temporal validity"],
+                "steps": ["get_loc_id_info for direct graph connections", "compare_geographies for supported pairwise containment/common ancestry and temporal validity"],
             },
         ],
         "available_tools": sorted(
@@ -340,7 +346,7 @@ def geometry_topic_help_payload(
         "input_question": str(question or "").strip() or None,
     }
 TOPIC_TOOLS: dict[str, tuple[str, ...]] = {
-    "overview": ("get_catalog", "get_pack", "get_data", "convert_reference", "resolve_point", "get_geometry"),
+    "overview": ("get_catalog", "get_pack", "get_geography", "get_data", "convert_reference", "resolve_point", "get_shape"),
     "data": ("get_catalog", "get_pack", "get_data"),
     "disasters": (
         "get_catalog", "get_pack", "get_data", "get_event",
@@ -454,7 +460,7 @@ def tool_help_payload(
     access = {
         "pricing": tool_public_pricing(name),
         "pricing_scope": "authored_policy; active operator policy can waive settlement",
-        "free_discovery": name in {"get_tool_help", "get_catalog", "get_pack", "identify_dataset_geography", "identify_reference_system"},
+        "free_discovery": name in {"get_tool_help", "get_catalog", "get_pack", "get_geography", "identify_dataset_geography", "identify_reference_system"},
         "limits": limits,
         "above_free_limit": "payment_required" if pricing.startswith("paid") else (
             "bounded_inline_limit_error" if name in {"create_geometry_export", "create_conversion_job"} else "typed_cap_error"

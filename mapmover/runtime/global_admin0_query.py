@@ -89,7 +89,11 @@ def _active_layout() -> dict[str, Any] | None:
 def resolve_global_admin0_query_points(
     points: Iterable[dict[str, Any]],
 ) -> list[pd.Series | None] | None:
-    """Resolve points against Full-derived shards, or return None for fallback."""
+    """Resolve points against Full-derived shards, or return None for fallback.
+
+    MCP_UPGRADE_REMOVE: remove the None fallback signal once every supported
+    release requires the compact Admin0 index; stale indexes must fail closed.
+    """
     point_items = list(points)
     layout = _active_layout()
     if layout is None:
@@ -171,7 +175,11 @@ def resolve_global_admin0_query_points(
 
 
 def load_global_admin0_identities(loc_ids: Iterable[str]) -> dict[str, pd.Series] | None:
-    """Read country identity columns from the compact index, never Full CSV."""
+    """Read country identity columns from the compact index, never Full CSV.
+
+    MCP_UPGRADE_REMOVE: remove the None fallback signal at the Admin0 index
+    cutover; the callers' broad-bank and graph fallbacks are marked separately.
+    """
     layout = _active_layout()
     if layout is None:
         return None
@@ -198,7 +206,11 @@ def load_global_admin0_identities(loc_ids: Iterable[str]) -> dict[str, pd.Series
 
 
 def load_global_admin0_geometries(loc_ids: Iterable[str]) -> pd.DataFrame | None:
-    """Read exact Full-derived Admin0 polygons by loc_id from selected shards."""
+    """Read exact Full-derived Admin0 polygons by loc_id from selected shards.
+
+    MCP_UPGRADE_REMOVE: remove the None fallback signal after compact Admin0
+    shape coverage and local/hosted callers pass the release parity gate.
+    """
     layout = _active_layout()
     if layout is None:
         return None

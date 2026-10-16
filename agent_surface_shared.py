@@ -238,11 +238,11 @@ def geography_workflow_section() -> str:
     """Return question-first instructions for the current geography MCP roster."""
     return (
         "1. Point to loc_id: call `resolve_point` with one coordinate or a bounded array; it stops at Admin 3. For Admin 4-6, group results by shallow scope and call `resolve_deep_point` with one coordinate or array plus one `shallow_loc_id` per call.\n"
-        "2. What a loc_id is connected to: call `get_loc_id_info`; add `include_references=true` for exact attached crosswalks and `include_hierarchy=true` for strict stored ancestry.\n"
+        "2. What a loc_id is directly connected to in the selected reference graph: call `get_loc_id_info`; results are capped per ID and say when more connections exist.\n"
         "3. Dataset to loc_id: pass bounded named columns to `identify_dataset_geography`; it selects only a recognized code column or coordinate pair. If a code column was selected, declare one country_scope and call `identify_reference_system` on its bounded values to determine the system. Resolve a known outside code or name with `convert_reference` and omit `to_system`; provide `to_system` only when another reference system is the desired output.\n"
-        "4. Shape lookup: call `get_geometry` with its default `include_polygon=false` for availability, metadata, bbox, and centroid; set `include_polygon=true` only when shape coordinates are needed. If the requested record is historical, return it first; present any `supersession` prompt as a second question and do not fetch the successor until the caller chooses it.\n"
-        "5. Coverage discovery: call `get_catalog(catalog='geometry', detail='lite')`, then `get_pack(catalog='geometry', pack_id='<family>', country_scope='<ISO3>')` for country systems, vintages, levels, and artifacts. A listed family-country pair is exchangeable through loc_id.\n"
-        "6. Relationship between two loc_ids: call `compare_geographies`. For bounded shapes under a supported administrative parent and level, use the `scope` input on `get_geometry`.\n"
+        "4. Shape lookup: call `get_shape` with an exact loc_id and default `include_polygon=false` for availability, metadata, bbox, and centroid; set `include_polygon=true` only when shape coordinates are needed. If the requested record is historical, return it first; present any `supersession` prompt as a second question and do not fetch the successor until the caller chooses it.\n"
+        "5. Coverage discovery: call `get_catalog(catalog='geometry')`, then `get_geography(scope_id='<ISO3>')` for a scope's families or `get_geography(family_id='<family>')` for its scopes. Known vintage years do not prove effective coverage.\n"
+        "6. Relationship between two loc_ids: call `compare_geographies`. Obtain descendant loc_ids through the explicit scope resolver before requesting their shapes.\n"
         "7. Batch rule: use a bounded batch where supported; split deep work by Admin1 owner.\n"
         "8. If the right path is unclear: call `get_tool_help` with a topic, then with one exact visible tool name. Future estimate/create/status builder contracts are retained internally but are not part of the public MCP roster."
     )
@@ -303,9 +303,9 @@ def agent_ai_plugin_description_for_model(*, app_origin: str, docs_origin: str, 
         "join surface; postal, watershed, Indigenous land, forest, and other geography families "
         "retain distinct identities and connect through published crosswalks when one exists. "
         "Geography tools use loc_id as the durable identifier. Start with get_tool_help(topic='geometry'), "
-        "then get_catalog(catalog='geometry') and get_pack for country and family coverage. "
+        "then get_catalog(catalog='geometry') and get_geography for country and family coverage. "
         "Use identify_reference_system when an input column is unknown. "
-        "resolve_point, resolve_deep_point, get_loc_id_info, and get_geometry accept a bounded batch. "
+        "resolve_point, resolve_deep_point, get_loc_id_info, and get_shape accept a bounded batch. "
         "request_id is optional but recommended for tracing and idempotency. "
         f"{free_vs_paid_sentence()}"
     )

@@ -117,7 +117,7 @@ class McpAccountScopeTests(unittest.TestCase):
                 _execute_paid_tool(
                     request,
                     "get_data",
-                    {"pack_id": "earthquakes", "metrics": [], "filters": {}},
+                    {"pack_id": "earthquakes", "metrics": ["event_count"], "filters": {}},
                     "paid-1",
                 )
             )
@@ -239,6 +239,7 @@ class DataHelperTelemetryTests(unittest.TestCase):
             "get_tool_help",
             "get_catalog",
             "get_pack",
+            "get_geography",
             "get_event",
         }
         self.assertEqual(set(DATA_HELPER_CAPABILITIES), expected)
@@ -259,17 +260,11 @@ class DataHelperTelemetryTests(unittest.TestCase):
 
     def test_get_catalog_writes_a_usage_row(self) -> None:
         with mock.patch("mapmover.routes.mcp.log_api_query_event") as analytics_mock:
-            envelope = _tool_call_envelope(self.client, "get_catalog")
+            envelope = _tool_call_envelope(self.client, "get_catalog", {"catalog": "data"})
 
         result = envelope["result"]["structuredContent"]
-        self.assertEqual(
-            result["public_catalogs"]["data"]["download_url"],
-            "https://app.daedalmap.com/api/v1/catalog/download",
-        )
-        self.assertEqual(
-            result["public_catalogs"]["geometry"]["catalog_path"],
-            "geometry/geometry_catalog.json",
-        )
+        self.assertEqual(result["download_url"], "https://app.daedalmap.com/api/v1/catalog/download")
+        self.assertEqual(result["catalog"], "data")
 
         analytics_mock.assert_called_once()
         analytics = analytics_mock.call_args.kwargs
@@ -280,7 +275,7 @@ class DataHelperTelemetryTests(unittest.TestCase):
         self.assertEqual(analytics["metadata"]["surface"], "agent_api_mcp")
         self.assertEqual(analytics["metadata"]["access_lane"], ACCESS_LANE_FREE)
 
-    def test_get_catalog_download_returns_railway_url_without_loading_catalog(self) -> None:
+    def test_get_catalog_rejects_undeclared_download_mode(self) -> None:
         with mock.patch("mapmover.routes.mcp.load_api_catalog") as load_catalog:
             envelope = _tool_call_envelope(
                 self.client,
@@ -288,27 +283,24 @@ class DataHelperTelemetryTests(unittest.TestCase):
                 {"catalog": "data", "detail": "download"},
             )
 
-        result = envelope["result"]["structuredContent"]
-        self.assertEqual(result["detail"], "download")
-        self.assertEqual(result["download_url"], "https://app.daedalmap.com/api/v1/catalog/download")
-        self.assertNotIn("packs", result)
+        self.assertEqual(envelope["error"]["code"], -32602)
         load_catalog.assert_not_called()
 
     def test_get_catalog_geometry_lite_uses_bounded_capability_view(self) -> None:
         with mock.patch(
-            "mapmover.runtime.reference_exchange.geometry_catalog_discovery",
-            return_value={"ok": True, "catalog": "geometry", "detail": "lite", "families": []},
+            "mapmover.runtime.reference_exchange.geography_directory",
+            return_value={"ok": True, "catalog": "geometry", "families": [], "scopes": [], "download_url": "test"},
         ) as read_catalog:
             envelope = _tool_call_envelope(
                 self.client,
                 "get_catalog",
-                {"catalog": "geometry", "detail": "lite", "country_scope": "CAN"},
+                {"catalog": "geometry"},
             )
 
         result = envelope["result"]["structuredContent"]
         self.assertEqual(result["catalog"], "geometry")
-        self.assertEqual(result["detail"], "lite")
-        read_catalog.assert_called_once_with(detail="lite", country_scope="CAN")
+        self.assertEqual(result["scopes"], [])
+        read_catalog.assert_called_once_with()
 
     def test_get_catalog_data_full_adds_metric_inventory_and_pack_next_step(self) -> None:
         catalog = {"packs": [{"pack_id": "demo", "title": "Demo", "metric_ids": ["population"]}]}
@@ -319,13 +311,12 @@ class DataHelperTelemetryTests(unittest.TestCase):
             envelope = _tool_call_envelope(
                 self.client,
                 "get_catalog",
-                {"catalog": "data", "detail": "full"},
+                {"catalog": "data"},
             )
 
         result = envelope["result"]["structuredContent"]
-        self.assertEqual(result["detail"], "full")
-        self.assertEqual(result["packs"][0]["metrics"], ["population"])
-        self.assertEqual(result["packs"][0]["next_call"]["tool"], "get_pack")
+        self.assertEqual(result["packs"][0]["pack_id"], "demo")
+        self.assertNotIn("metrics", result["packs"][0])
         load_detail.assert_not_called()
 
     def test_get_pack_lite_points_to_published_execution_tool(self) -> None:
@@ -340,28 +331,28 @@ class DataHelperTelemetryTests(unittest.TestCase):
             envelope = _tool_call_envelope(
                 self.client,
                 "get_pack",
-                {"catalog": "data", "pack_id": "demo", "detail": "lite"},
+                {"pack_id": "demo"},
             )
 
         result = envelope["result"]["structuredContent"]
         self.assertEqual(result["next_step"]["tool"], "get_data")
         self.assertNotIn("target_name", result["next_step"])
-        self.assertEqual(result["download_call"]["arguments"]["detail"], "download")
+        self.assertEqual(result["catalog"], "data")
 
     def test_get_catalog_defaults_to_geometry_on_geometry_facade(self) -> None:
         with mock.patch(
-            "mapmover.runtime.reference_exchange.geometry_catalog_discovery",
-            return_value={"ok": True, "catalog": "geometry", "detail": "lite", "families": []},
+            "mapmover.runtime.reference_exchange.geography_directory",
+            return_value={"ok": True, "catalog": "geometry", "families": [], "scopes": []},
         ) as read_catalog:
             envelope = _tool_call_envelope(
                 self.client,
                 "get_catalog",
-                path="/mcp/geography",
+                {"catalog": "geometry"}, path="/mcp/geography",
             )
 
         result = envelope["result"]["structuredContent"]
         self.assertEqual(result["catalog"], "geometry")
-        read_catalog.assert_called_once_with(detail="lite", country_scope=None)
+        read_catalog.assert_called_once_with()
 
     def test_get_pack_missing_pack_logs_a_deny(self) -> None:
         with mock.patch("mapmover.routes.mcp.log_api_query_event") as analytics_mock:
@@ -642,6 +633,21 @@ class CatalogDrivenPackFacadeTests(unittest.TestCase):
         self.assertEqual(forwarded["metrics"], ["value"])
         self.assertNotIn("source_id", forwarded)
 
+    def test_get_data_rejects_missing_or_malformed_contract_before_executor(self) -> None:
+        backend = mock.AsyncMock()
+        with mock.patch("mapmover.routes.mcp.execute_query_dataset_payload", new=backend):
+            for arguments in (
+                {"pack_id": "earthquakes", "filters": {}},
+                {"pack_id": "earthquakes", "metrics": ["event_count"]},
+                {"pack_id": "earthquakes", "metrics": ["event_count"], "filters": {"time": {}}},
+                {"pack_id": "earthquakes", "metrics": ["event_count"], "filters": {"time": {"value": 2020, "granularity": {}}}},
+                {"pack_id": "earthquakes", "metrics": ["event_count"], "filters": {"compare": [{"field": "value", "op": {}, "value": 1}]}},
+                {"pack_id": "earthquakes", "metrics": ["event_count"], "filters": {}, "sort": {"field": "value", "direction": []}},
+            ):
+                envelope = _tool_call_envelope(self.client, "get_data", arguments)
+                self.assertEqual(envelope["result"]["structuredContent"]["error"]["code"], "invalid_data_request")
+        backend.assert_not_awaited()
+
     def test_get_data_rejects_a_different_pack_on_a_narrow_facade(self) -> None:
         catalog = {"packs": [{"pack_id": "future_pack", "title": "Future Pack"}]}
         backend = mock.AsyncMock()
@@ -658,6 +664,40 @@ class CatalogDrivenPackFacadeTests(unittest.TestCase):
 
         self.assertEqual(envelope["error"]["code"], -32602)
         backend.assert_not_awaited()
+
+    def test_data_tools_reject_undeclared_routes_before_lookup(self) -> None:
+        backend = mock.AsyncMock()
+        with mock.patch("mapmover.routes.mcp.execute_query_dataset_payload", new=backend):
+            data = _tool_call_envelope(
+                self.client, "get_data",
+                {"pack_id": "earthquakes", "metrics": ["event_count"],
+                 "filters": {"country": "USA"}},
+            )
+        self.assertEqual(data["error"]["code"], -32602)
+        self.assertIn("filters.country", data["error"]["message"])
+        backend.assert_not_awaited()
+
+        with mock.patch("mapmover.routes.mcp.get_event_payload") as lookup:
+            event = _tool_call_envelope(
+                self.client, "get_event",
+                {"pack_id": "earthquakes", "source_id": "earthquakes",
+                 "event_id": "e1", "country": "USA"},
+            )
+        self.assertEqual(event["error"]["code"], -32602)
+        lookup.assert_not_called()
+
+    def test_get_event_rejects_malformed_optional_fields_before_lookup(self) -> None:
+        with (mock.patch("mapmover.routes.mcp.get_event_payload") as lookup,
+              mock.patch("mapmover.routes.mcp._live_tool_rate_limit_response", return_value=None)):
+            for extra in ({"include": "geometry"}, {"relationship_depth": 3},
+                          {"geometry_mode": ["current"]}, {"limit": 0}):
+                envelope = _tool_call_envelope(
+                    self.client, "get_event",
+                    {"pack_id": "earthquakes", "source_id": "earthquakes",
+                     "event_id": "event-1", **extra},
+                )
+                self.assertEqual(envelope["error"]["code"], -32602)
+        lookup.assert_not_called()
 
     def test_pack_absent_from_catalog_has_no_generic_facade(self) -> None:
         with mock.patch("mapmover.routes.mcp.load_api_catalog", return_value={"packs": []}):
@@ -791,7 +831,7 @@ class BlindCallerHelpTests(unittest.TestCase):
                 self.assertEqual(access.get("pricing"), tool_pricing(name))
                 self.assertEqual(access.get("help", {}).get("tool"), "get_tool_help")
                 self.assertIn(data_contract.get("input_family"), {
-                    "none", "pack_selector", "structured_query", "live_window",
+                    "none", "catalog_selector", "geography_selector", "pack_selector", "structured_query", "live_window",
                     "exact_event", "relationship_search",
                 })
                 self.assertIn(data_contract.get("result_family"), {"catalog", "rows", "relationships"})
@@ -808,6 +848,7 @@ class BlindCallerHelpTests(unittest.TestCase):
             set(get_data_properties["filters"]["properties"]),
             {"region_ids", "time", "equals", "compare"},
         )
+        self.assertFalse(get_data_properties["filters"]["additionalProperties"])
         self.assertEqual(
             get_data_properties["filters"]["properties"]["compare"]["items"]["properties"]["op"]["enum"],
             ["=", "!=", ">", ">=", "<", "<="],
@@ -872,7 +913,7 @@ class BlindCallerHelpTests(unittest.TestCase):
             "identify_reference_system": {"ok": True, "status": "matched", "candidates": []},
             "convert_reference": {"ok": True, "results": []},
             "compare_geographies": {"ok": True, "spatial_relation": "overlaps"},
-            "get_geometry": {
+            "get_shape": {
                 "ok": True,
                 "selection": "exact_loc_ids",
                 "items": [],
@@ -945,7 +986,7 @@ class BlindCallerHelpTests(unittest.TestCase):
             tool["name"]: tool
             for tool in response.json()["result"]["tools"]
         }
-        self.assertEqual(len(tools), 11)
+        self.assertEqual(len(tools), 12)
         self.assertTrue(GEOMETRY_TOOL_IDS.issubset(tools))
         for name, definition in tools.items():
             with self.subTest(tool=name):
@@ -1036,7 +1077,6 @@ class TrustedArtifactBypassTests(unittest.TestCase):
             "compare_geographies": {
                 "items": [{"left_loc_id": "USA", "right_loc_id": "USA"} for _ in range(200)]
             },
-            "get_loc_id_info": {"loc_ids": [f"USA-{i}" for i in range(200)]},
         }
         for tool, arguments in cases.items():
             with self.subTest(tool=tool):
@@ -1087,7 +1127,6 @@ class TrustedArtifactBypassTests(unittest.TestCase):
             "compare_geographies": {
                 "items": [{"left_loc_id": "USA", "right_loc_id": "USA"} for _ in range(200)]
             },
-            "get_loc_id_info": {"loc_ids": [f"USA-{i}" for i in range(200)]},
         }
         # This is a cap/admission test, not a 600-item reference-graph
         # integration test. Stub the accepted work so no long-lived MCP worker
@@ -1099,10 +1138,6 @@ class TrustedArtifactBypassTests(unittest.TestCase):
             ),
             mock.patch(
                 "mapmover.routes.mcp._compare_geographies_items",
-                return_value=[{"ok": True}],
-            ),
-            mock.patch(
-                "mapmover.routes.mcp._get_loc_id_info_items",
                 return_value=[{"ok": True}],
             ),
         ):
@@ -1144,7 +1179,7 @@ class TrustedArtifactBypassTests(unittest.TestCase):
             mock.patch("mapmover.routes.mcp._trusted_artifact_access", return_value=(None, None)),
             mock.patch("mapmover.routes.mcp.rate_limiter.check", return_value=(True, 0)) as limiter_mock,
         ):
-            envelope = _tool_call_envelope(self.client, "get_catalog", {})
+            envelope = _tool_call_envelope(self.client, "get_catalog", {"catalog": "data"})
         self.assertIn("result", envelope)
         limiter_mock.assert_called_once()
 
@@ -1227,7 +1262,7 @@ class ToolAccessRegistryTests(unittest.TestCase):
         import mapmover.routes.mcp as mcp_module
         from tool_access_shared import tool_free_item_limit
 
-        for tool in ("resolve_point", "get_geometry", "get_loc_id_info"):
+        for tool in ("resolve_point", "get_shape", "get_loc_id_info"):
             with self.subTest(tool=tool):
                 self.assertEqual(
                     mcp_module._tool_batch_item_limit(tool),
@@ -1300,7 +1335,7 @@ class PaidBulkLicensingTests(unittest.TestCase):
     def test_free_tools_never_enforce_paid_bulk(self) -> None:
         import mapmover.routes.mcp as mcp_module
 
-        for tool in ("get_geometry", "get_catalog", "get_pack"):
+        for tool in ("get_shape", "get_catalog", "get_pack"):
             with self.subTest(tool=tool):
                 self.assertFalse(mcp_module._tool_paid_bulk_enforced(tool))
 

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import math
 import re
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -1552,6 +1553,132 @@ def geometry_catalog_discovery(
     })
 
 
+def geography_directory() -> dict[str, Any]:
+    """Small published family/scope directory; no geometry or graph reads."""
+    catalog = load_geometry_catalog()
+    index = _published_geometry_family_index(catalog)
+    scopes: dict[str, dict[str, Any]] = {}
+    descriptions = {str(item.get("country_code") or "").upper(): item.get("description")
+                    for item in _public_catalog_records(catalog, "country_profiles")}
+    descriptions.update({str(item.get("release_unit_id") or "").upper(): item.get("description")
+                         for item in _public_catalog_records(catalog, "domain_profiles")})
+    for entry in index.values():
+        for country in entry["countries"]:
+            key = country["country_code"]
+            scopes[key] = {"scope_id": key, "label": country["label"],
+                           "description": descriptions.get(key)}
+        for unit in entry.get("domain_units") or []:
+            key = unit["unit_id"]
+            scopes[key] = {"scope_id": key, "label": unit["label"],
+                           "description": descriptions.get(key)}
+    return {
+        "ok": True, "catalog": "geometry",
+        "families": [{"family_id": key, "label": value["label"],
+                      "description": value.get("description")} for key, value in sorted(index.items())],
+        "scopes": [value for _, value in sorted(scopes.items())],
+        "download_url": "https://app.daedalmap.com/api/v1/geometry/catalog/download",
+    }
+
+
+def geography_detail(*, family_id: str | None = None, scope_id: str | None = None,
+                     year: int | None = None) -> dict[str, Any]:
+    """Bounded metadata projection from the selected public catalog only."""
+    import re
+
+    catalog = load_geometry_catalog()
+    selection_year = year if year is not None else datetime.now(timezone.utc).year
+    index = _published_geometry_family_index(catalog)
+    scope = str(scope_id or "").strip().upper()
+    family = str(family_id or "").strip().lower()
+    if family and family not in index:
+        return {"ok": False, "error": {"code": "family_not_found", "message": f"Family '{family}' is not published."}}
+    valid_scopes = {item["country_code"] for entry in index.values() for item in entry["countries"]}
+    valid_scopes.update(unit for entry in index.values() for unit in entry.get("scopes") or [])
+    if scope and scope not in valid_scopes:
+        return {"ok": False, "error": {"code": "scope_not_found", "message": f"Scope '{scope}' is not published."}}
+
+    public_banks = _public_catalog_records(catalog, "geometry_banks")
+    country_coverage = {str(item.get("country_code") or "").upper(): item
+                        for item in _public_catalog_records(catalog, "country_family_coverage")}
+    admitted_index = catalog.get("family_edition_index")
+    has_edition_index = isinstance(admitted_index, list)
+    admitted_rows = [item for item in admitted_index or [] if isinstance(item, dict)
+                     and str(item.get("publication_status") or "").lower() in
+                     {"published", "approved_for_publication", "active", "current"}]
+    pairs = []
+    for fid, entry in sorted(index.items()):
+        if family and fid != family:
+            continue
+        units = [item["country_code"] for item in entry["countries"]] + list(entry.get("scopes") or [])
+        for unit in sorted(set(units)):
+            if scope and unit != scope:
+                continue
+            # Bank vintages are hints; the catalog does not yet prove an
+            # admitted edition timeline or effective year intervals.
+            banks = [bank for bank in public_banks
+                     if str(bank.get("scope") or "").upper() == unit
+                     and (str(bank.get("family_id") or "") == fid
+                          or fid == "administrative" and re.fullmatch(r"admin_[0-6]", str(bank.get("family") or "")))]
+            vintage_years: set[int] = set()
+            for bank in banks:
+                match = re.search(r"(?:19|20)\d{2}", str(bank.get("vintage") or ""))
+                if match:
+                    vintage_years.add(int(match.group()))
+            family_coverage = next((item for item in country_coverage.get(unit, {}).get("families") or []
+                                    if item.get("family_id") == fid), {})
+            row = {"family_id": fid, "scope_id": unit, "label": entry["label"],
+                   "coverage_status": family_coverage.get("coverage_status"),
+                   "available_levels": family_coverage.get("hierarchy_levels") or family_coverage.get("native_tier_names"),
+                   "known_vintage_years": sorted(vintage_years), "effective_year_ranges": None,
+                   "edition_index_status": "available" if has_edition_index else "not_published"}
+            editions = [item for item in admitted_rows
+                        if str(item.get("scope_id") or "").upper() == unit
+                        and str(item.get("family_id") or "") == fid
+                        and type(item.get("edition_year")) is int]
+            years = sorted({item["edition_year"] for item in editions})
+            if has_edition_index:
+                row["edition_years"] = years
+                ranges = [{"edition_year": item["edition_year"],
+                           "authority": item.get("authority"),
+                           "effective_start_year": item.get("effective_start_year"),
+                           "effective_end_year": item.get("effective_end_year")}
+                          for item in editions if item.get("effective_start_year") is not None
+                          or item.get("effective_end_year") is not None]
+                row["effective_year_ranges"] = ranges or None
+            if not has_edition_index:
+                row["year_selection"] = {"status": "edition_index_unavailable",
+                                         "requested_year": selection_year,
+                                         "year_defaulted": year is None,
+                                         "selected_edition_year": None, "double_check": True}
+            else:
+                selected = max((value for value in years if value <= selection_year), default=None)
+                row["year_selection"] = {
+                    "status": "no_previous_edition" if selected is None else
+                              "exact" if selected == selection_year else "previous_available",
+                    "requested_year": selection_year, "year_defaulted": year is None,
+                    "selected_edition_year": selected,
+                    "double_check": selected is not None and selected != selection_year,
+                    "editions": [item for item in editions if item["edition_year"] == selected],
+                }
+            pairs.append(row)
+    result = {"ok": True, "catalog": "geometry", "family_id": family or None,
+              "scope_id": scope or None, "requested_year": selection_year,
+              "year_defaulted": year is None, "coverage": pairs}
+    if scope:
+        coverage = country_coverage.get(scope)
+        if coverage:
+            result["admin_spine"] = {"active_admin_depth": coverage.get("active_admin_depth"),
+                                     "max_admin_level": coverage.get("max_admin_level"),
+                                     "hierarchy_levels": coverage.get("admin_hierarchy_levels")}
+        else:
+            profile = next((item for item in _public_catalog_records(catalog, "domain_profiles")
+                            if str(item.get("release_unit_id") or "").upper() == scope), None)
+            if profile:
+                result["admin_spine"] = {"release_unit_kind": profile.get("release_unit_kind"),
+                                         "description": profile.get("description")}
+    return _clean_json(result)
+
+
 def geometry_pack_detail(
     pack_id: str, *, country_scope: str | None = None,
     release_unit: str | None = None, detail: str = "lite",
@@ -2450,9 +2577,9 @@ def resolve_references_batch(requests: list[dict[str, Any]]) -> list[dict[str, A
         ))
         identities = load_global_admin0_identities(values)
         if identities is None:
-            # A legacy/local layout without the compact identity index retains
-            # the established graph fallback. Production published layouts are
-            # required to expose the index and never enter this branch.
+            # MCP_UPGRADE_REMOVE: local layout without the compact identity
+            # index retains the graph route. Delete when all supported local
+            # and hosted layouts require the published compact identity index.
             for index, request, value in global_admin0_candidates:
                 unscoped_alias_groups.setdefault("geoboundaries.code", []).append(
                     (index, request, value)
@@ -3256,6 +3383,8 @@ def _metadata_geometry_reference(
     if not row:
         return {"ok": False, "loc_id": canonical, "has_shape": False, "error": "no geometry found"}
     family = _reference_family(canonical, admin_level=row.get("admin_level"))
+    # MCP_UPGRADE_REMOVE: rely on the verified row-level availability field
+    # once every selected geometry bank publishes one.
     has_shape = bool(row.get("has_polygon", True))
     payload = {
         "ok": has_shape,

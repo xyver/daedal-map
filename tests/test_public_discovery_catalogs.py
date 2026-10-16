@@ -122,19 +122,19 @@ class PublicDiscoveryCatalogTests(unittest.TestCase):
     def test_geometry_server_cards_match_each_facade_tool_menu(self) -> None:
         expected_tools = {
             "geography": {
-                "get_tool_help", "get_catalog", "get_pack",
+                "get_tool_help", "get_catalog", "get_pack", "get_geography",
                 "resolve_point", "resolve_deep_point",
                 "get_loc_id_info", "identify_dataset_geography", "identify_reference_system",
                 "convert_reference",
-                "compare_geographies", "get_geometry",
+                "compare_geographies", "get_shape",
             },
             "reverse-geocoding": {
-                "get_tool_help", "get_catalog", "get_pack",
+                "get_tool_help", "get_catalog", "get_geography",
                 "resolve_point", "resolve_deep_point",
             },
             "boundaries": {
-                "get_tool_help", "get_catalog", "get_pack", "get_loc_id_info",
-                "compare_geographies", "get_geometry",
+                "get_tool_help", "get_catalog", "get_pack", "get_geography", "get_loc_id_info",
+                "compare_geographies", "get_shape",
             },
         }
 
@@ -155,7 +155,7 @@ class PublicDiscoveryCatalogTests(unittest.TestCase):
         ).json()
         paid_by_name = {tool["name"]: tool["paid"] for tool in geography["tools"]}
         self.assertTrue(paid_by_name["resolve_point"])
-        self.assertFalse(paid_by_name["get_geometry"])
+        self.assertFalse(paid_by_name["get_shape"])
         self.assertFalse(paid_by_name["get_catalog"])
 
     def test_catalog_routes_share_discovery_rate_limit_surface(self) -> None:
@@ -524,7 +524,7 @@ class PublicDiscoveryCatalogTests(unittest.TestCase):
             response = self.client.post(
                 "/mcp/geography",
                 headers={"x-api-key": "account-mcp-test"},
-                json={"jsonrpc": "2.0", "id": "account-bulk", "method": "tools/call", "params": {"name": "resolve_point", "arguments": {"target_admin_level": "admin_2", "points": [{"lon": -118.2, "lat": 34.0} for _ in range(101)]}}},
+                json={"jsonrpc": "2.0", "id": "account-bulk", "method": "tools/call", "params": {"name": "resolve_point", "arguments": {"points": [{"lon": -118.2, "lat": 34.0} for _ in range(101)]}}},
             )
         self.assertEqual(response.status_code, 200, response.text)
         payload = response.json()["result"]["structuredContent"]

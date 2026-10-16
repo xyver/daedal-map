@@ -443,28 +443,39 @@ def _route_paths(
     return list(dict.fromkeys(path_map.get(str(value), DATA_ROOT / str(value)) for value in rows if value))
 
 
-def _relationship_route_paths(
+def _relationship_route_records(
     root: Path, family: str, endpoint_column: str,
-) -> list[Path]:
+) -> list[dict[str, Any]]:
     if endpoint_column not in {"source_family", "target_family"} or not family:
         return []
     index_path = root / PARTITION_INDEXES["relationships"]
     try:
         if index_path.is_file():
             rows = pq.read_table(
-                index_path, columns=["path"], filters=[(endpoint_column, "=", family)],
-            ).to_pydict().get("path", [])
+                index_path, columns=["path", "evidence_class", "strict_parent"],
+                filters=[(endpoint_column, "=", family)],
+            ).to_pylist()
         elif is_cloud_mode():
-            frame = select_rows(
-                index_path, columns=["path"], exact_filters={endpoint_column: family},
-            )
-            rows = frame["path"].tolist() if "path" in frame.columns else []
+            frame = select_rows(index_path, columns=["path", "evidence_class", "strict_parent"],
+                                exact_filters={endpoint_column: family})
+            rows = frame.to_dict("records")
         else:
             return []
     except Exception:
         return []
     path_map = _partition_source_map(str(root), "relationships")
-    return list(dict.fromkeys(path_map.get(str(value), DATA_ROOT / str(value)) for value in rows if value))
+    selected = []
+    seen: set[str] = set()
+    for row in rows:
+        value = str(row.get("path") or "")
+        if value and value not in seen:
+            seen.add(value)
+            selected.append({**row, "resolved_path": path_map.get(value, DATA_ROOT / value)})
+    return selected
+
+
+def _relationship_route_paths(root: Path, family: str, endpoint_column: str) -> list[Path]:
+    return [row["resolved_path"] for row in _relationship_route_records(root, family, endpoint_column)]
 
 
 def _table_source(table: str, *, loc_id: str | None = None) -> str:
@@ -1357,19 +1368,55 @@ def relationships_for_loc_id(
         requested_limit = max(1, int(limit))
         def selected_rows(column: str) -> list[dict[str, Any]]:
             endpoint = "source_family" if column == "source_loc_id" else "target_family"
-            path = _table_source_for_roots(
-                "relationships", roots,
-                relationship_family=family or None,
-                relationship_endpoint=endpoint,
-            )
-            if not path:
-                return []
-            cursor = connection.execute(
-                f"SELECT * FROM read_parquet({path}, union_by_name=True) WHERE {column} = ? LIMIT ?",
-                [str(loc_id), requested_limit],
-            )
-            columns = [item[0] for item in cursor.description]
-            return [dict(zip(columns, row)) for row in cursor.fetchall()]
+            rows: list[dict[str, Any]] = []
+            for root in roots:
+                for route in _relationship_route_records(root, family, endpoint):
+                    path = route["resolved_path"]
+                    columns = set(parquet_columns(path))
+                    source = f"['{_sql_path(path)}']"
+                    spine_parent = route.get("strict_parent") is True and route.get("evidence_class") == "admin_spine_parent_column"
+                    if not spine_parent and {"source_loc_id", "target_loc_id"} <= columns:
+                        cursor = connection.execute(
+                            f"SELECT * FROM read_parquet({source}) WHERE {column} = ? LIMIT ?",
+                            [str(loc_id), requested_limit],
+                        )
+                        names = [item[0] for item in cursor.description]
+                        rows.extend(dict(zip(names, values)) for values in cursor.fetchall())
+                    elif spine_parent and {"loc_id", "parent_id", "admin_level", "parent_admin_level"} <= columns:
+                        # The graph's strict Admin parent partition references
+                        # the spine bank itself. Its edge is loc_id -> parent_id.
+                        predicate = "loc_id" if column == "source_loc_id" else "parent_id"
+                        selected = [name for name in ("loc_id", "parent_id", "admin_level", "parent_admin_level",
+                                                      "source_vintage", "valid_from", "valid_to", "source_system") if name in columns]
+                        cursor = connection.execute(
+                            f"SELECT {', '.join(selected)} FROM read_parquet({source}) WHERE {predicate} = ? LIMIT ?",
+                            [str(loc_id), requested_limit],
+                        )
+                        names = [item[0] for item in cursor.description]
+                        for values in cursor.fetchall():
+                            row = dict(zip(names, values))
+                            child = str(row.get("loc_id") or "")
+                            parent = str(row.get("parent_id") or "")
+                            if not child or not parent:
+                                continue
+                            rows.append({
+                                "relationship_id": f"strict_parent:{child}:{parent}",
+                                "source_loc_id": child,
+                                "target_loc_id": parent,
+                                "source_family": f"admin_{row['admin_level']}",
+                                "target_family": f"admin_{row['parent_admin_level']}",
+                                "relationship_type": "strict_parent",
+                                "relationship_subtype": "admin_spine_parent",
+                                "relationship_vintage": row.get("source_vintage"),
+                                "valid_from": row.get("valid_from"),
+                                "valid_to": row.get("valid_to"),
+                                "authority": row.get("source_system"),
+                            })
+                    else:
+                        raise ReferenceRouteUnavailable(f"relationship partition has no supported edge columns: {path}")
+                    if len(rows) >= requested_limit:
+                        return rows[:requested_limit]
+            return rows
 
         if direction == "outgoing":
             rows = selected_rows("source_loc_id")
@@ -1385,5 +1432,94 @@ def relationships_for_loc_id(
             str(row.get("relationship_id") or ""),
         ))
         return rows[:requested_limit]
+    finally:
+        connection.close()
+
+
+def relationships_between_loc_ids(left_loc_id: str, right_loc_id: str, *, limit: int = 20) -> list[dict[str, Any]]:
+    """Read only declared graph partitions for an exact pair, in either direction."""
+    left = str(left_loc_id).strip().upper()
+    right = str(right_loc_id).strip().upper()
+    if not left or not right or not reference_graph_available():
+        return []
+    nodes = {loc_id: identity(loc_id) or {} for loc_id in (left, right)}
+    families = {}
+    for loc_id, node in nodes.items():
+        implementation = str(node.get("family") or "")
+        families[loc_id] = implementation if implementation.startswith("admin_") else str(node.get("geography_family") or implementation)
+    if not all(families.values()):
+        return []
+    right_roots = set(graph_roots_for_loc_id(right))
+    roots = [root for root in graph_roots_for_loc_id(left) if root in right_roots]
+    if not roots:
+        return []
+    requested_limit = max(1, min(int(limit), 100))
+    scan_limit = requested_limit + 1
+    selected: list[dict[str, Any]] = []
+    connection = _connection()
+    try:
+        for source_id, target_id in ((left, right), (right, left)):
+            for root in roots:
+                index_path = root / PARTITION_INDEXES["relationships"]
+                if not index_path.is_file() and not is_cloud_mode():
+                    raise ReferenceRouteUnavailable(f"relationship routing index unavailable: {index_path}")
+                filters = [("source_family", "=", families[source_id]),
+                           ("target_family", "=", families[target_id])]
+                if index_path.is_file():
+                    routes = pq.read_table(index_path,
+                                           columns=["path", "evidence_class", "strict_parent"],
+                                           filters=filters).to_pylist()
+                else:
+                    frame = select_rows(index_path,
+                                        columns=["path", "evidence_class", "strict_parent"],
+                                        exact_filters=dict((key, value) for key, _operator, value in filters))
+                    routes = frame.to_dict("records")
+                path_map = _partition_source_map(str(root), "relationships")
+                for route in routes:
+                    relative = str(route.get("path") or "")
+                    if not relative or relative not in path_map:
+                        raise ReferenceRouteUnavailable("relationship route references an unpinned partition")
+                    path = path_map[relative]
+                    columns = set(parquet_columns(path))
+                    source = f"['{_sql_path(path)}']"
+                    spine_parent = route.get("strict_parent") is True and route.get("evidence_class") == "admin_spine_parent_column"
+                    if spine_parent:
+                        if not {"loc_id", "parent_id", "admin_level", "parent_admin_level"} <= columns:
+                            raise ReferenceRouteUnavailable("admin spine relationship partition lacks parent columns")
+                        projected = [name for name in ("loc_id", "parent_id", "source_vintage", "valid_from", "valid_to", "source_system") if name in columns]
+                        cursor = connection.execute(
+                            f"SELECT {', '.join(projected)} FROM read_parquet({source}) WHERE loc_id = ? AND parent_id = ? LIMIT ?",
+                            [source_id, target_id, scan_limit],
+                        )
+                        names = [item[0] for item in cursor.description]
+                        for values in cursor.fetchall():
+                            row = dict(zip(names, values))
+                            selected.append({
+                                "relationship_id": f"strict_parent:{source_id}:{target_id}",
+                                "source_loc_id": source_id, "target_loc_id": target_id,
+                                "source_family": families[source_id], "target_family": families[target_id],
+                                "relationship_type": "strict_parent", "relationship_subtype": "admin_spine_parent",
+                                "relationship_vintage": row.get("source_vintage"),
+                                "valid_from": row.get("valid_from"), "valid_to": row.get("valid_to"),
+                                "authority": row.get("source_system"),
+                            })
+                    elif {"source_loc_id", "target_loc_id"} <= columns:
+                        projected = [name for name in (
+                            "source_loc_id", "target_loc_id", "source_family", "target_family",
+                            "relationship_id", "relationship_type", "relationship_subtype",
+                            "relationship_vintage", "valid_from", "valid_to", "authority",
+                            "source_area_share", "target_area_share", "match_share", "method",
+                        ) if name in columns]
+                        cursor = connection.execute(
+                            f"SELECT {', '.join(projected)} FROM read_parquet({source}) WHERE source_loc_id = ? AND target_loc_id = ? LIMIT ?",
+                            [source_id, target_id, scan_limit],
+                        )
+                        names = [item[0] for item in cursor.description]
+                        selected.extend(dict(zip(names, values)) for values in cursor.fetchall())
+                    else:
+                        raise ReferenceRouteUnavailable("relationship partition has no supported edge columns")
+                    if len(selected) > requested_limit:
+                        raise ReferenceRouteUnavailable("exact pair has more relationship rows than the bounded comparison limit")
+        return selected
     finally:
         connection.close()

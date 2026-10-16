@@ -195,7 +195,7 @@ TOOL_ACCESS_REGISTRY: dict[str, dict] = {
         "paid_item_limit": 100,
         "notes": "Initial technical rollout is bounded to one Admin1 partition and 100 points; payment policy comes later.",
     },
-    "get_geometry": {
+    "get_shape": {
         "family": FAMILY_GEOGRAPHY,
         "capability_id": "geometry_lookup",
         "pricing": PRICING_BY_MATERIAL,
@@ -346,6 +346,11 @@ TOOL_ACCESS_REGISTRY: dict[str, dict] = {
     "get_pack": {
         "family": FAMILY_DISCOVERY,
         "capability_id": "pack_detail_discovery",
+        "pricing": PRICING_FREE,
+    },
+    "get_geography": {
+        "family": FAMILY_DISCOVERY,
+        "capability_id": "geography_metadata_discovery",
         "pricing": PRICING_FREE,
     },
     "get_live_earthquake_events": {

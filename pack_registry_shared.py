@@ -366,11 +366,12 @@ PACK_REGISTRY: dict[str, dict] = {
         "mcp_tool_allowlist": (
             "get_catalog",
             "get_pack",
+            "get_geography",
             "identify_dataset_geography",
             "identify_reference_system",
             "convert_reference",
             "compare_geographies",
-            "get_geometry",
+            "get_shape",
             "resolve_point",
             "resolve_deep_point",
             "get_loc_id_info",
@@ -395,12 +396,13 @@ PACK_REGISTRY: dict[str, dict] = {
         "tool_summaries": (
             {"name": "get_tool_help", "summary": "per-tool contracts plus topic-level workflows and the loc_id mental model"},
             {"name": "get_catalog", "summary": "discover geometry families and the countries where each exists"},
-            {"name": "get_pack", "summary": "inspect one geometry family globally or within one country"},
+            {"name": "get_pack", "summary": "inspect one selected data pack"},
+            {"name": "get_geography", "summary": "inspect one family across scopes or one scope across families and years"},
             {"name": "identify_dataset_geography", "summary": "bounded table-column samples -> ranked geography column, country, level, and reference binding"},
             {"name": "identify_reference_system", "summary": "unknown or declared identifiers -> ranked reference systems and matching geometry banks"},
             {"name": "convert_reference", "summary": "one reference or reference batch -> loc_id by default, or any target system through loc_id"},
             {"name": "compare_geographies", "summary": "two loc_ids -> supported containment/common-ancestry and temporal-validity evidence"},
-            {"name": "get_geometry", "summary": "loc_id, loc_ids, or admin scope -> available/missing shape preflight, metadata, and optional polygons"},
+            {"name": "get_shape", "summary": "exact loc_id or loc_ids -> shape metadata and optional polygons"},
             {"name": "resolve_point", "summary": "one point or point array -> compact Admin 0-3 chains and Admin 1 routing keys"},
             {"name": "resolve_deep_point", "summary": "one point or scoped point array + one Admin 1 loc_id -> compact Admin 4-6 chains"},
             {"name": "get_loc_id_info", "summary": "loc_id or loc_id array -> available data packs and geometry families, with executable next calls"},
@@ -410,7 +412,7 @@ PACK_REGISTRY: dict[str, dict] = {
         "display_name": "Reverse Geocoding",
         "kind": "tool_family_alias",
         "pricing": "mixed",
-        "mcp_tool_allowlist": ("get_catalog", "get_pack", "resolve_point", "resolve_deep_point"),
+        "mcp_tool_allowlist": ("get_catalog", "get_geography", "resolve_point", "resolve_deep_point"),
         "mcp_name": "com.daedalmap/reverse-geocoding",
         "mcp_version": "1.4.2",
         "mcp_title": "DaedalMap Reverse Geocoding (coordinates to loc_id)",
@@ -437,14 +439,15 @@ PACK_REGISTRY: dict[str, dict] = {
         "mcp_tool_allowlist": (
             "get_catalog",
             "get_pack",
-            "get_geometry",
+            "get_geography",
+            "get_shape",
             "compare_geographies",
             "get_loc_id_info",
         ),
         "mcp_name": "com.daedalmap/boundaries",
         "mcp_version": "1.3.2",
         "mcp_title": "DaedalMap Administrative Boundaries (loc_id to polygon)",
-        "mcp_description": "Inspect loc_id identity and relationships, then retrieve bounded boundary metadata, bounding boxes, centroids, or polygons for exact loc_ids and supported administrative scopes.",
+        "mcp_description": "Inspect loc_id identity and relationships, then retrieve bounded boundary metadata, bounding boxes, centroids, or polygons for exact loc_ids.",
         "registry_meta": {
             "categories": ["geospatial", "boundaries", "data"],
             "highlights": [
@@ -453,9 +456,9 @@ PACK_REGISTRY: dict[str, dict] = {
                 "Clip or index your own grid/raster data against administrative areas",
             ],
         },
-        "routing": {"preferred_tool": "get_geometry"},
+        "routing": {"preferred_tool": "get_shape"},
         "tool_summaries": (
-            {"name": "get_geometry", "summary": "exact loc_ids or admin scope -> availability, shape metadata, and optional polygons"},
+            {"name": "get_shape", "summary": "exact loc_ids -> availability, shape metadata, and optional polygons"},
             {"name": "compare_geographies", "summary": "two loc_ids -> supported containment/common-ancestry and temporal-validity evidence"},
             {"name": "get_loc_id_info", "summary": "loc_id or loc_id array -> available data packs and geometry families, with executable next calls"},
         ),
@@ -568,10 +571,10 @@ def tool_family_pack_detail(pack_id: str | None) -> dict:
     start_here: list[str]
     important_rules: list[str]
     if preferred_tool == "get_catalog":
-        first_arguments = {"catalog": "geometry", "detail": "lite"}
+        first_arguments = {"catalog": "geometry"}
         start_here = [
-            "Call get_catalog with catalog='geometry' to see each geometry family and the countries where it exists.",
-            "Call get_pack for one family; add country_scope only when country-specific versions, vintages, levels, or artifacts are needed.",
+            "Call get_catalog with catalog='geometry' to list family and scope IDs.",
+            "Call get_geography with one family_id to see its scopes, or one scope_id to see its families and Admin spine coverage.",
             "Use identify_dataset_geography when the caller has a table sample but has not selected or classified its geography column.",
             "Use identify_reference_system when the caller has identifier values but needs to discover or verify their system, level, vintage, and shape bank. Translate natural language into the strict schema first and preserve identifiers as strings with leading zeros.",
             "Use convert_reference for outside identifiers or names; omit to_system to return loc_id, or provide it for another system.",
@@ -580,12 +583,12 @@ def tool_family_pack_detail(pack_id: str | None) -> dict:
             "These are direct utility tools, not a get_data pack; discovery and small calls are free, while hosted resolve_point arrays follow the applicable access policy.",
             "loc_id is the reserve identifier: generic conversions should flow X -> loc_id -> Y.",
             "Use get_catalog for live catalog-backed family discovery instead of assuming a fixed list of countries or admin depths.",
-            "Use get_pack for reference-system and bridge detail after selecting a family and, when needed, a country.",
+            "Use get_geography for family/scope coverage; use get_loc_id_info for exact known-ID references.",
             "Use identify_dataset_geography for neutral table samples; callers must not hard-code country or reference-system eligibility before that call.",
             "Use identify_reference_system before bulk conversion when geography identifiers are unknown or only informally declared.",
             "Use convert_reference for ZIP/ZCTA, tribal-area, NWS public forecast-zone, NWS fire weather-zone, admin-name, and named-geometry inputs.",
             "Use get_loc_id_info with include_references=true for reverse lookup from an existing loc_id to overlapping or equivalent external references.",
-            "Use get_geometry only when geometry metadata, bbox, centroid, or polygon is needed.",
+            "Use get_shape only when geometry metadata, bbox, centroid, or polygon is needed.",
             "Use convert_reference for both side-chain-to-admin and admin-to-side-chain conversions.",
         ]
     elif preferred_tool == "resolve_point":
@@ -593,21 +596,21 @@ def tool_family_pack_detail(pack_id: str | None) -> dict:
         start_here = [
             "Call resolve_point first when you have coordinates; its compact stack is the normal answer.",
             "Take the returned deepest_resolved_loc_id or any level from the stack for filtering.",
-            "Only when more detail is requested, pass all stack loc_ids to get_loc_id_info; call get_geometry separately for shapes.",
+            "Only when more detail is requested, pass all stack loc_ids to get_loc_id_info; call get_shape separately for shapes.",
         ]
         important_rules = [
             "These are direct utility tools, not a get_data pack; bulk throughput uses the points input on resolve_point or resolve_deep_point.",
             "Coordinates must be WGS84 decimal degrees.",
             "Use resolve_point for one coordinate or a shallow array. Use resolve_deep_point for one coordinate or an array already split by Admin 1, with one shallow_loc_id per call.",
             "A mixed-vintage point chain is context. get_loc_id_info hierarchy and resolve_loc_id_scope follow strict stored parentage within a coherent release.",
-            "get_geometry returns bbox and centroid by default; request include_polygon only when you need the full geometry payload.",
+            "get_shape returns bbox and centroid by default; request include_polygon only when you need the full geometry payload.",
             "Use convert_reference for ZIP/ZCTA, tribal-area, NWS public forecast-zone, or NWS fire weather-zone conversions in either direction.",
             "Use get_loc_id_info for chain details and set include_references=true only for attached or overlapping reference systems.",
         ]
-    elif preferred_tool == "get_geometry":
+    elif preferred_tool == "get_shape":
         first_arguments = {"loc_id": "USA-CA-037"}
         start_here = [
-            "Call get_geometry when you already have a loc_id and need its extent.",
+            "Call get_shape when you already have a loc_id and need its extent.",
             "Use bbox and centroid for lightweight indexing and clipping.",
             "Request include_polygon only when you need the exact perimeter.",
         ]
@@ -615,8 +618,8 @@ def tool_family_pack_detail(pack_id: str | None) -> dict:
             "These are free utility tools, not a get_data pack.",
             "Use canonical loc_ids such as USA, CAN-BC, or USA-CA-037.",
             "BBox/centroid is the default response shape because full polygons can be large.",
-            "Use get_geometry with include_polygon=false to check larger shape lists without reading polygon coordinates.",
-            "Use get_loc_id_info for hierarchy, lifecycle, catalog coverage, provenance, or non-geometry references; get_geometry stays shape-focused.",
+            "Use get_shape with include_polygon=false to check larger shape lists without reading polygon coordinates.",
+            "Use get_loc_id_info for hierarchy, lifecycle, catalog coverage, provenance, or non-geometry references; get_shape stays shape-focused.",
         ]
     else:
         first_arguments = {"loc_id": "USA-CA-037"}
@@ -640,12 +643,12 @@ def tool_family_pack_detail(pack_id: str | None) -> dict:
             {
                 "question": "What geometry coverage does DaedalMap expose right now?",
                 "tool": "get_catalog",
-                "arguments": {"catalog": "geometry", "detail": "lite"},
+                "arguments": {"catalog": "geometry"},
             },
             {
                 "question": "Which countries have postal geography?",
-                "tool": "get_pack",
-                "arguments": {"catalog": "geometry", "pack_id": "postal_area", "detail": "lite"},
+                "tool": "get_geography",
+                "arguments": {"family_id": "postal_area"},
             },
             {
                 "question": "Do these values match 2020 US Census tract GEOIDs and a shape bank?",

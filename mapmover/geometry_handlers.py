@@ -1529,6 +1529,8 @@ def resolve_point_to_location(lon: float, lat: float, include_geometry: bool = T
     lat = float(lat)
 
     indexed_matches = resolve_global_admin0_query_points([{"lon": lon, "lat": lat}])
+    # MCP_UPGRADE_REMOVE: broad global-bank containment fallback. Delete only
+    # after the selected Admin0 point index passes coastal/island parity.
     if indexed_matches is None or indexed_matches[0] is None:
         country_df = load_global_countries_frame()
         if country_df is None or country_df.empty:
@@ -1794,6 +1796,8 @@ def resolve_points_to_locations(
     stage_started = time.perf_counter()
     if scope_iso3:
         identities = load_global_admin0_identities([scope_iso3])
+        # MCP_UPGRADE_REMOVE: broad global-bank identity fallback for layouts
+        # without the admitted compact Admin0 identity index.
         if identities is None:
             country_df = load_global_countries_frame()
             _add_timing_ms(timing_ms, "global_country_fallback_load_ms", stage_started)
@@ -1819,6 +1823,8 @@ def resolve_points_to_locations(
         country_matches = resolve_global_admin0_query_points(normalized_points)
         used_predicate_layout = country_matches is not None
         predicate_miss_country_df = None
+        # MCP_UPGRADE_REMOVE: broad global-bank point fallback while selected
+        # Admin0 point coverage and hosted parity are still being closed.
         if country_matches is None:
             country_df = load_global_countries_frame()
             _add_timing_ms(timing_ms, "global_country_fallback_load_ms", stage_started)
@@ -1999,6 +2005,9 @@ def resolve_points_to_locations(
         if not country_items:
             continue
 
+        # MCP_UPGRADE_REMOVE: shallow Admin1-2 legacy country-bank point route.
+        # Delete after admitted global Full coverage replaces these bank reads
+        # and country/coast/border parity passes for supported scopes.
         min_lon = min(float(item["lon"]) for item in country_items)
         max_lon = max(float(item["lon"]) for item in country_items)
         min_lat = min(float(item["lat"]) for item in country_items)
@@ -4233,10 +4242,9 @@ def _geometry_metadata_row(row) -> dict:
         "bbox_min_lat": row.get("bbox_min_lat"),
         "bbox_max_lon": row.get("bbox_max_lon"),
         "bbox_max_lat": row.get("bbox_max_lat"),
-        # Reaching this function means an exact row was returned by a geometry
-        # bank. Older banks may omit the availability boolean even though the
-        # shape column is present; do not force a polygon read just to rediscover
-        # that attachment.
+        # MCP_UPGRADE_REMOVE: older banks omit row-level shape availability.
+        # Replace this optimistic default with a verified has_shape/has_polygon
+        # field in every selected bank and a bounded exact-row legacy probe.
         "has_polygon": bool(declared_has_polygon) if declared_has_polygon is not None else True,
         "iso_a3": row.get("iso_a3"),
         "valid_from": _geometry_metadata_value(row, "valid_from", "valid_from_date"),
@@ -4360,6 +4368,9 @@ def get_selection_geometry_metadata(loc_ids: list) -> list[dict]:
         loc_id for loc_id in requested_ids
         if loc_id not in query_layout_ids and loc_id not in direct_family_ids
     ]
+    # MCP_UPGRADE_REMOVE: this metadata projection still decodes exact graph
+    # shapes inside load_reference_graph_geometry. Replace with a pinned
+    # identity/shape-index metadata route before calling it shape-free.
     reference_df = (
         load_reference_graph_geometry(graph_requests, columns=GEOMETRY_METADATA_COLUMNS)
         if graph_requests else

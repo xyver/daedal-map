@@ -6,7 +6,6 @@ import pandas as pd
 from shapely.geometry import Polygon, box, mapping
 
 from mapmover.runtime.family_point_resolution import (
-    _representation_manifest_cached,
     family_artifacts,
     normalize_requested_family,
     resolve_family_points,
@@ -15,16 +14,6 @@ from mapmover.runtime.family_point_resolution import (
 
 
 class FamilyPointResolutionTests(unittest.TestCase):
-    def test_cloud_family_lookup_does_not_probe_unpublished_download_manifest(self):
-        with (
-            patch("mapmover.runtime.family_point_resolution.get_data_plane_mode", return_value="cloud"),
-            patch("mapmover.runtime.family_point_resolution.read_artifact_json") as read,
-        ):
-            _representation_manifest_cached.cache_clear()
-            self.assertEqual(_representation_manifest_cached("CAN", 1), {})
-            read.assert_not_called()
-            _representation_manifest_cached.cache_clear()
-
     def test_cancelled_predicate_route_stops_before_next_file_or_shapes(self):
         stop_event = threading.Event()
 
@@ -60,17 +49,17 @@ class FamilyPointResolutionTests(unittest.TestCase):
             self.assertEqual(shallow_scope("USA-TX-201"), ("USA", "USA-TX", None))
         route.assert_called_once_with("USA", ["USA-TX-201"])
 
-    def test_manifest_source_family_names_route_to_canonical_catalog_families(self):
-        manifest = {"artifacts": [
-            {"family": "named_geographical_feature", "role": "query_exact_predicate_index", "path": "named.index.parquet", "rows": 2},
-            {"family": "named_geographical_feature", "role": "query_exact_geometry", "path": "named.parquet"},
-            {"family": "map_grid", "role": "query_exact_predicate_index", "path": "grid.index.parquet", "rows": 3},
-            {"family": "map_grid", "role": "query_exact_geometry", "path": "grid.parquet"},
+    def test_published_bank_family_names_route_to_canonical_catalog_families(self):
+        catalog = {"geometry_banks": [
+            {"scope": "CAN", "family": family, "geometry_path": path,
+             "bank_role": "graph_ready_sidechain", "row_count": count,
+             "material_policy": {"hosted_access": {"publication_ready": True, "paid_allowed": True}}}
+            for family, path, count in (
+                ("named_geographical_feature", "geometry/named.parquet", 2),
+                ("map_grid", "geometry/grid.parquet", 3),
+            )
         ]}
-        with (
-            patch("mapmover.runtime.family_point_resolution.representation_manifest", return_value=manifest),
-            patch("mapmover.runtime.family_point_resolution.load_geometry_catalog", return_value={}),
-        ):
+        with patch("mapmover.runtime.family_point_resolution.load_geometry_catalog", return_value=catalog):
             artifacts = family_artifacts("CAN")
 
         self.assertNotIn("named_geographical_feature", artifacts)
@@ -78,7 +67,7 @@ class FamilyPointResolutionTests(unittest.TestCase):
         self.assertEqual(artifacts["named_feature"]["shape_count"], 2)
         self.assertEqual(artifacts["reference_grid"]["shape_count"], 3)
 
-    def test_published_catalog_banks_fallback_when_download_manifest_is_absent(self):
+    def test_published_catalog_banks_are_the_selected_route(self):
         catalog = {"geometry_banks": [{
             "scope": "CAN",
             "family": "postal_area",
@@ -87,10 +76,7 @@ class FamilyPointResolutionTests(unittest.TestCase):
             "material_policy": {"hosted_access": {"publication_ready": True, "paid_allowed": True}},
             "row_count": 10,
         }]}
-        with (
-            patch("mapmover.runtime.family_point_resolution.representation_manifest", return_value={}),
-            patch("mapmover.runtime.family_point_resolution.load_geometry_catalog", return_value=catalog),
-        ):
+        with patch("mapmover.runtime.family_point_resolution.load_geometry_catalog", return_value=catalog):
             artifacts = family_artifacts("CAN")
 
         self.assertEqual(artifacts["postal_area"]["predicate_paths"], [catalog["geometry_banks"][0]["geometry_path"]])
@@ -226,6 +212,25 @@ class FamilyPointResolutionTests(unittest.TestCase):
         self.assertEqual(result["status"], "family_lookup_error")
         read.assert_not_called()
         graph.assert_not_called()
+
+    def test_multiframe_layout_without_temporal_consumer_fails_before_index_read(self):
+        catalog = {
+            "runtime_query_layouts": {"family_points": {"USA": {"watershed": {
+                "country": "USA", "family": "watershed", "schema_version": "0.3.0",
+                "source_release_id": "usa_test", "index_path": "multi_frame.parquet",
+            }}}},
+            "country_profiles": [{"country_code": "USA", "active_release": {"release_id": "usa_test"}}],
+        }
+        with (
+            patch("mapmover.runtime.family_point_resolution.load_geometry_catalog", return_value=catalog),
+            patch("mapmover.runtime.family_point_resolution.country_capability_record",
+                  return_value={"available_family_ids": ["watershed"]}),
+            patch("mapmover.runtime.family_point_resolution.family_artifacts", return_value={}),
+            patch("mapmover.runtime.family_point_resolution.read_bbox_candidates_for_points") as read,
+        ):
+            result = resolve_family_points("USA", ["watershed"], [{"lon": 1, "lat": 1}])[0]["watershed"]
+        self.assertEqual(result["error"]["code"], "temporal_selector_unavailable")
+        read.assert_not_called()
 
     def test_zero_bbox_candidates_do_not_open_shape_bank(self):
         with (

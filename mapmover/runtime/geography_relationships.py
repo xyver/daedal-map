@@ -1,4 +1,4 @@
-"""Spatial and temporal relationships between canonical geographic identities.
+"""Recorded and temporal relationships between canonical geographic identities.
 
 The public ``compare_geographies`` tool is deliberately loc_id-keyed.  Name and
 outside-code resolution remains the responsibility of ``resolve_reference``;
@@ -10,9 +10,6 @@ from __future__ import annotations
 from copy import deepcopy
 from datetime import date
 from typing import Any, Callable
-
-from shapely import make_valid
-from shapely.geometry import shape
 
 from .geography_reference import canonicalize_loc_id, classify_loc_id_family
 
@@ -249,12 +246,9 @@ def _identity_state(loc_id: str, when: date | None) -> dict[str, Any]:
     if historical:
         return historical
     canonical = canonicalize_loc_id(loc_id)
-    try:
-        from .reference_graph import identity_at
+    from .reference_graph import identity_at
 
-        graph_identity = identity_at(canonical, when)
-    except Exception:
-        graph_identity = None
+    graph_identity = identity_at(canonical, when)
     if graph_identity:
         valid_at = _valid_on(graph_identity, when)
         return {
@@ -279,73 +273,8 @@ def _identity_state(loc_id: str, when: date | None) -> dict[str, Any]:
     }
 
 
-def _apply_geometry_validity(identity: dict[str, Any], geometry: dict[str, Any], when: date | None) -> None:
-    """Use bank-row validity when the identity registry has no stronger clock."""
-    if identity.get("valid_at_requested_time") is not None or when is None:
-        return
-    valid_from = geometry.get("valid_from")
-    valid_to = geometry.get("valid_to")
-    if valid_from in (None, "") and valid_to in (None, ""):
-        return
-    start = _parse_date(valid_from, field="geometry.valid_from")
-    end = _parse_date(valid_to, field="geometry.valid_to")
-    identity["valid_from"] = valid_from
-    identity["valid_to"] = valid_to
-    identity["valid_at_requested_time"] = (start is None or when >= start) and (end is None or when < end)
-    identity["lifecycle_status"] = "bank_versioned"
-    identity["temporal_confidence"] = "bank_declared"
-    identity["geometry_vintage"] = geometry.get("geometry_vintage")
-    identity["bank_id"] = geometry.get("bank_id")
-
-
-def _geodesic_area_km2(geometry: Any) -> float | None:
-    if geometry is None or geometry.is_empty:
-        return 0.0
-    try:
-        from pyproj import Geod
-
-        area, _perimeter = Geod(ellps="WGS84").geometry_area_perimeter(geometry)
-        return abs(float(area)) / 1_000_000.0
-    except Exception:
-        return None
-
-
-def _spatial_relationship(left_geometry: Any, right_geometry: Any) -> dict[str, Any]:
-    left = make_valid(shape(left_geometry)) if isinstance(left_geometry, dict) else left_geometry
-    right = make_valid(shape(right_geometry)) if isinstance(right_geometry, dict) else right_geometry
-    intersection = left.intersection(right)
-    if left.equals(right):
-        relation = "equals"
-    elif left.disjoint(right):
-        relation = "disjoint"
-    elif left.touches(right):
-        relation = "touches"
-    elif left.within(right):
-        relation = "within"
-    elif left.contains(right):
-        relation = "contains"
-    elif left.overlaps(right):
-        relation = "overlaps"
-    else:
-        relation = "intersects"
-    left_area = _geodesic_area_km2(left)
-    right_area = _geodesic_area_km2(right)
-    intersection_area = _geodesic_area_km2(intersection)
-    return {
-        "spatial_relation": relation,
-        "intersects": not left.disjoint(right),
-        "left_inside_right": left.within(right) or left.equals(right),
-        "right_inside_left": left.contains(right) or left.equals(right),
-        "intersection_area_km2": intersection_area,
-        "left_area_km2": left_area,
-        "right_area_km2": right_area,
-        "left_area_share": (intersection_area / left_area) if intersection_area is not None and left_area else None,
-        "right_area_share": (intersection_area / right_area) if intersection_area is not None and right_area else None,
-        "de9im": left.relate(right),
-    }
-
-
-def _admin_spine_relationship(left_loc_id: str, right_loc_id: str) -> dict[str, Any] | None:
+def _admin_spine_relationship(left_loc_id: str, right_loc_id: str,
+                              left_identity: dict[str, Any], right_identity: dict[str, Any]) -> dict[str, Any] | None:
     """Return relationship evidence encoded by canonical Admin Spine loc_ids.
 
     Administrative loc_ids are hierarchical paths.  Prefix containment is
@@ -355,8 +284,9 @@ def _admin_spine_relationship(left_loc_id: str, right_loc_id: str) -> dict[str, 
     """
     left = canonicalize_loc_id(left_loc_id)
     right = canonicalize_loc_id(right_loc_id)
-    admin_families = {"admin_0", "admin_local", "admin_geometry"}
-    if classify_loc_id_family(left) not in admin_families or classify_loc_id_family(right) not in admin_families:
+    left_family = str(left_identity.get("family") or "")
+    right_family = str(right_identity.get("family") or "")
+    if not (left_family.startswith("admin_") and right_family.startswith("admin_")):
         return None
 
     left_parts = left.split("-")
@@ -411,47 +341,55 @@ def _admin_spine_relationship(left_loc_id: str, right_loc_id: str) -> dict[str, 
     }
 
 
-def _direct_crosswalk_relationship(
-    left_loc_id: str,
-    right_loc_id: str,
-    *,
-    reference_fetcher: Callable[[str], dict[str, Any]],
-) -> dict[str, Any] | None:
-    """Find direct published crosswalk evidence before loading polygons."""
+def _direct_graph_relationship(left_loc_id: str, right_loc_id: str,
+                               edges: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Describe only the relation asserted by direct selected-graph edges."""
+    if not edges:
+        return None
     left = canonicalize_loc_id(left_loc_id)
     right = canonicalize_loc_id(right_loc_id)
-    left_family = classify_loc_id_family(left)
-    right_family = classify_loc_id_family(right)
-    if not left_family or not right_family or left_family == right_family:
+    claims: set[str] = set()
+    evidence = []
+    for edge in edges:
+        source = canonicalize_loc_id(str(edge.get("source_loc_id") or ""))
+        target = canonicalize_loc_id(str(edge.get("target_loc_id") or ""))
+        if {source, target} != {left, right}:
+            continue
+        kind = str(edge.get("relationship_type") or "").strip().lower()
+        direction = "left_to_right" if source == left else "right_to_left"
+        if kind in {"strict_parent", "contained_by", "within"}:
+            claims.add("within" if direction == "left_to_right" else "contains")
+        elif kind in {"contains", "parent_of"}:
+            claims.add("contains" if direction == "left_to_right" else "within")
+        elif kind in {"equals", "equivalent_identity"}:
+            claims.add("equals")
+        elif kind in {"disjoint", "no_overlap"}:
+            claims.add("no_overlap")
+        elif "overlap" in kind or kind == "intersects":
+            claims.add("overlaps")
+        evidence.append({
+            "source_loc_id": source, "target_loc_id": target,
+            "relationship_id": edge.get("relationship_id"),
+            "relationship_type": edge.get("relationship_type"),
+            "relationship_subtype": edge.get("relationship_subtype"),
+            "relationship_vintage": edge.get("relationship_vintage"),
+            "valid_from": edge.get("valid_from"), "valid_to": edge.get("valid_to"),
+            "source_area_share": edge.get("source_area_share"),
+            "target_area_share": edge.get("target_area_share"),
+            "match_share": edge.get("match_share"), "method": edge.get("method"),
+            "authority": edge.get("authority"), "direction": direction,
+        })
+    if not evidence:
         return None
-
-    for origin, target, direction in ((left, right, "left_to_right"), (right, left, "right_to_left")):
-        payload = reference_fetcher(origin)
-        for reference in payload.get("references") or []:
-            if canonicalize_loc_id(str(reference.get("value") or "")) != target:
-                continue
-            role = str(reference.get("role") or "crosswalk_relationship")
-            return {
-                "decisive": True,
-                "relationship_basis": "published_crosswalk",
-                "geometry_loaded": False,
-                "spatial_relation": "overlaps" if "overlap" in role else "crosswalk_related",
-                "intersects": True if "overlap" in role else None,
-                "crosswalk_evidence": {
-                    "direction": direction,
-                    "role": role,
-                    "system": reference.get("system"),
-                    "relationship_id": reference.get("relationship_id"),
-                    "relationship_vintage": reference.get("relationship_vintage"),
-                    "source_area_share": reference.get("source_area_share"),
-                    "target_area_share": reference.get("target_area_share"),
-                    "match_share": reference.get("match_share"),
-                    "is_primary": reference.get("is_primary"),
-                    "method": reference.get("method"),
-                    "authority": reference.get("authority"),
-                },
-            }
-    return None
+    relation = next(iter(claims)) if len(claims) == 1 else "unknown"
+    return {
+        "relationship_basis": "selected_reference_graph",
+        "geometry_loaded": False,
+        "spatial_relation": relation,
+        "intersects": (True if relation in {"equals", "within", "contains", "overlaps"}
+                       else False if relation == "no_overlap" else None),
+        "graph_evidence": evidence,
+    }
 
 
 def compare_geographies(
@@ -462,12 +400,11 @@ def compare_geographies(
     left_as_of: str | date | None = None,
     right_as_of: str | date | None = None,
     include_successors: bool = True,
-    geometry_fetcher: Callable[..., dict[str, Any]] | None = None,
     resolution_fetcher: Callable[[str], dict[str, Any]] | None = None,
     identity_fetcher: Callable[[str, date | None], dict[str, Any]] | None = None,
-    reference_fetcher: Callable[[str], dict[str, Any]] | None = None,
+    graph_fetcher: Callable[[str, str], list[dict[str, Any]]] | None = None,
 ) -> dict[str, Any]:
-    """Compare identities using hierarchy, crosswalks, then exact geometry."""
+    """Compare two identities using hierarchy and direct graph evidence only."""
     from .reference_exchange import resolve_loc_id_input
 
     resolution_fetcher = resolution_fetcher or resolve_loc_id_input
@@ -494,6 +431,12 @@ def compare_geographies(
     right_when = _parse_date(right_as_of, field="right_as_of") or common_when
     left_identity = identity_fetcher(left_id, left_when)
     right_identity = identity_fetcher(right_id, right_when)
+    if any(item.get("lifecycle_status") == "unversioned" for item in (left_identity, right_identity)):
+        return {
+            "ok": False,
+            "error": {"code": "loc_id_not_found", "message": "both loc_ids must have selected graph or admitted historical identities"},
+            "left": left_identity, "right": right_identity,
+        }
     if left_resolution.get("resolved_from_public_alias"):
         left_identity["requested_loc_id"] = left_resolution.get("requested_loc_id")
         left_identity["resolved_from_public_alias"] = True
@@ -514,7 +457,33 @@ def compare_geographies(
     else:
         temporal_relation = "coexistence_unknown"
 
-    admin_relationship = _admin_spine_relationship(left_id, right_id)
+    if left_valid is False or right_valid is False:
+        return {
+            "ok": True, "left": left_identity, "right": right_identity,
+            "temporal_relation": temporal_relation,
+            "relationship_basis": "selected_reference_graph",
+            "geometry_loaded": False,
+            "spatial_relation": "not_evaluated",
+            "reason": "one or more identities are not valid at the requested time",
+        }
+    if left_when != right_when and (left_when is not None or right_when is not None):
+        return {
+            "ok": True, "left": left_identity, "right": right_identity,
+            "temporal_relation": temporal_relation,
+            "relationship_basis": "selected_reference_graph",
+            "geometry_loaded": False, "spatial_relation": "not_evaluated",
+            "reason": "pairwise spatial relation requires one shared comparison date",
+        }
+    if left_id == right_id:
+        return {
+            "ok": True, "left": left_identity, "right": right_identity,
+            "temporal_relation": temporal_relation,
+            "relationship_basis": "same_graph_identity",
+            "geometry_loaded": False, "spatial_relation": "equals",
+            "intersects": True,
+        }
+
+    admin_relationship = _admin_spine_relationship(left_id, right_id, left_identity, right_identity)
     if admin_relationship and admin_relationship.get("decisive"):
         return {
             "ok": True,
@@ -524,88 +493,47 @@ def compare_geographies(
             **{key: value for key, value in admin_relationship.items() if key != "decisive"},
         }
 
-    if reference_fetcher is None:
-        from .reference_exchange import loc_id_references
+    if graph_fetcher is None:
+        from .reference_graph import relationships_between_loc_ids
 
-        reference_fetcher = loc_id_references
-    crosswalk_relationship = _direct_crosswalk_relationship(
-        left_id,
-        right_id,
-        reference_fetcher=reference_fetcher,
-    )
-    if crosswalk_relationship:
+        graph_fetcher = relationships_between_loc_ids
+    graph_edges = graph_fetcher(left_id, right_id)
+    if left_when is not None:
+        graph_edges = [edge for edge in graph_edges
+                       if (edge.get("valid_from") or edge.get("valid_to")) and _valid_on(edge, left_when)]
+    graph_relationship = _direct_graph_relationship(left_id, right_id, graph_edges)
+    if graph_relationship:
         return {
             "ok": True,
             "left": left_identity,
             "right": right_identity,
             "temporal_relation": temporal_relation,
-            **{key: value for key, value in crosswalk_relationship.items() if key != "decisive"},
+            **graph_relationship,
             **({
                 "hierarchy_relation": admin_relationship.get("hierarchy_relation"),
                 "common_ancestor_loc_id": admin_relationship.get("common_ancestor_loc_id"),
             } if admin_relationship else {}),
-        }
-
-    if geometry_fetcher is None:
-        from .reference_exchange import get_geometry_reference
-
-        geometry_fetcher = get_geometry_reference
-    left_geometry = geometry_fetcher(left_id, include_polygon=True)
-    right_geometry = geometry_fetcher(right_id, include_polygon=True)
-    _apply_geometry_validity(left_identity, left_geometry, left_when)
-    _apply_geometry_validity(right_identity, right_geometry, right_when)
-    left_valid = left_identity.get("valid_at_requested_time")
-    right_valid = right_identity.get("valid_at_requested_time")
-    if left_valid is False or right_valid is False:
-        temporal_relation = "one_or_more_not_valid"
-    elif left_valid is True and right_valid is True:
-        temporal_relation = "coexistent"
-    else:
-        temporal_relation = "coexistence_unknown"
-    spatial: dict[str, Any]
-    if left_valid is False or right_valid is False:
-        spatial = {
-            "spatial_relation": "not_evaluated",
-            "reason": "one or more identities are not valid at the requested time",
-        }
-    elif left_geometry.get("geometry") and right_geometry.get("geometry"):
-        left_shape = left_geometry.get("_decoded_geometry")
-        right_shape = right_geometry.get("_decoded_geometry")
-        spatial = _spatial_relationship(
-            left_shape if left_shape is not None else left_geometry["geometry"],
-            right_shape if right_shape is not None else right_geometry["geometry"],
-        )
-    else:
-        spatial = {
-            "spatial_relation": "geometry_unavailable",
-            "reason": "approved geometry is missing for one or more requested identities",
         }
     return {
         "ok": True,
         "left": left_identity,
         "right": right_identity,
         "temporal_relation": temporal_relation,
-        "relationship_basis": "exact_geometry",
-        "geometry_loaded": True,
+        "relationship_basis": "selected_reference_graph",
+        "geometry_loaded": False,
         **({
             "hierarchy_relation": admin_relationship.get("hierarchy_relation"),
             "common_ancestor_loc_id": admin_relationship.get("common_ancestor_loc_id"),
         } if admin_relationship else {}),
-        **spatial,
-        "geometry_sources": {
-            "left": {key: left_geometry.get(key) for key in ("loc_id", "name", "family", "admin_level", "has_shape", "valid_from", "valid_to", "geometry_vintage", "bank_id", "lineage")},
-            "right": {key: right_geometry.get(key) for key in ("loc_id", "name", "family", "admin_level", "has_shape", "valid_from", "valid_to", "geometry_vintage", "bank_id", "lineage")},
-        },
-        "area_share_meaning": {
-            "left_area_share": "fraction of the left geometry covered by the intersection",
-            "right_area_share": "fraction of the right geometry covered by the intersection",
-        },
+        "spatial_relation": "unknown",
+        "reason": "no direct pair relationship is published for the selected time in the selected graph; absence does not prove no overlap",
     }
 
 
 def compare_geographies_batch(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Compare many pairs with cached, lazy evidence lookups per endpoint."""
-    from .reference_exchange import get_geometry_reference, loc_id_references, resolve_loc_id_input
+    """Compare many pairs with cached identity and exact-pair graph reads."""
+    from .reference_exchange import resolve_loc_id_input
+    from .reference_graph import ReferenceRouteUnavailable, relationships_between_loc_ids
 
     requested_ids: list[str] = []
     seen_requested: set[str] = set()
@@ -617,28 +545,20 @@ def compare_geographies_batch(items: list[dict[str, Any]]) -> list[dict[str, Any
                 requested_ids.append(requested)
 
     resolutions = {requested: resolve_loc_id_input(requested) for requested in requested_ids}
-    geometries: dict[str, dict[str, Any]] = {}
     identity_cache: dict[tuple[str, date | None], dict[str, Any]] = {}
-    reference_cache: dict[str, dict[str, Any]] = {}
+    graph_cache: dict[tuple[str, str], list[dict[str, Any]]] = {}
 
     def cached_resolution(loc_id: str) -> dict[str, Any]:
         canonical = canonicalize_loc_id(loc_id)
         return resolutions.get(canonical) or resolve_loc_id_input(canonical)
 
-    def cached_geometry(loc_id: str, **_kwargs: Any) -> dict[str, Any]:
-        canonical = canonicalize_loc_id(loc_id)
-        if canonical not in geometries:
-            prepared = dict(get_geometry_reference(canonical, include_polygon=True))
-            if prepared.get("geometry"):
-                prepared["_decoded_geometry"] = make_valid(shape(prepared["geometry"]))
-            geometries[canonical] = prepared
-        return geometries[canonical]
-
-    def cached_references(loc_id: str) -> dict[str, Any]:
-        canonical = canonicalize_loc_id(loc_id)
-        if canonical not in reference_cache:
-            reference_cache[canonical] = loc_id_references(canonical, limit_per_system=100)
-        return reference_cache[canonical]
+    def cached_graph(left_loc_id: str, right_loc_id: str) -> list[dict[str, Any]]:
+        left = canonicalize_loc_id(left_loc_id)
+        right = canonicalize_loc_id(right_loc_id)
+        key = tuple(sorted((left, right)))
+        if key not in graph_cache:
+            graph_cache[key] = relationships_between_loc_ids(left, right)
+        return graph_cache[key]
 
     def cached_identity(loc_id: str, when: date | None) -> dict[str, Any]:
         key = (canonicalize_loc_id(loc_id), when)
@@ -667,11 +587,12 @@ def compare_geographies_batch(items: list[dict[str, Any]]) -> list[dict[str, Any
                 left_as_of=item.get("left_as_of"),
                 right_as_of=item.get("right_as_of"),
                 include_successors=bool(item.get("include_successors", True)),
-                geometry_fetcher=cached_geometry,
                 resolution_fetcher=cached_resolution,
                 identity_fetcher=cached_identity,
-                reference_fetcher=cached_references,
+                graph_fetcher=cached_graph,
             ))
+        except ReferenceRouteUnavailable as exc:
+            results.append({"ok": False, "error": {"code": "reference_route_unavailable", "message": str(exc)}})
         except ValueError as exc:
             results.append({
                 "ok": False,

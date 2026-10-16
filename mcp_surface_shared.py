@@ -61,9 +61,7 @@ def _data_filters_schema() -> dict:
                 "description": "Threshold filters using filterable fields or selected metric ids published by get_pack.",
             },
         },
-        # Pack-specific direct field filters remain legal, but the four shared
-        # shapes above are explicit so clients do not have to guess them.
-        "additionalProperties": scalar_or_list,
+        "additionalProperties": False,
     }
 
 
@@ -118,7 +116,17 @@ def build_mcp_instructions(*, safety_notice: str | None = None) -> str:
         "LLM translates the user's natural-language request into strict tool "
         "JSON; execution tools do not parse prose. Start with get_catalog, then "
         "get_pack before querying a new pack. Call get_tool_help before an "
-        "unfamiliar tool. On a typed error, preserve the user's intent, inspect "
+        "unfamiliar tool. When the only place input is coordinates, call "
+        "resolve_point first and use its returned country and shallow loc_id "
+        "stack to scope every later place-specific call. Only resolve_point "
+        "and resolve_deep_point accept coordinates; use the latter only with "
+        "a returned shallow_loc_id and the original point. Use "
+        "convert_reference for scoped names or outside "
+        "identifiers. identify_dataset_geography and identify_reference_system "
+        "prepare an uncertain dataset binding before conversion. Keep all "
+        "relevant returned loc_ids when place identity overlaps. Pass canonical "
+        "loc_ids to geography readers and place-filtered data calls. "
+        "On a typed error, preserve the user's intent, inspect "
         "error/guidance/clarification, correct the arguments from the schema, "
         "and ask the user only when clarification.required is true."
     )
@@ -165,43 +173,44 @@ def build_tool_definitions(*, include_paused: bool = False) -> list[dict]:
         },
         {
             "name": "get_catalog",
-            "title": "List Available Packs and Geometry Families",
-            "description": "Broad directory discovery only: use this before selecting a pack or geometry family. It lists available data packs or geometry families and supports optional coverage filtering; it does not inspect one known loc_id or return one entry's full contract. For data, loc_id plus time_range filters the directory to confirmed place-and-time coverage while keeping unknown coverage separate. Geometry results list families and release units. After choosing one result, call get_pack with that exact pack_id.",
+            "title": "List Published Packs or Geographies",
+            "description": "Choose data or geometry. Data returns pack IDs and brief labels; geometry returns family IDs and scope IDs (countries, GLOBAL, MARINE). Use get_pack for a data pack or get_geography for one family or scope. The complete catalog URL is included in the response.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "catalog": {"type": "string", "enum": ["data", "geometry"], "default": "data", "description": "Catalog family. The geography facade defaults to geometry; other facades default to data."},
-                    "detail": {"type": "string", "enum": ["lite", "full", "download"], "default": "lite", "description": "Use lite to select a pack, full for expanded metric/query inventories, or download for the complete raw catalog URL."},
-                    "country_scope": {"type": "string", "description": "Optional ISO3 focus for catalog='geometry' with detail='lite'."},
-                    "loc_id": {"type": "string", "description": "Optional DaedalMap loc_id for catalog='data'. Combine with time_range to discover packs confirmed for both place and time. For place details without pack filtering, use get_loc_id_info."},
-                    "time_range": {
-                        "type": "object",
-                        "properties": {
-                            "start": {"anyOf": [{"type": "string"}, {"type": "integer"}]},
-                            "end": {"anyOf": [{"type": "string"}, {"type": "integer"}]},
-                        },
-                        "additionalProperties": False,
-                        "description": "Optional inclusive discovery window for catalog='data'. At least one bound is required.",
-                    },
+                    "catalog": {"type": "string", "enum": ["data", "geometry"], "description": "Required directory selector."},
                 },
+                "required": ["catalog"],
                 "additionalProperties": False,
             },
             "annotations": {"readOnlyHint": True},
         },
         {
             "name": "get_pack",
-            "title": "Inspect One Selected Pack or Geometry Family",
-            "description": "Single-entry contract lookup only: use this after get_catalog and supply one exact pack_id. It returns that selected data pack's query fields and access metadata, or that selected geometry family's countries and global domains. Add country_scope or release_unit to inspect its systems, releases, vintages, levels, and artifacts. It does not list the whole catalog, inspect a place, or retrieve rows or shapes; follow next_step to the appropriate execution tool.",
+            "title": "Inspect One Data Pack",
+            "description": "After get_catalog(data), supply one exact data pack_id. Returns its metrics, time coverage, filters, and access metadata. Geometry families and scopes use get_geography.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "catalog": {"type": "string", "enum": ["data", "geometry"], "description": "Metadata family. When omitted, geometry facades default to geometry and known geometry-family ids are inferred; all other calls default to data."},
                     "pack_id": {"type": "string", "description": _pack_id_description()},
-                    "detail": {"type": "string", "enum": ["lite", "full", "download"], "default": "lite", "description": "Use lite to decide and start, full for detailed MCP query metadata, or download for the complete raw metadata file."},
-                    "country_scope": {"type": "string", "pattern": "^[A-Za-z]{3}$", "description": "Optional ISO3 country for a geometry family. Omit it to learn which countries publish the family; provide it for country-specific versions, vintages, levels, and artifacts."},
-                    "release_unit": {"type": "string", "pattern": "^[A-Za-z0-9_-]+$", "description": "Optional non-country geometry release unit such as GLOBAL or MARINE. Do not combine with country_scope."},
                 },
                 "required": ["pack_id"],
+                "additionalProperties": False,
+            },
+            "annotations": {"readOnlyHint": True},
+        },
+        {
+            "name": "get_geography",
+            "title": "Inspect One Geography Family or Scope",
+            "description": "Supply exactly one published family_id to list its scopes, or one scope_id (ISO3, GLOBAL, MARINE) to list families and administrative coverage. Optional year selects the latest known published edition no later than that year; a previous-year substitution is flagged for checking. This reads catalog metadata only, not shapes.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "family_id": {"type": "string", "minLength": 1},
+                    "scope_id": {"type": "string", "minLength": 3},
+                    "year": {"type": "integer", "minimum": 1, "maximum": 9999},
+                },
+                "oneOf": [{"required": ["family_id"]}, {"required": ["scope_id"]}],
                 "additionalProperties": False,
             },
             "annotations": {"readOnlyHint": True},
@@ -235,7 +244,7 @@ def build_tool_definitions(*, include_paused: bool = False) -> list[dict]:
         {
             "name": "resolve_point",
             "title": "Resolve Point(s) (Shallow)",
-            "description": "Compact first-pass reverse geocoding for one WGS84 coordinate or a bounded point array. Returns the deepest available administrative loc_id chain: the global baseline reaches Admin 2, while adopted country query banks may reach Admin 3. It does not open deep partitions or side-family shape banks. Use a returned shallow loc_id with resolve_deep_point for Admin 4-6 or one explicit family. Single and bulk requests share this contract; access limits are based on point count.",
+            "description": "Primary entry for a bare WGS84 coordinate or bounded point array. Finds the country and returns the deepest available shallow administrative loc_id chain: the global baseline reaches Admin 2, while adopted country query banks may reach Admin 3. Carry its country and loc_ids into later place-specific calls. It does not open deep partitions or side-family shape banks. Use a returned shallow loc_id with resolve_deep_point for Admin 4-6 or one explicit family. Single and bulk requests share this contract; access limits are based on point count.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -257,11 +266,6 @@ def build_tool_definitions(*, include_paused: bool = False) -> list[dict]:
                         },
                         "description": "Bounded WGS84 point array. Use top-level lat/lon instead for one point.",
                     },
-                    "target_admin_level": {
-                        "anyOf": [{"type": "string"}, {"type": "integer"}],
-                        "description": "Optional exact requested level from Admin 0-3. Omit it to return the deepest available shallow level.",
-                    },
-                    "include_marine_context": {"type": "boolean", "default": False, "description": "Opt in to parallel Marine overlaps for land matches. Defaults to false so ordinary administrative resolution stays lightweight. Offshore Marine fallback still applies."},
                     "batch_id": {"type": "string", "description": "Optional caller-supplied batch id echoed for point arrays."},
                     "request_id": {"type": "string", "description": "Optional caller-supplied request id for tracing."},
                 },
@@ -276,7 +280,7 @@ def build_tool_definitions(*, include_paused: bool = False) -> list[dict]:
         {
             "name": "resolve_deep_point",
             "title": "Resolve Point(s) (Deep)",
-            "description": "Second-pass resolution for one WGS84 coordinate or a bounded point array. Supply one shared shallow_loc_id returned by resolve_point and one canonical family from get_catalog(catalog='geometry'). family defaults to administrative; shape-backed families use direct bbox-to-exact-shape lookup without crosswalks. Single and bulk requests share this scoped contract.",
+            "description": "Second-pass containment only after resolve_point. Supply the original WGS84 coordinate or a bounded point array, one shared shallow_loc_id returned by resolve_point, and one canonical family from get_catalog(catalog='geometry'). family defaults to administrative; shape-backed families use direct bbox-to-exact-shape lookup without crosswalks. Single and bulk requests share this scoped contract.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -315,25 +319,17 @@ def build_tool_definitions(*, include_paused: bool = False) -> list[dict]:
         },
         {
             "name": "get_loc_id_info",
-            "title": "Inspect Known loc_id Identities",
-            "description": "Known-place navigation and enrichment tool: use only when you already have one canonical loc_id or a bounded loc_ids array. It returns identity, strict stored parentage, lifecycle, shape status, and place-specific data-pack and geometry-family availability with executable next calls. Supply as_of for a precision-aware source-release date review alert. It does not list the global catalog and does not return polygon coordinates; use get_catalog to browse everything or get_geometry for shapes. Set include_hierarchy for same-release ancestors and include_references for maintained external or cross-family connections. Historical records are never replaced automatically. No payment required.",
+            "title": "Inspect Direct loc_id Connections",
+            "description": "Look up one known loc_id or a small batch in the selected reference graph. Return its identity and directly recorded loc_id connections, with family, direction, and relationship evidence. Each ID returns at most 50 connections and an explicit has_more flag. This tool does not expand descendants, infer containment, read shapes, search catalogs, or consult external adapters. No payment required.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "loc_id": {"type": "string", "description": "DaedalMap loc_id, e.g. 'USA-CA'."},
-                    "loc_ids": {"type": "array", "items": {"type": "string"}, "description": "DaedalMap loc_ids to inspect together, including every loc_id from a resolve_point stack. Default public cap is deployment-configurable."},
-                    "as_of": {"type": "string", "description": "Optional ISO day, month, or year (YYYY-MM-DD, YYYY-MM, or YYYY). Reviews the current Full source edition and returns a Double-check date alert for coarse or stale coverage; it does not select historical geometry."},
-                    "include_hierarchy": {"type": "boolean", "description": "When true, include strict stored parent and ancestor data. This never invents a parent edge across mixed releases. Default false."},
-                    "include_references": {"type": "boolean", "description": "When true, include known external or side-chain references attached to each loc_id. Default false."},
-                    "systems": {"type": "array", "items": {"type": "string"}, "description": "Optional reference systems to include when include_references is true, such as zcta, nws_fire, overlay_tribal, or overlay_nws_public_zone."},
-                    "iso3": {"type": "string", "description": "Optional country hint for crosswalk artifacts. Defaults to the loc_id country when possible."},
-                    "target_admin_level": {"anyOf": [{"type": "string"}, {"type": "integer"}], "description": "Admin level for crosswalk-backed reverse reference lookup. Inferred when omitted."},
-                    "min_share": {"type": "number", "minimum": 0, "maximum": 1, "description": "Optional minimum target-area share for reverse overlap references."},
-                    "limit_per_system": {"type": "integer", "minimum": 1, "maximum": 100, "description": "Maximum overlap references to return per bridge/system. Default 10."},
+                    "loc_ids": {"type": "array", "minItems": 1, "maxItems": 10, "items": {"type": "string"}, "description": "Up to 10 known loc_ids, including a resolve_point stack."},
                     "batch_id": {"type": "string", "description": "Optional caller-supplied batch id for tracing."},
                     "request_id": {"type": "string", "description": "Optional caller-supplied request id for tracing."},
                 },
-                "anyOf": [
+                "oneOf": [
                     {"required": ["loc_id"]},
                     {"required": ["loc_ids"]},
                 ],
@@ -434,7 +430,7 @@ def build_tool_definitions(*, include_paused: bool = False) -> list[dict]:
         {
             "name": "convert_reference",
             "title": "Convert Geographic Reference",
-            "description": "Convert within one declared scope per call: iso3 is required and names one ISO3 country, GLOBAL, or MARINE. A batch uses one from_system, to_system, and crosswalk_id, with at most 25000 requested result rows. Convert X -> loc_id -> Y; omit to_system to enter the loc_id universe. For admin or city names use from_system admin_boundary with a country_hint inside the declared country. A published direct crosswalk uses one selected artifact; if the system pair has multiple artifacts, supply crosswalk_id from the typed ambiguity error. An exact miss ends on that artifact. Use get_pack when the family or country-specific system is unknown. The tools/list access metadata states authored free, account, and paid item allowances; active operator policy may waive payment.",
+            "description": "Convert within one declared scope per call: iso3 is required and names one ISO3 country, GLOBAL, or MARINE. A batch uses one from_system, to_system, and crosswalk_id, with at most 25000 requested result rows. Convert X -> loc_id -> Y; omit to_system to enter the loc_id universe. For admin or city names use from_system admin_boundary with a country_hint inside the declared country. A published direct crosswalk uses one selected artifact; if the system pair has multiple artifacts, supply crosswalk_id from the typed ambiguity error. An exact miss ends on that artifact. Use get_geography when family or scope coverage is unknown. The tools/list access metadata states authored free, account, and paid item allowances; active operator policy may waive payment.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -490,12 +486,12 @@ def build_tool_definitions(*, include_paused: bool = False) -> list[dict]:
         {
             "name": "compare_geographies",
             "title": "Compare Geographic Identities",
-            "description": "Compare two geographic identities for the public guarantees implemented today: containment/common ancestry and temporal validity for the requested vintages. The response may include additional maintained evidence, but callers must not rely on deeper topology or relationship semantics as a stable contract until that review is complete. Use convert_reference first for names or outside identifiers. No payment required.",
+            "description": "Compare two known loc_ids using selected reference-graph identity and direct relationship evidence. Verified Admin ancestry can prove containment; a typed graph edge can prove only the relation it declares. An explicit negative edge returns no_overlap; a missing edge returns unknown. This tool never reads polygons or computes shape intersections. Use an external identifier bridge before this call when the input is not a loc_id. No payment required.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "left_loc_id": {"type": "string", "description": "First DaedalMap loc_id."},
-                    "right_loc_id": {"type": "string", "description": "Second DaedalMap loc_id."},
+                    "left_loc_id": {"type": "string", "minLength": 1, "description": "First DaedalMap loc_id."},
+                    "right_loc_id": {"type": "string", "minLength": 1, "description": "Second DaedalMap loc_id."},
                     "as_of": {"type": "string", "description": "ISO date or year applied to both identities."},
                     "left_as_of": {"type": "string", "description": "Optional ISO date or year for the left identity; overrides as_of."},
                     "right_as_of": {"type": "string", "description": "Optional ISO date or year for the right identity; overrides as_of."},
@@ -506,8 +502,8 @@ def build_tool_definitions(*, include_paused: bool = False) -> list[dict]:
                         "items": {
                             "type": "object",
                             "properties": {
-                                "left_loc_id": {"type": "string"},
-                                "right_loc_id": {"type": "string"},
+                                "left_loc_id": {"type": "string", "minLength": 1},
+                                "right_loc_id": {"type": "string", "minLength": 1},
                                 "as_of": {"type": "string"},
                                 "left_as_of": {"type": "string"},
                                 "right_as_of": {"type": "string"},
@@ -523,7 +519,7 @@ def build_tool_definitions(*, include_paused: bool = False) -> list[dict]:
                     "batch_id": {"type": "string", "description": "Optional caller-supplied batch id for tracing."},
                     "request_id": {"type": "string", "description": "Optional caller-supplied request id for tracing."},
                 },
-                "anyOf": [
+                "oneOf": [
                     {"required": ["left_loc_id", "right_loc_id"]},
                     {"required": ["items"]},
                 ],
@@ -532,24 +528,14 @@ def build_tool_definitions(*, include_paused: bool = False) -> list[dict]:
             "annotations": {"readOnlyHint": True},
         },
         {
-            "name": "get_geometry",
+            "name": "get_shape",
             "title": "Retrieve Shapes for Known loc_ids",
-            "description": "Shape availability and bounded coordinate retrieval only: use when you already have exact loc_ids, or one administrative parent_loc_id plus target admin_level. The default fast preflight returns has_shape, shape metadata, centroid, and bounding box; set include_polygon=true only for GeoJSON coordinates. Use get_loc_id_info for hierarchy, identity, catalog coverage, or crosswalk facts; get_geometry does not return those place details. Administrative scope queries stay within the optimized Admin Spine layout, while independent geometry families require exact loc_ids. Historical geometry is returned first and successors are never substituted automatically. Access is selected-material dependent: tools/list metadata gives the lane ceilings, while the chosen geometry bank decides whether payment is required.",
+            "description": "Shape lookup for exact existing loc_ids only. The default returns shape availability, centroid, and bounding box; include_polygon=true adds GeoJSON coordinates. Obtain any descendant IDs before this call. Historical geometry is returned first and successors are never substituted automatically. Year selection is not yet supported.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "loc_id": {"type": "string", "description": "DaedalMap loc_id, such as USA-CA-037, USA-Z-00601, USA-NWSFZ-AKZ317, EEZ-USA, or IHO1953-240001002."},
                     "loc_ids": {"type": "array", "minItems": 1, "uniqueItems": True, "items": {"type": "string"}, "description": "Exact DaedalMap loc_ids to fetch in one call. Default public cap is deployment-configurable and lower when include_polygon is true."},
-                    "scope": {
-                        "type": "object",
-                        "properties": {
-                            "parent_loc_id": {"type": "string", "description": "Administrative parent loc_id, such as USA-TX or CAN-BC."},
-                            "admin_level": {"anyOf": [{"type": "string"}, {"type": "integer"}], "description": "Descendant level to retrieve, such as admin_2, 2, or county."},
-                            "bbox": {"anyOf": [{"type": "array", "items": {"type": "number"}, "minItems": 4, "maxItems": 4}, {"type": "string"}], "description": "Optional minLon,minLat,maxLon,maxLat intersection filter."},
-                        },
-                        "required": ["parent_loc_id", "admin_level"],
-                        "additionalProperties": False,
-                    },
                     "include_polygon": {"type": "boolean", "description": "When true, include the full GeoJSON geometry. Default false."},
                     "batch_id": {"type": "string", "description": "Optional caller-supplied batch id for tracing."},
                     "request_id": {"type": "string", "description": "Optional caller-supplied request id for tracing."},
@@ -557,7 +543,6 @@ def build_tool_definitions(*, include_paused: bool = False) -> list[dict]:
                 "oneOf": [
                     {"required": ["loc_id"]},
                     {"required": ["loc_ids"]},
-                    {"required": ["scope"]},
                 ],
                 "additionalProperties": False,
             },
