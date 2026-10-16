@@ -683,6 +683,30 @@ class ReferenceGraphRuntimeTests(unittest.TestCase):
             self.assertEqual(reference_graph.active_reference_graph_root(), country)
             global_root.assert_not_called()
 
+    def test_cloud_country_identity_uses_selected_catalog_without_graph_discovery(self) -> None:
+        profile = {
+            "country_code": "CAN", "release_status": "published",
+            "active_release": {"release_id": "can_geometry_1_3_5"},
+        }
+        expected = (
+            self.root / "geometry/countries/CAN/reference/can_geometry_1_3_5"
+        ).resolve()
+        with (
+            mock.patch.object(reference_graph, "DATA_ROOT", self.root),
+            mock.patch.object(reference_graph, "is_cloud_mode", return_value=True),
+            mock.patch.object(reference_graph, "load_geometry_catalog", return_value={
+                "country_profiles": [profile],
+            }),
+            mock.patch.object(reference_graph, "reference_graph_roots") as discovery,
+            mock.patch.object(reference_graph, "global_reference_graph_root") as global_root,
+        ):
+            self.assertEqual(
+                reference_graph.graph_roots_for_loc_id("CAN-ON-3520-HEALTH-3503"),
+                [expected],
+            )
+            discovery.assert_not_called()
+            global_root.assert_not_called()
+
     def test_missing_global_manifest_does_not_probe_graph_parquets(self) -> None:
         with mock.patch.object(reference_graph, "_graph_json", return_value=None), \
              mock.patch.object(reference_graph, "_missing_graph_files") as missing:

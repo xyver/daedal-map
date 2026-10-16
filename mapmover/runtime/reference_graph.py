@@ -326,18 +326,27 @@ def global_reference_graph_root() -> Path | None:
 
 def graph_root_for_loc_id(loc_id: str | None) -> Path | None:
     """Pick the graph owning a loc_id, using its country prefix."""
-    roots = reference_graph_roots()
-    if loc_id:
-        country = str(loc_id).split("-", 1)[0].strip().upper()
-        if country in roots:
-            return roots[country]
-    return global_reference_graph_root()
+    roots = graph_roots_for_loc_id(loc_id)
+    return roots[0] if roots else None
 
 
 def graph_roots_for_loc_id(loc_id: str | None) -> list[Path]:
     """Select the owning country graph, or the global graph for unknown IDs."""
-    country_roots = reference_graph_roots()
     prefix = str(loc_id or "").split("-", 1)[0].strip().upper()
+    if is_cloud_mode() and len(prefix) == 3 and prefix.isalpha():
+        # Published catalog selection is already the country authority. An
+        # exact country ID must not scan or depend on discovery of every other
+        # graph; one transient failure during that scan could cache an empty
+        # root set and silently turn valid shapes into no_point_overlap.
+        for profile in load_geometry_catalog().get("country_profiles") or []:
+            if (isinstance(profile, dict)
+                    and str(profile.get("country_code") or "").upper() == prefix
+                    and str(profile.get("release_status") or "") in {
+                        "approved_for_publication", "published",
+                    }):
+                return [country_reference_root(DATA_ROOT, prefix, profile).resolve()]
+        return []
+    country_roots = reference_graph_roots()
     if prefix in country_roots:
         # A country-prefixed identity has one authoritative pack. Do not probe
         # the global graph or unrelated countries after selecting that pack.
@@ -690,13 +699,14 @@ def reference_graph_families() -> list[dict[str, Any]]:
 
 
 def identity(loc_id: str) -> dict[str, Any] | None:
-    if not reference_graph_available():
+    roots = graph_roots_for_loc_id(loc_id)
+    if not roots:
         return None
     connection = None
     try:
         # Query roots one at a time so country authority wins deterministically
         # when its Admin0 loc_id is also present in the global fallback.
-        for root in graph_roots_for_loc_id(loc_id):
+        for root in roots:
             routed = _route_paths(root, IDENTITY_ROUTE_INDEX, "loc_id", [str(loc_id)])
             partition_paths = routed if routed is not None else _partition_paths(root, "identities")
             source = _table_source_for_roots("identities", [root], selected_paths=partition_paths)
@@ -845,10 +855,6 @@ def identities(loc_ids: list[str], *, require_route: bool = False) -> list[dict[
     requested = list(dict.fromkeys(str(item).strip() for item in loc_ids if str(item).strip()))
     if not requested:
         return []
-    if not reference_graph_available():
-        if require_route:
-            raise ReferenceRouteUnavailable("active reference graph unavailable")
-        return []
     # Query roots in authority order, opening DuckDB only after an exact route
     # selects a physical partition. Do not hydrate every partition up front.
     remaining = requested[:]
@@ -860,6 +866,10 @@ def identities(loc_ids: list[str], *, require_route: bool = False) -> list[dict[
             for root in graph_roots_for_loc_id(loc_id):
                 if root not in roots:
                     roots.append(root)
+        if not roots:
+            if require_route:
+                raise ReferenceRouteUnavailable("selected reference graph unavailable")
+            return []
         selected_columns = ", ".join(f'"{column}"' for column in IDENTITY_COLUMNS)
         for root in roots:
             if not remaining:
