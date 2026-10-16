@@ -1718,7 +1718,7 @@ def _finish_data_helper(
     return _jsonrpc_response(
         _tool_result(
             payload, is_error=is_error,
-            text_summary_only=not is_error and tool_name in {"get_catalog", "get_geography", "get_pack"},
+            structured_only=tool_name in {"get_catalog", "get_geography", "get_pack"},
         ),
         rpc_request_id,
     )
@@ -1975,7 +1975,7 @@ def _provenance_summary(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _tool_result(payload: Any, *, is_error: bool = False, text_summary_only: bool = False) -> dict[str, Any]:
+def _tool_result(payload: Any, *, is_error: bool = False, structured_only: bool = False) -> dict[str, Any]:
     if is_error and isinstance(payload, dict):
         error = payload.get("error")
         execution_error_code = error.get("code") if isinstance(error, dict) else None
@@ -2017,20 +2017,23 @@ def _tool_result(payload: Any, *, is_error: bool = False, text_summary_only: boo
     if isinstance(payload, dict) and not is_error and "provenance" not in payload:
         payload = {**payload, "provenance": _provenance_summary(payload)}
     payload = _with_agent_safety(payload, surface="tool_result") if not is_error else payload
-    # Sanitize before serializing so the text copy and structuredContent agree.
-    # json.dumps below allows NaN by default and would emit bare NaN tokens that
-    # no strict JSON parser accepts.
+    # Sanitize before serializing so structuredContent is valid strict JSON.
     payload = _json_safe(payload)
-    if isinstance(payload, (dict, list)):
+    if structured_only:
+        # MCP requires the content array, but it may be empty. Discovery tools
+        # have one result channel: structuredContent.
+        content: list[dict[str, str]] = []
+    elif isinstance(payload, (dict, list)):
         payload_bytes = _json_size_bytes(payload) or 0
-        if text_summary_only or payload_bytes > _mcp_text_inline_limit_bytes():
+        if payload_bytes > _mcp_text_inline_limit_bytes():
             text = _summarize_structured_tool_payload(payload, payload_bytes)
         else:
             text = json.dumps(payload, ensure_ascii=False, indent=2)
+        content = [{"type": "text", "text": text}]
     else:
-        text = str(payload)
+        content = [{"type": "text", "text": str(payload)}]
     result: dict[str, Any] = {
-        "content": [{"type": "text", "text": text}],
+        "content": content,
         "structuredContent": payload if isinstance(payload, (dict, list)) else {"value": payload},
     }
     if is_error:

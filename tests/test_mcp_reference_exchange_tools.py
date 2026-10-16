@@ -381,12 +381,10 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
     def test_pack_sized_tool_result_keeps_metadata_only_in_structured_content(self) -> None:
         payload = {"pack_id": "world_bank_wdi", "metric_ids": [f"metric_{index:04d}" for index in range(1200)]}
 
-        result = _tool_result(payload, text_summary_only=True)
+        result = _tool_result(payload, structured_only=True)
 
         self.assertEqual(result["structuredContent"]["metric_ids"], payload["metric_ids"])
-        self.assertIn("pack_id=world_bank_wdi", result["content"][0]["text"])
-        self.assertNotIn("metric_0000", result["content"][0]["text"])
-        self.assertLess(len(result["content"][0]["text"]), 200)
+        self.assertEqual(result["content"], [])
 
     def test_invalid_input_keeps_short_help_guidance(self) -> None:
         result = _tool_result({"error": {"code": "invalid_time", "message": "Invalid time"}}, is_error=True)
@@ -1538,8 +1536,7 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
 
         result = envelope["result"]
         self.assertEqual(result["structuredContent"]["sources"][0]["metric_ids"], ["example_metric"])
-        self.assertIn("pack_id=example_pack", result["content"][0]["text"])
-        self.assertNotIn("example_metric", result["content"][0]["text"])
+        self.assertEqual(result["content"], [])
 
     def test_discovery_contracts_reject_extra_fields_before_lookup(self) -> None:
         for name, arguments in (
@@ -1555,8 +1552,12 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
 
     def test_geography_unknown_id_is_typed_and_metadata_only(self) -> None:
         with mock.patch("mapmover.runtime.reference_exchange.get_geometry_references") as shape_read:
-            payload = _tool_call(self.client, "get_geography", {"scope_id": "ZZZ"})
+            envelope = _mcp_call(self.client, "tools/call", {
+                "name": "get_geography", "arguments": {"scope_id": "ZZZ"},
+            })
+        payload = envelope["result"]["structuredContent"]
         self.assertEqual(payload["error"]["code"], "scope_not_found")
+        self.assertEqual(envelope["result"]["content"], [])
         shape_read.assert_not_called()
 
     def test_geometry_catalog_lists_families_scopes_and_download_url(self) -> None:
@@ -1566,8 +1567,7 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         self.assertTrue(any(row["scope_id"] == "MARINE" for row in payload["scopes"]))
         self.assertEqual(payload["download_url"], "https://app.daedalmap.com/api/v1/geometry/catalog/download")
         self.assertNotIn("geometry_banks", payload)
-        self.assertIn("structuredContent", envelope["result"]["content"][0]["text"])
-        self.assertNotIn("postal_area", envelope["result"]["content"][0]["text"])
+        self.assertEqual(envelope["result"]["content"], [])
 
     def test_convert_reference_defaults_to_loc_id(self) -> None:
         payload = _tool_call(
