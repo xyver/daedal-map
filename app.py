@@ -304,7 +304,7 @@ async def lifespan(app: FastAPI):
     order_processor.set_executor(async_execute_order)
     await order_processor.start()
     logger.info("Startup complete - data catalog and order processor initialized")
-    from mapmover.memory_logging import start_memory_logging
+    from mapmover.memory_logging import memory_stage, start_memory_logging
     stop_memory_logging = start_memory_logging()
     stop_catalog_refresh = threading.Event()
 
@@ -388,7 +388,8 @@ async def lifespan(app: FastAPI):
                 while True:
                     threading.Event().wait(240)
                     try:
-                        prewarm_ops_snapshots(force_refresh=True)
+                        with memory_stage('ops_snapshots_refresh'):
+                            prewarm_ops_snapshots(force_refresh=True)
                     except Exception:
                         logger.exception("Ops snapshot refresh-ahead failed")
 

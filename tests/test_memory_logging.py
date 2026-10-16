@@ -9,6 +9,8 @@ from mapmover import memory_logging as history
 
 class MemoryHistoryTests(unittest.TestCase):
     def tearDown(self):
+        history._RECENT_STAGE_EVENTS.clear()
+        history._ACTIVE_STAGES.clear()
         if history._FILE_HANDLER is not None:
             history.logger.removeHandler(history._FILE_HANDLER)
             history._FILE_HANDLER.close()
@@ -80,6 +82,40 @@ class MemoryHistoryTests(unittest.TestCase):
             history.logger.removeHandler(history._FILE_HANDLER)
             history._FILE_HANDLER.close()
             history._FILE_HANDLER = None
+
+    def test_background_stage_records_process_delta_and_overlap(self):
+        snapshots = iter([
+            {'rss_kib': 100, 'glibc_free_bytes': 10},
+            {'rss_kib': 110, 'glibc_free_bytes': 15},
+            {'rss_kib': 120, 'glibc_free_bytes': 20},
+            {'rss_kib': 130, 'glibc_free_bytes': 25},
+        ])
+        with patch.dict(history.os.environ, {'MEMORY_STAGE_ENABLED': '1'}), \
+                patch.object(history, '_stage_snapshot', side_effect=lambda: next(snapshots)), \
+                patch.object(history.logger, 'info'):
+            with history.memory_stage('startup_geometry_display'):
+                with history.memory_stage('startup_ops_snapshots'):
+                    self.assertEqual(len(history._ACTIVE_STAGES), 2)
+        events = list(history._RECENT_STAGE_EVENTS)
+        self.assertEqual([event['name'] for event in events],
+                         ['startup_ops_snapshots', 'startup_geometry_display'])
+        self.assertTrue(all(event['overlapped_other_stage'] for event in events))
+        self.assertEqual(events[1]['before']['rss_kib'], 100)
+        self.assertEqual(events[1]['after']['rss_kib'], 130)
+        sampled = history.sample_memory()
+        self.assertEqual(len(sampled['recent_memory_stage_events']), 2)
+        self.assertEqual(sampled['active_memory_stages'], [])
+        self.assertEqual(len(history._RECENT_STAGE_EVENTS), 0)
+
+    def test_stage_snapshot_failure_does_not_change_work_result(self):
+        with patch.dict(history.os.environ, {'MEMORY_STAGE_ENABLED': '1'}), \
+                patch.object(history, '_stage_snapshot', side_effect=OSError('unavailable')), \
+                patch.object(history.logger, 'info'):
+            with history.memory_stage('startup_api_catalog'):
+                result = 7
+        self.assertEqual(result, 7)
+        self.assertEqual(history._RECENT_STAGE_EVENTS[-1]['before'], {})
+        self.assertEqual(history._RECENT_STAGE_EVENTS[-1]['after'], {})
 
 
 if __name__ == '__main__':

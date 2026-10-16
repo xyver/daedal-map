@@ -1,5 +1,8 @@
 """Periodic memory evidence in service logs; no external monitor or history store."""
 from datetime import datetime, timezone
+from collections import deque
+from contextlib import contextmanager
+from itertools import count
 import json
 import logging
 from logging.handlers import RotatingFileHandler
@@ -21,6 +24,75 @@ _EPOCH = uuid.uuid4().hex
 _START = time.monotonic()
 _FILE_HANDLER = None
 _MEMORY_LOG_BACKUPS = 90  # About 900 MiB; headroom for a month as sample size grows.
+_STAGE_LOCK = threading.Lock()
+_STAGE_IDS = count(1)
+_ACTIVE_STAGES: dict[int, dict] = {}
+_RECENT_STAGE_EVENTS = deque(maxlen=64)
+
+
+def _stage_snapshot() -> dict:
+    """Read process counters without walking caches or executing SQL."""
+    from mapmover.memory_diagnostics import process_memory_snapshot
+
+    process = process_memory_snapshot()
+    status = process.get('status_kib') or {}
+    allocator = process.get('glibc_allocator') or {}
+    return {
+        'rss_kib': status.get('VmRSS'),
+        'anonymous_rss_kib': status.get('RssAnon'),
+        'glibc_allocated_bytes': allocator.get('allocated_heap_bytes'),
+        'glibc_free_bytes': allocator.get('free_heap_bytes'),
+        'cpu_seconds': round(time.process_time(), 4),
+    }
+
+
+@contextmanager
+def memory_stage(name: str):
+    """Mark bounded background work in the process memory timeline.
+
+    Deltas are process-wide and only directional when work overlaps. Native
+    allocation stacks still require a profiler in an isolated process.
+    """
+    enabled = os.environ.get('MEMORY_STAGE_ENABLED',
+                             '1' if os.environ.get('DEPLOYMENT', '').lower() == 'railway' else '0')
+    if enabled.strip().lower() not in {'1', 'true', 'yes', 'on'}:
+        yield
+        return
+    label = str(name)[:80]
+    stage_id = next(_STAGE_IDS)
+    try:
+        before = _stage_snapshot()
+    except Exception:
+        before = {}
+    started = time.monotonic()
+    started_at = datetime.now(timezone.utc).isoformat()
+    with _STAGE_LOCK:
+        overlap = bool(_ACTIVE_STAGES)
+        for active in _ACTIVE_STAGES.values():
+            active['overlap'] = True
+        _ACTIVE_STAGES[stage_id] = {'name': label, 'overlap': overlap}
+    status = 'ok'
+    try:
+        yield
+    except BaseException:
+        status = 'error'
+        raise
+    finally:
+        try:
+            after = _stage_snapshot()
+        except Exception:
+            after = {}
+        event = {
+            'process_epoch': _EPOCH, 'pid': os.getpid(),
+            'name': label, 'started_at': started_at,
+            'finished_at': datetime.now(timezone.utc).isoformat(),
+            'duration_seconds': round(time.monotonic() - started, 3),
+            'status': status, 'before': before, 'after': after,
+        }
+        with _STAGE_LOCK:
+            event['overlapped_other_stage'] = _ACTIVE_STAGES.pop(stage_id)['overlap']
+            _RECENT_STAGE_EVENTS.append(event)
+        logger.info('memory_stage %s', json.dumps(event, separators=(',', ':')))
 
 
 def _ensure_file_log():
@@ -70,6 +142,10 @@ def sample_memory():
     row['cgroup_peak_bytes'] = process.get('cgroup_peak_bytes')
     row['cgroup'] = process.get('cgroup_stat', {})
     row['cgroup_events'] = process.get('cgroup_events', {})
+    with _STAGE_LOCK:
+        row['active_memory_stages'] = sorted({stage['name'] for stage in _ACTIVE_STAGES.values()})
+        row['recent_memory_stage_events'] = list(_RECENT_STAGE_EVENTS)
+        _RECENT_STAGE_EVENTS.clear()
     for key in ('status_error', 'smaps_rollup_error', 'cgroup_stat_error', 'cgroup_events_error'):
         if process.get(key):
             row[key] = process[key]

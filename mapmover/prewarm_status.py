@@ -55,8 +55,11 @@ def complete_prewarm_task(task: str, error: Exception | None = None) -> None:
 
 def run_prewarm_task(task: str, func, *args, **kwargs) -> None:
     """Run a task while reliably recording completion for readiness probes."""
+    from mapmover.memory_logging import memory_stage
+
     try:
-        func(*args, **kwargs)
+        with memory_stage('startup_' + task):
+            func(*args, **kwargs)
     except Exception as exc:
         complete_prewarm_task(task, exc)
         raise

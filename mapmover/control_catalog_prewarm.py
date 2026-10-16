@@ -131,7 +131,9 @@ def maintain_app_catalogs(stop_event: threading.Event, *, startup_monotonic: flo
         with _refresh_state_lock:
             _refresh_state["state"] = "refreshing"
         try:
-            counts = refresh_app_catalogs()
+            from mapmover.memory_logging import memory_stage
+            with memory_stage('catalog_refresh'):
+                counts = refresh_app_catalogs()
         except Exception as exc:
             logger.exception("App catalog refresh-ahead failed")
             with _refresh_state_lock:
