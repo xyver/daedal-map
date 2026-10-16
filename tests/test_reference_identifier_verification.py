@@ -78,6 +78,70 @@ class LocIdVerificationTests(unittest.TestCase):
 
 
 class ConcurringSystemTests(unittest.TestCase):
+    def test_selected_stale_example_scope_stops_before_alias_lookup(self) -> None:
+        with (
+            mock.patch("mapmover.runtime.reference_exchange.list_reference_systems", return_value={
+                "ok": False, "error": {"code": "reference_scope_metadata_unavailable"},
+            }),
+            mock.patch("mapmover.runtime.reference_graph.identify_aliases") as aliases,
+        ):
+            payload = identify_reference_system(["06037"], country_scope="USA")
+        self.assertEqual(payload["error"]["code"], "reference_route_unavailable")
+        aliases.assert_not_called()
+
+    def test_internal_lite_listing_reads_scope_metadata(self) -> None:
+        from mapmover.runtime.reference_exchange import list_reference_systems
+
+        scope = {"catalog_fingerprint": "selected", "families": [{
+            "family_id": "administrative", "identifier_systems": [{
+                "system": "admin.native_id", "examples": ["01"],
+                "examples_status": "verified_alias_index",
+            }],
+        }]}
+        with (
+            mock.patch("mapmover.runtime.reference_graph._graph_json", return_value=scope),
+            mock.patch("mapmover.runtime.reference_exchange.load_geometry_catalog",
+                       return_value={"catalog_fingerprint": "selected"}),
+        ):
+            listing = list_reference_systems(country_scope="USA", lite_scope_only=True)
+        self.assertTrue(listing["ok"])
+        self.assertEqual(listing["systems"][0]["family_id"], "administrative")
+        self.assertEqual(listing["systems"][0]["examples"], ["01"])
+
+    def test_identification_includes_release_examples_without_using_them_as_matches(self) -> None:
+        with mock.patch("mapmover.runtime.reference_exchange.list_reference_systems", return_value={
+            "ok": True, "systems": [{"system": "us_census_geoid", "examples": ["06037", "36061"]}],
+        }):
+            payload = identify_reference_system(["06037"], country_scope="USA")
+        census = next(row for row in payload["candidates"] if row["system"] == "us_census_geoid")
+        self.assertEqual(census["identifier_examples"], ["06037", "36061"])
+        self.assertEqual(census["example_format_match_rate"], 1.0)
+        self.assertEqual(payload["status"], "ambiguous")
+
+        with (
+            mock.patch("mapmover.runtime.reference_exchange.list_reference_systems", return_value={
+                "ok": True, "systems": [{"system": "us_census_geoid", "examples": ["06037"]}],
+            }),
+            mock.patch("mapmover.runtime.reference_identification._reference_graph_candidates",
+                       return_value=[]),
+        ):
+            missing = identify_reference_system(["99999"], country_scope="USA")
+        self.assertEqual(missing["status"], "unmatched")
+        self.assertIsNone(missing["recommended_binding"])
+
+    def test_stale_selected_alias_index_is_not_reported_as_unmatched(self) -> None:
+        from mapmover.runtime.reference_graph import ReferenceRouteUnavailable
+
+        for failure in (ReferenceRouteUnavailable("stale USA alias index"), OSError("index read failed")):
+            with self.subTest(failure=type(failure).__name__), mock.patch(
+                "mapmover.runtime.reference_graph.identify_aliases", side_effect=failure,
+            ):
+                payload = identify_reference_system(["06037"], country_scope="USA")
+
+                self.assertFalse(payload["ok"])
+                self.assertEqual(payload["status"], "route_unavailable")
+                self.assertEqual(payload["error"]["code"], "reference_route_unavailable")
+
     def test_dataset_context_ranks_county_above_five_digit_zcta_shape(self) -> None:
         payload = identify_reference_system(
             ["06037"],

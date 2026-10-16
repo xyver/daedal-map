@@ -74,6 +74,11 @@ def normalize_identifier_system(value: Any) -> str:
     return _SYSTEM_ALIASES.get(text, text)
 
 
+def _identifier_shape(value: str) -> str:
+    return "".join("9" if char.isdigit() else "A" if char.isalpha() else char
+                   for char in value)
+
+
 def census_geoid_level(value: Any) -> str | None:
     text = str(value or "").strip()
     if not text.isdigit() or text[:2] not in US_STATE_FIPS_TO_ABBR:
@@ -267,7 +272,7 @@ def _reference_graph_candidates(
 ) -> list[dict[str, Any]]:
     lookup_to_original: dict[str, list[str]] = defaultdict(list)
     try:
-        from .reference_graph import identify_aliases
+        from .reference_graph import ReferenceRouteUnavailable, identify_aliases
         from .reference_exchange import _normalize_source_loc_id
 
         # The public ZIP/ZCTA name is normalized to overlay_zcta, while the
@@ -292,8 +297,12 @@ def _reference_graph_candidates(
         )
     except IdentificationCancelled:
         raise
-    except Exception:
-        alias_rows = []
+    except ReferenceRouteUnavailable:
+        # A stale selected index is a route failure, not evidence that the
+        # identifier is absent. Do not turn it into an ordinary no-match.
+        raise
+    except Exception as exc:
+        raise ReferenceRouteUnavailable("selected alias lookup failed") from exc
     grouped: dict[str, dict[str, list[str]]] = defaultdict(lambda: defaultdict(list))
     for row in alias_rows:
         system = normalize_identifier_system(row.get("reference_system"))
@@ -643,6 +652,17 @@ def identify_reference_system(
     expected_internal_release = str(expected.get("internal_release") or "").strip() or None
     country = str(country_scope or expected.get("country_scope") or "").strip().upper()
 
+    listing: dict[str, Any] = {}
+    if country:
+        from .reference_exchange import list_reference_systems
+
+        listing = list_reference_systems(country_scope=country, lite_scope_only=True)
+        if (listing.get("error") or {}).get("code") == "reference_scope_metadata_unavailable":
+            return {"ok": False, "status": "route_unavailable", "error": {
+                "code": "reference_route_unavailable",
+                "message": "Selected reference-system scope metadata is stale.",
+            }}
+
     candidates: list[dict[str, Any]] = []
 
     census_matches: dict[str, list[str]] = {}
@@ -784,7 +804,18 @@ def identify_reference_system(
         }
         if cancelled is not None:
             graph_kwargs["cancelled"] = cancelled
-        for candidate in _reference_graph_candidates(values, **graph_kwargs):
+        from .reference_graph import ReferenceRouteUnavailable
+        try:
+            graph_candidates = _reference_graph_candidates(values, **graph_kwargs)
+        except ReferenceRouteUnavailable:
+            return {
+                "ok": False, "status": "route_unavailable",
+                "error": {
+                    "code": "reference_route_unavailable",
+                    "message": "The selected country alias index is unavailable or stale.",
+                },
+            }
+        for candidate in graph_candidates:
             if not expected_system or candidate["system"] == expected_system:
                 candidates.append(candidate)
 
@@ -912,6 +943,22 @@ def identify_reference_system(
         {key: value for key, value in candidate.items() if not key.startswith("_")}
         for candidate in candidates
     ]
+    if public_candidates:
+        if listing.get("ok"):
+            examples_by_system: dict[str, list[str]] = {}
+            for system in listing.get("systems") or []:
+                examples = examples_by_system.setdefault(str(system.get("system") or ""), [])
+                for value in system.get("examples") or []:
+                    if value not in examples and len(examples) < 10:
+                        examples.append(value)
+            for candidate in public_candidates:
+                examples = examples_by_system.get(str(candidate.get("system") or "")) or []
+                if examples:
+                    candidate["identifier_examples"] = examples
+                    shapes = {_identifier_shape(example) for example in examples}
+                    candidate["example_format_match_rate"] = round(
+                        sum(_identifier_shape(value) in shapes for value in values) / len(values), 6
+                    )
     dataset_interpretations = _dataset_interpretations(
         values,
         dataset_context=dataset_context or {},

@@ -920,10 +920,28 @@ def _direct_crosswalk_matches_batch(
 
 def list_reference_systems(
     *, country_scope: str | None = None, include_crosswalks: bool = False,
-    read_wip: bool = False,
+    read_wip: bool = False, lite_scope_only: bool = False,
 ) -> dict[str, Any]:
     """Return the currently discoverable reference systems and crosswalks."""
     country = str(country_scope or "").strip().upper()
+    if lite_scope_only:
+        if not country:
+            return {"ok": False, "error": {"code": "country_scope_required"}}
+        from .reference_graph import _graph_json
+
+        scope = _graph_json(DATA_ROOT / "geometry" / "discovery" / "scopes" / f"{country}.json") or {}
+        if not any("identifier_systems" in family for family in scope.get("families") or []):
+            return {"ok": False, "error": {"code": "reference_examples_not_selected"}}
+        catalog = load_geometry_catalog()
+        if scope.get("catalog_fingerprint") != catalog.get("catalog_fingerprint"):
+            return {"ok": False, "error": {"code": "reference_scope_metadata_unavailable"}}
+        systems = [
+            {**system, "family_id": family["family_id"], "country_scope": country}
+            for family in scope.get("families") or []
+            for system in family.get("identifier_systems") or []
+        ]
+        return {"ok": True, "country_scope": country, "systems": systems,
+                "system_count": len(systems), "catalog_fingerprint": scope["catalog_fingerprint"]}
     global_catalog = load_geometry_catalog()
     has_profile = any(
         isinstance(item, dict)
