@@ -1722,6 +1722,9 @@ def resolve_points_to_locations(
     cloud mode. This helper keeps the result shape compatible while grouping
     geometry reads by country/state and admin level.
     """
+    from .mcp_execution import mark_mcp_stage
+
+    mark_mcp_stage("point_country_selection")
     # ``target_admin_level`` is exact: callers asking for Admin 3 receive an
     # error when that tier is unavailable. ``max_admin_level`` is an I/O
     # ceiling: return the deepest available match at or below it. Keeping the
@@ -1795,6 +1798,7 @@ def resolve_points_to_locations(
     by_country: dict[str, list[dict]] = {}
     stage_started = time.perf_counter()
     if scope_iso3:
+        mark_mcp_stage("point_country_identity")
         identities = load_global_admin0_identities([scope_iso3])
         # MCP_UPGRADE_REMOVE: broad global-bank identity fallback for layouts
         # without the admitted compact Admin0 identity index.
@@ -1826,6 +1830,7 @@ def resolve_points_to_locations(
         # MCP_UPGRADE_REMOVE: broad global-bank point fallback while selected
         # Admin0 point coverage and hosted parity are still being closed.
         if country_matches is None:
+            mark_mcp_stage("point_global_fallback")
             country_df = load_global_countries_frame()
             _add_timing_ms(timing_ms, "global_country_fallback_load_ms", stage_started)
             if country_df is None or country_df.empty:
@@ -1891,6 +1896,7 @@ def resolve_points_to_locations(
         # Failed/unavailable layout lookups remain eligible for the legacy path.
         unresolved_items: list[dict] = []
         stage_started = time.perf_counter()
+        mark_mcp_stage("point_admin_spine")
         query_matches = resolve_admin_spine_query_points(
             iso3, country_items, target_admin_level=io_admin_level,
             admin_1_scope=admin_1_scope,
@@ -1904,11 +1910,13 @@ def resolve_points_to_locations(
         # whether the country has Admin1-owned Admin 4-6 banks.  The country
         # profile declares those levels without opening their geometry, so use
         # it to advertise the deep follow-up tools accurately.
+        mark_mcp_stage("point_country_metadata")
         declared_deep_levels = (
             get_country_supported_deep_admin_levels(iso3)
             if shallow_banks_only
             else []
         )
+        mark_mcp_stage("point_result_assembly")
         for item, query_match in zip(country_items, query_matches):
             if query_match is None:
                 unresolved_items.append(item)

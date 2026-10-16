@@ -95,10 +95,14 @@ def resolve_global_admin0_query_points(
     release requires the compact Admin0 index; stale indexes must fail closed.
     """
     point_items = list(points)
+    from ..mcp_execution import mark_mcp_stage
+
+    mark_mcp_stage("point_global_layout")
     layout = _active_layout()
     if layout is None:
         return None
     try:
+        mark_mcp_stage("point_global_bbox_candidates")
         candidate_path = layout.get("point_bank") or layout["bbox_index"]
         bbox = read_bbox_candidates_for_points(
             candidate_path, point_items,
@@ -109,6 +113,7 @@ def resolve_global_admin0_query_points(
             "loc_id", "name", "source_kind", "area_sq_degrees", "geometry_wkb",
             "bbox_min_lon", "bbox_min_lat", "bbox_max_lon", "bbox_max_lat",
         ]
+        mark_mcp_stage("point_global_exact_shapes")
         exact = (
             read_rows_by_ids(
                 layout["point_bank"], candidate_ids,
@@ -130,6 +135,7 @@ def resolve_global_admin0_query_points(
         for row in exact.to_dict("records")
     }
     geometries: dict[str, Any] = {}
+    mark_mcp_stage("point_global_shape_cover")
     for candidate_id, row in rows_by_id.items():
         try:
             geometries[candidate_id] = load_wkb(bytes(row["geometry_wkb"]))
