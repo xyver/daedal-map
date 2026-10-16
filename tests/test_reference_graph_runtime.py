@@ -683,6 +683,12 @@ class ReferenceGraphRuntimeTests(unittest.TestCase):
             self.assertEqual(reference_graph.active_reference_graph_root(), country)
             global_root.assert_not_called()
 
+    def test_missing_global_manifest_does_not_probe_graph_parquets(self) -> None:
+        with mock.patch.object(reference_graph, "_graph_json", return_value=None), \
+             mock.patch.object(reference_graph, "_missing_graph_files") as missing:
+            self.assertIsNone(reference_graph.global_reference_graph_root())
+            missing.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -314,12 +314,12 @@ def _country_discovery_index_current(country: str, cloud_mode: bool, root_text: 
 def global_reference_graph_root() -> Path | None:
     """Return the complete global graph used after country authority."""
     root = (DATA_ROOT / GLOBAL_GRAPH_RELATIVE).resolve()
-    if _missing_graph_files(str(root), is_cloud_mode(), FULL_GRAPH_FILES):
-        return None
     manifest = _graph_json(root / "manifest.json") or {}
     if manifest.get("graph_scope") != "global":
         return None
     if str(manifest.get("completeness_status") or "").startswith("partial"):
+        return None
+    if _missing_graph_files(str(root), is_cloud_mode(), FULL_GRAPH_FILES):
         return None
     return root
 
