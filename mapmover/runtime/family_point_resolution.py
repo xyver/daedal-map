@@ -344,6 +344,9 @@ def resolve_family_points(
                 if not loc_id or not row.get("geometry"):
                     continue
                 shapes_by_id[loc_id] = (row, shape(row["geometry"]))
+            candidate_ids = set().union(*candidates_by_point)
+            if candidate_ids - shapes_by_id.keys():
+                raise ValueError("family_point_exact_shapes_missing")
 
             elapsed_ms = round((time.perf_counter() - started) * 1000, 3)
             for position, point_row in enumerate(point_rows):
@@ -369,6 +372,8 @@ def resolve_family_points(
                     "error": {
                         "code": "family_point_shape_budget_exceeded"
                         if str(exc) == "family_point_shape_budget_exceeded"
+                        else "family_point_exact_shapes_missing"
+                        if str(exc) == "family_point_exact_shapes_missing"
                         else "family_lookup_failed",
                         "message": str(exc),
                     },

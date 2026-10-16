@@ -149,6 +149,27 @@ class FamilyPointResolutionTests(unittest.TestCase):
         self.assertEqual(results[1]["postal_area"]["status"], "no_point_overlap")
         self.assertEqual(results[1]["postal_area"]["matches"], [])
 
+    def test_bbox_candidates_without_exact_shapes_fail_closed(self):
+        candidates = pd.DataFrame([{"point_position": 0, "loc_id": "USA-POSTAL-1"}])
+        with (
+            patch("mapmover.runtime.family_point_resolution.load_geometry_catalog", return_value={}),
+            patch("mapmover.runtime.family_point_resolution.country_capability_record",
+                  return_value={"available_family_ids": ["postal_area"]}),
+            patch("mapmover.runtime.family_point_resolution.family_artifacts", return_value={
+                "postal_area": {"predicate_paths": ["predicate.parquet"],
+                                "exact_paths": ["shapes.parquet"]},
+            }),
+            patch("mapmover.runtime.family_point_resolution.read_bbox_candidates_for_points",
+                  return_value=candidates),
+            patch("mapmover.runtime.family_point_resolution.load_reference_graph_geometry",
+                  return_value=pd.DataFrame()),
+        ):
+            result = resolve_family_points(
+                "USA", ["postal_area"], [{"lon": 1, "lat": 1}],
+            )[0]["postal_area"]
+        self.assertEqual(result["status"], "family_lookup_error")
+        self.assertEqual(result["error"]["code"], "family_point_exact_shapes_missing")
+
     def test_declared_point_index_routes_shapes_without_graph_discovery(self):
         catalog = {
             "runtime_query_layouts": {"family_points": {"USA": {"watershed": {
