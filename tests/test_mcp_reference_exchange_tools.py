@@ -374,9 +374,29 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
 
         self.assertEqual(result["structuredContent"]["request_id"], "large-shape-test")
         text = result["content"][0]["text"]
-        self.assertIn("Large structured MCP result", text)
+        self.assertIn("Structured MCP result", text)
         self.assertIn("structuredContent", text)
         self.assertNotIn("x" * 200, text)
+
+    def test_pack_sized_tool_result_keeps_metadata_only_in_structured_content(self) -> None:
+        payload = {"pack_id": "world_bank_wdi", "metric_ids": [f"metric_{index:04d}" for index in range(1200)]}
+
+        result = _tool_result(payload, text_summary_only=True)
+
+        self.assertEqual(result["structuredContent"]["metric_ids"], payload["metric_ids"])
+        self.assertIn("pack_id=world_bank_wdi", result["content"][0]["text"])
+        self.assertNotIn("metric_0000", result["content"][0]["text"])
+        self.assertLess(len(result["content"][0]["text"]), 200)
+
+    def test_invalid_input_keeps_short_help_guidance(self) -> None:
+        result = _tool_result({"error": {"code": "invalid_time", "message": "Invalid time"}}, is_error=True)
+
+        self.assertEqual(result["structuredContent"]["error"]["message"], "Invalid time")
+        self.assertEqual(result["structuredContent"]["guidance"], {
+            "action": "correct_call_then_retry",
+            "message": "See get_tool_help for valid arguments.",
+            "help_tool": "get_tool_help",
+        })
 
     def test_non_finite_numbers_do_not_break_the_tool_result(self) -> None:
         # Geometry banks carry rows with no measured centroid or bbox. Those
@@ -607,6 +627,8 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
 
         self.assertEqual(payload["error"]["code"], "mcp_execution_timeout")
         self.assertEqual(payload["retry_after"], 5)
+        self.assertEqual(payload["guidance"]["action"], "wait_then_retry")
+        self.assertEqual(payload["clarification"]["reason"], "server_timeout")
         self.assertEqual(self.analytics_state["error_code"], "mcp_execution_timeout")
         self.assertFalse(self.analytics_state["concurrency_rejected"])
         analytics = analytics_mock.call_args.kwargs
@@ -1505,6 +1527,20 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
                              {"pack_id": "postal_area"}}, path="/mcp/boundaries")
         self.assertEqual(envelope["error"]["code"], -32602)
 
+    def test_get_pack_returns_machine_metadata_without_text_copy(self) -> None:
+        pack = {"pack_id": "example_pack", "sources": [{
+            "source_id": "example_source", "metrics": {"example_metric": {"name": "Example"}},
+        }]}
+        with mock.patch("mapmover.routes.mcp.load_api_pack_detail", return_value=pack):
+            envelope = _mcp_call(self.client, "tools/call", {
+                "name": "get_pack", "arguments": {"pack_id": "example_pack"},
+            }, path="/mcp")
+
+        result = envelope["result"]
+        self.assertEqual(result["structuredContent"]["sources"][0]["metric_ids"], ["example_metric"])
+        self.assertIn("pack_id=example_pack", result["content"][0]["text"])
+        self.assertNotIn("example_metric", result["content"][0]["text"])
+
     def test_discovery_contracts_reject_extra_fields_before_lookup(self) -> None:
         for name, arguments in (
             ("get_catalog", {"catalog": "geometry", "country_scope": "CAN"}),
@@ -1524,14 +1560,14 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         shape_read.assert_not_called()
 
     def test_geometry_catalog_lists_families_scopes_and_download_url(self) -> None:
-        payload = _tool_call(
-            self.client,
-            "get_catalog", {"catalog": "geometry"},
-        )
+        envelope = _mcp_call(self.client, "tools/call", {"name": "get_catalog", "arguments": {"catalog": "geometry"}})
+        payload = envelope["result"]["structuredContent"]
         self.assertTrue(any(row["family_id"] == "postal_area" for row in payload["families"]))
         self.assertTrue(any(row["scope_id"] == "MARINE" for row in payload["scopes"]))
         self.assertEqual(payload["download_url"], "https://app.daedalmap.com/api/v1/geometry/catalog/download")
         self.assertNotIn("geometry_banks", payload)
+        self.assertIn("structuredContent", envelope["result"]["content"][0]["text"])
+        self.assertNotIn("postal_area", envelope["result"]["content"][0]["text"])
 
     def test_convert_reference_defaults_to_loc_id(self) -> None:
         payload = _tool_call(

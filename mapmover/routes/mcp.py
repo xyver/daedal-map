@@ -1553,20 +1553,26 @@ def _summarize_structured_tool_payload(payload: Any, payload_bytes: int) -> str:
     if isinstance(payload, dict):
         result_items = payload.get("results") or payload.get("items") or payload.get("rows")
         count = len(result_items) if isinstance(result_items, list) else None
-        parts = ["Large structured MCP result returned in structuredContent."]
+        parts = ["Structured MCP result returned in structuredContent."]
         if payload.get("request_id"):
             parts.append(f"request_id={payload.get('request_id')}")
+        if payload.get("pack_id"):
+            parts.append(f"pack_id={payload.get('pack_id')}")
         if payload.get("ok") is not None:
             parts.append(f"ok={payload.get('ok')}")
         if count is not None:
             parts.append(f"items={count}")
         if payload.get("available") is not None:
             parts.append(f"available={payload.get('available')}")
+        if payload.get("source_count") is not None:
+            parts.append(f"sources={payload.get('source_count')}")
+        if payload.get("metric_count") is not None:
+            parts.append(f"metrics={payload.get('metric_count')}")
         parts.append(f"structured_json_bytes={payload_bytes}")
         return " ".join(parts)
     if isinstance(payload, list):
-        return f"Large structured MCP result returned in structuredContent. items={len(payload)} structured_json_bytes={payload_bytes}"
-    return f"Large MCP result returned in structuredContent. structured_json_bytes={payload_bytes}"
+        return f"Structured MCP result returned in structuredContent. items={len(payload)} structured_json_bytes={payload_bytes}"
+    return f"MCP result returned in structuredContent. structured_json_bytes={payload_bytes}"
 
 
 def _elapsed_ms(started_at: float) -> int:
@@ -1709,7 +1715,13 @@ def _finish_data_helper(
             **(analytics_metadata or {}),
         },
     )
-    return _jsonrpc_response(_tool_result(payload, is_error=is_error), rpc_request_id)
+    return _jsonrpc_response(
+        _tool_result(
+            payload, is_error=is_error,
+            text_summary_only=not is_error and tool_name in {"get_catalog", "get_geography", "get_pack"},
+        ),
+        rpc_request_id,
+    )
 
 
 def _log_passthrough_data_helper(
@@ -1963,10 +1975,13 @@ def _provenance_summary(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _tool_result(payload: Any, *, is_error: bool = False) -> dict[str, Any]:
+def _tool_result(payload: Any, *, is_error: bool = False, text_summary_only: bool = False) -> dict[str, Any]:
     if is_error and isinstance(payload, dict):
         error = payload.get("error")
-        capacity_error = isinstance(error, dict) and error.get("code") == "mcp_execution_capacity"
+        execution_error_code = error.get("code") if isinstance(error, dict) else None
+        retryable_execution_error = execution_error_code in {
+            "mcp_execution_capacity", "mcp_execution_timeout",
+        }
         if "guidance" not in payload:
             payload = {
                 **payload,
@@ -1974,13 +1989,14 @@ def _tool_result(payload: Any, *, is_error: bool = False) -> dict[str, Any]:
                     {
                         "action": "wait_then_retry",
                         "message": (
-                            f"The server is busy. Wait {payload.get('retry_after', 2)} seconds, "
+                            f"The server {('timed out' if execution_error_code == 'mcp_execution_timeout' else 'is busy')}. "
+                            f"Wait {payload.get('retry_after', 2)} seconds, "
                             "then retry the same call."
                         ),
                     }
-                    if capacity_error else {
+                    if retryable_execution_error else {
                         "action": "correct_call_then_retry",
-                        "message": "Use the typed error and this tool's input schema to correct the call. Call get_tool_help with the same tool name if the contract is unfamiliar.",
+                        "message": "See get_tool_help for valid arguments.",
                         "help_tool": "get_tool_help",
                     }
                 ),
@@ -1990,7 +2006,11 @@ def _tool_result(payload: Any, *, is_error: bool = False) -> dict[str, Any]:
                 **payload,
                 "clarification": {
                     "required": False,
-                    "reason": "server_busy" if capacity_error else "client_call_correction",
+                    "reason": (
+                        "server_timeout" if execution_error_code == "mcp_execution_timeout"
+                        else "server_busy" if retryable_execution_error
+                        else "client_call_correction"
+                    ),
                     "questions": [],
                 },
             }
@@ -2003,7 +2023,7 @@ def _tool_result(payload: Any, *, is_error: bool = False) -> dict[str, Any]:
     payload = _json_safe(payload)
     if isinstance(payload, (dict, list)):
         payload_bytes = _json_size_bytes(payload) or 0
-        if payload_bytes > _mcp_text_inline_limit_bytes():
+        if text_summary_only or payload_bytes > _mcp_text_inline_limit_bytes():
             text = _summarize_structured_tool_payload(payload, payload_bytes)
         else:
             text = json.dumps(payload, ensure_ascii=False, indent=2)
