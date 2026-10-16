@@ -6,6 +6,7 @@ import pandas as pd
 from shapely.geometry import Polygon, box, mapping
 
 from mapmover.runtime.family_point_resolution import (
+    _representation_manifest_cached,
     family_artifacts,
     normalize_requested_family,
     resolve_family_points,
@@ -14,6 +15,16 @@ from mapmover.runtime.family_point_resolution import (
 
 
 class FamilyPointResolutionTests(unittest.TestCase):
+    def test_cloud_family_lookup_does_not_probe_unpublished_download_manifest(self):
+        with (
+            patch("mapmover.runtime.family_point_resolution.get_data_plane_mode", return_value="cloud"),
+            patch("mapmover.runtime.family_point_resolution.read_artifact_json") as read,
+        ):
+            _representation_manifest_cached.cache_clear()
+            self.assertEqual(_representation_manifest_cached("CAN", 1), {})
+            read.assert_not_called()
+            _representation_manifest_cached.cache_clear()
+
     def test_cancelled_predicate_route_stops_before_next_file_or_shapes(self):
         stop_event = threading.Event()
 

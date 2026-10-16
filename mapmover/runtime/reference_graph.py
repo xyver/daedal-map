@@ -335,27 +335,21 @@ def graph_root_for_loc_id(loc_id: str | None) -> Path | None:
 
 
 def graph_roots_for_loc_id(loc_id: str | None) -> list[Path]:
-    """Prefer country authority, then retain the global fallback."""
-    roots: list[Path] = []
+    """Select the owning country graph, or the global graph for unknown IDs."""
     country_roots = reference_graph_roots()
     prefix = str(loc_id or "").split("-", 1)[0].strip().upper()
     if prefix in country_roots:
-        roots.append(country_roots[prefix])
-    elif loc_id:
-        # Some authority-owned namespaces are intentionally not ISO-prefixed.
-        # Search admitted country graphs deterministically; admission requires
-        # singular identity ownership within each graph.
-        roots.extend(country_roots[key] for key in sorted(country_roots))
+        # A country-prefixed identity has one authoritative pack. Do not probe
+        # the global graph or unrelated countries after selecting that pack.
+        return [country_roots[prefix]]
     global_root = global_reference_graph_root()
-    if global_root is not None and global_root not in roots:
-        roots.append(global_root)
-    return roots
+    return [global_root] if global_root is not None else []
 
 
 def active_reference_graph_root() -> Path | None:
     """Kept for callers that still expect a single root."""
     roots = reference_graph_roots()
-    return next(iter(roots.values()), global_reference_graph_root())
+    return next(iter(roots.values()), None) or global_reference_graph_root()
 
 
 def _partition_records(root: Path, table: str) -> list[dict[str, Any]]:

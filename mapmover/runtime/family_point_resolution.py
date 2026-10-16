@@ -1,9 +1,9 @@
 """Resolve points against explicitly requested canonical geometry families.
 
-The representation manifest is the physical routing authority: its compact
-predicate Parquets choose canonical loc_ids, and the reference graph routes
-those ids to the authoritative exact shape banks. Crosswalks are deliberately
-not part of this path.
+The selected release's family point layout is the bounded physical route.
+Older local authoring uses compact representation predicates; published
+catalog banks supply legacy hosted paths until a release selects its point
+layout. Crosswalks are deliberately not part of this path.
 """
 
 from __future__ import annotations
@@ -105,6 +105,11 @@ def _manifest_relative_path(country: str) -> str:
 
 @lru_cache(maxsize=32)
 def _representation_manifest_cached(country: str, _epoch: int) -> dict[str, Any]:
+    # The hosted published catalog excludes downloadable_inputs. Family paths
+    # are already declared by its geometry banks, so probing this build-only
+    # manifest adds a guaranteed object-store 404 to every country lookup.
+    if get_data_plane_mode() == "cloud":
+        return {}
     relative = _manifest_relative_path(country)
     local_path = DATA_ROOT / Path(relative)
     if get_data_plane_mode() != "cloud" and not force_remote_data_reads():

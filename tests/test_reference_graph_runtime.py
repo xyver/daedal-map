@@ -661,19 +661,27 @@ class ReferenceGraphRuntimeTests(unittest.TestCase):
                 "s3://bucket/published/graph.parquet",
             )
 
-    def test_country_graph_precedes_global_fallback(self) -> None:
+    def test_country_identity_stays_in_its_graph(self) -> None:
         country = self.root / "country"
         global_root = self.root / "global"
         with mock.patch.object(reference_graph, "reference_graph_roots", return_value={"TST": country}), \
              mock.patch.object(reference_graph, "global_reference_graph_root", return_value=global_root):
             self.assertEqual(
                 reference_graph.graph_roots_for_loc_id("TST-A-001"),
-                [country, global_root],
+                [country],
             )
             self.assertEqual(
                 reference_graph.graph_roots_for_loc_id("ZZZ-G1"),
-                [country, global_root],
+                [global_root],
             )
+
+    def test_country_identity_does_not_probe_global_graph(self) -> None:
+        country = self.root / "country"
+        with mock.patch.object(reference_graph, "reference_graph_roots", return_value={"TST": country}), \
+             mock.patch.object(reference_graph, "global_reference_graph_root") as global_root:
+            self.assertEqual(reference_graph.graph_roots_for_loc_id("TST-A-001"), [country])
+            self.assertEqual(reference_graph.active_reference_graph_root(), country)
+            global_root.assert_not_called()
 
 
 if __name__ == "__main__":
