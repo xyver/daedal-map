@@ -164,6 +164,8 @@ class MCPDiscoveryCompactionTests(unittest.TestCase):
         source = {
             "pack_id": "demo",
             "metrics": {"population": "People"},
+            "sources": [{"source_id": "demo_source", "source_name": "Demo source",
+                         "metrics": {"population": {"reference": "large" * 10000}}}],
             "material_policy": {"large": "raw-only"},
             "quick_start": {"first_query_template": {"pack_id": "demo", "metrics": ["population"]}},
         }
@@ -171,8 +173,13 @@ class MCPDiscoveryCompactionTests(unittest.TestCase):
         full = mcp_full_pack_detail(source, catalog="data")
         download = pack_download_payload("demo", catalog="data", payload=source)
 
-        self.assertEqual(full["detail"], "full")
+        self.assertEqual(full["detail"], "query_metadata")
         self.assertNotIn("material_policy", full)
+        self.assertEqual(full["sources"][0]["metric_ids"], ["population"])
+        self.assertEqual(full["metric_count"], 1)
+        self.assertNotIn("full_call", full)
+        self.assertNotIn("reference", str(full))
+        self.assertLess(len(json.dumps(full)), 35000)
         self.assertEqual(full["next_step"]["tool"], "get_data")
         self.assertEqual(download["detail"], "download")
         self.assertEqual(download["download_url"], "https://app.daedalmap.com/api/v1/packs/demo/download")

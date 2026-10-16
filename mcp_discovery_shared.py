@@ -442,20 +442,51 @@ def annotate_full_pack_detail(payload: Any, *, catalog: str) -> Any:
 
 
 def mcp_full_pack_detail(payload: Any, *, catalog: str) -> Any:
-    """Return detailed query metadata while leaving raw policy evidence to download."""
+    """Return bounded, executable pack metadata without expanding source records."""
     if not isinstance(payload, dict):
         return payload
-    omitted = {"material_policy", "license_evidence"}
-    result = {key: deepcopy(value) for key, value in payload.items() if key not in omitted}
-    next_step = _data_query_call(payload)
-    quick_start = result.get("quick_start") if isinstance(result.get("quick_start"), dict) else None
-    if quick_start is not None and next_step.get("tool") == "get_data":
-        quick_start["first_query_template"] = deepcopy(next_step["arguments"])
-    if str(result.get("preferred_tool") or "") in {
+    result = compact_pack_detail(payload, catalog=catalog)
+    # The public get_pack schema has one exact pack_id selector. These older
+    # handoffs included removed catalog/detail arguments and invite retry loops.
+    result.pop("full_call", None)
+    result.pop("download_call", None)
+    result["detail"] = "query_metadata"
+    if result.get("preferred_tool") in {
         "query_dataset", "get_earthquake_events", "get_volcanic_activity", "get_tsunami_events", "get_fx_rates",
     }:
         result["preferred_tool"] = "get_data"
-    return annotate_full_pack_detail(result, catalog=catalog)
+    source_summaries: list[dict[str, Any]] = []
+    all_metric_ids: set[str] = set()
+    for source in payload.get("sources") or []:
+        if not isinstance(source, dict):
+            continue
+        metrics = source.get("metrics")
+        if isinstance(metrics, dict):
+            metric_ids = sorted(str(key) for key in metrics if str(key))
+        elif isinstance(metrics, list):
+            metric_ids = sorted({
+                str(value if isinstance(value, str) else value.get("metric_id") or value.get("id") or "")
+                for value in metrics if isinstance(value, (str, dict))
+            } - {""})
+        elif isinstance(source.get("metric_ids"), list):
+            metric_ids = sorted({str(value) for value in source["metric_ids"] if str(value)})
+        else:
+            metric_ids = []
+        all_metric_ids.update(metric_ids)
+        source_summaries.append({
+            **_copy_present(source, ("source_id", "source_name", "time_granularity", "geographic_level")),
+            "metric_count": len(metric_ids),
+            "metric_ids": metric_ids,
+        })
+    if source_summaries:
+        result["sources"] = source_summaries
+        result["source_count"] = len(source_summaries)
+    if all_metric_ids:
+        result["metric_count"] = len(all_metric_ids)
+    elif isinstance(payload.get("metrics"), dict):
+        result["metric_ids"] = sorted(str(key) for key in payload["metrics"] if str(key))
+        result["metric_count"] = len(result["metric_ids"])
+    return result
 
 
 def pack_download_payload(pack_id: str, *, catalog: str, payload: Any) -> dict[str, Any]:
