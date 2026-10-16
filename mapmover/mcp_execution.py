@@ -83,6 +83,7 @@ class _ExecutionTrace:
         self.io: dict[str, int] = {}
         self.last_artifact_error: str | None = None
         self.timed_out = False
+        self.query_connection: Any | None = None
         self.lock = threading.Lock()
 
     def snapshot(self) -> dict[str, Any]:
@@ -147,6 +148,26 @@ def record_mcp_artifact_error(error: BaseException) -> None:
                     error_name = f"ClientError:{code}"
         with trace.lock:
             trace.last_artifact_error = error_name
+
+
+@contextmanager
+def mcp_duckdb_query(connection: Any):
+    """Register the worker's active DuckDB query for timeout interruption."""
+    trace = getattr(_TRACE_LOCAL, "trace", None)
+    if trace is None:
+        yield
+        return
+    with trace.lock:
+        if trace.timed_out:
+            raise MCPExecutionTimeoutError("MCP worker was cancelled")
+        previous_connection = trace.query_connection
+        trace.query_connection = connection
+    try:
+        yield
+    finally:
+        with trace.lock:
+            if trace.query_connection is connection:
+                trace.query_connection = previous_connection
 
 
 @contextmanager
@@ -248,7 +269,13 @@ async def run_mcp_blocking(
     try:
         return await asyncio.wait_for(asyncio.shield(wrapped), timeout=budget)
     except asyncio.TimeoutError as exc:
-        trace.timed_out = True
+        with trace.lock:
+            trace.timed_out = True
+            if trace.query_connection is not None:
+                try:
+                    trace.query_connection.interrupt()
+                except Exception as interrupt_error:
+                    _LOGGER.warning("MCP query interrupt failed: %s", type(interrupt_error).__name__)
         _LOGGER.warning("MCP worker timed out: %s", trace.snapshot())
         if cancellation_event is not None:
             cancellation_event.set()

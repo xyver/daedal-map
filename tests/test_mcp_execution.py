@@ -3,10 +3,60 @@ import threading
 import unittest
 from unittest import mock
 
+import duckdb
+
 from mapmover import mcp_execution
+from mapmover.duckdb_helpers import run_df
 
 
 class MCPExecutionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_timeout_interrupts_active_duckdb_query_and_releases_worker(self):
+        started = threading.Event()
+        finished = threading.Event()
+        interrupted = threading.Event()
+        connections = []
+
+        class StartedConnection:
+            def __init__(self, connection):
+                self.connection = connection
+
+            def execute(self, *args, **kwargs):
+                started.set()
+                return self.connection.execute(*args, **kwargs)
+
+            def interrupt(self):
+                self.connection.interrupt()
+
+        def worker():
+            connection = duckdb.connect()
+            connections.append(connection)
+            try:
+                with (
+                    mock.patch("mapmover.duckdb_helpers.is_cloud_mode", return_value=False),
+                    mock.patch("mapmover.duckdb_helpers._get_thread_connection", return_value=StartedConnection(connection)),
+                ):
+                    try:
+                        run_df("SELECT sum(i) FROM range(1000000000000) t(i)", [])
+                    except duckdb.InterruptException:
+                        interrupted.set()
+            finally:
+                finished.set()
+                connection.close()
+
+        task = asyncio.create_task(mcp_execution.run_mcp_blocking(
+            "resolve_deep_point", worker, timeout_seconds=0.1,
+        ))
+        try:
+            self.assertTrue(await asyncio.to_thread(started.wait, 1))
+            with self.assertRaises(mcp_execution.MCPExecutionTimeoutError):
+                await task
+            self.assertTrue(await asyncio.to_thread(finished.wait, 2))
+            self.assertTrue(interrupted.is_set())
+        finally:
+            if connections and not finished.is_set():
+                connections[0].interrupt()
+                await asyncio.to_thread(finished.wait, 2)
+
     async def test_artifact_client_error_trace_records_only_code(self):
         class ClientError(Exception):
             response = {"Error": {"Code": "NoSuchKey", "Message": "private object path"}}

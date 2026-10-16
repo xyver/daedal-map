@@ -22,6 +22,7 @@ import pandas as pd
 
 from .runtime_config import force_remote_data_reads, get_data_plane_mode, get_runtime_config
 from .catalog_surface import get_catalog_surface_override
+from .mcp_execution import mcp_duckdb_query
 from .runtime.published_artifacts import resolve_data_artifact_uri
 
 try:
@@ -514,7 +515,8 @@ class _QueryConnectionLease:
 
     def execute(self, *args, **kwargs):
         try:
-            return self._connection.execute(*args, **kwargs)
+            with mcp_duckdb_query(self._connection):
+                return self._connection.execute(*args, **kwargs)
         except Exception as exc:
             if _looks_like_connection_error(exc):
                 self._discard = True
@@ -549,23 +551,25 @@ def lease_query_connection() -> _QueryConnectionLease:
 
 
 def _execute_df(con, sql: str, params: list, *, raw_geoparquet: bool = False) -> pd.DataFrame:
-    if not raw_geoparquet:
-        return con.execute(sql, params).df()
-    con.execute("SET enable_geoparquet_conversion=false")
-    try:
-        return con.execute(sql, params).df()
-    finally:
-        con.execute("SET enable_geoparquet_conversion=true")
+    with mcp_duckdb_query(con):
+        if not raw_geoparquet:
+            return con.execute(sql, params).df()
+        con.execute("SET enable_geoparquet_conversion=false")
+        try:
+            return con.execute(sql, params).df()
+        finally:
+            con.execute("SET enable_geoparquet_conversion=true")
 
 
 def _execute_rows(con, sql: str, params: list, *, raw_geoparquet: bool = False) -> list[tuple]:
-    if not raw_geoparquet:
-        return con.execute(sql, params).fetchall()
-    con.execute("SET enable_geoparquet_conversion=false")
-    try:
-        return con.execute(sql, params).fetchall()
-    finally:
-        con.execute("SET enable_geoparquet_conversion=true")
+    with mcp_duckdb_query(con):
+        if not raw_geoparquet:
+            return con.execute(sql, params).fetchall()
+        con.execute("SET enable_geoparquet_conversion=false")
+        try:
+            return con.execute(sql, params).fetchall()
+        finally:
+            con.execute("SET enable_geoparquet_conversion=true")
 
 
 def run_df(sql: str, params: list, *, raw_geoparquet: bool = False) -> pd.DataFrame:

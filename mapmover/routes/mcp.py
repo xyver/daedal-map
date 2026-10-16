@@ -103,6 +103,9 @@ MCP_GEOMETRY_READ_TOOLS = {
     "get_job_status",
 }
 MCP_GEOMETRY_BULK_TOOLS = {"create_geometry_export", "create_conversion_job"}
+# Leave room inside the ten-second interactive budget for auth and response
+# shaping. A family point query must use a bounded selected release layout.
+FAMILY_POINT_WORKER_TIMEOUT_SECONDS = 8
 MCP_ANALYTICS_NAMESPACE = "com.daedalmap/analytics"
 
 
@@ -3082,6 +3085,7 @@ async def _execute_point_lookup_tool(
                     [requested_family],
                     valid_points,
                     diagnostic_id=request_id,
+                    timeout_seconds=FAMILY_POINT_WORKER_TIMEOUT_SECONDS,
                     stop_event=stop_event,
                     cancellation_event=stop_event,
                 )
@@ -3342,6 +3346,7 @@ async def _execute_point_lookup_tool(
                     [requested_family],
                     [{"lon": lon, "lat": lat}],
                     diagnostic_id=request_id,
+                    timeout_seconds=FAMILY_POINT_WORKER_TIMEOUT_SECONDS,
                     stop_event=stop_event,
                     cancellation_event=stop_event,
                 )
