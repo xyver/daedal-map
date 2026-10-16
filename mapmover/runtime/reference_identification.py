@@ -1099,7 +1099,8 @@ def identify_reference_system(
                 "maps_to": "expected.vintage" if vintage_conflict else None,
             }],
         }
-        guidance = {"action": "ask_user_then_retry", "message": message, "recommended_tool": "list_reference_systems" if vintage_conflict else "identify_reference_system"}
+        guidance = {"action": "ask_user_then_retry", "message": message,
+                    "recommended_tool": "identify_reference_system"}
     elif status == "unmatched":
         code = "unknown_expected_system" if expected_system else "no_reference_system_match"
         warnings.append({
@@ -1107,11 +1108,19 @@ def identify_reference_system(
             "message": "The expected.system value is not a supported canonical name or alias." if expected_system else "No maintained exact identifier system matched the supplied values.",
         })
         guidance = {
-            "action": "inspect_contract_then_retry",
-            "message": "Use list_reference_systems for canonical system names, or omit expected.system to detect from exact values.",
-            "next_call": {"tool": "list_reference_systems", "arguments": {}},
-            "accepted_examples": ["us_census_geoid", "daedalmap.loc_id", "overlay_zcta", "overlay_nws_public_zone", "overlay_nws_fire_weather_zone"],
+            "action": "ask_user_then_retry",
+            "message": (
+                "Ask for the identifier source, geography level, and vintage before retrying. "
+                "If expected.system was supplied, check its spelling against the candidate system names."
+            ),
         }
+        if listing.get("ok"):
+            country_systems = sorted({
+                str(item.get("system")) for item in listing.get("systems") or []
+                if item.get("system")
+            })
+            guidance["country_systems"] = country_systems[:20]
+            guidance["country_system_count"] = len(country_systems)
         clarification = {
             "required": True,
             "reason": code,

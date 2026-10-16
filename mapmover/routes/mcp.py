@@ -5415,7 +5415,7 @@ async def mcp_endpoint_info(pack_id: str | None = None):
             "Call get_catalog with catalog='geometry', then get_geography for one family or scope.",
             "Call get_tool_help with an exact name from tools/list before an unfamiliar tool.",
             "Use resolve_point for coordinates or identify_reference_system and convert_reference for outside identifiers.",
-            "Use get_shape with include_polygon=false for a lightweight availability check.",
+            "Use get_shape with an exact loc_id to inspect the selected shape; include_polygon=false omits polygon coordinates from the response but may still read shape data. Verified metadata-only availability awaits the next data release.",
         ]
     else:
         how_to_start = [

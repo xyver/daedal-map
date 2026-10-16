@@ -686,8 +686,9 @@ class ReferenceExchangeRuntimeTests(unittest.TestCase):
 
         self.assertEqual(payload["status"], "unmatched")
         self.assertEqual(payload["warnings"][-1]["code"], "unknown_expected_system")
-        self.assertEqual(payload["guidance"]["action"], "inspect_contract_then_retry")
-        self.assertEqual(payload["guidance"]["next_call"]["tool"], "list_reference_systems")
+        self.assertEqual(payload["guidance"]["action"], "ask_user_then_retry")
+        self.assertNotIn("next_call", payload["guidance"])
+        self.assertNotIn("list_reference_systems", payload["guidance"]["message"])
 
     def test_identifier_values_must_be_strings_to_preserve_leading_zeros(self) -> None:
         payload = identify_reference_system([1001, 1003], country_scope="USA")

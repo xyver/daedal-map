@@ -460,17 +460,23 @@ def _relationship_route_records(
                                 exact_filters={endpoint_column: family})
             rows = frame.to_dict("records")
         else:
-            return []
-    except Exception:
-        return []
-    path_map = _partition_source_map(str(root), "relationships")
+            raise ReferenceRouteUnavailable(f"relationship routing index unavailable: {index_path}")
+        path_map = _partition_source_map(str(root), "relationships")
+    except ReferenceRouteUnavailable:
+        raise
+    except Exception as exc:
+        raise ReferenceRouteUnavailable(f"relationship routing index could not be read: {index_path}") from exc
     selected = []
     seen: set[str] = set()
     for row in rows:
         value = str(row.get("path") or "")
         if value and value not in seen:
+            if value not in path_map:
+                raise ReferenceRouteUnavailable(
+                    f"relationship routing index references an unpinned partition: {value}"
+                )
             seen.add(value)
-            selected.append({**row, "resolved_path": path_map.get(value, DATA_ROOT / value)})
+            selected.append({**row, "resolved_path": path_map[value]})
     return selected
 
 
@@ -1366,7 +1372,7 @@ def relationships_for_loc_id(
     connection = _connection()
     try:
         requested_limit = max(1, int(limit))
-        def selected_rows(column: str) -> list[dict[str, Any]]:
+        def selected_rows(column: str, *, exclude_self: bool = False) -> list[dict[str, Any]]:
             endpoint = "source_family" if column == "source_loc_id" else "target_family"
             rows: list[dict[str, Any]] = []
             for root in roots:
@@ -1376,9 +1382,10 @@ def relationships_for_loc_id(
                     source = f"['{_sql_path(path)}']"
                     spine_parent = route.get("strict_parent") is True and route.get("evidence_class") == "admin_spine_parent_column"
                     if not spine_parent and {"source_loc_id", "target_loc_id"} <= columns:
+                        self_filter = " AND source_loc_id IS DISTINCT FROM ?" if exclude_self else ""
                         cursor = connection.execute(
-                            f"SELECT * FROM read_parquet({source}) WHERE {column} = ? LIMIT ?",
-                            [str(loc_id), requested_limit],
+                            f"SELECT * FROM read_parquet({source}) WHERE {column} = ?{self_filter} LIMIT ?",
+                            [str(loc_id), *([str(loc_id)] if exclude_self else []), requested_limit],
                         )
                         names = [item[0] for item in cursor.description]
                         rows.extend(dict(zip(names, values)) for values in cursor.fetchall())
@@ -1386,11 +1393,12 @@ def relationships_for_loc_id(
                         # The graph's strict Admin parent partition references
                         # the spine bank itself. Its edge is loc_id -> parent_id.
                         predicate = "loc_id" if column == "source_loc_id" else "parent_id"
+                        self_filter = " AND loc_id IS DISTINCT FROM ?" if exclude_self else ""
                         selected = [name for name in ("loc_id", "parent_id", "admin_level", "parent_admin_level",
                                                       "source_vintage", "valid_from", "valid_to", "source_system") if name in columns]
                         cursor = connection.execute(
-                            f"SELECT {', '.join(selected)} FROM read_parquet({source}) WHERE {predicate} = ? LIMIT ?",
-                            [str(loc_id), requested_limit],
+                            f"SELECT {', '.join(selected)} FROM read_parquet({source}) WHERE {predicate} = ?{self_filter} LIMIT ?",
+                            [str(loc_id), *([str(loc_id)] if exclude_self else []), requested_limit],
                         )
                         names = [item[0] for item in cursor.description]
                         for values in cursor.fetchall():
@@ -1423,8 +1431,10 @@ def relationships_for_loc_id(
         elif direction == "incoming":
             rows = selected_rows("target_loc_id")
         else:
-            rows = selected_rows("source_loc_id") + selected_rows("target_loc_id")
-            rows = list({str(row.get("relationship_id")): row for row in rows}.values())
+            rows = selected_rows("source_loc_id") + selected_rows("target_loc_id", exclude_self=True)
+            # A self-loop appears in both directions. Exclude it from the
+            # incoming scan; never deduplicate by relationship_id, which may
+            # be null on many distinct selected graph edges.
 
         rows.sort(key=lambda row: (
             str(row.get("relationship_type") or ""),

@@ -88,7 +88,7 @@ def graph_info_items(loc_ids: list[str]) -> list[dict[str, Any]]:
             "name": identity.get("name"),
             "family": identity.get("geography_family") or identity.get("family"),
             "admin_level": identity.get("admin_level"),
-            "parent_id": identity.get("parent_id"),
+            "parent_id": identity.get("parent_loc_id") or identity.get("parent_id"),
             "valid_from": identity.get("valid_from"),
             "valid_to": identity.get("valid_to"),
             "connections": connections,

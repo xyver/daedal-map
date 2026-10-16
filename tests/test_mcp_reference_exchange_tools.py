@@ -181,7 +181,8 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         with (
             mock.patch("mapmover.runtime.loc_id_graph_info.indexed_public_alias_candidates", return_value={}),
             mock.patch("mapmover.runtime.loc_id_graph_info.identities", return_value=[
-                {"loc_id": "CAN-BC", "name": "British Columbia", "family": "admin_1"},
+                {"loc_id": "CAN-BC", "name": "British Columbia", "family": "admin_1",
+                 "parent_loc_id": "CAN"},
             ]) as identities,
             mock.patch("mapmover.runtime.loc_id_graph_info.relationships_for_loc_id", return_value=edges) as relationships,
             mock.patch("mapmover.data_loading._load_agent_api_catalog", side_effect=AssertionError("data catalog read")),
@@ -193,6 +194,7 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         self.assertEqual(payload["connection_count"], 2)
         self.assertEqual({row["loc_id"] for row in payload["connections"]}, {"CAN-WATER-1", "CAN-FOREST-1"})
         self.assertFalse(payload["has_more"])
+        self.assertEqual(payload["parent_id"], "CAN")
         self.assertNotIn("availability", payload)
         self.assertNotIn("references", payload)
 

@@ -294,6 +294,60 @@ class ReferenceGraphRuntimeTests(unittest.TestCase):
         pair = relationships_between_loc_ids("TST-A-001", "TST-B-002")
         self.assertEqual(pair[0]["relationship_type"], "strict_parent")
 
+    def test_multi_route_null_ids_preserve_edges_and_report_truncation(self) -> None:
+        routes = pd.read_parquet(self.root / "relationship_partitions.parquet")
+        for route_number in (1, 2):
+            path = self.root / f"incoming_{route_number}.parquet"
+            rows = [{
+                "relationship_id": None,
+                "source_loc_id": f"TST-CHILD-{route_number}-{index:03d}",
+                "target_loc_id": "TST-A-001",
+                "source_family": "test_sidechain",
+                "target_family": "test_sidechain",
+                "relationship_type": "official_membership",
+            } for index in range(30)]
+            if route_number == 1:
+                rows.append({
+                    "relationship_id": None,
+                    "source_loc_id": "TST-A-001",
+                    "target_loc_id": "TST-A-001",
+                    "source_family": "test_sidechain",
+                    "target_family": "test_sidechain",
+                    "relationship_type": "official_membership",
+                })
+            pd.DataFrame(rows).to_parquet(path, index=False)
+            routes = pd.concat([routes, pd.DataFrame([{
+                **routes.iloc[0].to_dict(),
+                "partition_id": f"incoming_{route_number}",
+                "path": str(path),
+                "row_count": len(rows),
+            }])], ignore_index=True)
+        routes.to_parquet(self.root / "relationship_partitions.parquet", index=False)
+        pd.DataFrame([{
+            "loc_id": "TST-A-001", "path": str(self.root / "identities.parquet"),
+        }]).to_parquet(self.root / "identity_routes.parquet", index=False)
+
+        edges = relationships_for_loc_id("TST-A-001", limit=100)
+        self.assertEqual(len(edges), 62)
+        self.assertEqual(sum(row.get("relationship_id") is None for row in edges), 61)
+        self.assertEqual(sum(row["source_loc_id"] == row["target_loc_id"] for row in edges), 1)
+        with mock.patch("mapmover.runtime.loc_id_graph_info.indexed_public_alias_candidates", return_value={}):
+            from mapmover.runtime.loc_id_graph_info import graph_info_items
+            result = graph_info_items(["TST-A-001"])[0]
+        self.assertIn("connection_count", result, result)
+        self.assertEqual(result["connection_count"], 50)
+        self.assertTrue(result["has_more"])
+
+    def test_missing_relationship_index_is_a_route_error(self) -> None:
+        (self.root / "relationship_partitions.parquet").unlink()
+        with self.assertRaisesRegex(reference_graph.ReferenceRouteUnavailable, "relationship routing index unavailable"):
+            relationships_for_loc_id("TST-A-001")
+
+    def test_unpinned_relationship_partition_is_a_route_error(self) -> None:
+        with mock.patch.object(reference_graph, "_partition_source_map", return_value={}):
+            with self.assertRaisesRegex(reference_graph.ReferenceRouteUnavailable, "unpinned partition"):
+                relationships_for_loc_id("TST-A-001")
+
     def test_exact_identity_route_miss_does_not_scan_all_partitions(self) -> None:
         pd.DataFrame([{
             "loc_id": "TST-A-001", "path": str(self.root / "identities.parquet"),

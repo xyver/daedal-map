@@ -128,6 +128,8 @@ class ConcurringSystemTests(unittest.TestCase):
             missing = identify_reference_system(["99999"], country_scope="USA")
         self.assertEqual(missing["status"], "unmatched")
         self.assertIsNone(missing["recommended_binding"])
+        self.assertEqual(missing["guidance"]["country_systems"], ["us_census_geoid"])
+        self.assertNotIn("next_call", missing["guidance"])
 
     def test_stale_selected_alias_index_is_not_reported_as_unmatched(self) -> None:
         from mapmover.runtime.reference_graph import ReferenceRouteUnavailable
