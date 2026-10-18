@@ -67,6 +67,26 @@ def can_query_event_source(source_id: str) -> bool:
     return duckdb_available() and source_id in DUCKDB_EVENT_SOURCES
 
 
+def hurricane_track_join_columns(available_columns: Iterable[str]) -> tuple[str, ...]:
+    """Select storm metadata for track joins across published schema versions.
+
+    Older storms.parquet releases omit prepared display lifecycle fields. Keep
+    those fields when present, while allowing the tracks endpoint and warmer to
+    serve the older published artifact.
+    """
+    available = set(available_columns)
+    required = (
+        "storm_id", "name", "year", "basin", "max_wind_kt",
+        "min_pressure_mb", "max_category", "num_positions",
+        "start_date", "end_date", "made_landfall",
+    )
+    optional = (
+        "display_start_timestamp", "display_end_timestamp",
+        "display_animation_kind",
+    )
+    return (*required, *(column for column in optional if column in available))
+
+
 # ---------------------------------------------------------------------------
 # Cloud / httpfs helpers
 # ---------------------------------------------------------------------------
@@ -1671,24 +1691,7 @@ def prewarm_disaster_sources(global_dir: Path) -> None:
                     pos_df = pos_df.dropna(subset=["latitude", "longitude"])
                     if not pos_df.empty:
                         joined = pos_df.merge(
-                            storms_df[
-                                [
-                                    "storm_id",
-                                    "name",
-                                    "year",
-                                    "basin",
-                                    "max_wind_kt",
-                                    "min_pressure_mb",
-                                    "max_category",
-                                    "num_positions",
-                                    "start_date",
-                                    "end_date",
-                                    "display_start_timestamp",
-                                    "display_end_timestamp",
-                                    "display_animation_kind",
-                                    "made_landfall",
-                                ]
-                            ],
+                            storms_df[list(hurricane_track_join_columns(storms_df.columns))],
                             on="storm_id",
                             how="inner",
                         )

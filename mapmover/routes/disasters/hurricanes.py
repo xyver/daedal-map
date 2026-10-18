@@ -3,7 +3,7 @@
 from fastapi import APIRouter
 
 from mapmover.disaster_filters import apply_location_filters, get_default_min_year
-from mapmover.duckdb_helpers import cache_get, cache_set, duckdb_available, is_default_preload_range, make_cache_key, make_preload_cache_key, parquet_available, select_filtered_event_rows, select_peak_positions_by_storm_ids, select_rows_by_exact_value
+from mapmover.duckdb_helpers import cache_get, cache_set, duckdb_available, hurricane_track_join_columns, is_default_preload_range, make_cache_key, make_preload_cache_key, parquet_available, select_filtered_event_rows, select_peak_positions_by_storm_ids, select_rows_by_exact_value
 from mapmover.logging_analytics import logger
 from mapmover.paths import GLOBAL_DIR
 
@@ -367,22 +367,7 @@ async def get_storm_tracks_geojson(
             if preload_ck is not None and not positions_subset.empty:
                 joined = positions_subset.merge(
                     storms_df.reset_index()[
-                        [
-                            "storm_id",
-                            "name",
-                            "year",
-                            "basin",
-                            "max_wind_kt",
-                            "min_pressure_mb",
-                            "max_category",
-                            "num_positions",
-                            "start_date",
-                            "end_date",
-                            "made_landfall",
-                            "display_start_timestamp",
-                            "display_end_timestamp",
-                            "display_animation_kind",
-                        ]
+                        list(hurricane_track_join_columns(storms_df.columns))
                     ],
                     on="storm_id",
                     how="inner",
