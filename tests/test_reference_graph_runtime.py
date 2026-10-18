@@ -36,6 +36,24 @@ from mapmover.runtime import reference_graph
 
 
 class ReferenceGraphRuntimeTests(unittest.TestCase):
+    def test_publisher_namespace_identity_uses_exact_country_route(self) -> None:
+        can_root = Path("CAN/reference_graph")
+        bra_root = Path("BRA/reference_graph")
+        for cloud_mode in (False, True):
+            with (
+                self.subTest(cloud_mode=cloud_mode),
+                mock.patch.object(reference_graph, "is_cloud_mode", return_value=cloud_mode),
+                mock.patch.object(reference_graph, "reference_graph_roots", return_value={
+                    "BRA": bra_root, "CAN": can_root,
+                }),
+                mock.patch.object(reference_graph, "_route_paths", side_effect=lambda root, *_args: (
+                    [root / "identity.parquet"] if root == can_root else []
+                )),
+                mock.patch.object(reference_graph, "global_reference_graph_root", return_value=None),
+            ):
+                self.assertEqual(reference_graph.graph_roots_for_loc_id(
+                    "CGNDB-00000118CCC54AB8BC2083A146C45EAD"), [can_root])
+
     def test_health_source_windows_are_hash_pinned_and_month_precise(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             data_root = Path(directory)

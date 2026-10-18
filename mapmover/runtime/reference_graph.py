@@ -351,6 +351,16 @@ def graph_roots_for_loc_id(loc_id: str | None) -> list[Path]:
         # A country-prefixed identity has one authoritative pack. Do not probe
         # the global graph or unrelated countries after selecting that pack.
         return [country_roots[prefix]]
+    # Some country-owned identities use a publisher namespace (for example
+    # CGNDB and CANVEC1M) instead of an ISO3 prefix. Their exact identity
+    # routes identify the owning country without scanning unrelated identity
+    # partitions or guessing from the namespace.
+    routed_roots = [
+        root for root in country_roots.values()
+        if _route_paths(root, IDENTITY_ROUTE_INDEX, "loc_id", [str(loc_id)])
+    ]
+    if routed_roots:
+        return routed_roots
     global_root = global_reference_graph_root()
     return [global_root] if global_root is not None else []
 
