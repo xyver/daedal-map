@@ -3930,6 +3930,15 @@ export const PointRadiusModel = {
    * @private
    */
   _clearTornadoSequence() {
+    const session = this._tornadoSeqState;
+    if (session?.scaleId && TimeSlider) {
+      if (session.timeChangeHandler) {
+        TimeSlider.removeChangeListener(session.timeChangeHandler);
+      }
+      TimeSlider.exitEventAnimation?.();
+      TimeSlider.removeScale(session.scaleId);
+    }
+    this._tornadoSeqState = null;
     if (!MapAdapter?.map) return;
 
     const map = MapAdapter.map;
