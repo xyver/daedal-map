@@ -3494,6 +3494,7 @@ export const OverlayController = {
    * @param {number} endMs - End timestamp in milliseconds
    * @param {object} options - Optional request overrides
    * @param {object|null} options.params - Query parameter overrides
+   * @param {AbortSignal|null} options.signal - Optional cancellation signal
    * @returns {Promise<boolean>}
    */
   async loadOverlayRange(overlayId, startMs, endMs, options = {}) {
@@ -3554,7 +3555,7 @@ export const OverlayController = {
         }
       : endpointBase;
 
-    const loaded = await loadRangeData(overlayId, startMs, endMs, endpoint);
+    const loaded = await loadRangeData(overlayId, startMs, endMs, endpoint, options.signal || null);
     const hasCachedData = Boolean(dataCache[overlayId]?.features?.length);
 
     if (hasCachedData) {
