@@ -4,7 +4,6 @@
 
 import { postMsgpack } from '../utils/fetch.js';
 import { getApiUrl } from '../chat/api.js';
-import { isSharedShellRoute } from '../routing/app-route-state.js';
 
 export class ResearchModeToggle {
   static SHOW_CATALOG_SURFACE_CONTROLS = false;
@@ -223,10 +222,9 @@ export class ResearchModeToggle {
 
   updateRouteVisibility() {
     if (!this.modeMount) return;
-    const showModeSelector = isSharedShellRoute();
-    this.modeMount.hidden = !showModeSelector;
-    this.modeMount.setAttribute('aria-hidden', showModeSelector ? 'false' : 'true');
-    this.modeMount.classList.toggle('hidden', !showModeSelector);
+    this.modeMount.hidden = true;
+    this.modeMount.setAttribute('aria-hidden', 'true');
+    this.modeMount.classList.add('hidden');
   }
 
   getModeLabel(mode) {

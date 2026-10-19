@@ -4369,7 +4369,7 @@ def _build_exact_event_explore_handoff(feed: str, identifier_value: str) -> str:
     return (
         f"I could not find that {noun} record in the retained Ops window. "
         f"Ops only keeps a bounded live-history window; try Explore for the full historical record: "
-        f"/explore?pack={pack_id}&event_id={identifier}"
+        f"/?pack={pack_id}&event_id={identifier}"
     )
 
 

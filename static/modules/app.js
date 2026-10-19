@@ -912,8 +912,7 @@ export const App = {
     hideStartupChrome();
 
     const startupMode = getStartupChatMode();
-    // Preserve explicit lane URLs on boot, but leave the shared '/' shell alone
-    // so it can host the cross-mode selector.
+    // Keep the URL aligned with the selected lane; '/' is Explore.
     normalizeBootUrl(startupMode);
     setLaneTitle(startupMode);
     const routeIntent = parseRouteIntent();
