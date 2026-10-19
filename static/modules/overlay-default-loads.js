@@ -307,7 +307,8 @@ function buildExploreDisasterRangeAction(relativeYears = 10) {
 
   return {
     type: 'multi_default_load',
-    timeoutMs: 90_000,
+    timeoutMs: 180_000,
+    concurrency: 1,
     actions: overlayIds.map((overlayId) => ({
       type: 'overlay_range_load',
       overlayId,

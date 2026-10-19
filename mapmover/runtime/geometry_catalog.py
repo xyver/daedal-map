@@ -12,7 +12,7 @@ import re
 from fnmatch import fnmatchcase
 from functools import lru_cache
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from ..paths import GEOMETRY_DIR
 from ..catalog_cache_policy import control_catalog_cache_epoch
@@ -124,7 +124,7 @@ def load_geometry_catalog() -> dict[str, Any]:
     return _load_geometry_catalog_cached(epoch)
 
 
-def refresh_geometry_catalog() -> dict[str, Any]:
+def refresh_geometry_catalog(*, validate: Callable[[dict[str, Any]], None] | None = None) -> dict[str, Any]:
     """Prefetch the next catalog epoch without changing the current geometry view."""
     global _geometry_catalog_prefetch
     if _is_cloud_mode():
@@ -136,6 +136,8 @@ def refresh_geometry_catalog() -> dict[str, Any]:
     ):
         raise RuntimeError("geometry catalog refresh returned no records")
     catalog = _merge_crosswalks(payload)
+    if validate is not None:
+        validate(catalog)
     _geometry_catalog_prefetch = (_catalog_cache_epoch() + 1, catalog)
     return catalog
 

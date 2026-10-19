@@ -30,7 +30,7 @@ from mapmover.hosted_runtime_account import load_account_context
 from mapmover.hosted_runtime_events import submit_runtime_feedback
 from mapmover.order_queue import order_queue
 from mapmover.pack_downloader import _geometry_edition_projection, _load_json_from_ref
-from mapmover.prewarm_status import begin_prewarm, prewarm_readiness, run_prewarm_task
+from mapmover.prewarm_status import begin_prewarm, prewarm_readiness, run_prewarm_task, run_prewarm_task_after
 from mapmover.catalog_cache_policy import CONTROL_CATALOG_CACHE_TTL_SECONDS
 from mapmover.runtime_config import get_runtime_config
 from mapmover.runtime_build_info import runtime_build_info
@@ -191,9 +191,8 @@ def _start_runtime_prewarm_threads() -> list[str]:
     try:
         from mapmover.duckdb_helpers import is_cloud_mode
         if is_cloud_mode():
-            task_names.extend(["geometry_display", "reference_identities", "ops_snapshots"])
-            if os.environ.get("PREWARM_DISASTERS", "0").strip().lower() in {"1", "true", "yes", "on"}:
-                task_names.append("disasters")
+            task_names.extend(["geometry_display", "reference_identities", "ops_snapshots", "country_routing_indexes"])
+            task_names.append("disasters")
     except Exception:
         pass
     begin_prewarm(task_names)
@@ -215,7 +214,7 @@ def _start_runtime_prewarm_threads() -> list[str]:
         from mapmover.geometry_handlers import prewarm_geometry
         from mapmover.ops_orchestrator_runtime import prewarm_ops_snapshots
         from mapmover.paths import GLOBAL_DIR
-        from mapmover.runtime.reference_prewarm import prewarm_reference_identities
+        from mapmover.runtime.reference_prewarm import prewarm_country_routing_indexes, prewarm_reference_identities
 
         if is_cloud_mode():
             threading.Thread(
@@ -225,6 +224,14 @@ def _start_runtime_prewarm_threads() -> list[str]:
                 name="prewarm-geometry-display-refresh",
             ).start()
             started.append("geometry_display")
+
+            threading.Thread(
+                target=run_prewarm_task_after,
+                args=("country_routing_indexes", ("geometry_display",), prewarm_country_routing_indexes),
+                daemon=True,
+                name="prewarm-country-routing-indexes-refresh",
+            ).start()
+            started.append("country_routing_indexes")
 
             threading.Thread(
                 target=run_prewarm_task,
@@ -242,14 +249,13 @@ def _start_runtime_prewarm_threads() -> list[str]:
             ).start()
             started.append("ops_snapshots")
 
-            if os.environ.get("PREWARM_DISASTERS", "0").strip().lower() in {"1", "true", "yes", "on"}:
-                threading.Thread(
-                    target=run_prewarm_task,
-                    args=("disasters", prewarm_disaster_sources, GLOBAL_DIR),
-                    daemon=True,
-                    name="prewarm-disasters-refresh",
-                ).start()
-                started.append("disasters")
+            threading.Thread(
+                target=run_prewarm_task_after,
+                args=("disasters", tuple(task for task in task_names if task != "disasters"), prewarm_disaster_sources, GLOBAL_DIR),
+                daemon=True,
+                name="prewarm-disasters-refresh",
+            ).start()
+            started.append("disasters")
     except Exception as exc:
         logger.warning("Runtime refresh: background prewarm launch failed: %s", exc)
     return started

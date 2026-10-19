@@ -74,7 +74,17 @@ def refresh_app_catalogs() -> dict[str, int]:
     with catalog_surface_scope("api"):
         published = load_catalog(force_refresh=True)
     wip = load_full_catalog(force_refresh=True)
-    geometry = refresh_geometry_catalog()
+    from mapmover.runtime.reference_prewarm import (
+        country_routing_selection_is_warm, prewarm_country_routing_indexes,
+    )
+    from mapmover.duckdb_helpers import is_cloud_mode
+    def prewarm_new_country_selection(geometry: dict) -> None:
+        if not is_cloud_mode() or country_routing_selection_is_warm(geometry):
+            return
+        # A new publication must hydrate its routing files before the next
+        # catalog epoch makes the new country selection visible to readers.
+        prewarm_country_routing_indexes(geometry)
+    geometry = refresh_geometry_catalog(validate=prewarm_new_country_selection)
     ops_feeds = load_ops_feed_records(force_refresh=True)
     agent = load_api_catalog(force_refresh=True)
     guide = load_api_guide(force_refresh=True)
@@ -116,15 +126,18 @@ def maintain_app_catalogs(stop_event: threading.Event, *, startup_monotonic: flo
         if state == "ready":
             break
         if state == "failed":
-            return
+            # Keep catalog refresh alive when another readiness task fails.
+            # Its next refresh can still serve current control metadata.
+            break
     else:
         return
-    with _refresh_state_lock:
-        _refresh_state.update({
-            "state": "ready",
-            "last_success_at": datetime.now(timezone.utc).isoformat(),
-            "last_success_monotonic": startup_monotonic,
-        })
+    if state == "ready":
+        with _refresh_state_lock:
+            _refresh_state.update({
+                "state": "ready",
+                "last_success_at": datetime.now(timezone.utc).isoformat(),
+                "last_success_monotonic": startup_monotonic,
+            })
     next_refresh = startup_monotonic + APP_CATALOG_REFRESH_AHEAD_SECONDS
     while not stop_event.wait(max(0, next_refresh - time.monotonic())):
         started = time.monotonic()

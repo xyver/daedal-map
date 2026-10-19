@@ -88,7 +88,7 @@ from mapmover.routes.mcp import router as mcp_router
 from mapmover.routes.ops import router as ops_router
 from mapmover.routes.private_mcp import router as private_mcp_router
 from mapmover.routes.research import router as research_router
-from mapmover.prewarm_status import begin_prewarm, run_prewarm_task
+from mapmover.prewarm_status import begin_prewarm, run_prewarm_task, run_prewarm_task_after
 from mapmover.routes.system import prewarm_public_pack_catalog, router as system_router
 from tool_access_shared import HOSTED_MCP_SURFACE_RATE_LIMIT_DEFAULTS
 from mapmover.routes.weather import router as weather_router
@@ -319,18 +319,14 @@ async def lifespan(app: FastAPI):
         from mapmover.geometry_handlers import prewarm_geometry
         from mapmover.ops_orchestrator_runtime import prewarm_ops_snapshots
         from mapmover.paths import GLOBAL_DIR
-        from mapmover.runtime.reference_prewarm import prewarm_reference_identities
+        from mapmover.runtime.reference_prewarm import prewarm_country_routing_indexes, prewarm_reference_identities
         tasks = ["control_catalogs", "public_pack_catalog", "api_catalog"]
         if is_cloud_mode():
             # Readiness covers bounded, shared visitor dependencies only.
             # Executing every pack's authored default can hydrate large data
             # products and is neither a readiness requirement nor bounded.
-            tasks.extend(["geometry_display", "reference_identities", "ops_snapshots"])
-            # Disaster overlays are broad, multi-source reads. Keep them out
-            # of startup readiness; a scheduled warmer can opt in after the
-            # process is healthy.
-            if os.environ.get("PREWARM_DISASTERS", "0").strip().lower() in {"1", "true", "yes", "on"}:
-                tasks.append("disasters")
+            tasks.extend(["geometry_display", "reference_identities", "ops_snapshots", "country_routing_indexes"])
+            tasks.append("disasters")
         prewarm_started_monotonic = time.monotonic()
         begin_prewarm(tasks)
 
@@ -374,6 +370,12 @@ async def lifespan(app: FastAPI):
             )
             t_geom.start()
             threading.Thread(
+                target=run_prewarm_task_after,
+                args=("country_routing_indexes", ("geometry_display",), prewarm_country_routing_indexes),
+                daemon=True,
+                name="prewarm-country-routing-indexes",
+            ).start()
+            threading.Thread(
                 target=run_prewarm_task,
                 args=("reference_identities", prewarm_reference_identities),
                 daemon=True,
@@ -399,15 +401,14 @@ async def lifespan(app: FastAPI):
                 name="prewarm-ops-snapshots",
             ).start()
 
-            if os.environ.get("PREWARM_DISASTERS", "0").strip().lower() in {"1", "true", "yes", "on"}:
-                threading.Thread(
-                    target=run_prewarm_task,
-                    args=("disasters", prewarm_disaster_sources, GLOBAL_DIR),
-                    daemon=True,
-                    name="prewarm-disasters",
-                ).start()
+            threading.Thread(
+                target=run_prewarm_task_after,
+                args=("disasters", tuple(task for task in tasks if task != "disasters"), prewarm_disaster_sources, GLOBAL_DIR),
+                daemon=True,
+                name="prewarm-disasters",
+            ).start()
 
-            logger.info("Pre-warmers started: control-catalogs + public-pack-catalog + api-catalog + geometry-display + reference-identities + ops-snapshots")
+            logger.info("Pre-warmers started: catalogs + geometry display + reference identities + Ops snapshots; country routing indexes and seven disaster slices follow")
         else:
             logger.info("Pre-warmers started: control-catalogs + public-pack-catalog + api-catalog")
     except Exception as exc:
