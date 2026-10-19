@@ -8,6 +8,7 @@ import logging
 from logging.handlers import RotatingFileHandler
 import os
 from pathlib import Path
+import shutil
 import sys
 import threading
 import time
@@ -118,6 +119,43 @@ def _ensure_file_log():
         return None
 
 
+def _storage_snapshot(artifacts=None) -> dict:
+    """Sample the cache filesystem and loaded cache counters without walking files."""
+    result = {}
+    configured = os.environ.get('PUBLISHED_ARTIFACT_CACHE_DIR', '').strip()
+    if artifacts is not None:
+        try:
+            status = artifacts.artifact_cache_status()
+            result['artifact_cache'] = {
+                key: status[key] for key in (
+                    'enabled', 'bytes', 'quota_bytes', 'entry_count',
+                    'disk_hits', 'disk_misses', 'remote_reads', 'hydrations',
+                    'hydrated_bytes', 'evictions', 'evicted_bytes',
+                ) if key in status
+            }
+            configured = str(status.get('root') or configured)
+        except (OSError, ValueError, TypeError) as exc:
+            result['artifact_cache_error'] = type(exc).__name__
+    if not configured and os.environ.get('DEPLOYMENT', '').lower() == 'railway':
+        configured = '/mnt/artifact-cache/published-artifacts'
+    if configured:
+        root = Path(configured)
+        probe = root if root.exists() else root.parent
+        if probe.exists():
+            try:
+                usage = shutil.disk_usage(probe)
+                result['filesystem'] = {
+                    'total_bytes': usage.total,
+                    'used_bytes': usage.used,
+                    'free_bytes': usage.free,
+                }
+            except OSError as exc:
+                result['filesystem_error'] = type(exc).__name__
+        else:
+            result['filesystem_error'] = 'path_unavailable'
+    return result
+
+
 def sample_memory():
     """Inspect loaded objects only; no SQL, cache loads, GC or profiling."""
     from mapmover.memory_diagnostics import (
@@ -168,6 +206,7 @@ def sample_memory():
     artifacts = sys.modules.get('mapmover.runtime.published_artifacts')
     if artifacts is not None:
         row['artifact_activity'] = dict(artifacts._CACHE_STATS)
+    row['storage'] = _storage_snapshot(artifacts)
     security = sys.modules.get('mapmover.security')
     limiter = getattr(security, 'rate_limiter', None) if security else None
     if limiter is not None and hasattr(limiter, 'stats'):
