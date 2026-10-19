@@ -127,6 +127,10 @@ This repository is the open runtime: the FastAPI server, MCP and HTTP API, and
 map frontend. Use it to self-host, run against your own data, or extend the
 engine.
 
+The [Network prototype](network/README.md) also lives in this repository.
+It has its own Docker setup and dependencies under `network/`, so the map
+runtime does not need them to start.
+
 ```powershell
 cd county-map
 pip install -r requirements.txt
