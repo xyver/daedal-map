@@ -34,7 +34,7 @@ def prewarm_country_routing_indexes(catalog: dict[str, Any] | None = None) -> di
     from .geometry_storage_layout import country_release_manifest_relative
     from .published_artifacts import (
         artifact_cache_enabled, artifact_prefix, artifact_ref,
-        read_artifact_bytes, resolve_artifact_path,
+        pin_artifact_paths, read_artifact_bytes, resolve_artifact_path,
     )
 
     # Candidate/staging lanes are mutable and intentionally bypass Tier 2.
@@ -50,11 +50,13 @@ def prewarm_country_routing_indexes(catalog: dict[str, Any] | None = None) -> di
         raise RuntimeError("No published country profiles to prewarm")
     total_bytes = 0
     countries = []
+    warm_paths = ["geometry/geometry_catalog.json"]
 
     def control(relative: str) -> dict[str, Any]:
         payload = json.loads(read_artifact_bytes(relative, lane="active"))
         if not isinstance(payload, dict):
             raise ValueError(f"Invalid country routing control: {relative}")
+        warm_paths.append(relative)
         return payload
 
     for profile in profiles:
@@ -74,6 +76,7 @@ def prewarm_country_routing_indexes(catalog: dict[str, Any] | None = None) -> di
                 or pin.get("path") != manifest_path):
             raise ValueError(f"Country routing release selection changed: {country}")
         manifest_bytes = read_artifact_bytes(manifest_path, lane="active")
+        warm_paths.append(manifest_path)
         if hashlib.sha256(manifest_bytes).hexdigest() != pin.get("sha256"):
             raise ValueError(f"Country routing manifest pin mismatch: {country}")
         manifest = json.loads(manifest_bytes)
@@ -115,8 +118,10 @@ def prewarm_country_routing_indexes(catalog: dict[str, Any] | None = None) -> di
             if digest.hexdigest() != expected_hash:
                 raise ValueError(f"Country routing index hash mismatch: {relative}")
             total_bytes += local.stat().st_size
+            warm_paths.append(relative)
         countries.append(country)
-    result = {"countries": countries, "index_bytes": total_bytes}
+    pinned_bytes = pin_artifact_paths(warm_paths)
+    result = {"countries": countries, "index_bytes": total_bytes, "pinned_bytes": pinned_bytes}
     global _warmed_country_selection
     _warmed_country_selection = country_routing_selection(selected_catalog)
     logger.info("Country routing index pre-warmer complete: %s", result)

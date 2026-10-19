@@ -215,6 +215,34 @@ class PublishedArtifactTests(unittest.TestCase):
             self.assertTrue(recent.is_file())
             self.assertIn("recent", entries)
 
+    def test_pinned_routing_artifact_survives_quota_eviction(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir, mock.patch.dict(os.environ, {
+            "PUBLISHED_ARTIFACT_CACHE_DIR": temp_dir,
+            "PUBLISHED_ARTIFACT_CACHE_QUOTA_MB": "1",
+            "PUBLISHED_ARTIFACT_CACHE_EVICTION_GRACE_SECONDS": "0",
+        }, clear=True):
+            objects = Path(temp_dir) / "objects" / "aa"
+            objects.mkdir(parents=True)
+            pinned = objects / "routing.parquet"
+            other = objects / "other.parquet"
+            pinned.write_bytes(b"r" * 500_000)
+            other.write_bytes(b"o" * 500_000)
+            entries = {
+                "routing": {"local_path": str(pinned), "bytes": 500_000,
+                            "sha256": published_artifacts._sha256_file(pinned), "last_accessed": 0},
+                "other": {"local_path": str(other), "bytes": 500_000,
+                          "sha256": published_artifacts._sha256_file(other), "last_accessed": 0},
+            }
+            published_artifacts._write_index(entries)
+            with mock.patch.object(published_artifacts, "artifact_ref", return_value=mock.Mock(uri="routing")):
+                self.assertEqual(published_artifacts.pin_artifact_paths(["routing"], max_bytes=600_000), 500_000)
+            entries = published_artifacts._load_index()
+            self.assertTrue(published_artifacts._evict_for(entries, 500_000, keep_key="incoming"))
+            self.assertIn("routing", entries)
+            self.assertNotIn("other", entries)
+            self.assertTrue(pinned.is_file())
+            self.assertFalse(other.exists())
+
 
 if __name__ == "__main__":
     unittest.main()

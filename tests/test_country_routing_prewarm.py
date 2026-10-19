@@ -88,10 +88,13 @@ class CountryRoutingPrewarmTests(unittest.TestCase):
                     mock.patch.object(published_artifacts, "artifact_prefix", return_value="published/"), \
                     mock.patch.object(published_artifacts, "read_artifact_bytes", side_effect=read), \
                     mock.patch.object(published_artifacts, "resolve_artifact_path", side_effect=resolve), \
+                    mock.patch.object(published_artifacts, "pin_artifact_paths", return_value=43) as pin, \
                     mock.patch.object(geometry_catalog, "load_geometry_catalog", return_value=catalog):
                 result = reference_prewarm.prewarm_country_routing_indexes()
                 self.assertEqual(result["countries"], [country])
                 self.assertEqual(result["index_bytes"], sum(map(len, payloads.values())))
+                self.assertEqual(result["pinned_bytes"], 43)
+                self.assertEqual(len(pin.call_args.args[0]), 8)
                 self.assertTrue(reference_prewarm.country_routing_selection_is_warm(catalog))
 
                 (root / (graph + "identity_routes.parquet")).write_bytes(b"wrong bytes")

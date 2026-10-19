@@ -366,6 +366,7 @@ def _evict_for(entries: dict[str, dict[str, Any]], incoming_bytes: int, *, keep_
             (key, entry)
             for key, entry in entries.items()
             if key != keep_key
+            and not entry.get("pinned")
             and float(entry.get("last_accessed") or 0) <= safe_before
         ),
         key=lambda item: (float(item[1].get("last_accessed") or 0), item[0]),
@@ -396,6 +397,29 @@ def resolve_artifact_path(
 
     with mcp_stage("artifact_cache_resolution"):
         return _resolve_artifact_path_impl(relative_path, lane=lane, max_bytes=max_bytes)
+
+
+def pin_artifact_paths(relative_paths: list[str], *, max_bytes: int = 256 * 1024 * 1024) -> int:
+    """Reserve a bounded verified routing set within the existing disk quota."""
+    keys = {_cache_key(artifact_ref(path, lane="active")) for path in relative_paths}
+    with _CACHE_LOCK:
+        entries = _load_index()
+        selected_bytes = 0
+        for key in keys:
+            entry = entries.get(key)
+            path = _safe_entry_path(entry or {})
+            if not entry or path is None or not _verified_local_file(path, entry):
+                raise RuntimeError("Country routing artifact is absent from the verified disk cache")
+            selected_bytes += int(entry["bytes"])
+        if selected_bytes > max_bytes:
+            raise RuntimeError(f"Country routing warm set exceeds {max_bytes} byte pin budget")
+        for key, entry in entries.items():
+            if key in keys:
+                entry["pinned"] = True
+            else:
+                entry.pop("pinned", None)
+        _write_index(entries)
+        return selected_bytes
 
 
 def _resolve_artifact_path_impl(
