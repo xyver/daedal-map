@@ -17,7 +17,11 @@ import pandas as pd
 from mcp.server.fastmcp import FastMCP
 
 ROOT = Path(__file__).parents[1]
-DATA_DIR = Path(os.environ.get("ROAD_EDITOR_DATA_DIR", ROOT / "data"))
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+from app.data_paths import network_data_dir
+
+DATA_DIR = network_data_dir()
 ANALYSIS_DIR = DATA_DIR / "analysis"
 SCRIPTS_DIR = ROOT / "scripts"
 mcp = FastMCP("Lake County Road Network Editor", json_response=True)

@@ -12,8 +12,21 @@
 <body>
   <aside>
     <h1>Road Network Editor</h1>
+    <p><a class="choose-network" href="/packs">Choose network →</a></p>
     <p class="scope">Lake County, CA · regional driving context</p>
     <button id="how-it-works" class="how-it-works" type="button">How it works</button>
+    <details class="sidebar-section tile-settings">
+      <summary>Map tiles</summary>
+      <p>Starter tiles use OpenStreetMap. Set an XYZ tile URL for this local Mapping view and the Network pack view.</p>
+      <label for="basemap-url">XYZ tile URL</label>
+      <input id="basemap-url" type="text" spellcheck="false">
+      <label for="basemap-attribution">Required attribution</label>
+      <input id="basemap-attribution" type="text">
+      <button id="basemap-save" type="button">Use these tiles</button>
+      <button id="basemap-reset" type="button">Use starter tiles</button>
+      <p id="basemap-status" role="status"></p>
+      <p>Local XYZ folders can use <code>/tiles/{z}/{x}/{y}.png</code> after placing them in <code>data/tiles/</code>.</p>
+    </details>
     <details class="sidebar-section">
       <summary>Route calculation</summary>
       <label class="route-limit" for="route-minutes">Travel-time limit (minutes)</label>
@@ -73,6 +86,7 @@
   </dialog>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
+  <script src="/static/basemap.js"></script>
   <script src="/static/editor.js"></script>
 </body>
 </html>

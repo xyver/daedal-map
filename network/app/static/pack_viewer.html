@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Network pack preview</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <style>
+    html, body { height: 100%; margin: 0; font: 14px system-ui, sans-serif; color: #192331; }
+    main { display: grid; grid-template-columns: minmax(270px, 340px) 1fr; height: 100%; }
+    aside { padding: 18px; overflow: auto; border-right: 1px solid #ccd5de; background: #f7f9fb; }
+    #map { height: 100%; }
+    select, button { font: inherit; padding: 7px; max-width: 100%; }
+    button { cursor: pointer; margin: 4px 4px 4px 0; }
+    pre { white-space: pre-wrap; overflow-wrap: anywhere; background: white; padding: 10px; border: 1px solid #d9e1e8; }
+    .muted { color: #556779; }
+    .tile-settings { border: 1px solid #ccd5de; border-radius: 5px; padding: 8px 10px; margin: 12px 0; }
+    .tile-settings summary { cursor: pointer; font-weight: 700; }
+    .tile-settings label { display: block; margin-top: 8px; }
+    .tile-settings input, .tile-settings select { box-sizing: border-box; width: 100%; padding: 6px; }
+    #basemap-status { overflow-wrap: anywhere; }
+    @media (max-width: 720px) { main { grid-template-columns: 1fr; grid-template-rows: minmax(230px, 40%) 1fr; } aside { border-right: 0; border-bottom: 1px solid #ccd5de; } }
+  </style>
+</head>
+<body>
+  <main>
+    <aside>
+      <h1>Network pack preview</h1>
+      <p class="muted">Local candidate packs. Choose a feature to inspect its graph link. Save rail closures and river trace exclusions as scenarios.</p>
+      <details class="tile-settings">
+        <summary>Map tiles</summary>
+        <p>Use Mapping's tile choice or enter a separate Network XYZ URL.</p>
+        <label for="basemap-source">Tile choice</label>
+        <select id="basemap-source"><option value="mapping">Use Mapping tiles</option><option value="network">Network-specific tiles</option></select>
+        <label for="basemap-url">XYZ tile URL</label>
+        <input id="basemap-url" type="text" spellcheck="false">
+        <label for="basemap-attribution">Required attribution</label>
+        <input id="basemap-attribution" type="text">
+        <button id="basemap-save" type="button">Apply tiles</button>
+        <button id="basemap-reset" type="button">Use Mapping tiles</button>
+        <p id="basemap-status" role="status"></p>
+        <p>Unpack local XYZ tiles into <code>data/tiles/</code> and use <code>/tiles/{z}/{x}/{y}.png</code>.</p>
+      </details>
+      <label for="pack">Network pack</label><br>
+      <select id="pack"></select>
+      <p id="source" class="muted"></p>
+      <h2>Selected feature</h2>
+      <pre id="feature">Click a network line.</pre>
+      <button id="close" disabled>Change selected feature</button>
+      <button id="clear">Clear changes</button>
+      <button id="route" disabled>Route between its endpoints</button>
+      <button id="downstream" disabled>Trace downstream</button>
+      <button id="upstream" disabled>Trace upstream</button>
+      <h2>Scenario</h2>
+      <input id="scenario-name" aria-label="Scenario ID" placeholder="Scenario ID (letters, numbers, _ or -)" maxlength="80">
+      <button id="save" disabled>Save changes</button>
+      <select id="saved-scenarios" aria-label="Saved scenarios"></select>
+      <button id="load" disabled>Load scenario</button>
+      <button id="delete" disabled>Delete saved scenario</button>
+      <pre id="result">No analysis yet.</pre>
+      <p><a href="/">Road editor</a></p>
+    </aside>
+    <div id="map" aria-label="Network pack map"></div>
+  </main>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="/static/basemap.js"></script>
+  <script src="/static/pack_viewer.js"></script>
+</body>
+</html>

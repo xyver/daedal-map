@@ -1,10 +1,7 @@
 const scenarioId = "default";
 let lakeCountyView = { center: [39.08, -122.76], zoom: 10 };
 const map = L.map("map", { preferCanvas: true }).setView(lakeCountyView.center, lakeCountyView.zoom);
-L.tileLayer("https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}{r}.png", {
-  maxZoom: 19,
-  attribution: "© OpenStreetMap contributors © CARTO",
-}).addTo(map);
+NetworkBasemap.setup(map, "mapping");
 const stateColors = { open: "#19b84b", forward_only: "#1687e8", reverse_only: "#8f42df", closed: "#ef3434" };
 let roads;
 let roadHitAreas;

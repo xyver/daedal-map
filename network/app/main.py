@@ -21,14 +21,22 @@ from shapely.ops import nearest_points
 from shapely.strtree import STRtree
 
 from .scenarios import STATES, ScenarioStore
+from .network_pack import Pack
+from .pack_scenarios import PackScenarioStore
+from .data_paths import network_data_dir
 
 
-DATA_DIR = Path(os.environ.get("ROAD_EDITOR_DATA_DIR", Path(__file__).parents[1] / "data"))
+DATA_DIR = network_data_dir()
 BASELINE_DIR = DATA_DIR / "baseline"
+PACKS_DIR = DATA_DIR / "packs"
+TILES_DIR = DATA_DIR / "tiles"
 STATIC_DIR = Path(__file__).parent / "static"
 store = ScenarioStore(DATA_DIR)
+pack_scenarios = PackScenarioStore(DATA_DIR / "pack_scenarios")
 app = FastAPI(title="Lake County Road Network Editor", version="0.1.0")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+TILES_DIR.mkdir(parents=True, exist_ok=True)
+app.mount("/tiles", StaticFiles(directory=TILES_DIR), name="local_tiles")
 
 FEMA_OPEN_SHELTERS_URL = "https://gis.fema.gov/arcgis/rest/services/NSS/OpenShelters/FeatureServer/0/query"
 LIVE_SHELTER_CACHE_SECONDS = 120
@@ -52,6 +60,37 @@ class RouteRequest(BaseModel):
 class SaveScenarioRequest(BaseModel):
     name: str = Field(min_length=1, max_length=80)
     start_point: RoutePoint | None = None
+
+
+class PackAnalysisRequest(BaseModel):
+    start_node: str
+    end_node: str | None = None
+    closed_features: list[str] = Field(default_factory=list, max_length=500)
+
+
+class PackTraceRequest(BaseModel):
+    start_node: str
+    direction: str
+    closed_features: list[str] = Field(default_factory=list, max_length=500)
+
+
+class PackScenarioRequest(BaseModel):
+    closed_features: list[str] = Field(default_factory=list, max_length=500)
+
+
+def _local_pack(pack_id: str) -> Pack:
+    if not pack_id or any(char not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_" for char in pack_id):
+        raise HTTPException(status_code=422, detail="Invalid pack ID")
+    directory = PACKS_DIR / pack_id
+    if not directory.is_dir():
+        raise HTTPException(status_code=404, detail="Network pack was not found")
+    try:
+        pack = Pack.open(directory)
+    except (ValueError, OSError, KeyError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=422, detail=f"Network pack failed validation: {exc}") from exc
+    if pack.manifest.get("pack_id") != pack_id:
+        raise HTTPException(status_code=422, detail="Pack ID differs from its folder")
+    return pack
 
 
 def _baseline_path(filename: str) -> Path:
@@ -265,6 +304,130 @@ def _load_tile(tile_x: int, tile_y: int) -> dict[str, Any]:
 @app.get("/", include_in_schema=False)
 def index() -> FileResponse:
     return FileResponse(STATIC_DIR / "index.html")
+
+
+@app.get("/packs", include_in_schema=False)
+def pack_preview() -> FileResponse:
+    return FileResponse(STATIC_DIR / "pack_viewer.html")
+
+
+@app.get("/api/packs")
+def list_packs() -> dict[str, Any]:
+    result = []
+    for directory in sorted(PACKS_DIR.iterdir()) if PACKS_DIR.is_dir() else []:
+        if not directory.is_dir() or not (directory / "manifest.json").is_file():
+            continue
+        try:
+            manifest = _local_pack(directory.name).manifest
+        except HTTPException:
+            continue
+        result.append({key: manifest[key] for key in
+                       ("pack_id", "version", "network_type", "bbox", "capabilities", "source")})
+    return {"packs": result}
+
+
+@app.get("/api/packs/{pack_id}/features")
+def pack_features(pack_id: str, bbox: str | None = None) -> dict[str, Any]:
+    pack = _local_pack(pack_id)
+    features = pack.features
+    if bbox:
+        try:
+            values = [float(value) for value in bbox.split(",")]
+            if len(values) != 4 or values[0] >= values[2] or values[1] >= values[3]:
+                raise ValueError()
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail="Invalid feature bbox") from exc
+        query = shape({"type": "Polygon", "coordinates": [[
+            [values[0], values[1]], [values[2], values[1]],
+            [values[2], values[3]], [values[0], values[3]], [values[0], values[1]],
+        ]]})
+        features = [feature for feature in features if shape(feature["geometry"]).intersects(query)]
+    return {"type": "FeatureCollection", "features": features}
+
+
+@app.get("/api/packs/{pack_id}/features/{feature_id}")
+def pack_feature(pack_id: str, feature_id: str) -> dict[str, Any]:
+    pack = _local_pack(pack_id)
+    feature = next((item for item in pack.features if item["properties"]["feature_id"] == feature_id), None)
+    if feature is None:
+        raise HTTPException(status_code=404, detail="Feature was not found")
+    links = [item for item in pack.links if item["feature_id"] == feature_id]
+    return {"feature": feature, "links": links}
+
+
+@app.post("/api/packs/{pack_id}/component")
+def pack_component(pack_id: str, request: PackAnalysisRequest) -> dict[str, Any]:
+    pack = _local_pack(pack_id)
+    if "connected_component" not in pack.manifest["capabilities"]:
+        raise HTTPException(status_code=422, detail="Pack does not support component analysis")
+    try:
+        nodes = pack.component(request.start_node, disabled_features=set(request.closed_features))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {"pack_id": pack_id, "node_count": len(nodes), "closed_features": request.closed_features}
+
+
+@app.post("/api/packs/{pack_id}/route")
+def pack_route(pack_id: str, request: PackAnalysisRequest) -> dict[str, Any]:
+    if request.end_node is None:
+        raise HTTPException(status_code=422, detail="end_node is required")
+    pack = _local_pack(pack_id)
+    try:
+        result = pack.shortest_distance(request.start_node, request.end_node,
+                                        disabled_features=set(request.closed_features))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {"pack_id": pack_id, "unit": "km", "closed_features": request.closed_features, **result}
+
+
+@app.post("/api/packs/{pack_id}/trace")
+def pack_trace(pack_id: str, request: PackTraceRequest) -> dict[str, Any]:
+    pack = _local_pack(pack_id)
+    try:
+        result = pack.trace(request.start_node, direction=request.direction,
+                            disabled_features=set(request.closed_features))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {"pack_id": pack_id, "direction": request.direction,
+            "closed_features": request.closed_features, **result}
+
+
+@app.get("/api/packs/{pack_id}/scenarios")
+def list_pack_scenarios(pack_id: str) -> dict[str, Any]:
+    pack = _local_pack(pack_id)
+    return {"pack_id": pack_id, "scenario_ids": pack_scenarios.list(pack)}
+
+
+@app.get("/api/packs/{pack_id}/scenarios/{scenario_id}")
+def get_pack_scenario(pack_id: str, scenario_id: str) -> dict[str, Any]:
+    pack = _local_pack(pack_id)
+    try:
+        return pack_scenarios.load(pack, scenario_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Scenario was not found") from exc
+    except (ValueError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.put("/api/packs/{pack_id}/scenarios/{scenario_id}")
+def save_pack_scenario(pack_id: str, scenario_id: str, request: PackScenarioRequest) -> dict[str, Any]:
+    pack = _local_pack(pack_id)
+    try:
+        return pack_scenarios.save(pack, scenario_id, request.closed_features)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.delete("/api/packs/{pack_id}/scenarios/{scenario_id}")
+def delete_pack_scenario(pack_id: str, scenario_id: str) -> dict[str, str]:
+    pack = _local_pack(pack_id)
+    try:
+        pack_scenarios.delete(pack, scenario_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Scenario was not found") from exc
+    except (ValueError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {"scenario_id": scenario_id, "status": "deleted"}
 
 
 @app.get("/api/health")

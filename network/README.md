@@ -48,6 +48,20 @@ docker compose up
 
 Then open `http://localhost:8123`.
 
+For development after the dependencies have been built once, run the prepared
+compose file with `docker-compose.dev.yml` as an overlay:
+
+```powershell
+docker compose -f docker-compose.prepared.yml -f docker-compose.dev.yml up -d editor
+```
+
+This mounts `app/` and `scripts/` into the container. HTML, CSS, and JavaScript
+edits appear after a browser refresh; Python changes restart Uvicorn
+automatically. Rebuild only when dependencies or the Dockerfile change.
+`docker-compose.prepared.yml` alone remains the frozen-image smoke test. The
+downloadable Network extension will run on the Mapping local runtime; it will
+not require Docker for ordinary users.
+
 The prep command writes these local, gitignored artifacts under `data/baseline/`:
 
 - `lake_region.osm.pbf` - trimmed regional road extract
@@ -80,6 +94,63 @@ $env:ROAD_EDITOR_SOURCE_DATA_DIR = "C:\Users\Bryan\Desktop\global map\county-map
 
 The map cannot zoom or pan outside this small Lake County scope. Its widest
 view shows only major roads; zoom in for the full local editable network.
+
+## Typed network pack candidates
+
+The shared pack reader and `/packs` preview can inspect local rail, river, and
+power candidates beside the existing road editor. Candidate outputs belong in
+`data/packs/` (gitignored); they are not release data. The reader checks payload
+hashes and graph references before activation. Each source builder needs the
+geospatial Python environment; the viewer only needs the prepared pack.
+
+For the future shared local library, set `DATA_ROOT` to the same directory used
+by Mapping, Research MCP, and Geometry MCP. Network then reads and writes under
+`DATA_ROOT/networks/` (`packs/`, `pack_scenarios/`, `baseline/`, and `tiles/`).
+`ROAD_EDITOR_DATA_DIR` takes precedence for this prototype and the Docker
+config currently sets it to `/app/data`; without either setting, Network uses
+this checkout's `data/` directory. Existing prototype files are not migrated
+automatically. A normal user download must install validated network packs
+into the shared library and keep scenarios there across software updates.
+
+From `network/`, build the bounded Northern California examples with:
+
+```powershell
+python scripts/build_narn_rail_pack.py --source-archive "../../county-map-raw/Raw data/network_sources/USA/2026-09-17/fra_bts_narn/dot_53568_DS3.zip"
+python scripts/build_hydrorivers_pack.py --source-archive "../../county-map-raw/geometry/hydrosheds/hydrorivers/HydroRIVERS_v10_na_shp.zip"
+python scripts/build_transmission_pack.py --source-archive "../../county-map-raw/Raw data/network_sources/USA/2026-10-02/federal_energy_layers/transmission_lines_archive.geojson"
+```
+
+The shared API lists validated packs at `GET /api/packs`, serves map geometry
+and feature details under `/api/packs/{pack_id}/features`, and accepts bounded
+rail route and river trace requests. Rail arcs preserve FRA IDs and allow
+distance detours after an arc is closed. River links follow source `NEXT_DOWN`
+IDs; an exit from the selected area ends at a marked boundary node. The power
+candidate preserves line IDs, voltage, status, and labels for inspection. Its
+coordinate-derived endpoint joins are unverified, so power connectivity and
+outage analysis are disabled.
+
+The preview uses external Leaflet assets and OpenStreetMap standard tiles for
+interactive viewing; it is not an offline release. Do not bulk download or
+prefetch tiles from this public server. An offline package needs a separate
+licensed or self-hosted basemap. The road editor's **Map tiles** setting is the
+local Mapping default; **Choose network** opens the pack viewer, which inherits
+that setting unless its own Network tile override is selected. Both accept an
+XYZ URL template and attribution. These settings live in this browser's local
+storage on this origin; they do not yet read the online Explore MapLibre style.
+For an already licensed local XYZ folder, unpack `z/x/y.png` under
+`network/data/tiles/` and choose `/tiles/{z}/{x}/{y}.png`. Leaflet and the
+starter basemap remain online dependencies until the download bundles the
+library and a local tile source. Rail closures and river trace exclusions can
+be saved as scenarios under the gitignored `data/pack_scenarios/` folder. A saved scenario
+is tied to the exact pack manifest hash; reopening it against a changed pack
+returns an error instead of silently applying stale feature IDs.
+No candidate pack should be distributed until its source terms and validation
+receipt are reviewed.
+
+Run `python scripts/check_pack_candidates.py` to verify the three local packs.
+With the prepared Docker editor running on port 8123, run
+`python scripts/check_pack_service.py` to check the live preview and scenario
+save/load/delete API; it removes its own test scenario.
 
 ## Batch scenario analysis
 

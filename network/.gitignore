@@ -3,5 +3,8 @@
 /data/analysis/
 /lake-county-editor-baseline.zip
 /reference_data/
+/data/packs/
+/data/pack_scenarios/
+/data/tiles/
 __pycache__/
 *.py[cod]
