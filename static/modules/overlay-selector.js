@@ -1697,6 +1697,21 @@ export const OverlaySelector = {
     const category = CATEGORIES.find(c => c.id === categoryId);
     if (!category || !category.isCategory) return;
 
+    // The Explore disaster category is the same seven-layer first view as the
+    // welcome preset. Load that bounded, prewarm-aligned range once instead of
+    // launching seven unrelated pack defaults from the category checkbox.
+    const disasterPresetIds = [
+      'earthquakes', 'hurricanes', 'volcanoes', 'wildfires',
+      'tsunamis', 'tornadoes', 'floods'
+    ];
+    const eligibleIds = category.overlays
+      .filter((overlay) => !overlay.locked && !overlay.placeholder)
+      .map((overlay) => overlay.id);
+    const useDisasterPreset = active && this.currentLaneMode === 'explore'
+      && categoryId === 'disasters'
+      && eligibleIds.length === disasterPresetIds.length
+      && disasterPresetIds.every((id) => eligibleIds.includes(id));
+
     let anyEnabled = false;
     const enabledOverlayIds = [];
     for (const overlay of category.overlays) {
@@ -1720,7 +1735,7 @@ export const OverlaySelector = {
       if (wasActive !== active) {
         anyEnabled = anyEnabled || active;
         if (active) enabledOverlayIds.push(overlay.id);
-        this._notifyListeners(overlay.id, active, {
+        if (!useDisasterPreset) this._notifyListeners(overlay.id, active, {
           categoryBatch: {
             categoryId,
             active,
@@ -1730,6 +1745,11 @@ export const OverlaySelector = {
           }
         });
       }
+    }
+    if (useDisasterPreset && anyEnabled) {
+      this._notifyListeners(categoryId, true, {
+        categoryPreset: 'explore:disasters_2020_2025'
+      });
     }
     this._rememberCurrentLaneState();
 

@@ -9,7 +9,7 @@
  *
  * Antimeridian basins (Pacific) just carry a wide -180..180 bbox with the other
  * oceans as a transparent gap; no special longitude frame.
- * See county-map-private/docs/CLIMATE_DISPLAY.md (Ocean SST Grid Animation).
+ * See county-map-private/docs/mapping/CLIMATE_DISPLAY.md (Ocean SST Grid Animation).
  *
  * Shared LUT/dequantize/Mercator-warp/image-source primitives live in
  * raster-core.js (county-map-private/docs/archive/display_unification_2026-07.md

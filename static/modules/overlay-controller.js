@@ -2283,6 +2283,29 @@ export const OverlayController = {
 
     // Listen for overlay toggle events
     OverlaySelector.addListener((overlayId, isActive, options = {}) => {
+      if (options.categoryPreset) {
+        if (ChatManager?.runDefaultLoad) {
+          ChatManager.addMessage?.('Loading the seven disaster layers...', 'assistant', { mode: 'explore' });
+          void ChatManager.runDefaultLoad(
+            { presetId: options.categoryPreset },
+            { mode: 'explore', syntheticSource: 'overlay_category' }
+          ).then((result) => {
+            if (!result) {
+              ChatManager.addMessage?.('The disaster layers could not be loaded. Try the 10-year button again.', 'assistant', { mode: 'explore' });
+            }
+          }).catch((error) => {
+            console.error('Disaster category preset failed:', error);
+            ChatManager.addMessage?.('The disaster layers could not be loaded. Try the 10-year button again.', 'assistant', { mode: 'explore' });
+          });
+        } else {
+          // Keep category toggles usable if the chat module has not attached
+          // its preset executor yet.
+          for (const id of ['earthquakes', 'hurricanes', 'volcanoes', 'wildfires', 'tsunamis', 'tornadoes', 'floods']) {
+            void this.handleOverlayChange(id, true, { suppressStatusMessage: true });
+          }
+        }
+        return;
+      }
       this.handleOverlayChange(overlayId, isActive, options);
       const batch = options?.categoryBatch;
       if (batch && Array.isArray(batch.overlayIds)) {

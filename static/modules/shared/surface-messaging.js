@@ -213,18 +213,20 @@ export function buildExploreWelcomeStatusMessage() {
 
 export function buildOverlayStatusMessage(overlayId, isActive, options = {}) {
   const profile = getSurfaceMessageProfile(overlayId);
-  const loadedCount = Number(options.loadedCount);
+  const loadedCount = options.loadedCount == null || options.loadedCount === ''
+    ? null
+    : Number(options.loadedCount);
   const mode = String(options.mode || 'explore').trim().toLowerCase() || 'explore';
   if (!isActive) {
     return `${profile.label} hidden now. Ask chat to bring it back, switch regions, or load another layer.`;
   }
   if (mode === 'explore') {
-    if (Number.isFinite(loadedCount) && loadedCount >= 0) {
+    if (loadedCount !== null && Number.isFinite(loadedCount) && loadedCount >= 0) {
       return `${profile.label} active now. Loaded ${loadedCount.toLocaleString()} ${loadedCount === 1 ? profile.singular : profile.plural} from ${profile.exploreActiveDescription}. ${profile.exploreHints}`;
     }
     return `${profile.label} active now. Showing ${profile.exploreActiveDescription}. ${profile.exploreHints}`;
   }
-  if (Number.isFinite(loadedCount) && loadedCount >= 0) {
+  if (loadedCount !== null && Number.isFinite(loadedCount) && loadedCount >= 0) {
     return `${profile.label} active now. Loaded ${loadedCount.toLocaleString()} ${loadedCount === 1 ? profile.singular : profile.plural}.`;
   }
   return `${profile.label} active now.`;

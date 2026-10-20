@@ -574,6 +574,7 @@ export const TimeSlider = {
       return this.timestampToYear(timestamp);
     }
     if (this.sortedTimes.length) {
+      if (timestamp < this.sortedTimes[0]) return null;
       const idx = this.timeToIndex(timestamp);
       const snapped = this.sortedTimes[idx];
       // timeToIndex finds the NEAREST frame; shift back one when it rounded
@@ -881,7 +882,9 @@ export const TimeSlider = {
     suggestedSlider = this.calculateEventSpeed(durationMs);
 
     // Store previous speed for restoration
-    this._previousSpeedSlider = this.speedSliderValue;
+    if (!this._inEventMode) {
+      this._previousSpeedSlider = this.speedSliderValue;
+    }
     this._inEventMode = true;
 
     // Set new speed
@@ -895,21 +898,22 @@ export const TimeSlider = {
   },
 
   /**
-   * Exit event animation and return to world view speed.
-   * Returns to 1yr/sec default speed for world view browsing.
+   * Exit event animation and restore the speed selected before the session.
    */
   exitEventAnimation() {
-    // Return to 1yr/sec for world browsing (default speed)
-    const worldSpeed = SPEED_PRESETS.YEARLY;
-    this.setSpeedFromSlider(worldSpeed);
+    if (!this._inEventMode) return;
+    const previousSpeed = Number.isFinite(this._previousSpeedSlider)
+      ? this._previousSpeedSlider
+      : SPEED_PRESETS.YEARLY;
+    this.setSpeedFromSlider(previousSpeed);
     if (this.speedSlider) {
-      this.speedSlider.value = worldSpeed;
+      this.speedSlider.value = previousSpeed;
     }
 
     this._inEventMode = false;
     this._previousSpeedSlider = null;
 
-    console.log('TimeSlider: Exited event mode, returned to 1yr/sec default');
+    console.log(`TimeSlider: Exited event mode, restored ${this.getEffectiveSpeedLabel()}`);
   },
 
   /**

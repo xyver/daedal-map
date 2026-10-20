@@ -9,7 +9,7 @@
  * ramp, and a popup field list. Add a new feed = one config block + a backend
  * POINT_FEEDS entry (see mapmover/ops_point_feeds.py). No new overlay classes.
  *
- * See county-map-private/docs/CLIMATE_DISPLAY.md (Live Point Feeds).
+ * See county-map-private/docs/mapping/CLIMATE_DISPLAY.md (Live Point Feeds).
  */
 
 import { fetchMsgpack } from './utils/fetch.js';

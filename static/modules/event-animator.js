@@ -391,13 +391,10 @@ export const EventAnimator = {
     this._stopTornadoAnimation();
     this._removeTornadoLayers();
 
-    // Remove TimeSlider scale and listener. On return to the primary scale,
-    // reset speed to yearly (default for world view) - EventAnimator does not
-    // use TimeSlider.exitEventAnimation() for this (see TrackAnimator for the
-    // other restore strategy).
+    // Restore the pre-session speed before returning to the primary scale.
     releaseTimeSliderScale(TimeSlider, { scaleId: this.scaleId, timeChangeHandler: this._timeChangeHandler }, {
-      afterRestorePrimary: (ts) => {
-        if (ts.setSpeedPreset) ts.setSpeedPreset('YEARLY');
+      beforeRemoveScale: (ts) => {
+        ts.exitEventAnimation?.();
       }
     });
     this._timeChangeHandler = null;
