@@ -12,7 +12,7 @@ collector's current-state snapshot, shapes a GeoJSON FeatureCollection of points
 and caches it on snapshot identity (rebuilds once per collector poll, not per
 read). Served generically via GET /api/ops/points/{overlay_id}.
 
-See county-map-private/docs/CLIMATE_DISPLAY.md (Live Point Feeds).
+See county-map-private/docs/mapping/CLIMATE_DISPLAY.md (Live Point Feeds).
 """
 from __future__ import annotations
 
