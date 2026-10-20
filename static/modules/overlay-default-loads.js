@@ -307,6 +307,7 @@ function buildExploreDisasterRangeAction(relativeYears = 10) {
 
   return {
     type: 'multi_default_load',
+    timeoutMs: 90_000,
     actions: overlayIds.map((overlayId) => ({
       type: 'overlay_range_load',
       overlayId,
@@ -582,8 +583,8 @@ export function resolveDefaultLoadAction({ lane = 'explore', overlayId = '', pac
     // Some published packs use the same id for the pack and its primary
     // source. If the anonymous catalog has no source row/default for a
     // ?source= link, still allow the authored pack default to satisfy the
-    // deep link. This keeps /explore?source=world_factbook equivalent to the
-    // working /explore?pack=world_factbook starter view.
+    // deep link. This keeps /?source=world_factbook equivalent to the
+    // working /?pack=world_factbook starter view.
     const sourceAsPackAction = buildPackDefaultLoadAction(normalizedSourceId);
     if (sourceAsPackAction) return sourceAsPackAction;
     const order = buildSourceDefaultLoadOrder(normalizedSourceId);

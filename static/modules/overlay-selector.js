@@ -1697,9 +1697,8 @@ export const OverlaySelector = {
     const category = CATEGORIES.find(c => c.id === categoryId);
     if (!category || !category.isCategory) return;
 
-    // The Explore disaster category is the same seven-layer first view as the
-    // welcome preset. Load that bounded, prewarm-aligned range once instead of
-    // launching seven unrelated pack defaults from the category checkbox.
+    // Explore's disaster category uses the same bounded first view as the
+    // welcome preset instead of seven independent pack defaults.
     const disasterPresetIds = [
       'earthquakes', 'hurricanes', 'volcanoes', 'wildfires',
       'tsunamis', 'tornadoes', 'floods'

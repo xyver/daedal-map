@@ -1,8 +1,8 @@
 /**
  * App route state -- single authority for URL <-> lane mapping.
  *
- * Phase 1/2 scope: the active lane (explore / research / ops) lives in the URL
- * path with small route-intent params. Phase 3 adds a versioned full-share
+ * Explore lives at /; Research and Ops use their own paths. Small route-intent
+ * params refine each lane. Phase 3 adds a versioned full-share
  * `state` payload. This module is the only place that reads window.location for
  * routing or writes browser history, so routing logic does not fragment across
  * lane controllers, auth, and pack/share loaders.
@@ -33,6 +33,11 @@ const LANE_TITLES = {
 export function normalizeLane(value) {
   const v = String(value || '').trim().toLowerCase();
   return LANES.includes(v) ? v : '';
+}
+
+function lanePath(lane) {
+  const normalized = normalizeLane(lane) || DEFAULT_LANE;
+  return normalized === DEFAULT_LANE ? '/' : '/' + normalized;
 }
 
 /**
@@ -66,7 +71,7 @@ function encodeFocusQueryParam(focus = null) {
 
 /**
  * Reflect the loaded pack/source in the URL so GA sees a distinct pageview
- * (`/explore?pack=earthquakes`) and the link is shareable. Uses replaceState so
+ * (`/?pack=earthquakes`) and the link is shareable. Uses replaceState so
  * loading a pack does not spam browser history; the history change still fires a
  * GA page_view that captures the new path + title. Source wins over pack when
  * both are given (the more specific intent). No-op when the URL already matches
@@ -76,7 +81,7 @@ function encodeFocusQueryParam(focus = null) {
  */
 export function writeEntityParam(lane, { packId = '', sourceId = '', feedId = '', eventId = '', focus = null } = {}) {
   if (typeof window === 'undefined') return;
-  const target = '/' + (normalizeLane(lane) || DEFAULT_LANE);
+  const target = lanePath(lane);
   const pack = String(packId || '').trim();
   const source = String(sourceId || '').trim();
   const feed = String(feedId || '').trim();
@@ -468,7 +473,7 @@ export function buildShareStateUrl(shareState, { absolute = false } = {}) {
   const normalized = normalizeShareState(shareState);
   if (!normalized) return '';
   const lane = normalized.lane || DEFAULT_LANE;
-  const path = '/' + lane;
+  const path = lanePath(lane);
   const simpleQuery = encodeSimpleShareStateQuery(normalized);
   const encoded = simpleQuery ? '' : encodeShareStateParam(normalized);
   const query = simpleQuery || (encoded ? `state=${encoded}` : '');
@@ -478,16 +483,15 @@ export function buildShareStateUrl(shareState, { absolute = false } = {}) {
 }
 
 /**
- * Parse the current URL into a normalized route intent. Phase 1 only resolves
- * the lane from the first path segment; the remaining fields are placeholders
- * the later phases fill in.
+ * Parse the current URL into a normalized route intent. The root path selects
+ * Explore; /ops and /research select their own lanes.
  * @param {Location} [loc]
  * @returns {{lane: string|null, view_id: string|null, view_label: string|null, pack_id: string|null, pack_ids: string[], source_id: string|null, feed_id: string|null, feed_ids: string[], event_id: string|null, exact_id_key: string|null,
  *   focus: object|null, prefill_query: string|null, route_message: string|null, share_state: object|null, requires_auth: boolean, invalid_reason: string|null}}
  */
 export function parseRouteIntent(loc = window.location) {
   const segment = String(loc.pathname || '/').replace(/^\/+/, '').split('/')[0];
-  const lane = normalizeLane(segment);
+  const lane = segment ? normalizeLane(segment) : DEFAULT_LANE;
   const params = new URLSearchParams(loc.search || '');
   const pick = (key) => {
     const v = String(params.get(key) || '').trim();
@@ -555,17 +559,6 @@ export function parseRouteIntent(loc = window.location) {
 }
 
 /**
- * Returns true when the current app URL is the shared shell route rather than a
- * lane-specific deep link. '/' and query-only variants remain the shared shell.
- * @param {Location} [loc]
- * @returns {boolean}
- */
-export function isSharedShellRoute(loc = window.location) {
-  const intent = parseRouteIntent(loc);
-  return !intent.lane;
-}
-
-/**
  * Initial lane on boot. Precedence: URL > default. Does not touch browser
  * history.
  * @param {string} [_savedLane]
@@ -585,7 +578,7 @@ export function getInitialLane(_savedLane) {
  * @param {{replace?: boolean}} [opts]
  */
 export function writeLane(lane, { replace = false, preserveQuery = false } = {}) {
-  const target = '/' + (normalizeLane(lane) || DEFAULT_LANE);
+  const target = lanePath(lane);
   const current = (window.location.pathname || '/').replace(/\/+$/, '') || '/';
   const params = new URLSearchParams(window.location.search || '');
   if (!preserveQuery) {
@@ -604,14 +597,11 @@ export function writeLane(lane, { replace = false, preserveQuery = false } = {})
 }
 
 /**
- * Reflect the resolved boot lane in the URL without adding a history entry.
- * The shared shell now intentionally stays at '/', so boot normalization only
- * preserves lane-specific entry URLs and leaves the shared shell untouched.
+ * Reflect a changed boot lane in the URL without adding a history entry.
  * @param {string} resolvedLane
  */
 export function normalizeBootUrl(resolvedLane) {
   const intent = parseRouteIntent();
-  if (!intent.lane) return;
   const lane = normalizeLane(resolvedLane) || DEFAULT_LANE;
   if (intent.lane !== lane) {
     writeLane(lane, { replace: true, preserveQuery: true });

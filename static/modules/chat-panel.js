@@ -1518,6 +1518,18 @@ export const ChatManager = {
     if (action.type === 'multi_default_load' && Array.isArray(action.actions)) {
       const actions = action.actions.filter(Boolean);
       const requestedCount = Number(action._requestedPackCount) || actions.length;
+      const timeoutMs = Number(action.timeoutMs) || 0;
+      const batchController = timeoutMs > 0 ? new AbortController() : null;
+      const abortFromParent = () => batchController?.abort();
+      if (batchController && options.signal) {
+        if (options.signal.aborted) abortFromParent();
+        else options.signal.addEventListener('abort', abortFromParent, { once: true });
+      }
+      let timedOut = false;
+      const timeoutId = batchController ? window.setTimeout(() => {
+        timedOut = true;
+        batchController.abort();
+      }, timeoutMs) : null;
       let successCount = 0;
       const loadedLabels = [];
       const failedLabels = [];
@@ -1533,6 +1545,7 @@ export const ChatManager = {
           try {
             const childResult = await this.executeDefaultLoadAction(childAction, {
               ...options,
+              signal: batchController?.signal || options.signal,
               onProgress: null,
               suppressResultMessage: true
             });
@@ -1556,9 +1569,14 @@ export const ChatManager = {
         }
       };
 
-      await Promise.all(
-        Array.from({ length: concurrency }, () => runNext())
-      );
+      try {
+        await Promise.all(
+          Array.from({ length: concurrency }, () => runNext())
+        );
+      } finally {
+        if (timeoutId != null) window.clearTimeout(timeoutId);
+        options.signal?.removeEventListener?.('abort', abortFromParent);
+      }
 
       // A curated multi-load may define one shared playback window. Apply it
       // only after every child range has contributed its cache coverage;
@@ -1606,8 +1624,16 @@ export const ChatManager = {
         const failedText = failedLabels.length
           ? ` Failed: ${joinLabelsForMessage(failedLabels)}.`
           : '';
-        const summaryText = `${baseSummary}${failedText}`;
+        const timeoutText = timedOut ? ' The load timed out; try the remaining layers individually.' : '';
+        const summaryText = `${baseSummary}${failedText}${timeoutText}`;
         this.addMessage(summaryText, 'assistant', { mode: options.mode || this.mode });
+      } else if (!options.suppressResultMessage && actions.length > 0) {
+        const timeoutText = timedOut ? ' The request timed out.' : '';
+        this.addMessage(
+          `The requested layers could not be loaded.${timeoutText} Try again or load one layer at a time.`,
+          'assistant',
+          { mode: options.mode || this.mode }
+        );
       }
 
       return successCount > 0
@@ -1720,7 +1746,7 @@ export const ChatManager = {
         overlayId,
         action.startMs,
         action.endMs,
-        { params: action.params || null }
+        { params: action.params || null, signal: options.signal || null }
       );
 
       const rangeMessage = options.message || action.message;

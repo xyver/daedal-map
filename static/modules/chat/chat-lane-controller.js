@@ -2,7 +2,7 @@
  * Lane switching and chat-mode UI helpers.
  */
 
-import { isSharedShellRoute, writeLane, setLaneTitle } from '../routing/app-route-state.js';
+import { writeLane, setLaneTitle } from '../routing/app-route-state.js';
 
 function normalizeChatMode(mode, chatModes = ['explore', 'research', 'ops']) {
   return chatModes.includes(mode) ? mode : 'explore';
@@ -47,7 +47,6 @@ export async function switchChatMode(ctx, mode, deps = {}) {
   const App = deps.App || null;
   const OverlaySelector = deps.OverlaySelector || null;
   const chatModes = deps.CHAT_MODES || ['explore', 'research', 'ops'];
-  const sharedShell = isSharedShellRoute();
   mode = normalizeChatMode(mode, chatModes);
   if (mode === ctx.mode) return;
 
@@ -55,11 +54,7 @@ export async function switchChatMode(ctx, mode, deps = {}) {
   ctx.modeHistories[ctx.mode] = ctx.history;
 
   ctx.mode = mode;
-  // Keep the shared shell at '/' when the selector is used there; lane-specific
-  // URLs still remain stable when entered directly or shared as deep links.
-  if (!isSharedShellRoute()) {
-    writeLane(mode);
-  }
+  writeLane(mode);
   setLaneTitle(mode);
   ctx.history = ctx.modeHistories[mode] || [];
   applyModeUiState(ctx, deps);
@@ -77,11 +72,6 @@ export async function switchChatMode(ctx, mode, deps = {}) {
   }
 
   const pane = ctx.messagePanes?.[mode] || null;
-  const laneHistory = Array.isArray(ctx.modeHistories?.[mode]) ? ctx.modeHistories[mode] : [];
-  const shouldReseedForSharedShell = sharedShell && laneHistory.length === 0;
-  if (shouldReseedForSharedShell) {
-    clearWelcomeMessages(pane);
-  }
   if (
     !paneHasWelcomeMessage(pane)
     || !paneHasWelcomeStatus(pane)

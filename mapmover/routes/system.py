@@ -1297,7 +1297,7 @@ def _build_public_pack_detail(pack_id: str, mcp_only: bool = False) -> dict | No
         subsources.append({
             "source_id": s.get("source_id"),
             # Presence signals the pack page to show a per-source "View on map"
-            # button (-> /explore?source=<id>); only authored sources get one.
+            # button (-> /?source=<id>); only authored sources get one.
             "default_question": source_default_question,
             "example_questions": deduped_source_questions,
             "source_name": _best_source_text(
@@ -3564,15 +3564,21 @@ def _render_app_shell() -> str:
 
 @router.get("/", response_class=HTMLResponse)
 async def serve_index():
-    """Serve the frontend HTML shell."""
+    """Serve Explore at the canonical app URL."""
     return _render_app_shell()
 
 
-@router.get("/explore", response_class=HTMLResponse)
+@router.get("/explore", include_in_schema=False)
+async def redirect_explore(request: Request):
+    """Keep existing Explore deep links while using / for new links."""
+    query = request.url.query
+    return RedirectResponse(url=f"/?{query}" if query else "/", status_code=308)
+
+
 @router.get("/ops", response_class=HTMLResponse)
 @router.get("/research", response_class=HTMLResponse)
 async def serve_lane_shell():
-    """Serve the same SPA shell for lane deep-links (/explore, /ops, /research).
+    """Serve the same SPA shell for lane deep-links (/ops, /research).
 
     The client reads the active lane from the URL path. Unlike the marketing
     routes in app.py, these must NOT redirect to the www site -- they are the
