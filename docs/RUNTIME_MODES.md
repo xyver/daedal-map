@@ -26,6 +26,12 @@ Explore is discovery-first. It starts from the catalog, identifies relevant
 packs and sources, and connects results to the map. Use it when you do not yet
 know which source contains the answer or are choosing data for a corpus.
 
+### Mapping (planned)
+
+Mapping is the local, authoring-oriented mirror of Explore. It keeps Explore's
+map behavior and adds installed/user-provided data and durable local projects.
+It is planned work, not a name for every current local Explore session.
+
 ### Research
 
 Research is corpus-first. It starts from the active local corpus or installed
