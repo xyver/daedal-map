@@ -17,7 +17,7 @@ backing store. A 30-second in-process cache keeps the check off the response
 path. The cache means a hot caller can technically over-spend by up to 30s of
 LLM calls before being cut off; that is acceptable for v1.
 
-See county-map-private/docs/CHAT.md for the current budget contract.
+See county-map-private/docs/app/CHAT.md for the current budget contract.
 """
 
 from __future__ import annotations
