@@ -36,6 +36,93 @@ from mapmover.runtime import reference_graph
 
 
 class ReferenceGraphRuntimeTests(unittest.TestCase):
+    def test_canonical_route_never_falls_back_to_unpinned_path(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "geometry/countries/USA/reference/release"
+            root.mkdir(parents=True)
+            pd.DataFrame([{
+                "loc_id": "USA-example",
+                "path": "geometry/countries/USA/relationships/old/identities.parquet",
+            }]).to_parquet(root / reference_graph.IDENTITY_ROUTE_INDEX, index=False)
+            with (
+                mock.patch.object(reference_graph, "is_cloud_mode", return_value=True),
+                mock.patch.object(reference_graph, "_country_for_root", return_value="USA"),
+                mock.patch.object(reference_graph, "load_geometry_catalog", return_value={
+                    "country_profiles": [{
+                        "country_code": "USA", "release_version": "1.3.6",
+                        "canonical_runtime_namespace_required": True,
+                    }],
+                }),
+                mock.patch.object(reference_graph, "_partition_source_map", return_value={}),
+            ):
+                with self.assertRaisesRegex(
+                    reference_graph.ReferenceRouteUnavailable, "unpinned partition",
+                ):
+                    reference_graph._route_paths(
+                        root, reference_graph.IDENTITY_ROUTE_INDEX,
+                        "loc_id", ["USA-example"],
+                    )
+
+    def test_usa_next_release_requires_graph_candidate_admission(self) -> None:
+        profile = {"country_code": "USA", "release_version": "1.3.6"}
+        pins = {"geometry/countries/USA/relationships/source/manifest.json": "a" * 64}
+        manifest = {"status": "PASS", "source_manifest_hashes": pins}
+        self.assertTrue(reference_graph._candidate_admission_required(profile))
+        self.assertFalse(reference_graph._candidate_admission_valid(manifest))
+        with mock.patch.object(reference_graph, "_graph_json", return_value=manifest):
+            with self.assertRaises(reference_graph.ReferenceRouteUnavailable):
+                reference_graph._require_candidate_admission(Path("USA/reference"), profile)
+        with (mock.patch.object(reference_graph, "is_cloud_mode", return_value=True),
+              mock.patch.object(reference_graph, "load_geometry_catalog", return_value={
+                  "country_profiles": [{**profile, "release_status": "approved_for_publication"}],
+              }),
+              mock.patch.object(reference_graph, "country_reference_root",
+                                return_value=Path("USA/reference")),
+              mock.patch.object(reference_graph, "_graph_json", return_value=manifest)):
+            with self.assertRaises(reference_graph.ReferenceRouteUnavailable):
+                reference_graph.graph_roots_for_loc_id("USA-test")
+        manifest["candidate_admission"] = {
+            "status": "approved_candidate", "approved_package_count": 1,
+            "approved_source_manifest_hashes": pins,
+            "source_manifest_hashes": pins,
+        }
+        self.assertTrue(reference_graph._candidate_admission_valid(manifest))
+        manifest["candidate_admission"]["source_manifest_hashes"] = {}
+        self.assertFalse(reference_graph._candidate_admission_valid(manifest))
+
+    def test_compact_admin_routes_use_partition_selectors_without_row_index(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            data_root = Path(directory)
+            root = data_root / "geometry/countries/USA/reference_graph"
+            root.mkdir(parents=True)
+            relative = "geometry/countries/USA/history/ct_2022_identity.parquet"
+            national = "geometry/countries/USA/history/us_2022_identity.parquet"
+            pd.DataFrame([
+                {
+                    "kind": "admin_temporal_compact",
+                    "selector": json.dumps({"state": "USA-CT", "admin_level": 3}),
+                    "path": relative, "sha256": "a" * 64,
+                },
+                {
+                    "kind": "admin_temporal_compact",
+                    "selector": json.dumps({"state": "US", "admin_level": 0}),
+                    "path": national, "sha256": "b" * 64,
+                },
+            ]).to_parquet(root / "identity_partitions.parquet", index=False)
+            reference_graph._compact_admin_route_specs.cache_clear()
+            with (mock.patch.object(reference_graph, "DATA_ROOT", data_root),
+                  mock.patch.object(reference_graph, "is_cloud_mode", return_value=False),
+                  mock.patch.object(reference_graph, "_route_paths", return_value=[])):
+                self.assertEqual(reference_graph._identity_route_paths(
+                    root, ["USA-CT-110-504200"]), [data_root / relative])
+                self.assertEqual(reference_graph._identity_route_paths(
+                    root, ["USA"]), [data_root / national])
+                self.assertEqual(reference_graph._identity_route_paths(
+                    root, ["USA-CT-110-504200-1"]), [])
+                self.assertEqual(reference_graph._identity_route_paths(
+                    root, ["USA-NY-110-504200"]), [])
+            reference_graph._compact_admin_route_specs.cache_clear()
+
     def test_publisher_namespace_identity_uses_exact_country_route(self) -> None:
         can_root = Path("CAN/reference_graph")
         bra_root = Path("BRA/reference_graph")
