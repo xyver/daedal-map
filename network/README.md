@@ -6,6 +6,11 @@ own for now: it does not import the Mapping app and accepts prepared/source
 artifacts as explicit Docker mounts. A later Network extension will use the
 shared Mapping display interface.
 
+The [Network tool entry](../tools/network/README.md) records the planned
+contained source location and the current migration boundary. The
+[single-tool guide](../docs/WORK_ON_ONE_TOOL.md#network-prototype-available-now)
+shows how to check out and adapt only this prototype.
+
 The program source is licensed under [MIT](LICENSE), matching the public
 DaedalMap map runtime. Source data, prepared network graphs, shelter snapshots,
 and other installed packs retain their own source terms; the software licence

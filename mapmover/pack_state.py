@@ -12,10 +12,12 @@ from __future__ import annotations
 
 import json
 import shutil
+import tempfile
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .paths import DATA_ROOT, PACKS_ROOT, SETTINGS_PATH, STATE_DIR, ensure_dir
+from .paths import DATA_ROOT, PACKS_ROOT, RUNTIME_MODE, SETTINGS_PATH, STATE_DIR, ensure_dir
 from .catalog_surface import filter_catalog_for_product_surface
 
 
@@ -55,9 +57,8 @@ def _extract_overlay_label(source: dict, leaf_key: str) -> str:
 
 
 def _build_overlay_tree_for_sources(sources: list[dict]) -> dict:
-    # Local import to avoid a circular import at module load time
-    # (data_loading imports build_active_catalog from this module).
-    from .data_loading import load_source_metadata, source_data_version
+    # Local import to avoid a circular import at module load time.
+    from .data_loading import source_data_version
 
     tree: dict = {}
 
@@ -88,10 +89,6 @@ def _build_overlay_tree_for_sources(sources: list[dict]) -> dict:
             },
         )
         source_id = source.get("source_id")
-        # load_source_metadata is memoized (_metadata_cache), so this is a
-        # cheap cache hit after first load -- not a fresh per-request read
-        # (Task L5 activation guard: no new hot-loop metadata loads).
-        metadata = load_source_metadata(source_id) if source_id else None
         entry = {
             "source_id": source_id,
             "pack_id": source.get("pack_id"),
@@ -107,7 +104,7 @@ def _build_overlay_tree_for_sources(sources: list[dict]) -> dict:
             "default_question": source.get("default_question"),
             "default_response": source.get("default_response"),
         }
-        version = source_data_version(metadata)
+        version = source_data_version(source)
         if version:
             entry["data_version"] = version
         leaf["sources"].append(entry)
@@ -180,6 +177,31 @@ def _load_pack_catalog_fragment(entry: dict) -> dict:
         return {}
 
 
+def build_installed_pack_catalog(state: dict) -> dict:
+    """Combine validated installed fragments into the local catalog input."""
+    sources: dict[str, dict] = {}
+    packs: dict[str, dict] = {}
+    for entry in state.get("installed_packs", []):
+        pack_id = str(entry.get("pack_id") or "").strip()
+        fragment = _load_pack_catalog_fragment(entry)
+        if not fragment.get("sources"):
+            raise RuntimeError(f"Installed pack catalog is missing or empty: {pack_id}")
+        for source in fragment.get("sources", []):
+            source_id = str(source.get("source_id") or "").strip()
+            if not source_id or source.get("pack_id") != pack_id or source_id in sources:
+                raise RuntimeError(f"Conflicting installed source identity: {source_id}")
+            sources[source_id] = dict(source)
+        for pack in fragment.get("packs", []):
+            if pack.get("pack_id") != pack_id:
+                raise RuntimeError(f"Conflicting installed pack identity: {pack_id}")
+            packs[pack_id] = dict(pack)
+        if pack_id not in packs:
+            packs[pack_id] = {"pack_id": pack_id, "source_ids": [
+                source_id for source_id, source in sources.items() if source.get("pack_id") == pack_id
+            ]}
+    return {"sources": list(sources.values()), "packs": list(packs.values())}
+
+
 def _get_pack_source_ids(entry: dict, full_catalog: dict) -> list[str]:
     explicit = _normalize_pack_ids(entry.get("source_ids", []))
     if explicit:
@@ -213,22 +235,14 @@ def _same_file_contents(left: Path, right: Path) -> bool:
         return False
 
 
-def _clear_directory(path: Path) -> None:
-    if not path.exists():
-        return
-    for child in path.iterdir():
-        if child.is_dir():
-            shutil.rmtree(child)
-        else:
-            child.unlink()
-
-
-def _copy_pack_tree(source_root: Path, dest_root: Path) -> list[str]:
+def _copy_pack_tree(source_root: Path, dest_root: Path, *, skip_root_controls: bool = False) -> list[str]:
     conflicts = []
     for source_path in sorted(source_root.rglob("*")):
         if not source_path.is_file():
             continue
         relative_path = source_path.relative_to(source_root)
+        if skip_root_controls and relative_path.as_posix() in {"catalog.json", "index.json", MANAGED_DATA_ROOT_MARKER.name}:
+            continue
         dest_path = dest_root / relative_path
         ensure_dir(dest_path.parent)
         if dest_path.exists():
@@ -247,18 +261,18 @@ def _copy_pack_tree(source_root: Path, dest_root: Path) -> list[str]:
     return conflicts
 
 
-def _write_managed_root_marker(state: dict, active_pack_ids: list[str]) -> None:
+def _write_managed_root_marker(state: dict, active_pack_ids: list[str], root: Path = DATA_ROOT) -> None:
     marker = {
         "version": 1,
         "catalog_mode": state.get("catalog_mode", "managed_packs"),
         "active_pack_ids": active_pack_ids,
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
-    with MANAGED_DATA_ROOT_MARKER.open("w", encoding="utf-8") as fh:
+    with (root / MANAGED_DATA_ROOT_MARKER.name).open("w", encoding="utf-8") as fh:
         json.dump(marker, fh, indent=2)
 
 
-def _write_runtime_index(active_catalog: dict, state: dict) -> None:
+def _write_runtime_index(active_catalog: dict, state: dict, root: Path = DATA_ROOT) -> None:
     runtime_index = {
         "version": 1,
         "catalog_mode": state.get("catalog_mode", "managed_packs"),
@@ -266,11 +280,11 @@ def _write_runtime_index(active_catalog: dict, state: dict) -> None:
         "active_pack_ids": active_catalog.get("runtime_pack_state", {}).get("active_pack_ids", []),
         "source_count": active_catalog.get("total_sources", 0),
     }
-    with (DATA_ROOT / "index.json").open("w", encoding="utf-8") as fh:
+    with (root / "index.json").open("w", encoding="utf-8") as fh:
         json.dump(runtime_index, fh, indent=2)
 
 
-def materialize_active_data_root(full_catalog: dict, state: dict | None = None) -> dict:
+def materialize_active_data_root(full_catalog: dict, state: dict | None = None, *, adopt_unmanaged: bool = False) -> dict:
     state = state or load_pack_state()
     if state.get("catalog_mode") != "managed_packs":
         return {
@@ -279,7 +293,8 @@ def materialize_active_data_root(full_catalog: dict, state: dict | None = None) 
             "data_root": str(DATA_ROOT),
         }
 
-    active_catalog = build_active_catalog(full_catalog, state)
+    catalog_input = build_installed_pack_catalog(state) if RUNTIME_MODE == "local" else full_catalog
+    active_catalog = build_active_catalog(catalog_input, state)
     active_pack_ids = active_catalog.get("runtime_pack_state", {}).get("active_pack_ids", [])
     active_entries = []
     missing_installs = []
@@ -296,27 +311,78 @@ def materialize_active_data_root(full_catalog: dict, state: dict | None = None) 
     data_root_exists = DATA_ROOT.exists()
     data_root_nonempty = data_root_exists and any(DATA_ROOT.iterdir())
     marker_exists = MANAGED_DATA_ROOT_MARKER.exists()
-    if data_root_nonempty and not marker_exists:
-        raise RuntimeError(
-            f"Refusing to materialize managed packs into non-empty DATA_ROOT without marker: {DATA_ROOT}"
-        )
+    try:
+        existing = json.loads((DATA_ROOT / "catalog.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        existing = {}
+    generated_empty_catalog = existing.get("generated_by") == "local_runtime" and not existing.get("sources")
+    if data_root_nonempty and not marker_exists and not adopt_unmanaged and not generated_empty_catalog:
+        raise RuntimeError(f"Refusing to replace unmanaged DATA_ROOT without adoption: {DATA_ROOT}")
 
-    ensure_dir(DATA_ROOT)
-    _clear_directory(DATA_ROOT)
-
+    # Resolve a configured junction before swapping directories, so the
+    # junction itself keeps pointing at the data location the user chose.
+    target_root = DATA_ROOT.resolve()
+    ensure_dir(target_root.parent)
+    staged_root = Path(tempfile.mkdtemp(prefix=".daedal_stage_", dir=target_root.parent))
+    backup_root = target_root.parent / f".daedal_pre_materialize_{uuid.uuid4().hex}"
     conflicts = []
-    for entry in active_entries:
-        data_root = Path(entry.get("data_root") or "")
-        if not data_root.exists():
-            raise RuntimeError(f"Installed pack data_root not found for {entry.get('pack_id')}: {data_root}")
-        if data_root.resolve() == DATA_ROOT.resolve():
-            raise RuntimeError(f"Installed pack data_root may not be DATA_ROOT itself: {data_root}")
-        conflicts.extend(_copy_pack_tree(data_root, DATA_ROOT))
+    try:
+        for entry in active_entries:
+            data_root = Path(entry.get("data_root") or "")
+            if not data_root.exists():
+                raise RuntimeError(f"Installed pack data_root not found for {entry.get('pack_id')}: {data_root}")
+            if data_root.resolve() == DATA_ROOT.resolve():
+                raise RuntimeError(f"Installed pack data_root may not be DATA_ROOT itself: {data_root}")
+            conflicts.extend(_copy_pack_tree(data_root, staged_root, skip_root_controls=True))
 
-    with (DATA_ROOT / "catalog.json").open("w", encoding="utf-8") as fh:
-        json.dump(active_catalog, fh, indent=2)
-    _write_runtime_index(active_catalog, state)
-    _write_managed_root_marker(state, active_pack_ids)
+        if generated_empty_catalog and DATA_ROOT.exists():
+            # First install may follow a user dropping files into the data
+            # folder before opening the Library. Preserve that whole inbox.
+            conflicts.extend(_copy_pack_tree(DATA_ROOT, staged_root, skip_root_controls=True))
+
+        # Files added by hand are an inbox until the user reviews them. Keep
+        # them in place across another pack install or activation.
+        from .local_catalog_discovery import scan_local_archives, scan_unindexed_sources
+        for candidate in scan_unindexed_sources():
+            relative = Path(candidate["path"])
+            _copy_pack_tree(DATA_ROOT / relative, staged_root / relative)
+        for archive in scan_local_archives(include_installed=True):
+            relative = Path(archive["path"])
+            destination = staged_root / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            if not destination.exists():
+                shutil.copy2(DATA_ROOT / relative, destination)
+
+        with (staged_root / "catalog.json").open("w", encoding="utf-8") as fh:
+            json.dump(active_catalog, fh, indent=2)
+        _write_runtime_index(active_catalog, state, staged_root)
+        _write_managed_root_marker(state, active_pack_ids, staged_root)
+        for source in active_catalog.get("sources", []):
+            if not (staged_root / str(source.get("path") or "") / "metadata.json").is_file():
+                raise RuntimeError(f"Materialized source metadata missing: {source.get('source_id')}")
+
+        control_files = {"catalog.json", "index.json", MANAGED_DATA_ROOT_MARKER.name}
+        old_paths = ({path.relative_to(DATA_ROOT).as_posix() for path in DATA_ROOT.rglob("*")
+                      if path.is_file() and path.name not in control_files} if DATA_ROOT.exists() else set())
+        new_paths = {path.relative_to(staged_root).as_posix() for path in staged_root.rglob("*")
+                     if path.is_file()}
+        retain_backup = bool(old_paths - new_paths or conflicts) or (data_root_nonempty and not marker_exists and adopt_unmanaged)
+
+        if target_root.exists():
+            target_root.rename(backup_root)
+        try:
+            staged_root.rename(target_root)
+        except OSError:
+            if backup_root.exists() and not target_root.exists():
+                backup_root.rename(target_root)
+            raise
+        # An adopted user data tree is retained as a recovery copy. Managed
+        # roots and the generated empty first-boot catalog can be discarded.
+        if backup_root.exists() and not retain_backup:
+            shutil.rmtree(backup_root)
+    finally:
+        if staged_root.exists():
+            shutil.rmtree(staged_root)
 
     return {
         "materialized": True,
@@ -324,6 +390,7 @@ def materialize_active_data_root(full_catalog: dict, state: dict | None = None) 
         "active_pack_ids": active_pack_ids,
         "copied_pack_count": len(active_entries),
         "conflicts": sorted(set(conflicts)),
+        "previous_unmanaged_root": str(backup_root) if backup_root.exists() else None,
     }
 
 

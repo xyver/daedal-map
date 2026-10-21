@@ -107,6 +107,7 @@ def _install_pack_record(
     manifest_hash: str,
     *,
     activate: bool,
+    adopt_unmanaged: bool = False,
 ) -> tuple[dict, dict | None]:
     state = load_pack_state()
     install_root = data_root.parent
@@ -133,7 +134,7 @@ def _install_pack_record(
 
     materialization = None
     if activate or saved_state.get("catalog_mode") == "managed_packs":
-        materialization = materialize_active_data_root(full_catalog, saved_state)
+        materialization = materialize_active_data_root(full_catalog, saved_state, adopt_unmanaged=adopt_unmanaged)
     return saved_state, materialization
 
 
@@ -144,6 +145,7 @@ def install_pack_from_local_catalog(
     source_data_root: str | Path | None = None,
     activate: bool = False,
     replace_existing: bool = True,
+    allow_managed_source_root: bool = False,
 ) -> dict:
     """
     Bootstrap an installed pack from the current local full data tree.
@@ -157,7 +159,7 @@ def install_pack_from_local_catalog(
     if not any(src.get("pack_id") == pack_id for src in catalog_for_install.get("sources", [])):
         catalog_for_install = _load_catalog_from_root(source_root_base)
 
-    if source_root_base.resolve() == DATA_ROOT.resolve() and MANAGED_DATA_ROOT_MARKER.exists():
+    if source_root_base.resolve() == DATA_ROOT.resolve() and MANAGED_DATA_ROOT_MARKER.exists() and not allow_managed_source_root:
         raise RuntimeError(
             "Local pack bootstrap requires an unmanaged full data tree; "
             f"DATA_ROOT currently looks like a managed runtime root: {DATA_ROOT}"
@@ -224,6 +226,7 @@ def install_pack_from_local_catalog(
         manifest_path,
         manifest_hash,
         activate=activate,
+        adopt_unmanaged=allow_managed_source_root,
     )
 
     return {
@@ -246,6 +249,7 @@ def install_pack_from_manifest(
     *,
     activate: bool = False,
     replace_existing: bool = True,
+    adopt_unmanaged: bool = False,
 ) -> dict:
     """
     Install a pack from a staged manifest/data directory.
@@ -321,6 +325,7 @@ def install_pack_from_manifest(
         final_manifest_path,
         manifest_hash,
         activate=activate,
+        adopt_unmanaged=adopt_unmanaged,
     )
 
     return {

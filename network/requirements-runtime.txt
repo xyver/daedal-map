@@ -1,0 +1,6 @@
+# Network editor local runtime. The full requirements.txt also serves
+# graph-building scripts and the optional Network MCP in the dev image.
+fastapi==0.122.0
+uvicorn==0.38.0
+shapely==2.1.2
+pydantic>=2.0,<3

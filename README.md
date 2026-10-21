@@ -131,6 +131,12 @@ The [Network prototype](network/README.md) also lives in this repository.
 It has its own Docker setup and dependencies under `network/`, so the map
 runtime does not need them to start.
 
+To develop one local program without checking out every source directory, see
+[Work on one local tool](docs/WORK_ON_ONE_TOOL.md). The
+[tool source entries](tools/README.md) cover Mapping, Network, Research MCP,
+Geometry MCP, and the optional AI expansion, including their current migration
+status.
+
 ```powershell
 cd county-map
 pip install -r requirements.txt

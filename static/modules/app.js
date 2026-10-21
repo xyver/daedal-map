@@ -4,6 +4,7 @@
  */
 
 import { CONFIG } from './config.js';
+import './local-catalog-notice.js';
 import { GeometryCache, LocationInfoCache } from './cache.js';
 import { DisplayRuntime } from './display-runtime.js';
 import { cancelActiveRequests, fetchMsgpack, postMsgpack } from './utils/fetch.js';
