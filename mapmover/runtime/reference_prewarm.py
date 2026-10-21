@@ -83,8 +83,11 @@ def prewarm_country_routing_indexes(catalog: dict[str, Any] | None = None) -> di
         if str((manifest.get("release_unit") or {}).get("id") or "").upper() != country:
             raise ValueError(f"Country routing manifest owner mismatch: {country}")
         exact = str((manifest.get("runtime") or {}).get("exact") or "")
-        graph = f"{base}/reference/{release_id}/"
-        if exact != f"{base}/admin_spine/exact/{release_id}/" or (manifest.get("runtime") or {}).get("reference") != f"{base}/reference/":
+        canonical = profile.get("canonical_runtime_namespace_required") is True
+        graph = f"{base}/reference/graph/" if canonical else f"{base}/reference/{release_id}/"
+        expected_exact = (f"{base}/admin_spine/serving/exact/" if canonical
+                          else f"{base}/admin_spine/exact/{release_id}/")
+        if exact != expected_exact or (manifest.get("runtime") or {}).get("reference") != f"{base}/reference/":
             raise ValueError(f"Country routing runtime paths mismatch: {country}")
         graph_manifest = control(graph + "manifest.json")
         discovery_manifest = control(f"{base}/reference_discovery/manifest.json")

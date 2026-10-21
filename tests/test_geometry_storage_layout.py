@@ -5,6 +5,7 @@ import pytest
 from mapmover.runtime.geometry_storage_layout import (
     catalog_artifact_path,
     country_admin_spine_root,
+    country_reference_root,
     country_crosswalk_artifact_path,
     country_release_manifest_relative,
     global_admin0_display_relative,
@@ -35,6 +36,17 @@ def test_global_admin0_high_level_contract_keeps_three_distinct_worldwide_banks(
 def test_country_paths_come_from_one_contained_layout_contract() -> None:
     assert country_admin_spine_root(Path("data"), "usa", PROFILE) == Path(
         "data/geometry/countries/USA/admin_spine/exact/usa_geometry_1_3_2"
+    )
+
+
+def test_new_country_release_uses_stable_serving_roots() -> None:
+    profile = {"release_id": "usa_geometry_1_3_6", "release_version": "1.3.6",
+               "canonical_runtime_namespace_required": True}
+    assert country_admin_spine_root(Path("data"), "USA", profile) == Path(
+        "data/geometry/countries/USA/admin_spine/serving/exact"
+    )
+    assert country_reference_root(Path("data"), "USA", profile) == Path(
+        "data/geometry/countries/USA/reference/graph"
     )
 
 
@@ -79,6 +91,21 @@ def test_embedded_legacy_path_resolves_by_release_hash() -> None:
     assert released_artifact_path(
         "geometry/countries/USA/relationships/old/aliases.parquet", digest, paths,
     ) == "geometry/countries/USA/reference/example/1.3.2/aliases.parquet"
+
+
+def test_canonical_release_requires_exact_graph_path() -> None:
+    digest = "a" * 64
+    canonical = "geometry/countries/USA/families/place/census/exact/1.3.6/shapes.parquet"
+    paths = released_artifact_paths_by_hash({
+        "objects": [{"sha256": digest, "source_paths": [canonical]}],
+    })
+    assert released_artifact_path(canonical, digest, paths, strict=True) == canonical
+    with pytest.raises(ValueError, match="not declared"):
+        released_artifact_path("geometry/countries/USA/relationships/trial/shapes.parquet",
+                               digest, paths, strict=True)
+    authoring = "geometry/countries/USA/relationships/trial/shapes.parquet"
+    with pytest.raises(ValueError, match="authoring namespace"):
+        released_artifact_path(authoring, digest, {digest: (authoring,)}, strict=True)
 
 
 def test_exact_declared_path_wins_when_projection_has_same_basename() -> None:

@@ -82,7 +82,8 @@ def layout_available(iso3: str) -> bool:
         return False
     country = str(iso3).upper()
     if not (
-        relative_root.startswith(f"geometry/countries/{country}/admin_spine/exact/")
+        relative_root == f"geometry/countries/{country}/admin_spine/serving/exact"
+        or relative_root.startswith(f"geometry/countries/{country}/admin_spine/exact/")
     ):
         return False
     expected = relative_root + "/manifest.json"
