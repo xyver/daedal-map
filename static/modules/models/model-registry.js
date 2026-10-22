@@ -213,20 +213,17 @@ export const ModelRegistry = {
           return geoType === 'Point';
         });
 
-        // Wildfire perimeter geometry supplements its authoritative incident
-        // point. PolygonModel renders the supplied point as a deliberately
-        // smaller center flame, so keep the normal point renderer only for
-        // incidents without a perimeter; otherwise zooming in would create
-        // two flames or, if points were replaced, hide point-only fires.
-        if (eventType === 'wildfire') {
-          const fireKey = (feature) => String(
+        // PolygonModel supplies the center marker for shaped fire and flood
+        // events. Keep the normal point renderer only for events without a shape.
+        if (eventType === 'wildfire' || eventType === 'flood') {
+          const eventKey = (feature) => String(
             feature?.properties?.event_id
             || feature?.properties?.incident_id
             || feature?.properties?.id
             || ''
           ).trim();
-          const shapedFireKeys = new Set(polygonFeatures.map(fireKey).filter(Boolean));
-          pointFeatures = pointFeatures.filter((feature) => !shapedFireKeys.has(fireKey(feature)));
+          const shapedEventKeys = new Set(polygonFeatures.map(eventKey).filter(Boolean));
+          pointFeatures = pointFeatures.filter((feature) => !shapedEventKeys.has(eventKey(feature)));
         }
 
         // Render polygons with polygon model

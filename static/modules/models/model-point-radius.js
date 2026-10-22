@@ -14,6 +14,18 @@ import { DisasterPopup } from '../disaster-popup.js';
 import { fetchMsgpack } from '../utils/fetch.js';
 import { extendBoundsWithCoordinateList } from '../map-focus.mjs';
 
+function hasEventLocation(props) {
+  const lat = props?.latitude;
+  const lon = props?.longitude;
+  return lat != null && lon != null
+    && Number.isFinite(Number(lat)) && Number.isFinite(Number(lon))
+    && Math.abs(Number(lat)) <= 90 && Math.abs(Number(lon)) <= 180;
+}
+
+function isAreaGeometry(geometry) {
+  return geometry?.type === 'Polygon' || geometry?.type === 'MultiPolygon';
+}
+
 const DISASTER_ICON_SVGS = {
   earthquake: `
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
@@ -571,10 +583,9 @@ export const PointRadiusModel = {
 
     // Setup click handler - shows unified popup on click
     const clickHandler = (e) => {
-      // Don't show popups during animation playback
-      if (TimeSlider?.isPlaying) return;
-
       if (e.features.length > 0) {
+        // Keep the selected event in view while its popup or focused action opens.
+        if (TimeSlider?.isPlaying) TimeSlider.pause();
         const pickedFeature = this._pickBestFeatureCandidate(e.features, eventType) || e.features[0];
         const props = pickedFeature.properties;
 
@@ -2473,31 +2484,40 @@ export const PointRadiusModel = {
               ? `/api/wildfires/${props.event_id}/perimeter?year=${year}`
               : `/api/wildfires/${props.event_id}/perimeter`;
             const perimData = await fetchMsgpack(perimUrl);
-            if (perimData.type === 'Feature' && perimData.geometry) {
-              model._notifyWildfirePerimeter({
-                eventId: props.event_id,
-                fireName: props.fire_name || 'Wildfire',
-                geometry: perimData,
-                latitude: props.latitude,
-                longitude: props.longitude,
-                areaKm2: props.area_km2,
-                timestamp: props.timestamp
-              });
+            if (perimData.type === 'Feature' && isAreaGeometry(perimData.geometry)) {
+              const durationDays = Number(props.duration_days);
+              const startMs = new Date(props.timestamp).getTime();
+              if (Number.isFinite(durationDays) && durationDays > 0 && Number.isFinite(startMs)) {
+                model._notifyFireAnimation(perimData, props.event_id, durationDays,
+                  props.timestamp, props.latitude, props.longitude);
+              } else {
+                model._notifyWildfirePerimeter({
+                  eventId: props.event_id,
+                  fireName: props.fire_name || 'Wildfire',
+                  geometry: perimData,
+                  latitude: props.latitude,
+                  longitude: props.longitude,
+                  areaKm2: props.area_km2,
+                  timestamp: props.timestamp
+                });
+              }
               break;
             }
           } catch (err) {
             console.log('No perimeter data, falling back to circle');
           }
 
-          // Option 3: Fallback to area circle
-          if (props.latitude && props.longitude && props.area_km2 > 0) {
-            const radiusKm = Math.sqrt(props.area_km2 / Math.PI);
+          // Option 3: area circle when known, otherwise a location point.
+          if (hasEventLocation(props)) {
+            const areaKm2 = Number(props.area_km2);
+            const radiusKm = Number.isFinite(areaKm2) && areaKm2 > 0
+              ? Math.sqrt(areaKm2 / Math.PI) : 0;
             model._notifyWildfireImpact({
               eventId: props.event_id,
               fireName: props.fire_name || 'Wildfire',
               latitude: props.latitude,
               longitude: props.longitude,
-              areaKm2: props.area_km2,
+              areaKm2: radiusKm > 0 ? areaKm2 : null,
               radiusKm: radiusKm,
               timestamp: props.timestamp
             });
@@ -2513,11 +2533,11 @@ export const PointRadiusModel = {
               const url = `/api/floods/${props.event_id}/geometry`;
               const data = await fetchMsgpack(url);
               // Handle both Feature (single geometry) and FeatureCollection formats
-              if (data.type === 'Feature' && data.geometry) {
+              if (data.type === 'Feature' && isAreaGeometry(data.geometry)) {
                 model._notifyFloodAnimation(data, props.event_id, props.duration_days,
                   props.timestamp, props.end_timestamp, props.latitude, props.longitude, props.event_name);
                 break;
-              } else if (data.type === 'FeatureCollection' && data.features) {
+              } else if (data.type === 'FeatureCollection' && data.features?.some((feature) => isAreaGeometry(feature.geometry))) {
                 model._notifyFloodAnimation(data, props.event_id, props.duration_days,
                   props.timestamp, props.end_timestamp, props.latitude, props.longitude, props.event_name);
                 break;
@@ -2526,15 +2546,17 @@ export const PointRadiusModel = {
               console.error('Error fetching flood geometry:', err);
             }
           }
-          // Fallback: show area circle based on area_km2
-          if (props.latitude && props.longitude && props.area_km2 > 0) {
-            const radiusKm = Math.sqrt(props.area_km2 / Math.PI); // Circle radius from area
+          // Fallback: area circle when known, otherwise a location point.
+          if (hasEventLocation(props)) {
+            const areaKm2 = Number(props.area_km2);
+            const radiusKm = Number.isFinite(areaKm2) && areaKm2 > 0
+              ? Math.sqrt(areaKm2 / Math.PI) : 0;
             model._notifyFloodImpact({
               eventId: props.event_id,
               eventName: props.event_name || 'Flood',
               latitude: props.latitude,
               longitude: props.longitude,
-              areaKm2: props.area_km2,
+              areaKm2: radiusKm > 0 ? areaKm2 : null,
               radiusKm: radiusKm,
               durationDays: props.duration_days,
               timestamp: props.timestamp

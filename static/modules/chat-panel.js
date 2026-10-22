@@ -1532,6 +1532,7 @@ export const ChatManager = {
       }, timeoutMs) : null;
       let successCount = 0;
       const loadedLabels = [];
+      const loadedOverlayIds = [];
       const failedLabels = [];
       const concurrency = Math.max(1, Math.min(3, actions.length));
       let nextIndex = 0;
@@ -1552,6 +1553,7 @@ export const ChatManager = {
             if (childResult && (typeof childResult !== 'object' || childResult.ok !== false)) {
               successCount += 1;
               loadedLabels.push(formatDefaultLoadActionLabel(childAction));
+              if (childAction.overlayId) loadedOverlayIds.push(childAction.overlayId);
             } else {
               failedLabels.push(formatDefaultLoadActionLabel(childAction));
             }
@@ -1588,7 +1590,8 @@ export const ChatManager = {
         // after the batch so a catalog/list refresh during one child request
         // cannot leave data cached but no overlays active to render it.
         const timelineOverlayIds = Array.isArray(timeline.overlayIds)
-          ? timeline.overlayIds.map((value) => String(value || '').trim()).filter(Boolean)
+          ? timeline.overlayIds.map((value) => String(value || '').trim())
+              .filter((value) => value && loadedOverlayIds.includes(value))
           : [];
         for (const overlayId of timelineOverlayIds) {
           OverlaySelector?.showOverlay?.(overlayId, options.mode || this.mode);

@@ -2495,6 +2495,10 @@ export const App = {
   setupSatelliteToggle() {
     const checkbox = document.getElementById('satCheckbox');
     if (checkbox) {
+      if (document.body?.dataset.localWrapper === 'true') {
+        checkbox.closest('label')?.remove();
+        return;
+      }
       // Restore saved state
       try {
         const saved = localStorage.getItem('countymap_satellite_enabled');

@@ -67,6 +67,34 @@ def ensure_empty_catalog(data_root: Path) -> bool:
     return True
 
 
+def _legacy_package(extract_root: Path, version: dict) -> dict:
+    """Translate a verified older ZIP into source mappings; never admit its catalog."""
+    legacy = _json(extract_root / "data" / "catalog.json")
+    pack_id = str(version.get("pack_id") or "")
+    sources = [source for source in legacy.get("sources") or [] if isinstance(source, dict)]
+    if not sources or any(source.get("pack_id") != pack_id for source in sources):
+        raise ValueError("Legacy pack catalog identity differs from published download")
+    files = []
+    source_ids = []
+    for source in sources:
+        source_id = str(source.get("source_id") or "")
+        source_root = _relative(source.get("path"))
+        archive_root = extract_root / "data" / "sources" / source_id
+        if (not TOKEN.fullmatch(source_id) or source_root.parts[0] not in {"global", "countries"}
+                or not (archive_root / "metadata.json").is_file()):
+            raise ValueError("Legacy pack has invalid source mapping")
+        source_ids.append(source_id)
+        for member in archive_root.rglob("*"):
+            if member.is_file():
+                relative = member.relative_to(archive_root)
+                files.append({"source_id": source_id,
+                              "source_path": (source_root / relative).as_posix(),
+                              "archive_path": member.relative_to(extract_root).as_posix()})
+    return {"pack_id": pack_id, "pack_version": version.get("version"),
+            "pack_name": pack_id.replace("_", " ").title(),
+            "source_ids": source_ids, "files": files}
+
+
 def _extract_verified(archive_path: Path, extract_root: Path, version: dict) -> dict:
     with zipfile.ZipFile(archive_path) as archive:
         names: set[str] = set()
@@ -81,7 +109,6 @@ def _extract_verified(archive_path: Path, extract_root: Path, version: dict) -> 
             dest.parent.mkdir(parents=True, exist_ok=True)
             with archive.open(member) as source, dest.open("wb") as output:
                 shutil.copyfileobj(source, output)
-    package = _json(extract_root / "data" / "manifest.json")
     declared = version.get("files")
     if not isinstance(declared, list) or not declared:
         raise ValueError("Pack release has no verified member inventory")
@@ -96,7 +123,47 @@ def _extract_verified(archive_path: Path, extract_root: Path, version: dict) -> 
     archived_files = {name for name in names if not name.endswith("/")}
     if verified != archived_files:
         raise ValueError("Pack archive members differ from verified inventory")
-    return package
+    package_path = extract_root / "data" / "manifest.json"
+    if package_path.is_file():
+        return _json(package_path)
+    if version.get("legacy_catalog_archive") and (extract_root / "data" / "catalog.json").is_file():
+        return _legacy_package(extract_root, version)
+    raise ValueError("Pack ZIP has no supported source manifest")
+
+
+def install_verified_data_zip(archive_path: Path, storage_root: Path, *, pack_id: str,
+                              release: dict, log=lambda _: None) -> dict:
+    """Install a ZIP matched to the saved Downloads catalog without network reads."""
+    archive_path = Path(archive_path)
+    package_id = str(release.get("packageId") or "")
+    version = str(release.get("version") or "")
+    expected_sha = str(release.get("sha256") or "").lower()
+    expected_size = release.get("size")
+    if (not TOKEN.fullmatch(pack_id) or not TOKEN.fullmatch(package_id)
+            or not version or not isinstance(expected_size, int)
+            or not re.fullmatch(r"[0-9a-f]{64}", expected_sha)
+            or archive_path.stat().st_size != expected_size or _hash(archive_path) != expected_sha):
+        raise ValueError("ZIP does not match its published Downloads record")
+    members = []
+    with zipfile.ZipFile(archive_path) as archive:
+        for member in archive.infolist():
+            if member.is_dir():
+                continue
+            with archive.open(member) as source:
+                digest = hashlib.sha256()
+                for block in iter(lambda: source.read(1024 * 1024), b""):
+                    digest.update(block)
+            members.append({"path": member.filename, "sha256": digest.hexdigest()})
+    manifest = {"pack_id": pack_id, "version": version,
+                "artifact": {"sha256": expected_sha, "size_bytes": expected_size,
+                             "download_url": archive_path.as_uri()},
+                "files": members, "legacy_catalog_archive": True}
+    pointer = {"pack_id": pack_id, "current_version": version,
+               "version_manifest_url": "local-verified-version"}
+    return install_data_pack("local-verified-current", storage_root,
+                             fetch_json=lambda key: pointer if key == "local-verified-current" else manifest,
+                             download=lambda _url, _path: None,
+                             archive_path=archive_path, log=log)
 
 
 def _prepare_pack_data(extract_root: Path, pack_root: Path, package: dict, version: dict) -> dict:

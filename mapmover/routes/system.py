@@ -18,7 +18,7 @@ from urllib.parse import urlparse
 
 import msgpack
 from fastapi import APIRouter, Request, Response
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 
 from agent_surface_shared import agent_ai_plugin_description_for_model
 from mapmover.auth_context import build_session_cache_key, get_authenticated_user
@@ -29,7 +29,6 @@ from mapmover.catalog_surface import is_mcp_distribution_source
 from mapmover.hosted_runtime_account import load_account_context
 from mapmover.hosted_runtime_events import submit_runtime_feedback
 from mapmover.order_queue import order_queue
-from mapmover.pack_downloader import _geometry_edition_projection, _load_json_from_ref
 from mapmover.prewarm_status import begin_prewarm, prewarm_readiness, run_prewarm_task
 from mapmover.catalog_cache_policy import CONTROL_CATALOG_CACHE_TTL_SECONDS
 from mapmover.runtime_config import get_runtime_config
@@ -381,65 +380,45 @@ def _read_public_json(url: str) -> dict:
     return data if isinstance(data, dict) else {}
 
 
-def _downloadable_pack_store_entry(entry: dict, public_base: str) -> dict:
-    pack_id = str(entry.get("pack_id") or "").strip()
-    if not pack_id:
-        return {}
-
-    normalized = dict(entry)
-    package_id = str(entry.get("package_id") or f"{pack_id}-lite").strip()
-    current_url = str(entry.get("current_manifest_url") or f"{public_base}/downloadable/packs/{pack_id}/{package_id}/stable/current.json").strip()
-    version_url = ""
-    release_url = ""
-    edition = ""
-    try:
-        current = _read_public_json(current_url)
-        version_url = str(current.get("version_manifest_url") or "").strip()
-        if version_url:
-            version = _read_public_json(version_url)
-        elif current.get("package_profile") == "geometry":
-            release_url = str(current.get("release_manifest_url") or "").strip()
-            edition = str(current.get("edition") or "").strip()
-            release = _load_json_from_ref(release_url, current.get("release_manifest_sha256"))
-            version = _geometry_edition_projection(release, current)
-        else:
-            version = {}
-    except Exception:
-        current = {}
-        version = {}
-
-    artifact = version.get("artifact") if isinstance(version.get("artifact"), dict) else {}
-    size_bytes = int(artifact.get("size_bytes") or 0) if str(artifact.get("size_bytes") or "").strip() else 0
-    files = version.get("files") if isinstance(version.get("files"), list) else []
-    installed_size_bytes = 0
-    for item in files:
+def _storefront_pack_entries(catalog: dict) -> list[dict]:
+    """Project the same published data cards used by launcher Data into local settings."""
+    categories = catalog.get("categories") if isinstance(catalog, dict) else None
+    data = categories.get("data") if isinstance(categories, dict) else None
+    if not isinstance(data, list):
+        raise ValueError("Storefront catalog has no data pack list")
+    entries = []
+    for item in data:
         if not isinstance(item, dict):
             continue
-        raw_size = item.get("size_bytes")
-        if raw_size in (None, ""):
-            raw_size = item.get("size")
+        manifest_url = str(item.get("manifestUrl") or "").strip()
+        parsed = urlparse(manifest_url)
+        parts = parsed.path.split("/")
         try:
-            installed_size_bytes += int(raw_size or 0)
-        except (TypeError, ValueError):
+            marker = parts.index("packs")
+            pack_id, path_package_id, channel = parts[marker + 1:marker + 4]
+        except (ValueError, IndexError):
             continue
-    normalized.update(
-        {
+        package_id = str(item.get("packageId") or "").strip()
+        if (not pack_id or not package_id or package_id != path_package_id or
+                channel != "stable" or parsed.scheme != "https"):
+            continue
+        current_url = parsed._replace(path="/".join(parts[:marker + 4]) + "/current.json",
+                                      params="", query="", fragment="").geturl()
+        size = item.get("size") if isinstance(item.get("size"), int) else 0
+        entries.append({
+            "pack_id": pack_id,
+            "package_id": package_id,
+            "package_tier": str(item.get("tier") or "lite").strip(),
             "current_manifest_url": current_url,
-            "version_manifest_url": version_url or str(entry.get("version_manifest_url") or "").strip(),
-            "release_manifest_url": release_url or str(entry.get("release_manifest_url") or "").strip(),
-            "edition": edition or str(entry.get("edition") or "").strip(),
-            "current_version": str(version.get("version") or current.get("current_version") or entry.get("current_version") or "").strip(),
-            "source_name": str(version.get("source_name") or current.get("source_name") or entry.get("source_name") or pack_id).strip(),
-            "description": str(version.get("description") or current.get("description") or entry.get("description") or "").strip(),
-            "notes": list(version.get("notes") or current.get("notes") or entry.get("notes") or []),
-            "download_url": str(artifact.get("download_url") or "").strip(),
-            "size_bytes": size_bytes,
-            "size_mb": round(size_bytes / (1024 * 1024), 2) if size_bytes > 0 else 0.0,
-            "installed_size_bytes": installed_size_bytes,
-            "installed_size_mb": round(installed_size_bytes / (1024 * 1024), 2) if installed_size_bytes > 0 else 0.0,
-        }
-    )
-    return normalized
+            "version_manifest_url": manifest_url,
+            "current_version": str(item.get("version") or "").strip(),
+            "source_name": str(item.get("title") or pack_id).strip(),
+            "description": str(item.get("description") or "").strip(),
+            "tags": item.get("badges") if isinstance(item.get("badges"), list) else [],
+            "size_bytes": size,
+            "size_mb": round(size / (1024 * 1024), 2) if size > 0 else 0.0,
+        })
+    return entries
 
 
 def _select_downloadable_pack_current_url(index_data: dict, pack_id: str, package_id: str, public_base: str) -> str:
@@ -2500,7 +2479,14 @@ async def get_catalog_sources(req: Request):
 
     auth_user = get_authenticated_user(req)
     using_wip = request_uses_wip_catalog(req, auth_user)
-    entitled = _get_entitled_packs(req)
+    # The local wrapper's catalog is already restricted to the packs in its
+    # shared library. Hosted account entitlements must not hide those packs
+    # from an unsigned-in localhost session.
+    local_library = (
+        os.getenv("DAEDALMAP_ACCESS_MODE", "").strip().lower() == "local_wrapper"
+        and _local_wrapper_state_allowed(req)
+    )
+    entitled = None if local_library else _get_entitled_packs(req)
     all_sources = (load_full_catalog() if using_wip else load_catalog()).get("sources", [])
 
     SUMMARY_KEYS = {"source_id", "pack_id", "source_name", "category", "data_type", "scope", "topic_tags"}
@@ -2771,7 +2757,13 @@ async def get_catalog_overlays(req: Request):
     auth_user = get_authenticated_user(req)
     using_wip = request_uses_wip_catalog(req, auth_user)
     catalog = load_full_catalog() if using_wip else load_catalog()
-    entitled = _get_entitled_packs(req)
+    # Local library visibility is determined by its active installed packs,
+    # not by hosted account entitlements.
+    local_library = (
+        os.getenv("DAEDALMAP_ACCESS_MODE", "").strip().lower() == "local_wrapper"
+        and _local_wrapper_state_allowed(req)
+    )
+    entitled = None if local_library else _get_entitled_packs(req)
 
     all_sources = catalog.get("sources", [])
 
@@ -2872,7 +2864,7 @@ async def set_local_catalog_surface(req: Request):
 
 @router.post("/api/local/data-plane")
 async def set_local_data_plane(req: Request):
-    """Switch localhost reads between installed files and the cloud lane."""
+    """Keep local desktop reads on installed files, including old callers."""
     from mapmover.data_cascade import clear_cache as clear_data_cascade_cache
     from mapmover.duckdb_helpers import cache_clear, reset_thread_connection_pool
     from mapmover.foundation_helpers import clear_foundation_helper_cache
@@ -2895,6 +2887,8 @@ async def set_local_data_plane(req: Request):
             body = await req.json()
         except Exception:
             body = {}
+    if str((body or {}).get("mode") or "").strip().lower() != "local":
+        return msgpack_error("Explore Map reads installed local data only.", 400)
     previous_mode = get_data_plane_mode()
     try:
         mode = set_local_data_plane_mode((body or {}).get("mode"))
@@ -3315,27 +3309,19 @@ async def add_local_catalog_archive(req: Request):
 
 @router.get("/api/local-wrapper/packs/store")
 async def get_local_wrapper_pack_store(req: Request):
-    """Proxy the public downloadable pack index so localhost browser UI avoids CORS issues."""
+    """Project the shared public storefront catalog for the localhost library."""
     _context, error = _require_local_or_admin(req)
     if error:
         return error
 
-    public_base = _downloadable_public_base_url()
-    index_url = f"{public_base}/downloadable/packs/index.json"
+    catalog_url = str(os.getenv("DAEDALMAP_STOREFRONT_CATALOG_URL") or
+                      "https://www.daedalmap.com/downloadable/storefront_catalog.json").strip()
     try:
-        index_data = _read_public_json(index_url)
-        packs = index_data.get("packs")
-        enriched = []
-        for pack in packs if isinstance(packs, list) else []:
-            if not isinstance(pack, dict):
-                continue
-            record = _downloadable_pack_store_entry(pack, public_base)
-            if record:
-                enriched.append(record)
+        catalog = await asyncio.to_thread(_read_public_json, catalog_url)
+        enriched = _storefront_pack_entries(catalog)
         return JSONResponse({
             "ok": True,
-            "public_base_url": public_base,
-            "index_url": index_url,
+            "catalog_url": catalog_url,
             "packs": enriched,
         })
     except urllib.error.URLError as exc:
@@ -3669,7 +3655,55 @@ def _render_app_shell() -> str:
         quote = needle[-1]
         stamped = needle[:-1] + f"?v={_v(rel)}" + quote
         html = html.replace(needle, stamped)
+    if os.getenv("DAEDALMAP_ACCESS_MODE", "").strip().lower() == "local_wrapper":
+        html = html.replace("<head>", "<head>\n  <script>window.DAEDALMAP_LOCAL_WRAPPER = true;</script>", 1)
+        html = html.replace('  <link rel="preconnect" href="https://unpkg.com" crossorigin>\n', "", 1)
+        html = html.replace('  <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>\n', "", 1)
+        html = html.replace('  <script src="/static/js/dm-visitor.js"></script>\n', "", 1)
+        html = html.replace("<body>", '<body data-local-wrapper="true">', 1)
+        html = html.replace('data-tutorial-title="Account and Session"',
+                            'data-tutorial-title="Explore Map"', 1)
+        html = html.replace(
+            'data-tutorial-body="Manage account access here, switch between account-backed and guest behavior, or collapse the sidebar to focus on the map."',
+            'data-tutorial-body="Use the launcher for map and data settings, or collapse the sidebar to focus on the map."',
+            1,
+        )
     return html
+
+
+_LOCAL_MAP_DETAIL_FILES = {"ne_10m_land.geojson", "ne_10m_admin_0_countries.geojson"}
+
+
+@router.get("/api/local-map-tiles/config")
+async def get_local_map_tiles_config(request: Request):
+    if not _local_wrapper_state_allowed(request):
+        return JSONResponse({"error": "Local map settings are unavailable"}, status_code=404)
+    config_path = Path(os.getenv("DAEDALMAP_MAP_TILES_CONFIG") or "")
+    try:
+        payload = json.loads(config_path.read_text(encoding="utf-8")) if config_path.is_file() else {}
+    except (OSError, ValueError):
+        payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
+    detail_root = Path(os.getenv("DAEDALMAP_MAP_TILES_ROOT") or "")
+    detail_available = bool(str(detail_root) not in {"", "."} and all(
+        (detail_root / filename).is_file() for filename in _LOCAL_MAP_DETAIL_FILES))
+    mode = payload.get("mode") if payload.get("mode") in {"offline_basic", "offline_detail"} else "offline_basic"
+    if mode == "offline_detail" and not detail_available:
+        mode = "offline_basic"
+    return {"mode": mode, "remote_style_url": "",
+            "detail_available": detail_available}
+
+
+@router.get("/api/local-map-tiles/detail/{filename}")
+async def get_local_map_detail_file(request: Request, filename: str):
+    if not _local_wrapper_state_allowed(request) or filename not in _LOCAL_MAP_DETAIL_FILES:
+        return JSONResponse({"error": "Map detail file unavailable"}, status_code=404)
+    detail_root = Path(os.getenv("DAEDALMAP_MAP_TILES_ROOT") or "")
+    path = detail_root / filename
+    if str(detail_root) in {"", "."} or not path.is_file():
+        return JSONResponse({"error": "Map detail file unavailable"}, status_code=404)
+    return FileResponse(path, media_type="application/geo+json")
 
 
 @router.get("/", response_class=HTMLResponse)
@@ -3706,6 +3740,26 @@ async def serve_settings_page(request: Request):
     if runtime_mode and runtime_mode != "local":
         return HTMLResponse("<h1>Not Found</h1>", status_code=404)
 
+    if os.getenv("DAEDALMAP_ACCESS_MODE", "").strip().lower() == "local_wrapper":
+        requested = str(request.query_params.get("tab") or "settings").lower()
+        tabs = {"settings": ("advanced", "Settings"), "library": ("library", "Data"),
+                "research": ("research", "Research"), "llm": ("llm", "AI"),
+                "runtime": ("runtime", "Explore Map"), "self-host": ("advanced", "Settings")}
+        tab, title = tabs.get(requested, tabs["settings"])
+        navigation = STATE_DIR / "launcher_navigation.json"
+        navigation.parent.mkdir(parents=True, exist_ok=True)
+        temporary = navigation.with_suffix(".json.tmp")
+        temporary.write_text(json.dumps({"tab": tab}), encoding="utf-8")
+        os.replace(temporary, navigation)
+        return HTMLResponse(
+            '<!doctype html><html><head><meta charset="utf-8"><title>DaedalMap Launcher</title></head>'
+            '<body style="font:16px system-ui;background:#091723;color:#eef7fb;padding:3rem">'
+            f'<h1>Open {title} in DaedalMap Launcher</h1>'
+            '<p>The launcher manages program settings and data downloads. '
+            'If it is open, this page has requested the matching tab.</p>'
+            '<p>You can close this browser tab.</p></body></html>'
+        )
+
     llm_ready = bool(os.getenv("ANTHROPIC_API_KEY", "").strip() or os.getenv("OPENAI_API_KEY", "").strip())
     llm_status = "Configured" if llm_ready else "Missing"
     llm_note = (
@@ -3713,8 +3767,6 @@ async def serve_settings_page(request: Request):
         if llm_ready
         else "Set OPENAI_API_KEY or ANTHROPIC_API_KEY in .env before using chat."
     )
-    downloadable_public_base = _downloadable_public_base_url()
-    pack_store_index_url = f"{downloadable_public_base}/downloadable/packs/index.json"
     hosted_account_url = f"{SITE_URL}/account" if SITE_URL and not _is_localish_url(SITE_URL) else ""
     hosted_research_url = f"{hosted_account_url}?tab=research" if hosted_account_url else ""
     hosted_self_host_url = f"{hosted_account_url}?tab=self-host" if hosted_account_url else ""
@@ -4709,7 +4761,7 @@ async def serve_settings_page(request: Request):
                                 + (version ? '<span>v' + escapeHtml(version) + '</span>' : '')
                                 + (tier ? '<span>' + tier + '</span>' : '')
                                 + '<span>Download: ' + escapeHtml(sizeText) + '</span>'
-                                + '<span>Installs to: ' + escapeHtml(installedSizeText) + '</span>'
+                                + (Number(entry?.installed_size_bytes || 0) > 0 ? '<span>Installs to: ' + escapeHtml(installedSizeText) + '</span>' : '')
                                 + '</div>'
                                 + '<div class="pack-description">' + (desc || 'No description yet.') + '</div>'
                                 + (tags.length ? '<div class="pack-tags">' + tags.map(function(tag) {{ return '<span class="tag">' + escapeHtml(String(tag)) + '</span>'; }}).join('') + '</div>' : '')
@@ -4801,6 +4853,10 @@ async def serve_settings_page(request: Request):
                             if (!response.ok) throw new Error('Local pack status HTTP ' + response.status);
                             const payload = await response.json();
                             if (payload?.ok === false) throw new Error(payload.error || 'Local pack state unavailable.');
+                            return payload;
+                        }}).then(function(payload) {{
+                            const count = Array.isArray(payload?.installed_packs) ? payload.installed_packs.length : 0;
+                            localEl.innerHTML = '<div class="loading">' + count + ' local pack' + (count === 1 ? '' : 's') + ' found. Loading downloadable catalog...</div>';
                             return payload;
                         }}),
                     ]);

@@ -2994,6 +2994,11 @@ export const OverlayController = {
       return;
     }
 
+    // Fire/flood focused views listen to this slider themselves. Redrawing
+    // every active ten-year disaster layer behind them is both misleading and
+    // expensive, especially while a daily event scale is playing.
+    if (this._focusedOverlaySnapshot) return;
+
     // Determine if this is a timestamp (for lifecycle filtering)
     const isTimestamp = Math.abs(time) >= 50000;
     const forceRerender = source === 'bounds';
@@ -3123,6 +3128,7 @@ export const OverlayController = {
   },
 
   enterFocusedOverlayMode(viewState = null, overlayIds = []) {
+    TimeSlider?.pause?.();
     const restoreOverlayIds = Array.isArray(overlayIds)
       ? overlayIds.filter(Boolean)
       : [];
@@ -4346,6 +4352,25 @@ export const OverlayController = {
       console.log(`OverlayController: Applied exact-event filter for ${overlayId} -> ${filteredGeojson.features.length} feature(s)`);
     }
 
+    // Wildfire overviews contain thousands of static points. Most playback
+    // ticks leave the active set unchanged; avoid rebuilding the same map
+    // source and markers while the playhead moves between event boundaries.
+    if (overlayId === 'wildfires') {
+      if (useTimestamp && TimeSlider?.isPlaying) {
+        const keys = filteredGeojson.features.map((feature) =>
+          String(feature.properties?.event_id || feature.id || '').trim());
+        if (keys.every(Boolean)) {
+          const signature = keys.join('\u0000');
+          if (signature === this._wildfirePlaybackSignature && MapAdapter?.map?.getSource?.('wildfire-source')) return;
+          this._wildfirePlaybackSignature = signature;
+        } else {
+          this._wildfirePlaybackSignature = null;
+        }
+      } else {
+        this._wildfirePlaybackSignature = null;
+      }
+    }
+
     // Render using appropriate model
     const rendered = ModelRegistry?.render(filteredGeojson, endpoint.eventType, {
       displayContract: getOverlayDisplayContract(overlayId),
@@ -4374,6 +4399,7 @@ export const OverlayController = {
    * @param {string} overlayId - Overlay ID
    */
   hideOverlay(overlayId) {
+    if (overlayId === 'wildfires') this._wildfirePlaybackSignature = null;
     this.clearExactEventFilter?.(overlayId);
 
     if (overlayId === 'geometry_inventory') {

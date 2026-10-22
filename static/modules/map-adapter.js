@@ -84,10 +84,29 @@ export const MapAdapter = {
   /**
    * Initialize the map
    */
-  init() {
+  async init() {
+    const localWrapper = document.body?.dataset.localWrapper === 'true';
+    let baseStyle = this.STYLES.dark;
+    if (localWrapper) {
+      baseStyle = this.STYLES.offline;
+      try {
+        const response = await fetch('/api/local-map-tiles/config');
+        if (response.ok) {
+          const settings = await response.json();
+          if (settings.mode === 'offline_detail') {
+            baseStyle = JSON.parse(JSON.stringify(this.STYLES.offline));
+            baseStyle.sources.land.data = '/api/local-map-tiles/detail/ne_10m_land.geojson';
+            baseStyle.sources.countries.data = '/api/local-map-tiles/detail/ne_10m_admin_0_countries.geojson';
+          }
+        }
+      } catch (error) {
+        console.warn('Using built-in offline world map:', error);
+      }
+    }
+    this.activeBaseStyle = baseStyle;
     this.map = new maplibregl.Map({
       container: 'map',
-      style: 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json',
+      style: baseStyle,
       center: CONFIG.defaultCenter,
       zoom: CONFIG.defaultZoom,
       doubleClickZoom: false  // Disable default double-click zoom
@@ -374,6 +393,24 @@ export const MapAdapter = {
   // Map style URLs
   STYLES: {
     dark: 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json',
+    offline: {
+      version: 8,
+      name: 'DaedalMap offline world',
+      sources: {
+        land: { type: 'geojson', data: '/static/data/offline-basemap/ne_50m_land.geojson',
+          attribution: 'Made with Natural Earth' },
+        countries: { type: 'geojson', data: '/static/data/offline-basemap/ne_50m_admin_0_countries.geojson' }
+      },
+      layers: [
+        { id: 'offline-ocean', type: 'background', paint: { 'background-color': '#26343d' } },
+        { id: 'offline-land', type: 'fill', source: 'land', paint: { 'fill-color': '#101a20' } },
+        { id: 'offline-country-borders', type: 'line', source: 'countries', paint: {
+          'line-color': '#667680',
+          'line-width': ['interpolate', ['linear'], ['zoom'], 0, 0.35, 5, 0.8, 10, 1.2],
+          'line-opacity': 0.7
+        } }
+      ]
+    },
     satellite: {
       version: 8,
       sources: {
@@ -403,8 +440,9 @@ export const MapAdapter = {
    * @param {boolean} enabled - True for satellite, false for dark map
    */
   toggleSatellite(enabled) {
+    if (document.body?.dataset.localWrapper === 'true') enabled = false;
     this.satelliteMode = enabled;
-    const style = enabled ? this.STYLES.satellite : this.STYLES.dark;
+    const style = enabled ? this.STYLES.satellite : (this.activeBaseStyle || this.STYLES.dark);
 
     // Store current projection state
     const wasGlobeEnabled = this.map.getProjection()?.type === 'globe';
@@ -1396,6 +1434,7 @@ export const MapAdapter = {
   },
 
   isEmptyMapPointInspectorEnabled(lane = App?.currentCanvasMode || 'explore') {
+    if (document.body?.dataset.localWrapper === 'true') return false;
     // A coordinate/raster lookup is a shared map tool, not an Explore-only
     // behavior. Keep the lane argument so a future intentionally restricted
     // shell can opt out explicitly.

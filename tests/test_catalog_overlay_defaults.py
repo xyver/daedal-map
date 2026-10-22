@@ -97,6 +97,22 @@ class CatalogOverlayDefaultsTests(unittest.TestCase):
         self.assertIn("world_factbook", payload["pack_defaults"])
         self.assertIn("world_factbook", payload["source_defaults"])
 
+    def test_local_wrapper_shows_installed_sources_without_hosted_sign_in(self) -> None:
+        request = SimpleNamespace(headers={}, query_params={}, client=SimpleNamespace(host="127.0.0.1"))
+        with patch.dict("os.environ", {"DAEDALMAP_ACCESS_MODE": "local_wrapper"}), \
+                patch("mapmover.paths.INSTALL_MODE", "local"), \
+                patch("mapmover.paths.RUNTIME_MODE", "local"), \
+                patch("mapmover.routes.system.get_authenticated_user", return_value=None), \
+                patch("mapmover.catalog_surface.request_uses_wip_catalog", return_value=False), \
+                patch("mapmover.data_loading.load_catalog", return_value=self._catalog()), \
+                patch("mapmover.routes.system._get_entitled_packs", side_effect=AssertionError("hosted entitlements used")):
+            response = asyncio.run(get_catalog_overlays(request))
+
+        payload = msgpack.unpackb(response.body, raw=False)
+        self.assertEqual({"geometry_global", "world_factbook"},
+                         {source["source_id"] for source in payload["sources"]})
+        self.assertIn("world_factbook", payload["overlay_tree"])
+
 
 if __name__ == "__main__":
     unittest.main()

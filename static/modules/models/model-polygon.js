@@ -129,9 +129,9 @@ const WILDFIRE_CENTER_ICON_SVG = `
 export const PolygonModel = {
   // Currently active event types (supports multiple overlays simultaneously)
   activeTypes: new Set(),
-  // Wildfire perimeters render a second, point-based flame layer. Track its
-  // bindings separately because it is not backed by the perimeter source.
-  wildfireCenterInteractionTypes: new Set(),
+  // Polygon events can render a second point marker at their published center.
+  // Track its bindings separately because it has its own source.
+  centerInteractionTypes: new Set(),
 
   // Handler references for cleanup (per event type)
   clickHandlers: new Map(),      // eventType -> handler
@@ -147,7 +147,7 @@ export const PolygonModel = {
     return `${eventType}-polygon-${baseId}`;
   },
 
-  _wildfireCenterGeojson(geojson) {
+  _centerGeojson(geojson) {
     const features = [];
     for (const feature of geojson?.features || []) {
       const props = feature?.properties || {};
@@ -213,7 +213,7 @@ export const PolygonModel = {
         'icon-halo-blur': 0.6
       }
     });
-    this._bindWildfireCenterInteractions(map, eventType, layerId);
+    this._bindCenterInteractions(map, eventType, layerId);
   },
 
   _ensureWildfireCenterIcon(map, sourceId, layerId, eventType = 'wildfire') {
@@ -231,8 +231,8 @@ export const PolygonModel = {
     image.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(WILDFIRE_CENTER_ICON_SVG)}`;
   },
 
-  _bindWildfireCenterInteractions(map, eventType, layerId) {
-    if (eventType !== 'wildfire' || !map.getLayer(layerId) || this.wildfireCenterInteractionTypes.has(eventType)) return;
+  _bindCenterInteractions(map, eventType, layerId) {
+    if (!['wildfire', 'flood'].includes(eventType) || !map.getLayer(layerId) || this.centerInteractionTypes.has(eventType)) return;
     const clickHandler = this.clickHandlers.get(eventType);
     const hoverHandlers = this.hoverHandlers.get(eventType);
     if (!clickHandler || !hoverHandlers) return;
@@ -242,7 +242,24 @@ export const PolygonModel = {
     map.on('mouseleave', layerId, hoverHandlers.mouseleave);
     map.on('mousemove', layerId, hoverHandlers.mousemove);
     map.on('mouseleave', layerId, hoverHandlers.mouseleavePopup);
-    this.wildfireCenterInteractionTypes.add(eventType);
+    this.centerInteractionTypes.add(eventType);
+  },
+
+  _addFloodCenterLayer(map, sourceId, layerId) {
+    if (!map.getSource(sourceId) || map.getLayer(layerId)) return;
+    map.addLayer({
+      id: layerId,
+      type: 'circle',
+      source: sourceId,
+      paint: {
+        'circle-radius': ['interpolate', ['linear'], ['zoom'], 0, 5, 5, 7, 10, 10],
+        'circle-color': '#4baeff',
+        'circle-opacity': 0.9,
+        'circle-stroke-color': '#e8f7ff',
+        'circle-stroke-width': 1.5
+      }
+    });
+    this._bindCenterInteractions(map, 'flood', layerId);
   },
 
   /**
@@ -342,8 +359,8 @@ export const PolygonModel = {
       // type membership so isTypeActive stays in sync with on-map layers.
       this.activeTypes.add(eventType);
       existingSource.setData(geojson);
-      if (eventType === 'wildfire') {
-        map.getSource(centerSourceId)?.setData(this._wildfireCenterGeojson(geojson));
+      if (eventType === 'wildfire' || eventType === 'flood') {
+        map.getSource(centerSourceId)?.setData(this._centerGeojson(geojson));
       }
       return true;
     }
@@ -386,12 +403,13 @@ export const PolygonModel = {
     // marker remains useful for scanning dense live-fire maps. It uses the
     // collector-published incident coordinates, not a calculated label point,
     // and lives in a separate render-only source so event counts stay intact.
-    if (eventType === 'wildfire') {
+    if (eventType === 'wildfire' || eventType === 'flood') {
       map.addSource(centerSourceId, {
         type: 'geojson',
-        data: this._wildfireCenterGeojson(geojson)
+        data: this._centerGeojson(geojson)
       });
-      this._ensureWildfireCenterIcon(map, centerSourceId, centerId, eventType);
+      if (eventType === 'wildfire') this._ensureWildfireCenterIcon(map, centerSourceId, centerId, eventType);
+      else this._addFloodCenterLayer(map, centerSourceId, centerId);
     }
 
     // Add labels if requested
@@ -417,10 +435,8 @@ export const PolygonModel = {
 
     // Setup click handler - shows unified popup on click
     const clickHandler = (e) => {
-      // Don't show popups during animation playback
-      if (TimeSlider?.isPlaying) return;
-
       if (e.features.length > 0) {
+        if (TimeSlider?.isPlaying) TimeSlider.pause();
         const props = e.features[0].properties;
         // Use click location for popup
         const coords = e.lngLat ? [e.lngLat.lng, e.lngLat.lat] : null;
@@ -484,9 +500,8 @@ export const PolygonModel = {
     map.on('mouseleave', fillId, mouseleaveHandler);
     map.on('mousemove', fillId, mousemoveHandler);
     map.on('mouseleave', fillId, mouseleavePopupHandler);
-    // The center flame image may have loaded before or after these handlers
-    // were created. Bind now in either case so clicking it locks the popup.
-    this._bindWildfireCenterInteractions(map, eventType, centerId);
+    // The center marker may have loaded before or after these handlers.
+    this._bindCenterInteractions(map, eventType, centerId);
 
     console.log(`PolygonModel: Loaded ${geojson.features.length} ${eventType} features`);
   },
@@ -544,7 +559,7 @@ export const PolygonModel = {
       }
       this.hoverHandlers.delete(eventType);
     }
-    this.wildfireCenterInteractionTypes.delete(eventType);
+    this.centerInteractionTypes.delete(eventType);
 
     // Remove layers
     const layerIds = [labelId, centerId, strokeId, fillId];
@@ -578,7 +593,7 @@ export const PolygonModel = {
 
     // Clear tracking state
     this.activeTypes.clear();
-    this.wildfireCenterInteractionTypes.clear();
+    this.centerInteractionTypes.clear();
     this.clickHandlers.clear();
     this.hoverHandlers.clear();
   },

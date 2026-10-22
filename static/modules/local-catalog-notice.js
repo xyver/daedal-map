@@ -4,6 +4,8 @@ let checking = false;
 let localUnavailable = false;
 
 async function checkLocalCatalog() {
+  // Show guidance only over the map, never over a settings handoff page.
+  if (!document.getElementById('sidebarModeTitle')) return;
   if (checking || localUnavailable || document.querySelector('dialog[aria-label="Local data catalog"]')) return;
   checking = true;
   let payload;
@@ -41,7 +43,7 @@ async function checkLocalCatalog() {
   const description = document.createElement('p');
   description.textContent = hasData
     ? 'These sources or pack ZIPs are in your data folder but are not in the local catalog. Add them to make them available in the map?'
-    : 'Your catalog is empty. Open the Pack Library to download your first data pack.';
+    : 'Visit the Launcher Store in the Data tab to download your first data pack.';
   dialog.append(description);
   if (hasData) {
     const list = document.createElement('ul');
@@ -64,20 +66,30 @@ async function checkLocalCatalog() {
   actions.style.cssText = 'display:flex;gap:10px;flex-wrap:wrap;margin-top:16px';
   const primary = document.createElement('button');
   primary.type = 'button';
-  primary.textContent = hasData ? 'Add to catalog' : 'Open Pack Library';
+  primary.textContent = hasData ? 'Add to catalog' : 'Visit Launcher Store';
   primary.style.cssText = 'padding:9px 16px;border:0;border-radius:8px;background:#27c9da;color:#071c25;cursor:pointer;font-weight:700';
   const later = document.createElement('button');
   later.type = 'button';
   later.textContent = 'Later';
   later.style.cssText = 'padding:9px 16px;border:1px solid #7894a4;border-radius:8px;background:transparent;color:#f4f8fa;cursor:pointer';
-  later.addEventListener('click', () => {
+  const dismiss = () => {
     try { sessionStorage.setItem('daedal-local-catalog-dismissed', signature); } catch (_) { /* Continue. */ }
     dialog.close();
     dialog.remove();
-  });
+  };
+  later.addEventListener('click', dismiss);
   primary.addEventListener('click', async () => {
     if (!hasData) {
-      window.location.href = '/settings?tab=library';
+      primary.disabled = true;
+      status.textContent = 'Opening the launcher Data tab...';
+      try {
+        const response = await fetch('/settings?tab=library', { credentials: 'same-origin' });
+        if (!response.ok) throw new Error('Could not reach the launcher. Open its Data tab to download packs.');
+        dismiss();
+      } catch (error) {
+        status.textContent = error.message || 'Open the launcher Data tab to download packs.';
+        primary.disabled = false;
+      }
       return;
     }
     primary.disabled = true;

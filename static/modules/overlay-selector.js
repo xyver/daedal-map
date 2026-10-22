@@ -1164,6 +1164,27 @@ export function applyOverlayCatalogResponse(response = {}) {
       });
     }
   }
+  if (document.body?.dataset.localWrapper === 'true') {
+    const installedPackIds = new Set(
+      (Array.isArray(response.sources) ? response.sources : [])
+        .map((source) => String(source?.pack_id || '').trim()).filter(Boolean)
+    );
+    const installedSourceIds = new Set(
+      (Array.isArray(response.sources) ? response.sources : [])
+        .map((source) => String(source?.source_id || '').trim()).filter(Boolean)
+    );
+    const hasInstalledSource = (overlay) =>
+      overlay.id === 'admin_layers'
+      || (overlay.packIds || []).some((id) => installedPackIds.has(id))
+      || (overlay.sourceIds || []).some((id) => installedSourceIds.has(id));
+    ALL_CATEGORIES = ALL_CATEGORIES.flatMap((category) => {
+      if (category.isCategory) {
+        const overlays = category.overlays.filter(hasInstalledSource);
+        return overlays.length ? [{ ...category, overlays }] : [];
+      }
+      return category.overlay && hasInstalledSource(category.overlay) ? [category] : [];
+    });
+  }
   CATEGORIES = filterCategoriesForCurrentMode(ALL_CATEGORIES);
   ALL_OVERLAYS = getAllOverlaysFromCategories(ALL_CATEGORIES);
   VISIBLE_OVERLAYS = getAllOverlaysFromCategories(CATEGORIES);
@@ -1373,6 +1394,9 @@ export const OverlaySelector = {
           ]
         }
       ];
+      if (document.body?.dataset.localWrapper === 'true') {
+        ALL_CATEGORIES = ALL_CATEGORIES.filter((category) => category.id === 'admin_layers');
+      }
       pushGeometryInventoryCategory(ALL_CATEGORIES);
       CATEGORIES = filterCategoriesForCurrentMode(ALL_CATEGORIES);
       ALL_OVERLAYS = getAllOverlaysFromCategories(ALL_CATEGORIES);

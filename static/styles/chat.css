@@ -286,6 +286,11 @@ body.chat-mode-ops {
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);
 }
 
+body[data-local-wrapper="true"] #authBtn,
+body[data-local-wrapper="true"] #authStatusBar {
+  display: none;
+}
+
 .mobile-map-notice {
   display: none;
   padding: 9px 15px 10px;

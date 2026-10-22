@@ -2357,6 +2357,44 @@ const DisasterPopup = {
   },
 
   loadSequence() {
+    if (this.currentType === 'earthquake') {
+      const eventId = String(this.currentEvent?.event_id || '').trim();
+      const button = document.querySelector('.disaster-popup [data-action="load-sequence"]');
+      if (button) {
+        button.disabled = true;
+        button.textContent = 'Loading aftershocks...';
+      }
+      const finish = (message = '') => {
+        document.removeEventListener('earthquake-sequence-load-result', onResult);
+        clearTimeout(timeout);
+        if (this.currentType !== 'earthquake'
+            || String(this.currentEvent?.event_id || '').trim() !== eventId) return;
+        if (!message) {
+          this.hide();
+          return;
+        }
+        const currentButton = document.querySelector('.disaster-popup [data-action="load-sequence"]');
+        if (currentButton) {
+          currentButton.disabled = false;
+          currentButton.textContent = 'Try animation again';
+          let notice = document.querySelector('.disaster-popup .sequence-load-error');
+          if (!notice) {
+            notice = document.createElement('div');
+            notice.className = 'related-empty sequence-load-error';
+            currentButton.parentElement?.before(notice);
+          }
+          notice.textContent = message;
+        }
+      };
+      const onResult = (event) => {
+        if (String(event.detail?.eventId || '').trim() !== eventId) return;
+        finish(event.detail?.error || '');
+      };
+      const timeout = setTimeout(() => finish('The aftershock load timed out. Try again.'), 30000);
+      document.addEventListener('earthquake-sequence-load-result', onResult);
+      this.triggerSequenceHandler();
+      return;
+    }
     this.triggerSequenceHandler();
     this.hide();
   },

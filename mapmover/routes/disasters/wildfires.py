@@ -565,6 +565,16 @@ async def get_wildfires_geojson(
                 source_used.append("global")
 
         if not all_dfs:
+            # An empty response is valid when an installed source has no events
+            # in this range. With no wildfire files at all, report the missing
+            # pack so the browser does not count it as a loaded layer.
+            if not is_cloud_mode() and not (
+                usa_fires_path.is_file()
+                or can_fires_path.is_file()
+                or global_summary_path.is_file()
+                or list_wildfire_year_files()
+            ):
+                return msgpack_error("Wildfire data not available", 404)
             return msgpack_response(
                 {
                     "type": "FeatureCollection",

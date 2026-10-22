@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import tempfile
+import asyncio
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
 from mapmover import duckdb_helpers, foundation_helpers
+from mapmover.routes import system
 from mapmover.runtime import geometry_loader
 from mapmover.runtime.read_posture import geometry_read_mode
 from mapmover.runtime_config import (
@@ -37,6 +39,21 @@ class LocalDataPlaneRuntimeTests(unittest.TestCase):
         set_local_data_plane_mode("local")
         self.assertFalse(force_remote_data_reads())
         self.assertFalse(duckdb_helpers.is_cloud_mode())
+
+    def test_local_api_rejects_cloud_read_mode(self) -> None:
+        class Request:
+            async def body(self):
+                return b'{"mode":"cloud"}'
+
+            async def json(self):
+                return {"mode": "cloud"}
+
+        with patch.object(system, "_require_local_or_admin", return_value=(None, None)), \
+                patch("mapmover.paths.RUNTIME_MODE", "local"):
+            response = asyncio.run(system.set_local_data_plane(Request()))
+
+        self.assertEqual(400, response.status_code)
+        self.assertNotEqual("cloud", get_data_plane_mode())
 
     def test_cloud_override_does_not_accept_an_existing_local_parquet_as_proof(self) -> None:
         with tempfile.TemporaryDirectory() as temp_name:

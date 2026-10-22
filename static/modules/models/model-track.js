@@ -568,8 +568,8 @@ export const TrackModel = {
 
     // Click handler for track lines - show unified popup
     this.clickHandler = (e) => {
-      if (TimeSlider?.isPlaying) return;
       if (e.features.length > 0) {
+        if (TimeSlider?.isPlaying) TimeSlider.pause();
         const feature = e.features[0];
         const props = feature.properties;
         // Use click location for popup position (not genesis point)
@@ -775,8 +775,8 @@ export const TrackModel = {
 
     // Click handler for point markers - show unified popup
     this.clickHandler = (e) => {
-      if (TimeSlider?.isPlaying) return;
       if (e.features.length > 0) {
+        if (TimeSlider?.isPlaying) TimeSlider.pause();
         const feature = e.features[0];
         const props = feature.properties;
         // Use exact feature geometry for popup position
