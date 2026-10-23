@@ -29,7 +29,7 @@ INSTRUCTIONS = (
     "Local source-bound Research MCP. This server prepares explicit "
     "pack/source boundaries and deterministic evidence access; it does not "
     "run a hidden Research LLM. If the user asks how this MCP works, call "
-    "how_research_mcp_works. Use get_tool_help with an exact name from tools/list for one tool's strict contract. Call where_is_research_data to see which data "
+    "how_research_mcp_works. Use get_tool_help with an exact name from tools/list for one tool's strict contract. Call where_is_research_data to identify the installed data source, then get_catalog with catalog='data' to scan available packs and sources. "
     "source is active. The calling client LLM owns natural-language interpretation: translate the user's request into each tool's strict JSON schema, except where a schema explicitly accepts a question or query string. On errors, inspect error, guidance, and clarification; ask the user only when clarification.required is true, otherwise repair the call directly. "
     "The local server reads the selected data folder. For "
     "source selection, start with "
@@ -90,7 +90,7 @@ def _research_tool_definitions() -> list[dict[str, Any]]:
         {
             "name": "where_is_research_data",
             "title": "Where Is Research Data",
-            "description": "Report or change the local data folder used by this Research MCP server.",
+            "description": "Scan the active installed catalog and report available Research packs and sources. A local server can also change its data folder.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -113,6 +113,18 @@ def _research_tool_definitions() -> list[dict[str, Any]]:
                 "additionalProperties": False,
             },
             "annotations": {"readOnlyHint": False},
+        },
+        {
+            "name": "get_catalog",
+            "title": "Get Research Catalog",
+            "description": "List available data packs in this server's active installed catalog. Use get_research_pack for a selected pack's source and query details.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {"catalog": {"type": "string", "enum": ["data"], "description": "The Research data catalog."}},
+                "required": ["catalog"],
+                "additionalProperties": False,
+            },
+            "annotations": {"readOnlyHint": True},
         },
         {
             "name": "resolve_research_geography",
@@ -595,6 +607,8 @@ async def handle_jsonrpc_dict(body: dict[str, Any]) -> JSONResponse:
         return _jsonrpc_error(request_id, -32602, "Tool arguments must be an object")
     if tool_name not in {tool["name"] for tool in _research_tool_definitions()}:
         return _jsonrpc_error(request_id, -32601, f"Tool '{tool_name}' not found")
+    if tool_name == "get_catalog" and (set(arguments) != {"catalog"} or arguments.get("catalog") != "data"):
+        return _jsonrpc_error(request_id, -32602, "get_catalog requires only catalog='data'")
 
     try:
         if tool_name == "get_tool_help":

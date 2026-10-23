@@ -48,7 +48,8 @@ OUTCOME_CONFIRMATION = "confirmation_needed"
 RESEARCH_TOOL_GUIDANCE: dict[str, dict[str, Any]] = {
     "get_tool_help": {"use_when": ["You need the exact contract for one Research MCP tool."], "do_not_use_for": ["Family-level workflow orientation."], "example": {"tool_name": "query_research_source_data"}, "next_calls": ["how_research_mcp_works"]},
     "how_research_mcp_works": {"use_when": ["You need the complete source-bound Research workflow."], "do_not_use_for": ["Retrieving evidence rows."], "example": {"question": "How do I research across earthquakes and currency?"}, "next_calls": ["search_research_sources", "ask_research_sources"]},
-    "where_is_research_data": {"use_when": ["You need to inspect the active cloud or local data source."], "do_not_use_for": ["Selecting analytical sources."], "example": {}, "next_calls": ["ask_research_sources"]},
+    "where_is_research_data": {"use_when": ["You need to inspect the active cloud or local data source."], "do_not_use_for": ["Selecting analytical sources."], "example": {}, "next_calls": ["get_catalog"]},
+    "get_catalog": {"use_when": ["You need to see which Research data packs are installed in this server's catalog."], "do_not_use_for": ["Reading evidence rows or a full pack query contract."], "example": {"catalog": "data"}, "next_calls": ["get_research_pack", "search_research_sources"]},
     "resolve_research_geography": {"use_when": ["The user supplied place names or regional aliases that must become loc_ids."], "do_not_use_for": ["Searching for research sources."], "example": {"locations": ["British Columbia"]}, "next_calls": ["query_research_source_data"]},
     "search_research_sources": {"use_when": ["You need candidate packs or sources from a topic."], "do_not_use_for": ["Running the final evidence query."], "example": {"query": "earthquakes and currency"}, "next_calls": ["ask_research_sources"]},
     "resolve_research_corpus_intent": {"use_when": ["The user described desired source families in natural language."], "do_not_use_for": ["Binding or querying the corpus."], "example": {"query": "earthquakes, wildfires, and currency packs"}, "next_calls": ["ask_research_sources"]},
@@ -196,6 +197,7 @@ def call_tool(name: str, arguments: dict[str, Any] | None = None) -> dict[str, A
     funcs = {
         "how_research_mcp_works": how_research_mcp_works,
         "where_is_research_data": where_is_research_data,
+        "get_catalog": get_research_catalog,
         "resolve_research_geography": resolve_research_geography,
         "search_research_sources": search_research_sources,
         "resolve_research_corpus_intent": resolve_research_corpus_intent,
@@ -344,6 +346,10 @@ def how_research_mcp_works(question: str | None = None) -> dict[str, Any]:
                 ),
             },
             {
+                "name": "get_catalog",
+                "use_for": "List available Research packs in the installed data catalog.",
+            },
+            {
                 "name": "search_research_sources",
                 "use_for": "Find source candidates from a topic or question.",
             },
@@ -422,6 +428,35 @@ def where_is_research_data(
     return _active_data_source_report()
 
 
+def get_research_catalog(catalog: str) -> dict[str, Any]:
+    """Return a bounded directory from the selected installed data catalog."""
+    if catalog != "data":
+        return _error_result("get_catalog", "invalid_catalog", "Research MCP exposes catalog='data' only.")
+    active = _load_catalog()
+    packs = []
+    for pack_id, pack in sorted(_catalog_pack_index(active).items()):
+        source_ids = sorted({str(source.get("source_id") or "").strip()
+                             for source in pack.get("sources") or [] if isinstance(source, dict)
+                             and str(source.get("source_id") or "").strip()})
+        packs.append({
+            "pack_id": pack_id,
+            "title": str(pack.get("title") or pack.get("pack_name") or pack_id),
+            "description": str(pack.get("short_description") or pack.get("description") or ""),
+            "source_count": len(source_ids),
+            "source_ids": source_ids,
+            "category": pack.get("category"),
+            "data_types": pack.get("data_types") or [],
+            "scopes": pack.get("scopes") or [],
+        })
+    return {
+        "tool_name": "get_catalog", "outcome": OUTCOME_OK, "catalog": "data",
+        "catalog_kind": "local_installed" if _local_override_active() else "unconfigured",
+        "catalog_version": active.get("catalog_version"),
+        "pack_count": len(packs), "packs": packs,
+        "next_recommended_tool": "get_research_pack",
+    }
+
+
 def _active_data_source_report() -> dict[str, Any]:
     fixed_rule = (
         "The data source is controlled by whoever runs the server. On a "
@@ -429,10 +464,12 @@ def _active_data_source_report() -> dict[str, Any]:
         "local data folder."
     )
     if _local_override_active():
-        source_ids = [
+        source_ids = sorted({
             str(entry.get("source_id") or "").strip()
             for entry in _local_source_entries()
-        ]
+            if str(entry.get("source_id") or "").strip()
+        })
+        pack_ids = sorted(_catalog_pack_index())
         return {
             "tool_name": "where_is_research_data",
             "outcome": OUTCOME_OK,
@@ -440,10 +477,13 @@ def _active_data_source_report() -> dict[str, Any]:
             "mode": "local",
             "data_root": str(_LOCAL_DATA_SOURCE["data_root"]),
             "catalog_file": str(_LOCAL_DATA_SOURCE["catalog_name"]),
+            "catalog_kind": "local_installed",
             "source_count": len(source_ids),
-            "pack_ids": sorted(_catalog_pack_index().keys()),
+            "source_ids": source_ids,
+            "pack_count": len(pack_ids),
+            "pack_ids": pack_ids,
             "rule": fixed_rule,
-            "next_recommended_tool": "ask_research_sources",
+            "next_recommended_tool": "search_research_sources",
         }
     return {
         "tool_name": "where_is_research_data",
