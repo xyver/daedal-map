@@ -388,6 +388,38 @@ def test_api_published_source_does_not_require_python_registry_entry() -> None:
     assert result.time_field == "year"
 
 
+def test_published_aggregate_primary_file_does_not_repeat_admin2_folder() -> None:
+    source = {
+        "source_id": "earthquake_aggregates",
+        "pack_id": "earthquakes",
+        "path": "global/disasters/earthquakes/sources/aggregates",
+        "catalog_surfaces": ["api", "mcp"],
+        "runtime_primary_file": "admin2/yearly.parquet",
+        "location_field": "loc_id",
+        "temporal_coverage": {"field": "year", "granularity": "yearly"},
+        "metrics": {"event_count": {"name": "Event count"}},
+    }
+    source_path = Path("published/global/disasters/earthquakes/sources/aggregates")
+    column_paths = []
+
+    def columns(path):
+        column_paths.append(path)
+        return {"loc_id", "year", "event_count"}
+
+    api_query_runtime.clear_api_source_spec_cache()
+    with (
+        mock.patch.object(api_query_runtime, "load_catalog", return_value={"sources": [source]}),
+        mock.patch.object(api_query_runtime, "load_source_metadata", return_value=source),
+        mock.patch.object(api_query_runtime, "get_source_path", return_value=source_path),
+        mock.patch.object(api_query_runtime, "parquet_available", return_value=True),
+        mock.patch.object(api_query_runtime, "parquet_columns", side_effect=columns),
+    ):
+        spec = api_query_runtime.get_api_source_spec("earthquake_aggregates")
+
+    assert spec is not None
+    assert column_paths == [source_path / "admin2/yearly.parquet"]
+
+
 def test_python_source_specializer_cannot_override_catalog_api_admission() -> None:
     api_query_runtime.clear_api_source_spec_cache()
     with mock.patch.object(api_query_runtime, "load_catalog", return_value={"sources": []}):
