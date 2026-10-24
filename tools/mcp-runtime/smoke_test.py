@@ -107,6 +107,7 @@ def main() -> int:
         "get_tool_help": {"tool_name": "query_research_source_data"},
         "how_research_mcp_works": {},
         "where_is_research_data": {},
+        "get_catalog": {"catalog": "data"},
         "resolve_research_geography": {"locations": ["United States"]},
         "search_research_sources": {"query": "earthquakes"},
         "resolve_research_corpus_intent": {"query": "earthquakes"},
