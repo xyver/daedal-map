@@ -63,13 +63,17 @@ class DownloadedGeometryBackend:
     def __init__(self, data_root: str | Path):
         self.root = Path(data_root).expanduser().resolve()
         self.packages = []
+        self.bridges = []
         self.rows = []
         self.verified = {}
         self.schemas = {}
         for sidecar in sorted(self.root.rglob("geometry.json")):
             payload = json.loads(sidecar.read_text(encoding="utf-8"))
             sidecar.resolve().relative_to(self.root)
-            if not isinstance(payload, dict) or payload.get("profile") != "downloadable_geometry_package" or payload.get("package_tier") not in {"lite", "display", "detail"} or not isinstance(payload.get("files"), list):
+            if (not isinstance(payload, dict)
+                    or payload.get("profile") not in {"downloadable_geometry_package", "downloadable_external_reference_bridge"}
+                    or payload.get("package_tier") not in {"lite", "display", "detail"}
+                    or not isinstance(payload.get("files"), list)):
                 raise ValueError(f"Invalid Geometry package sidecar: {sidecar}")
             payload['country_code'] = payload.get('country_code') or payload.get('release_unit_id')
             files = []
@@ -90,8 +94,9 @@ class DownloadedGeometryBackend:
                 if local.stat().st_size != item["size_bytes"]:
                     raise ValueError(f"Package member size mismatch: {archive}")
                 files.append({**item, "local_path": local, "archive_path": archive})
-            self.packages.append({"sidecar": sidecar, "metadata": payload, "files": files})
-        if not self.packages:
+            package = {"sidecar": sidecar, "metadata": payload, "files": files}
+            (self.bridges if payload["profile"] == "downloadable_external_reference_bridge" else self.packages).append(package)
+        if not self.packages and not self.bridges:
             raise ValueError(f"No extracted Geometry package sidecars under {self.root}")
 
     def catalog(self, country=None) -> dict[str, Any]:
@@ -131,7 +136,7 @@ class DownloadedGeometryBackend:
         rows: list[dict[str, Any]] = []
         for package, file in self._records():
             archive = file["archive_path"].replace("\\", "/")
-            if file.get("component") != "reference" or f"/partitions/{kind}/" not in archive:
+            if file.get("component") != "reference" or (f"/partitions/{kind}/" not in archive and archive != f"reference/{kind}.parquet"):
                 continue
             if country and package["metadata"].get("country_code") not in {country, "GLOBAL"}:
                 continue
@@ -148,15 +153,33 @@ class DownloadedGeometryBackend:
                 raise ValueError(f"Reference {kind} selection exceeds {limit} rows; narrow the request")
         return rows
 
+    def _bridge_rows(self, *, scope: str, column: str, value: str) -> list[dict[str, Any]]:
+        if column not in {"gers_division_id", "loc_id"}:
+            raise ValueError("Unsupported Bridge lookup column")
+        rows = []
+        for package in self.bridges:
+            if package["metadata"].get("external_system") != "overture_gers":
+                continue
+            for file in package["files"]:
+                if file["archive_path"].replace("\\", "/") != "reference/overture_gers_loc_id_bridge.parquet":
+                    continue
+                self._verify_file(file)
+                filters = [(column, "=", value)]
+                if scope not in {"GLOBAL", "BRIDGES"}:
+                    filters.append(("iso3", "=", scope))
+                rows.extend(pq.read_table(file["local_path"], filters=filters).to_pylist())
+        return rows
+
     def _load(self, *, geometry: bool = False, loc_ids=None, country=None, admin_level=None, point=None):
-        wanted = {"loc_id", "parent_id", "admin_level", "type", "name", "iso_a3", "country_iso3", "centroid_lon", "centroid_lat", "has_polygon", "bbox_min_lon", "bbox_min_lat", "bbox_max_lon", "bbox_max_lat"}
+        wanted = {"loc_id", "parent_id", "admin_level", "type", "name", "iso_a3", "country_iso3", "family", "level", "centroid_lon", "centroid_lat", "has_polygon", "bbox_min_lon", "bbox_min_lat", "bbox_max_lon", "bbox_max_lat"}
         if geometry: wanted.update({"geometry", "geometry_wkb"})
         rows = []
         for package, file in self._records():
             meta = package["metadata"]
             if country and meta.get("country_code") not in {country, "GLOBAL"}: continue
             if file.get("component") not in ({"exact", "display"} if geometry else {"exact", "display", "reference"}): continue
-            if file.get("component") == "reference" and "/partitions/identities/" not in file["archive_path"].replace("\\", "/"):
+            archive = file["archive_path"].replace("\\", "/")
+            if file.get("component") == "reference" and "/partitions/identities/" not in archive and archive != "reference/identities.parquet":
                 continue
             path = file["local_path"]
             self._verify_file(file)
@@ -188,6 +211,7 @@ class DownloadedGeometryBackend:
                     row["admin_level"] = 0
                 row["_package_id"] = package["metadata"].get("package_id")
                 row["_tier"] = package["metadata"].get("package_tier")
+                row["family"] = row.get("family") or ("water_body" if meta.get("release_unit_id") == "MARINE" and row.get("level") == "water_body" else "marine_jurisdiction" if meta.get("release_unit_id") == "MARINE" else "administrative")
                 row["country"] = row.get("iso_a3") or row.get('country_iso3') or (meta.get("country_code") if meta.get("country_code") != "GLOBAL" else str(row["loc_id"]).split("-")[0])
                 row["polygon_kind"] = {"exact": "exact", "display": "simplified"}.get(file.get("component"))
                 if geometry and row.get("geometry") is None: continue
@@ -261,12 +285,26 @@ class DownloadedGeometryBackend:
         if args["catalog"] != "geometry":
             raise ValueError("catalog must be data or geometry")
         scopes = sorted({str(p["metadata"]["country_code"]) for p in self.packages})
-        # geometry_bank_ids name release artifacts, not public Geography families.
-        families = ["administrative"]
+        # Geometry bank IDs name artifacts. Marine publishes its families in
+        # the Reference identities table; a Bridge is a reference system, not
+        # a geometry family.
+        families = set()
+        for package in self.packages:
+            if package["metadata"].get("release_unit_id") != "MARINE":
+                families.add("administrative")
+                continue
+            for file in package["files"]:
+                if file["archive_path"].replace("\\", "/") == "reference/identities.parquet":
+                    self._verify_file(file)
+                    families.update(str(value) for value in pq.read_table(file["local_path"], columns=["family"])["family"].to_pylist() if value)
         return {"ok": True, "catalog": "geometry", "detail": "download", "catalog_version": "local",
-                "families": [{"family_id": value} for value in families],
+                "families": [{"family_id": value} for value in sorted(families)],
                 "scopes": [{"scope_id": value} for value in scopes],
-                "pack_count": len(self.packages), "packages": self.catalog()["packages"]}
+                "pack_count": len(self.packages) + len(self.bridges),
+                "packages": self.catalog()["packages"] if self.packages else [],
+                "external_reference_bridges": [{"package_id": p["metadata"].get("package_id"),
+                                                "external_system": p["metadata"].get("external_system")}
+                                               for p in self.bridges]}
 
     def _call_get_pack(self, args: dict[str, Any]) -> dict[str, Any]:
         return _error("data_catalog_unavailable", "get_pack needs an installed Research data catalog",
@@ -283,12 +321,15 @@ class DownloadedGeometryBackend:
         if family and family not in {row["family_id"] for row in catalog["families"]}:
             return _error("family_not_found", "No installed Geometry package covers this family", family_id=family)
         packages = [p["metadata"] for p in self.packages if not scope or p["metadata"].get("country_code") == scope]
-        coverage = [{"scope_id": p["country_code"], "family_id": family or "administrative",
+        packages = [p for p in packages if not family or (family in {"marine_jurisdiction", "water_body"}) == (p.get("release_unit_id") == "MARINE")]
+        coverage = [{"scope_id": p["country_code"], "family_id": selected_family,
                      "package_id": p["package_id"], "package_tier": p["package_tier"],
-                     "release_version": p.get("version")} for p in packages]
+                     "release_version": p.get("version")}
+                    for p in packages
+                    for selected_family in ([family] if family else (["marine_jurisdiction", "water_body"] if p.get("release_unit_id") == "MARINE" else ["administrative"]))]
         return {"ok": True, "catalog": "geometry", "family_id": family, "scope_id": scope,
                 "requested_year": args.get("year"), "coverage": coverage,
-                "admin_spine": {"release_unit_kind": "country"} if scope else {}}
+                "admin_spine": {"release_unit_kind": "country"} if scope and scope != "MARINE" else {}}
 
     @staticmethod
     def _points(args: dict[str, Any]) -> list[dict[str, Any]]:
@@ -306,7 +347,7 @@ class DownloadedGeometryBackend:
                       family: str = "administrative", target_level: int | None = None) -> dict[str, Any]:
         point = Point(item["lon"], item["lat"])
         matches = self._dedupe([row for row in self._load(geometry=True, point=point)
-                                if _shape(row["geometry"]).covers(point)])
+                                if row.get("family") == family and _shape(row["geometry"]).covers(point)])
         if shallow:
             anchor = self._identity(shallow)
             if anchor is None:
@@ -391,11 +432,11 @@ class DownloadedGeometryBackend:
         for edge, direction in [(edge, "outgoing") for edge in edges] + [(edge, "incoming") for edge in incoming]:
             connections.append({"loc_id": edge["target_loc_id"] if direction == "outgoing" else edge["source_loc_id"],
                                 "family": edge.get("target_family") if direction == "outgoing" else edge.get("source_family"),
-                                "direction": direction, "relationship_type": edge.get("relationship_type") or edge.get("semantic_type"),
+                                "direction": direction, "relationship_type": edge.get("relationship_type") or edge.get("relationship") or edge.get("semantic_type"),
                                 "relationship_subtype": edge.get("relationship_subtype"),
                                 "relationship_id": edge.get("relationship_id"),
                                 "relationship_vintage": edge.get("relationship_vintage")})
-        return {"loc_id": loc_id, "name": identity.get("name"), "family": "administrative",
+        return {"loc_id": loc_id, "name": identity.get("name"), "family": identity.get("family"),
                 "admin_level": identity.get("admin_level"), "parent_id": identity.get("parent_id"),
                 "connections": connections[:50], "connection_count": min(len(connections), 50),
                 "connection_limit": 50, "has_more": len(connections) > 50}
@@ -434,6 +475,11 @@ class DownloadedGeometryBackend:
                 ids = systems.setdefault(system, {}).setdefault(value, [])
                 if row.get("loc_id") and row["loc_id"] not in ids:
                     ids.append(row["loc_id"])
+            for edge in self._bridge_rows(scope=scope, column="gers_division_id", value=value):
+                if edge.get("relationship_type") == "equivalent_identity":
+                    ids = systems.setdefault("overture_gers", {}).setdefault(value, [])
+                    if edge["loc_id"] not in ids:
+                        ids.append(edge["loc_id"])
             identity = self._identity(value)
             if identity and (scope == "GLOBAL" or identity["country"] == scope):
                 systems.setdefault("daedalmap.loc_id", {}).setdefault(value, []).append(value)
@@ -481,6 +527,34 @@ class DownloadedGeometryBackend:
         if unsupported:
             return {"ok": False, "from_system": source, "input": value, "to_system": target,
                     "error": {"code": "route_unavailable", "message": "Installed reference aliases cannot evaluate " + ", ".join(unsupported)}}
+        if source == "overture_gers" or target == "overture_gers":
+            if not any(p["metadata"].get("external_system") == "overture_gers" for p in self.bridges):
+                return {"ok": False, "input": value, "from_system": source, "to_system": target,
+                        "error": {"code": "bridge_not_installed", "message": "Install the Overture GERS Bridge package"}}
+            if source == "overture_gers" and target in {"loc_id", "daedalmap.loc_id"}:
+                edges = self._bridge_rows(scope=scope, column="gers_division_id", value=value)
+                target_key = "loc_id"
+            elif source in {"loc_id", "daedalmap.loc_id"} and target == "overture_gers":
+                edges = self._bridge_rows(scope=scope, column="loc_id", value=value)
+                target_key = "gers_division_id"
+            else:
+                return {"ok": False, "input": value, "from_system": source, "to_system": target,
+                        "error": {"code": "route_unavailable", "message": "The installed Bridge only converts between Overture GERS and loc_id"}}
+            if not edges:
+                return {"ok": False, "input": value, "from_system": source, "to_system": target,
+                        "error": {"code": "not_found", "message": "No admitted Bridge edge resolves this identifier and scope"}}
+            matches = [{"value": edge[target_key], "loc_id": edge["loc_id"],
+                        "relationship_type": edge["relationship_type"], "iso3": edge["iso3"],
+                        "our_area_share": edge.get("our_area_share"),
+                        "their_area_share": edge.get("their_area_share")}
+                       for edge in edges if edge.get(target_key)]
+            matches.sort(key=lambda edge: (edge["relationship_type"] != "equivalent_identity", edge["value"]))
+            identities = {edge["loc_id"] for edge in edges if edge["relationship_type"] == "equivalent_identity"}
+            return {"ok": True, "input": value, "from_system": source, "to_system": target,
+                    "resolved_loc_id": next(iter(identities)) if len(identities) == 1 else None,
+                    "resolution_kind": "equivalent_identity" if len(identities) == 1 else "related_geography",
+                    "matches": matches[:int(item.get("limit") or args.get("limit") or 10)],
+                    "match_count": len(matches)}
         if source in {"loc_id", "daedalmap.loc_id"}:
             identity = self._identity(value)
             loc_ids = [value] if identity and (scope == "GLOBAL" or identity["country"] == scope) else []
@@ -511,7 +585,7 @@ class DownloadedGeometryBackend:
 
     def _call_convert_reference(self, args: dict[str, Any]) -> dict[str, Any]:
         scope = str(args["iso3"]).upper()
-        if not any(p["metadata"].get("country_code") in {scope, "GLOBAL"} for p in self.packages):
+        if not any(p["metadata"].get("country_code") in {scope, "GLOBAL"} for p in self.packages) and not self.bridges:
             return _error("scope_not_found", "No installed reference graph covers this scope", iso3=scope)
         items = args.get("items") if "items" in args else [{"value": args["value"]}]
         if not isinstance(items, list) or not 1 <= len(items) <= 25000:
