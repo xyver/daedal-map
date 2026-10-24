@@ -34,10 +34,12 @@ def test_catalog_change_refreshes_visible_packs_and_details():
         try:
             scan = research.where_is_research_data()
             assert scan["catalog_kind"] == "local_installed"
+            assert scan["next_recommended_tool"] == "get_catalog"
             assert scan["pack_ids"] == ["local_data"]
             assert scan["source_ids"] == ["sample"]
             directory = research.get_research_catalog("data")
             assert directory["packs"][0]["pack_id"] == "local_data"
+            assert directory["next_recommended_tool"] == "search_research_sources"
             assert directory["packs"][0]["source_ids"] == ["sample"]
             assert research.call_tool("get_catalog", {"catalog": "data"})["pack_count"] == 1
             response = asyncio.run(research_bundle.handle_jsonrpc_dict({
@@ -54,3 +56,6 @@ def test_catalog_change_refreshes_visible_packs_and_details():
             assert research.get_research_pack(pack_id="new_download")["outcome"] == "ok"
         finally:
             research.set_local_data_source(None)
+        unconfigured = research.where_is_research_data()
+        assert unconfigured["active_data_source"] == "unconfigured"
+        assert unconfigured["next_recommended_tool"] == "where_is_research_data"

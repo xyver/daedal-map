@@ -453,7 +453,7 @@ def get_research_catalog(catalog: str) -> dict[str, Any]:
         "catalog_kind": "local_installed" if _local_override_active() else "unconfigured",
         "catalog_version": active.get("catalog_version"),
         "pack_count": len(packs), "packs": packs,
-        "next_recommended_tool": "get_research_pack",
+        "next_recommended_tool": "search_research_sources",
     }
 
 
@@ -483,7 +483,7 @@ def _active_data_source_report() -> dict[str, Any]:
             "pack_count": len(pack_ids),
             "pack_ids": pack_ids,
             "rule": fixed_rule,
-            "next_recommended_tool": "search_research_sources",
+            "next_recommended_tool": "get_catalog",
         }
     return {
         "tool_name": "where_is_research_data",
@@ -492,7 +492,8 @@ def _active_data_source_report() -> dict[str, Any]:
         "mode": "local",
         "description": "No local data folder is selected.",
         "rule": fixed_rule,
-        "next_recommended_tool": "ask_research_sources",
+        "next_recommended_tool": "where_is_research_data",
+        "next_recommended_action": "Select an installed data root with the launcher or pass data_root, then call get_catalog.",
     }
 
 
