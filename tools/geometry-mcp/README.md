@@ -28,3 +28,8 @@ reference system, not a geometry family. `convert_reference` returns a scalar
 `resolved_loc_id` from an Overture GERS key only when the installed Bridge has
 one admitted `equivalent_identity` edge. Overlap and containment edges remain
 typed relationships in `matches`.
+
+Before publishing a runtime update, check Lite, Display, and Detail ZIPs for
+every published country against the same sidecar and Parquet layout contract.
+Country-specific bank counts and depth may differ. Rerun installed-package
+checks for country, Marine, and Bridge releases whenever that layout changes.
