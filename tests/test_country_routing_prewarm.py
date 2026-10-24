@@ -75,9 +75,6 @@ class CountryRoutingPrewarmTests(unittest.TestCase):
             "release_unit_id": "MARINE", "active_release": {
                 "publication_status": "published",
                 "version_manifest_path": "geometry/domains/MARINE/local_full/marine_v1/manifest.json",
-                "runtime_artifacts": {"point_bank": {
-                    "path": "geometry/domains/MARINE/local_full/marine_v1/predicate/point_bank.parquet",
-                }},
             },
         }]}
         with tempfile.TemporaryDirectory() as directory:
@@ -99,8 +96,6 @@ class CountryRoutingPrewarmTests(unittest.TestCase):
                     mock.patch.object(published_artifacts, "read_artifact_bytes", side_effect=read), \
                     mock.patch.object(published_artifacts, "resolve_artifact_path", side_effect=resolve), \
                     mock.patch.object(published_artifacts, "pin_artifact_paths", return_value=43) as pin, \
-                    mock.patch.object(reference_prewarm, "path_to_uri", return_value="s3://marine/point_bank.parquet"), \
-                    mock.patch.object(reference_prewarm, "run_rows", return_value=[("XOP-HS",)]) as point_probe, \
                     mock.patch.object(geometry_catalog, "load_geometry_catalog", return_value=catalog):
                 result = reference_prewarm.prewarm_country_routing_indexes()
                 self.assertEqual(result["countries"], [country])
@@ -110,10 +105,6 @@ class CountryRoutingPrewarmTests(unittest.TestCase):
                 self.assertEqual(result["marine_reference_bytes"], sum(
                     len(value) for key, value in payloads.items() if "MARINE" in key
                 ))
-                self.assertTrue(result["marine_point_query_warmed"])
-                point_probe.assert_called_once_with(
-                    "SELECT loc_id FROM read_parquet(?) LIMIT 1", ["s3://marine/point_bank.parquet"],
-                )
                 self.assertEqual(result["pinned_bytes"], 43)
                 self.assertEqual(len(pin.call_args.args[0]), 10)
                 self.assertTrue(reference_prewarm.country_routing_selection_is_warm(catalog))

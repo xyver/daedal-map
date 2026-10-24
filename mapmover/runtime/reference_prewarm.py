@@ -8,9 +8,7 @@ import re
 from pathlib import PurePosixPath
 from typing import Any
 
-from ..duckdb_helpers import path_to_uri, run_rows
 from ..foundation_helpers import load_country_crosswalk, load_reference_dict
-from ..paths import DATA_ROOT
 from .admin_spine_query import prewarm_shallow_identity_index
 from .global_admin0_query import load_global_admin0_identities
 
@@ -127,7 +125,6 @@ def prewarm_country_routing_indexes(catalog: dict[str, Any] | None = None) -> di
             warm_paths.append(relative)
         countries.append(country)
     marine_reference_bytes = 0
-    marine_point_query_warmed = False
     marine_profile = next((
         item for item in selected_catalog.get("domain_profiles") or []
         if isinstance(item, dict)
@@ -148,23 +145,9 @@ def prewarm_country_routing_indexes(catalog: dict[str, Any] | None = None) -> di
                 raise RuntimeError(f"Selected Marine Reference artifact could not be cached: {relative}")
             marine_reference_bytes += local.stat().st_size
             warm_paths.append(relative)
-        from .geometry_storage_layout import catalog_artifact_path
-
-        point_bank = catalog_artifact_path(
-            DATA_ROOT, (marine_release.get("runtime_artifacts") or {}).get("point_bank")
-        )
-        if point_bank is None:
-            raise RuntimeError("Selected Marine jurisdiction point bank is unavailable")
-        # Prime DuckDB/httpfs's remote Parquet footer and first range read
-        # during readiness. The point bank is too large to hydrate or pin.
-        if not run_rows("SELECT loc_id FROM read_parquet(?) LIMIT 1", [path_to_uri(point_bank)]):
-            raise RuntimeError("Selected Marine jurisdiction point bank is empty")
-        marine_point_query_warmed = True
     pinned_bytes = pin_artifact_paths(warm_paths)
     result = {"countries": countries, "index_bytes": total_bytes,
-              "marine_reference_bytes": marine_reference_bytes,
-              "marine_point_query_warmed": marine_point_query_warmed,
-              "pinned_bytes": pinned_bytes}
+              "marine_reference_bytes": marine_reference_bytes, "pinned_bytes": pinned_bytes}
     global _warmed_country_selection
     _warmed_country_selection = country_routing_selection(selected_catalog)
     logger.info("Country routing index pre-warmer complete: %s", result)
