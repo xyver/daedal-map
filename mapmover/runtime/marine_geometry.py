@@ -345,12 +345,31 @@ def resolve_marine_family_points(
     path = domain[bank_key]
     if not parquet_available(path):
         raise ValueError(f"Selected Marine {family} bank is unavailable")
-    if bank_key == "point_bank" or domain.get("canonical_geoparquet"):
+    if bank_key == "point_bank":
+        bbox_path = domain["bbox_index"]
+        if not parquet_available(bbox_path):
+            raise ValueError("Selected Marine jurisdiction bbox index is unavailable")
+        bbox = read_bbox_candidates_for_points(
+            bbox_path, point_items, columns=["loc_id"],
+        )
+        candidate_ids = set(bbox["loc_id"].astype(str)) if not bbox.empty else set()
+        geometry_column = "geometry" if domain.get("canonical_geoparquet") else "geometry_wkb"
+        rows = read_rows_by_ids(
+            path, candidate_ids, id_column="loc_id",
+            columns=["name", geometry_column, "area_km2",
+                     "bbox_min_lon", "bbox_min_lat", "bbox_max_lon", "bbox_max_lat"],
+            raw_geoparquet=domain.get("canonical_geoparquet", False),
+        ) if candidate_ids else pd.DataFrame(columns=["loc_id", "name", geometry_column])
+        exact = _exact_jurisdiction_matches(point_items, rows)
+        candidates = pd.concat([
+            rows[rows["loc_id"].astype(str).isin(loc_ids)].assign(point_position=position)
+            for position, loc_ids in exact.items() if loc_ids
+        ], ignore_index=True) if exact else pd.DataFrame(columns=["point_position", "loc_id", "name"])
+    elif domain.get("canonical_geoparquet"):
         geometry_column = "geometry" if domain.get("canonical_geoparquet") else "geometry_wkb"
         candidates = read_bbox_candidates_for_points(
             path, point_items,
-            columns=(["loc_id", "name", geometry_column, "area_km2"]
-                     if bank_key == "point_bank" else ["loc_id", "name", geometry_column]),
+            columns=["loc_id", "name", geometry_column],
             raw_geoparquet=domain.get("canonical_geoparquet", False),
         )
         matches = _exact_jurisdiction_matches(point_items, candidates)

@@ -20,6 +20,30 @@ from mapmover.runtime.geography_reference import is_named_water_loc_id
 
 
 class MarineGeometryRuntimeTests(unittest.TestCase):
+    def test_selected_marine_jurisdiction_uses_bbox_then_one_bank(self):
+        bbox_path = Path("marine/predicate/bbox_index.parquet")
+        bank_path = Path("marine/predicate/point_bank.parquet")
+        with (
+            patch.object(marine_runtime, "_active_domain_paths", return_value={
+                "bbox_index": bbox_path, "point_bank": bank_path,
+                "canonical_geoparquet": False,
+            }),
+            patch.object(marine_runtime, "parquet_available", return_value=True),
+            patch.object(marine_runtime, "read_bbox_candidates_for_points",
+                         return_value=pd.DataFrame([{"point_position": 0, "loc_id": "XOP-HS"}])) as bbox,
+            patch.object(marine_runtime, "read_rows_by_ids",
+                         return_value=pd.DataFrame([{"loc_id": "XOP-HS", "name": "High Seas"}])) as exact,
+            patch.object(marine_runtime, "_exact_jurisdiction_matches",
+                         return_value={0: {"XOP-HS"}}),
+        ):
+            result = marine_runtime.resolve_marine_family_points(
+                [{"lon": -130, "lat": 35}], "marine_jurisdiction",
+            )
+        self.assertEqual(result[0]["matches"][0]["loc_id"], "XOP-HS")
+        self.assertEqual(bbox.call_args.args[0], bbox_path)
+        self.assertEqual(exact.call_args.args[0], bank_path)
+        self.assertEqual(exact.call_count, 1)
+
     def test_marine_reference_identity_uses_release_tables_without_country_graph(self):
         from mapmover.runtime.loc_id_graph_info import graph_info_items
 
