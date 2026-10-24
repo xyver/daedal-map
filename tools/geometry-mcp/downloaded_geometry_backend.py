@@ -18,7 +18,7 @@ _PACKAGE_ROOT = Path(__file__).resolve().parents[2]
 for _runtime_root in (_PACKAGE_ROOT, _PACKAGE_ROOT / "runtime"):
     if (_runtime_root / "mcp_surface_shared.py").is_file() and str(_runtime_root) not in sys.path:
         sys.path.insert(0, str(_runtime_root))
-from mcp_surface_shared import build_tool_definitions
+from mcp_surface_shared import MARINE_JURISDICTION_FAMILIES, MARINE_POINT_FAMILIES, build_tool_definitions
 
 
 def _shape(value):
@@ -172,7 +172,7 @@ class DownloadedGeometryBackend:
 
     def _load(self, *, geometry: bool = False, loc_ids=None, country=None, admin_level=None, point=None,
               selected_path: Path | None = None):
-        wanted = {"loc_id", "parent_id", "admin_level", "type", "name", "iso_a3", "country_iso3", "family", "level", "centroid_lon", "centroid_lat", "has_polygon", "bbox_min_lon", "bbox_min_lat", "bbox_max_lon", "bbox_max_lat"}
+        wanted = {"loc_id", "parent_id", "admin_level", "type", "name", "iso_a3", "country_iso3", "family", "subtype", "level", "centroid_lon", "centroid_lat", "has_polygon", "bbox_min_lon", "bbox_min_lat", "bbox_max_lon", "bbox_max_lat"}
         if geometry: wanted.update({"geometry", "geometry_wkb"})
         rows = []
         for package, file in self._records():
@@ -215,6 +215,8 @@ class DownloadedGeometryBackend:
                 row["_package_id"] = package["metadata"].get("package_id")
                 row["_tier"] = package["metadata"].get("package_tier")
                 row["family"] = row.get("family") or ("water_body" if meta.get("release_unit_id") == "MARINE" and row.get("level") == "water_body" else "marine_jurisdiction" if meta.get("release_unit_id") == "MARINE" else "administrative")
+                if meta.get("release_unit_id") == "MARINE" and row.get("subtype") in MARINE_JURISDICTION_FAMILIES:
+                    row["family"] = row["subtype"]
                 row["country"] = row.get("iso_a3") or row.get('country_iso3') or (meta.get("country_code") if meta.get("country_code") != "GLOBAL" else str(row["loc_id"]).split("-")[0])
                 row["polygon_kind"] = {"exact": "exact", "display": "simplified"}.get(file.get("component"))
                 if geometry and row.get("geometry") is None: continue
@@ -299,7 +301,9 @@ class DownloadedGeometryBackend:
             for file in package["files"]:
                 if file["archive_path"].replace("\\", "/") == "reference/identities.parquet":
                     self._verify_file(file)
-                    families.update(str(value) for value in pq.read_table(file["local_path"], columns=["family"])["family"].to_pylist() if value)
+                    table = pq.read_table(file["local_path"], columns=["family", "subtype"])
+                    for row in table.to_pylist():
+                        families.add(row["subtype"] if row.get("subtype") in MARINE_JURISDICTION_FAMILIES else row["family"])
         return {"ok": True, "catalog": "geometry", "detail": "download", "catalog_version": "local",
                 "families": [{"family_id": value} for value in sorted(families)],
                 "scopes": [{"scope_id": value} for value in scopes],
@@ -321,15 +325,18 @@ class DownloadedGeometryBackend:
         if scope and not any(p["metadata"].get("country_code") == scope for p in self.packages):
             return _error("scope_not_found", "No installed Geometry package covers this scope", scope_id=scope)
         catalog = self._call_get_catalog({"catalog": "geometry"})
-        if family and family not in {row["family_id"] for row in catalog["families"]}:
+        installed_families = {row["family_id"] for row in catalog["families"]}
+        if family and family not in installed_families:
             return _error("family_not_found", "No installed Geometry package covers this family", family_id=family)
         packages = [p["metadata"] for p in self.packages if not scope or p["metadata"].get("country_code") == scope]
-        packages = [p for p in packages if not family or (family in {"marine_jurisdiction", "water_body"}) == (p.get("release_unit_id") == "MARINE")]
+        packages = [p for p in packages if not family or (family in MARINE_POINT_FAMILIES) == (p.get("release_unit_id") == "MARINE")]
         coverage = [{"scope_id": p["country_code"], "family_id": selected_family,
                      "package_id": p["package_id"], "package_tier": p["package_tier"],
                      "release_version": p.get("version")}
                     for p in packages
-                    for selected_family in ([family] if family else (["marine_jurisdiction", "water_body"] if p.get("release_unit_id") == "MARINE" else ["administrative"]))]
+                    for selected_family in ([family] if family else
+                                            ([value for value in MARINE_POINT_FAMILIES if value in installed_families]
+                                             if p.get("release_unit_id") == "MARINE" else ["administrative"]))]
         return {"ok": True, "catalog": "geometry", "family_id": family, "scope_id": scope,
                 "requested_year": args.get("year"), "coverage": coverage,
                 "admin_spine": {"release_unit_kind": "country"} if scope and scope != "MARINE" else {}}
@@ -351,7 +358,7 @@ class DownloadedGeometryBackend:
         if scope == "GLOBAL":
             names = {"exact/admin_0.parquet", "display/admin_0.parquet"}
         elif scope == "MARINE":
-            stem = ("jurisdictions" if family == "marine_jurisdiction" else
+            stem = ("jurisdictions" if family in MARINE_JURISDICTION_FAMILIES else
                     "named_water_areas" if water_kind == "named" else "water_bodies")
             names = {f"exact/{stem}.parquet", f"display/{stem}.parquet"}
         else:
@@ -376,7 +383,17 @@ class DownloadedGeometryBackend:
         selected = {path for rank, path in choices if rank == highest}
         if len(selected) != 1:
             raise ValueError(f"Ambiguous installed point bank for {scope} {family}; remove duplicate editions")
-        return next(iter(selected))
+        path = next(iter(selected))
+        if scope == "MARINE" and family in MARINE_JURISDICTION_FAMILIES:
+            selected_file = next(file for _package, file in self._records()
+                                 if file["local_path"] == path)
+            self._verify_file(selected_file)
+            if "subtype" not in self.schemas[path].names:
+                return None
+            available = set(pq.read_table(path, columns=["subtype"])["subtype"].to_pylist())
+            if family not in available:
+                return None
+        return path
 
     def _point_result(self, item: dict[str, Any], *, shallow: str | None = None,
                       family: str = "administrative", target_level: int | None = None,
@@ -384,7 +401,7 @@ class DownloadedGeometryBackend:
         point = Point(item["lon"], item["lat"])
         selected_rows = self._load(geometry=True, point=point, selected_path=selected_path)
         matches = self._dedupe([row for row in selected_rows
-                                if (scope == "MARINE" or row.get("family") == family)
+                                if (row.get("family") == family or scope == "MARINE" and family == "water_body")
                                 and _shape(row["geometry"]).covers(point)])
         if scope == "MARINE":
             return {
@@ -442,7 +459,7 @@ class DownloadedGeometryBackend:
             if scope not in {"GLOBAL", "MARINE"} and not (len(scope) == 3 and scope.isalpha()):
                 return _error("invalid_point_scope", "Select GLOBAL, MARINE, or one installed ISO3 country")
             allowed = {"GLOBAL": {"administrative"},
-                       "MARINE": {"marine_jurisdiction", "water_body"}}
+                       "MARINE": set(MARINE_POINT_FAMILIES)}
             if not family:
                 return _error("point_family_required", "Select one family for the selected scope")
             if family not in allowed.get(scope, {"administrative"}):

@@ -45,7 +45,17 @@ class InstalledSideFamilyTest(unittest.TestCase):
                 "display/admin_1.parquet": ("display", [row("AAA-1")]),
             }, tier="display")
             _package(root, "marine", "downloadable_geometry_package", "MARINE", {
-                "display/jurisdictions.parquet": ("display", [row("AAA-EEZ")]),
+                "reference/identities.parquet": ("reference", [
+                    {"loc_id": "AAA-EEZ", "family": "marine_jurisdiction", "subtype": "exclusive_economic_zone"},
+                    {"loc_id": "XOP-HS", "family": "marine_jurisdiction", "subtype": "high_seas"},
+                    {"loc_id": "IHO-1", "family": "water_body", "subtype": "named_water_area"},
+                ]),
+                "display/jurisdictions.parquet": ("display", [
+                    {**row("AAA-EEZ"), "family": "marine_jurisdiction",
+                     "subtype": "exclusive_economic_zone"},
+                    {**row("XOP-HS"), "family": "marine_jurisdiction",
+                     "subtype": "high_seas"},
+                ]),
                 "display/water_bodies.parquet": ("display", [row("XZONE")]),
                 "display/named_water_areas.parquet": ("display", [row("IHO-1")]),
             })
@@ -72,6 +82,19 @@ class InstalledSideFamilyTest(unittest.TestCase):
             self.assertEqual(named_result["family_result"]["matches"][0]["loc_id"], "IHO-1")
             self.assertEqual({p.name for p in backend.verified}, {"named_water_areas.parquet"})
             backend.verified.clear()
+            high_seas = backend.call("resolve_point", {
+                "lat": 0, "lon": 0, "scope_id": "MARINE", "family": "high_seas",
+            })
+            self.assertEqual([row["loc_id"] for row in high_seas["family_result"]["matches"]], ["XOP-HS"])
+            self.assertEqual({p.name for p in backend.verified}, {"jurisdictions.parquet"})
+            backend.verified.clear()
+            missing_family = backend.call("resolve_point", {
+                "lat": 0, "lon": 0, "scope_id": "MARINE", "family": "territorial_seas",
+            })
+            self.assertEqual(missing_family["error"]["code"], "selected_scope_unavailable")
+            self.assertEqual({row["family_id"] for row in backend.call("get_geography", {"scope_id": "MARINE"})["coverage"]},
+                             {"exclusive_economic_zone", "high_seas", "water_body"})
+            backend.verified.clear()
             country_result = backend.call("resolve_point", {
                 "lat": 0, "lon": 0, "scope_id": "USA", "family": "administrative",
             })
@@ -83,8 +106,8 @@ class InstalledSideFamilyTest(unittest.TestCase):
             root = Path(temporary)
             _package(root, "marine", "downloadable_geometry_package", "MARINE", {
                 "reference/identities.parquet": ("reference", [
-                    {"loc_id": "AAA-EEZ", "family": "marine_jurisdiction", "name": "Example EEZ"},
-                    {"loc_id": "XLAKE", "family": "water_body", "name": "Example lake"},
+                    {"loc_id": "AAA-EEZ", "family": "marine_jurisdiction", "subtype": "exclusive_economic_zone", "name": "Example EEZ"},
+                    {"loc_id": "XLAKE", "family": "water_body", "subtype": "water_body", "name": "Example lake"},
                 ]),
                 "display/water_bodies.parquet": ("display", [
                     {"loc_id": "XLAKE", "level": "water_body", "name": "Example lake",
@@ -102,9 +125,9 @@ class InstalledSideFamilyTest(unittest.TestCase):
             backend = DownloadedGeometryBackend(root)
             catalog = backend.call("get_catalog", {"catalog": "geometry"})
             self.assertEqual({row["family_id"] for row in catalog["families"]},
-                             {"marine_jurisdiction", "water_body"})
+                             {"exclusive_economic_zone", "water_body"})
             self.assertEqual(catalog["external_reference_bridges"][0]["external_system"], "overture_gers")
-            self.assertEqual(backend.call("get_loc_id_info", {"loc_id": "AAA-EEZ"})["family"], "marine_jurisdiction")
+            self.assertEqual(backend.call("get_loc_id_info", {"loc_id": "AAA-EEZ"})["family"], "exclusive_economic_zone")
             self.assertEqual(backend.call("get_shape", {"loc_id": "AAA-EEZ"})["error"]["code"], "shape_unavailable")
             self.assertTrue(backend.call("get_shape", {"loc_id": "XLAKE"})["has_shape"])
             exact = backend.call("convert_reference", {"iso3": "AAA", "from_system": "overture_gers", "value": "gers-exact"})

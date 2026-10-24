@@ -20,7 +20,7 @@ from mapmover.runtime.geography_reference import is_named_water_loc_id
 
 
 class MarineGeometryRuntimeTests(unittest.TestCase):
-    def test_selected_marine_jurisdiction_uses_bbox_then_one_bank(self):
+    def test_selected_marine_family_filters_bbox_before_exact_read(self):
         bbox_path = Path("marine/predicate/bbox_index.parquet")
         bank_path = Path("marine/predicate/point_bank.parquet")
         with (
@@ -30,18 +30,22 @@ class MarineGeometryRuntimeTests(unittest.TestCase):
             }),
             patch.object(marine_runtime, "parquet_available", return_value=True),
             patch.object(marine_runtime, "read_bbox_candidates_for_points",
-                         return_value=pd.DataFrame([{"point_position": 0, "loc_id": "XOP-HS"}])) as bbox,
+                         return_value=pd.DataFrame([
+                             {"point_position": 0, "loc_id": "XOP-HS", "subtype": "high_seas"},
+                             {"point_position": 0, "loc_id": "XOP-EEZ", "subtype": "exclusive_economic_zone"},
+                         ])) as bbox,
             patch.object(marine_runtime, "read_rows_by_ids",
                          return_value=pd.DataFrame([{"loc_id": "XOP-HS", "name": "High Seas"}])) as exact,
             patch.object(marine_runtime, "_exact_jurisdiction_matches",
                          return_value={0: {"XOP-HS"}}),
         ):
             result = marine_runtime.resolve_marine_family_points(
-                [{"lon": -130, "lat": 35}], "marine_jurisdiction",
+                [{"lon": -130, "lat": 35}], "high_seas",
             )
         self.assertEqual(result[0]["matches"][0]["loc_id"], "XOP-HS")
         self.assertEqual(bbox.call_args.args[0], bbox_path)
         self.assertEqual(exact.call_args.args[0], bank_path)
+        self.assertEqual(exact.call_args.args[1], {"XOP-HS"})
         self.assertEqual(exact.call_count, 1)
 
     def test_marine_reference_identity_uses_release_tables_without_country_graph(self):
@@ -53,7 +57,7 @@ class MarineGeometryRuntimeTests(unittest.TestCase):
             relationships = root / "relationships.parquet"
             pq.write_table(pa.Table.from_pylist([{
                 "loc_id": "ABW-EEZ", "name": "Example EEZ",
-                "family": "marine_jurisdiction", "level": "eez",
+                "family": "marine_jurisdiction", "subtype": "exclusive_economic_zone", "level": "eez",
             }]), identities)
             pq.write_table(pa.Table.from_pylist([{
                 "source_loc_id": "ABW-EEZ", "target_loc_id": "ABW",
@@ -63,7 +67,7 @@ class MarineGeometryRuntimeTests(unittest.TestCase):
                 "reference_identities": identities, "reference_relationships": relationships,
             }):
                 result = graph_info_items(["ABW-EEZ"])[0]
-        self.assertEqual(result["family"], "marine_jurisdiction")
+        self.assertEqual(result["family"], "exclusive_economic_zone")
         self.assertEqual(result["connections"][0]["relationship_type"], "marine_zone_country_association")
 
     def test_physical_land_reader_passes_path_to_cloud_uri_resolver(self):

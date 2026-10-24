@@ -89,7 +89,7 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         with mock.patch("mapmover.runtime.global_admin0_query.resolve_global_scope_points") as global_route, \
              mock.patch("mapmover.runtime.marine_geometry.resolve_marine_family_points") as marine_route:
             missing_scope = _tool_call(self.client, "resolve_point", {
-                "lat": 35, "lon": -130, "family": "marine_jurisdiction",
+                "lat": 35, "lon": -130, "family": "high_seas",
             })
             missing_family = _tool_call(self.client, "resolve_point", {
                 "lat": 35, "lon": -130, "scope_id": "MARINE",
@@ -100,10 +100,14 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
             missing_water_kind = _tool_call(self.client, "resolve_point", {
                 "lat": 35, "lon": -130, "scope_id": "MARINE", "family": "water_body",
             })
+            broad_family = _tool_call(self.client, "resolve_point", {
+                "lat": 35, "lon": -130, "scope_id": "MARINE", "family": "marine_jurisdiction",
+            })
         self.assertEqual(missing_scope["error"]["code"], "point_scope_required")
         self.assertEqual(missing_family["error"]["code"], "point_family_required")
         self.assertEqual(wrong_family["error"]["code"], "invalid_point_family")
         self.assertEqual(missing_water_kind["error"]["code"], "water_kind_required")
+        self.assertEqual(broad_family["error"]["code"], "invalid_point_family")
         global_route.assert_not_called()
         marine_route.assert_not_called()
 
@@ -117,11 +121,11 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
 
     def test_marine_point_selects_one_family(self) -> None:
         result = _tool_call(self.client, "resolve_point", {
-            "lat": 35, "lon": -130, "scope_id": "MARINE", "family": "marine_jurisdiction",
+            "lat": 35, "lon": -130, "scope_id": "MARINE", "family": "high_seas",
         })
-        self.assertEqual(result["family"], "marine_jurisdiction")
+        self.assertEqual(result["family"], "high_seas")
         self.assertEqual(result["family_result"]["status"], "matched")
-        self.assertEqual(result["family_result"]["matches"][0]["family"], "marine_jurisdiction")
+        self.assertEqual(result["family_result"]["matches"][0]["family"], "high_seas")
 
     def test_geometry_lineage_analytics_is_bounded_and_material_specific(self) -> None:
         metadata = _geometry_lineage_analytics_metadata({

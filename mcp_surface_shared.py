@@ -4,6 +4,18 @@ from mcp_data_contract_shared import decorate_data_tool_definition, decorate_sha
 from mcp_discovery_shared import data_access_workflow
 from mcp_geometry_contract_shared import decorate_geometry_tool_definition
 
+
+MARINE_JURISDICTION_FAMILIES = (
+    "exclusive_economic_zone",
+    "territorial_seas",
+    "contiguous_zones",
+    "extended_continental_shelves",
+    "internal_waters",
+    "archipelagic_waters",
+    "high_seas",
+)
+MARINE_POINT_FAMILIES = (*MARINE_JURISDICTION_FAMILIES, "water_body")
+
 def _pack_id_description() -> str:
     return "Pack identifier from get_catalog. Newly catalog-admitted packs require no MCP schema change."
 
@@ -247,12 +259,12 @@ def build_tool_definitions(*, include_paused: bool = False) -> list[dict]:
         {
             "name": "resolve_point",
             "title": "Resolve Point(s) in One Scope",
-            "description": "Resolve WGS84 coordinates in exactly one selected scope and family. Set scope_id=GLOBAL with family=administrative for Global Admin0, a published ISO3 with family=administrative for its shallow country bank, or scope_id=MARINE with family=marine_jurisdiction or water_body. Marine water_body also requires water_kind=named or zone to select one bank. Missing or incompatible selectors return a typed error. No call crosses scopes or opens a side-family bank. Discover scopes and families with get_catalog(catalog='geometry').",
+            "description": "Resolve WGS84 coordinates in exactly one selected scope and family. GLOBAL administrative finds Admin0; an ISO3 administrative scope finds its shallow country bank. MARINE requires one specific jurisdiction family (for example exclusive_economic_zone or high_seas), or water_body with water_kind=named or zone. The broad marine_jurisdiction category has no point route. No call crosses scopes or opens another family's bank. Discover families with get_catalog(catalog='geometry').",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "scope_id": {"type": "string", "minLength": 3, "description": "GLOBAL, MARINE, or one published ISO3 country. No automatic fallback into another scope."},
-                    "family": {"type": "string", "enum": ["administrative", "marine_jurisdiction", "water_body"], "description": "One family within the selected scope."},
+                    "family": {"type": "string", "enum": ["administrative", *MARINE_POINT_FAMILIES], "description": "One exact family within the selected scope."},
                     "water_kind": {"type": "string", "enum": ["named", "zone"], "description": "Required only for MARINE water_body: named seas or water zones."},
                     "lat": {"type": "number", "minimum": -90, "maximum": 90, "description": "Latitude in WGS84 decimal degrees."},
                     "lon": {"type": "number", "minimum": -180, "maximum": 180, "description": "Longitude in WGS84 decimal degrees."},

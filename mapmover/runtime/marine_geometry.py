@@ -22,6 +22,7 @@ from ..duckdb_helpers import (
     select_columns_from_parquet,
 )
 from ..paths import DATA_ROOT, GEOMETRY_DIR
+from mcp_surface_shared import MARINE_JURISDICTION_FAMILIES
 from .geography_reference import (
     is_marine_jurisdiction_loc_id,
     is_named_water_loc_id,
@@ -334,7 +335,7 @@ def resolve_marine_family_points(
     if domain is None:
         raise ValueError("The selected Marine query layout is unavailable")
     bank_key = (
-        "point_bank" if family == "marine_jurisdiction" else
+        family if family in MARINE_JURISDICTION_FAMILIES else
         {"zone": "water_bodies", "named": "named_water_areas"}.get(water_kind)
         if family == "water_body" else None
     )
@@ -342,16 +343,18 @@ def resolve_marine_family_points(
         raise ValueError(f"Marine has no point route for family {family}")
     if not point_items:
         return []
-    path = domain[bank_key]
+    path = (domain["point_bank"]
+            if bank_key in MARINE_JURISDICTION_FAMILIES else domain[bank_key])
     if not parquet_available(path):
         raise ValueError(f"Selected Marine {family} bank is unavailable")
-    if bank_key == "point_bank":
+    if bank_key in MARINE_JURISDICTION_FAMILIES:
         bbox_path = domain["bbox_index"]
         if not parquet_available(bbox_path):
             raise ValueError("Selected Marine jurisdiction bbox index is unavailable")
         bbox = read_bbox_candidates_for_points(
-            bbox_path, point_items, columns=["loc_id"],
+            bbox_path, point_items, columns=["loc_id", "subtype"],
         )
+        bbox = bbox[bbox["subtype"] == family]
         candidate_ids = set(bbox["loc_id"].astype(str)) if not bbox.empty else set()
         geometry_column = "geometry" if domain.get("canonical_geoparquet") else "geometry_wkb"
         rows = read_rows_by_ids(

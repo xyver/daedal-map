@@ -20,7 +20,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, Response
 
 from access_policy_shared import free_facade_data_row_limit, resolve_effective_access
-from mcp_surface_shared import build_mcp_instructions, build_tool_definitions
+from mcp_surface_shared import MARINE_POINT_FAMILIES, build_mcp_instructions, build_tool_definitions
 from mcp_data_contract_shared import normalize_data_tool_error
 from mcp_tool_help_shared import topic_help_payload, tool_help_payload
 from mcp_discovery_shared import (
@@ -2731,7 +2731,7 @@ async def _execute_resolve_point_tool(request: Request, arguments: dict[str, Any
             message="resolve_point accepts one scope_id: GLOBAL, MARINE, or a published ISO3 country.",
         )
     allowed_families = {"GLOBAL": {"administrative"},
-                        "MARINE": {"marine_jurisdiction", "water_body"}}
+                        "MARINE": set(MARINE_POINT_FAMILIES)}
     if not family:
         return _point_tool_contract_error(
             request_id, rpc_request_id, code="point_family_required",

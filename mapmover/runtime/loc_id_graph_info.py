@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from mcp_surface_shared import MARINE_JURISDICTION_FAMILIES
+
 from .reference_graph import (
     ReferenceRouteUnavailable,
     identities,
@@ -29,7 +31,7 @@ def _marine_info_items(loc_ids: list[str]) -> dict[str, dict[str, Any]]:
         return {value: _route_error(value, "selected Marine Reference release is unavailable") for value in loc_ids}
     try:
         identities_df = read_rows_by_ids(
-            identity_path, loc_ids, id_column="loc_id", columns=["name", "family", "level"]
+            identity_path, loc_ids, id_column="loc_id", columns=["name", "family", "subtype", "level"]
         )
         outgoing_df = read_rows_by_ids(
             relationship_path, loc_ids, id_column="source_loc_id",
@@ -66,7 +68,9 @@ def _marine_info_items(loc_ids: list[str]) -> dict[str, dict[str, Any]]:
             continue
         edges = connections[value]
         results[value] = {
-            "loc_id": value, "name": identity.get("name"), "family": identity.get("family"),
+            "loc_id": value, "name": identity.get("name"),
+            "family": (identity.get("subtype") if identity.get("subtype") in MARINE_JURISDICTION_FAMILIES
+                       else identity.get("family")),
             "admin_level": None, "parent_id": None, "connections": edges[:CONNECTION_LIMIT],
             "connection_count": min(len(edges), CONNECTION_LIMIT),
             "connection_limit": CONNECTION_LIMIT, "has_more": len(edges) > CONNECTION_LIMIT,
