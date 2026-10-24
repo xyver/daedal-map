@@ -2666,6 +2666,8 @@ def _point_tool_unexpected_fields(payload: dict[str, Any], *, deep: bool) -> lis
     allowed = {"lat", "lon", "points", "batch_id", "request_id"}
     if deep:
         allowed.update({"shallow_loc_id", "family", "target_admin_level"})
+    else:
+        allowed.update({"scope_id", "family", "water_kind"})
     return sorted(set(payload) - allowed)
 
 
@@ -2688,7 +2690,7 @@ def _point_tool_coordinate_error(payload: dict[str, Any]) -> tuple[str, str] | N
 
 @_guard_mcp_execution("resolve_point")
 async def _execute_resolve_point_tool(request: Request, arguments: dict[str, Any], rpc_request_id: Any) -> Response:
-    """Execute the one-or-many public Admin0-3 point contract."""
+    """Execute one selected Global or Marine point route."""
     payload = dict(arguments or {})
     request_id = str(payload.get("request_id") or rpc_request_id or "")
     has_batch = "points" in payload
@@ -2715,6 +2717,47 @@ async def _execute_resolve_point_tool(request: Request, arguments: dict[str, Any
     coordinate_error = _point_tool_coordinate_error(payload)
     if coordinate_error:
         return _point_tool_contract_error(request_id, rpc_request_id, code=coordinate_error[0], message=coordinate_error[1])
+    scope = str(payload.pop("scope_id", "") or "").strip().upper()
+    family = str(payload.pop("family", "") or "").strip()
+    water_kind = str(payload.pop("water_kind", "") or "").strip()
+    if not scope:
+        return _point_tool_contract_error(
+            request_id, rpc_request_id, code="point_scope_required",
+            message="Select exactly one scope_id: GLOBAL, MARINE, or a published ISO3 country. Use get_catalog(catalog='geometry') to discover available scopes.",
+        )
+    if scope not in {"GLOBAL", "MARINE"} and not (len(scope) == 3 and scope.isalpha()):
+        return _point_tool_contract_error(
+            request_id, rpc_request_id, code="invalid_point_scope",
+            message="resolve_point accepts one scope_id: GLOBAL, MARINE, or a published ISO3 country.",
+        )
+    allowed_families = {"GLOBAL": {"administrative"},
+                        "MARINE": {"marine_jurisdiction", "water_body"}}
+    if not family:
+        return _point_tool_contract_error(
+            request_id, rpc_request_id, code="point_family_required",
+            message="Select one family from get_catalog(catalog='geometry') for the selected scope_id.",
+        )
+    if family not in allowed_families.get(scope, {"administrative"}):
+        return _point_tool_contract_error(
+            request_id, rpc_request_id, code="invalid_point_family",
+            message=f"family {family} has no point route in {scope}; select one published family for that scope.",
+        )
+    if family == "water_body" and scope == "MARINE" and water_kind not in {"named", "zone"}:
+        return _point_tool_contract_error(
+            request_id, rpc_request_id, code="water_kind_required",
+            message="Marine water_body requires water_kind named or zone to select one bank.",
+        )
+    if water_kind and (scope != "MARINE" or family != "water_body"):
+        return _point_tool_contract_error(
+            request_id, rpc_request_id, code="water_kind_not_applicable",
+            message="water_kind applies only to MARINE water_body.",
+        )
+    payload["point_scope_id"] = scope
+    payload["family"] = family
+    if water_kind:
+        payload["water_kind"] = water_kind
+    if scope not in {"GLOBAL", "MARINE"}:
+        payload["country_scope"] = scope
     payload["lookup_mode"] = "standard"
     return await _execute_point_lookup_tool(
         request, payload, rpc_request_id, execution_tool_name="resolve_point"
@@ -2846,7 +2889,9 @@ async def _execute_point_lookup_tool(
     started_at = time.perf_counter()
     payload = _ensure_request_id(arguments, execution_tool_name)
     deep_lookup = execution_tool_name == "resolve_deep_point"
-    requested_family = str(payload.pop("family", "administrative") or "administrative") if deep_lookup else "administrative"
+    requested_family = str(payload.pop("family", "administrative") or "administrative")
+    point_scope_id = str(payload.pop("point_scope_id", "") or "")
+    water_kind = str(payload.pop("water_kind", "") or "") or None
     shallow_loc_id = str(payload.pop("shallow_loc_id", "") or "").strip() if deep_lookup else ""
     capability_id = "deep_point_lookup" if deep_lookup else "point_lookup"
     request_id = str(payload.get("request_id") or "")
@@ -3169,22 +3214,28 @@ async def _execute_point_lookup_tool(
         family_results: list[dict[str, Any]] = []
         if requested_family == "administrative":
             try:
-                raw_results = await run_mcp_blocking(
-                    execution_tool_name,
-                    resolve_points_to_locations,
-                    valid_points,
-                    diagnostic_id=request_id,
-                    include_geometry=include_geometry,
-                    timing_ms=resolver_stages,
-                    target_admin_level=target_admin_level,
-                    max_admin_level=max_admin_level,
-                    country_scope=country_scope,
-                    admin_1_scope=admin_1_scope,
-                    include_marine_context=(
-                        False if deep_lookup else payload.get("include_marine_context") is True
-                    ),
-                    shallow_banks_only=lookup_mode == "standard",
-                )
+                if point_scope_id == "GLOBAL":
+                    from mapmover.runtime.global_admin0_query import resolve_global_scope_points
+                    raw_results = await run_mcp_blocking(
+                        execution_tool_name, resolve_global_scope_points, valid_points,
+                        diagnostic_id=request_id,
+                    )
+                else:
+                    raw_results = await run_mcp_blocking(
+                        execution_tool_name,
+                        resolve_points_to_locations,
+                        valid_points,
+                        diagnostic_id=request_id,
+                        include_geometry=include_geometry,
+                        timing_ms=resolver_stages,
+                        target_admin_level=target_admin_level,
+                        max_admin_level=max_admin_level,
+                        country_scope=country_scope,
+                        admin_1_scope=admin_1_scope,
+                        include_marine_context=False,
+                        shallow_banks_only=lookup_mode == "standard",
+                        strict_scope=True,
+                    )
             except (MCPExecutionCapacityError, MCPExecutionTimeoutError):
                 raise
             except Exception as exc:
@@ -3193,9 +3244,9 @@ async def _execute_point_lookup_tool(
             family_started = time.perf_counter()
             from mapmover.runtime.family_point_resolution import resolve_family_points, resolve_marine_points
 
-            if requested_family == "marine":
+            if point_scope_id == "MARINE":
                 family_results = await run_mcp_blocking(
-                    execution_tool_name, resolve_marine_points, valid_points,
+                    execution_tool_name, resolve_marine_points, valid_points, requested_family, water_kind,
                     diagnostic_id=request_id,
                 )
             else:
@@ -3431,32 +3482,40 @@ async def _execute_point_lookup_tool(
         resolver_stages: dict[str, int] = {}
         family_result: dict[str, Any] = {}
         if requested_family == "administrative":
-            raw_results = await run_mcp_blocking(
-                execution_tool_name,
-                resolve_points_to_locations,
-                [{"lon": lon, "lat": lat}],
-                diagnostic_id=request_id,
-                include_geometry=False,
-                timing_ms=resolver_stages,
-                target_admin_level=target_admin_level,
-                max_admin_level=max_admin_level,
-                country_scope=country_scope,
-                admin_1_scope=admin_1_scope,
-                include_marine_context=(
-                    False if deep_lookup else payload.get("include_marine_context") is True
-                ),
-                shallow_banks_only=lookup_mode == "standard",
-            )
+            if point_scope_id == "GLOBAL":
+                from mapmover.runtime.global_admin0_query import resolve_global_scope_points
+                raw_results = await run_mcp_blocking(
+                    execution_tool_name, resolve_global_scope_points,
+                    [{"lon": lon, "lat": lat}], diagnostic_id=request_id,
+                )
+            else:
+                raw_results = await run_mcp_blocking(
+                    execution_tool_name,
+                    resolve_points_to_locations,
+                    [{"lon": lon, "lat": lat}],
+                    diagnostic_id=request_id,
+                    include_geometry=False,
+                    timing_ms=resolver_stages,
+                    target_admin_level=target_admin_level,
+                    max_admin_level=max_admin_level,
+                    country_scope=country_scope,
+                    admin_1_scope=admin_1_scope,
+                    include_marine_context=False,
+                    shallow_banks_only=lookup_mode == "standard",
+                    strict_scope=True,
+                )
             raw = raw_results[0] if raw_results else {"error": "point did not resolve", "point": {"lon": lon, "lat": lat}}
         else:
             family_started = time.perf_counter()
             from mapmover.runtime.family_point_resolution import resolve_family_points, resolve_marine_points
 
-            if requested_family == "marine":
+            if point_scope_id == "MARINE":
                 resolved_families = await run_mcp_blocking(
                     execution_tool_name,
                     resolve_marine_points,
                     [{"lon": lon, "lat": lat}],
+                    requested_family,
+                    water_kind,
                     diagnostic_id=request_id,
                 )
             else:

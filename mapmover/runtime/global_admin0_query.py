@@ -180,6 +180,40 @@ def resolve_global_admin0_query_points(
     return results
 
 
+def resolve_global_scope_points(points: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Resolve only the selected Global Admin0 point layout."""
+    point_items = list(points)
+    matches = resolve_global_admin0_query_points(point_items)
+    if matches is None:
+        return [{"point": {"lon": float(point["lon"]), "lat": float(point["lat"])},
+                 "error": {"code": "selected_scope_unavailable",
+                           "message": "The selected Global point query layout is unavailable; no other scope was searched"}}
+                for point in point_items]
+    results: list[dict[str, Any]] = []
+    for point, match in zip(point_items, matches):
+        coordinate = {"lon": float(point["lon"]), "lat": float(point["lat"])}
+        if match is None:
+            results.append({"point": coordinate, "error": {
+                "code": "no_point_overlap", "message": "No Global administrative polygon covers this point"
+            }})
+            continue
+        loc_id = str(match.get("loc_id") or "")
+        name = str(match.get("name") or loc_id)
+        selected = {"loc_id": loc_id, "name": name, "admin_level": 0, "family": "administrative"}
+        results.append({
+            "point": coordinate,
+            "country": {"loc_id": loc_id, "name": name},
+            "matched": selected,
+            "stack": [selected],
+            "deepest_resolved_loc_id": loc_id,
+            "deepest_resolved_admin_level": 0,
+            "deepest_resolved_family": "administrative",
+            "resolution_family": "administrative",
+            "query_layout": "global_admin0_point",
+        })
+    return results
+
+
 def load_global_admin0_identities(loc_ids: Iterable[str]) -> dict[str, pd.Series] | None:
     """Read country identity columns from the compact index, never Full CSV.
 

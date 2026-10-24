@@ -15,10 +15,80 @@ from .reference_graph import (
 CONNECTION_LIMIT = 50
 
 
+def _marine_info_items(loc_ids: list[str]) -> dict[str, dict[str, Any]]:
+    """Read the selected Marine release's small Reference tables by exact ID."""
+    from .geometry_predicate_query import read_rows_by_ids
+    from .marine_geometry import _active_domain_paths
+    from ..duckdb_helpers import parquet_available
+
+    domain = _active_domain_paths() or {}
+    identity_path = domain.get("reference_identities")
+    relationship_path = domain.get("reference_relationships")
+    if (identity_path is None or relationship_path is None
+            or not parquet_available(identity_path) or not parquet_available(relationship_path)):
+        return {value: _route_error(value, "selected Marine Reference release is unavailable") for value in loc_ids}
+    try:
+        identities_df = read_rows_by_ids(
+            identity_path, loc_ids, id_column="loc_id", columns=["name", "family", "level"]
+        )
+        outgoing_df = read_rows_by_ids(
+            relationship_path, loc_ids, id_column="source_loc_id",
+            columns=["target_loc_id", "relationship", "basis"],
+        )
+        incoming_df = read_rows_by_ids(
+            relationship_path, loc_ids, id_column="target_loc_id",
+            columns=["source_loc_id", "relationship", "basis"],
+        )
+    except Exception as exc:
+        return {value: _route_error(value, f"selected Marine Reference could not be read: {type(exc).__name__}")
+                for value in loc_ids}
+    by_id = {str(row["loc_id"]).upper(): row for row in identities_df.to_dict("records")}
+    connections: dict[str, list[dict[str, Any]]] = {value: [] for value in loc_ids}
+    for frame, key, other, direction in (
+        (outgoing_df, "source_loc_id", "target_loc_id", "outgoing"),
+        (incoming_df, "target_loc_id", "source_loc_id", "incoming"),
+    ):
+        for row in frame.to_dict("records"):
+            source = str(row.get(key) or "").upper()
+            if source in connections:
+                connections[source].append({
+                    "loc_id": row.get(other), "family": None, "direction": direction,
+                    "relationship_type": row.get("relationship"),
+                    "relationship_subtype": None, "relationship_id": None,
+                    "relationship_vintage": None,
+                })
+    results = {}
+    for value in loc_ids:
+        identity = by_id.get(value)
+        if identity is None:
+            results[value] = {"loc_id": value, "error": {
+                "code": "not_found", "message": "loc_id has no identity in the selected Marine Reference release"}}
+            continue
+        edges = connections[value]
+        results[value] = {
+            "loc_id": value, "name": identity.get("name"), "family": identity.get("family"),
+            "admin_level": None, "parent_id": None, "connections": edges[:CONNECTION_LIMIT],
+            "connection_count": min(len(edges), CONNECTION_LIMIT),
+            "connection_limit": CONNECTION_LIMIT, "has_more": len(edges) > CONNECTION_LIMIT,
+        }
+    return results
+
+
 def graph_info_items(loc_ids: list[str]) -> list[dict[str, Any]]:
     """Return selected-graph records without catalog, shape, or adapter reads."""
     requested = [value.strip().upper() for value in loc_ids]
     unique = list(dict.fromkeys(requested))
+    from .marine_geometry import is_marine_loc_id
+
+    marine_ids = [value for value in unique if is_marine_loc_id(value)]
+    if marine_ids:
+        marine = _marine_info_items(marine_ids)
+        country_ids = [value for value in requested if value not in marine]
+        if not country_ids:
+            return [marine[value] for value in requested]
+        country = graph_info_items(country_ids)
+        by_country = iter(country)
+        return [marine[value] if value in marine else next(by_country) for value in requested]
     try:
         aliases = indexed_public_alias_candidates(unique)
     except Exception as exc:

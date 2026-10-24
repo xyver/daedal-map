@@ -319,27 +319,15 @@ def resolve_family_points(
     return results
 
 
-def resolve_marine_points(points: Iterable[dict[str, Any]]) -> list[dict[str, dict[str, Any]]]:
-    """Project the existing direct Marine resolver into the family contract."""
-    from .loc_id_resolution import _resolve_points_to_marine_stacks
-
-    point_rows = list(points)
-    resolved = _resolve_points_to_marine_stacks(point_rows, include_geometry=False)
-    results: list[dict[str, dict[str, Any]]] = []
-    for raw in resolved:
-        matches: list[dict[str, Any]] = []
-        if isinstance(raw, dict) and isinstance(raw.get("matched"), dict):
-            matches.append(_public_match(raw["matched"]))
-            matches.extend(
-                _public_match(row)
-                for row in raw.get("overlap_families") or []
-                if isinstance(row, dict)
-            )
-        results.append({
-            "marine": {
-                "family": "marine",
-                "status": "matched" if matches else "no_point_overlap",
-                "matches": matches,
-            }
-        })
-    return results
+def resolve_marine_points(
+    points: Iterable[dict[str, Any]], family: str, water_kind: str | None = None,
+) -> list[dict[str, dict[str, Any]]]:
+    """Resolve only the selected Marine family, without land or side-bank reads."""
+    from .marine_geometry import resolve_marine_family_points
+    point_items = list(points)
+    try:
+        return [{family: result} for result in resolve_marine_family_points(point_items, family, water_kind)]
+    except ValueError as exc:
+        return [{family: {"family": family, "status": "family_lookup_error", "error": {
+            "code": "selected_scope_unavailable", "message": str(exc),
+        }}} for _ in point_items]

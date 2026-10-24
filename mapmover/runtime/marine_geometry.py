@@ -21,7 +21,7 @@ from ..duckdb_helpers import (
     run_df,
     select_columns_from_parquet,
 )
-from ..paths import GEOMETRY_DIR
+from ..paths import DATA_ROOT, GEOMETRY_DIR
 from .geography_reference import (
     is_marine_jurisdiction_loc_id,
     is_named_water_loc_id,
@@ -100,6 +100,15 @@ def _active_domain_paths() -> Optional[dict[str, Any]]:
     if any(paths.get(key) is None for key in paths):
         return None
     value = {**paths, "country_components": country_components}
+    # Marine's compact Reference identities are released beside its geometry
+    # banks. Keep the route on the active release instead of sending Marine
+    # loc_ids through the country-only reference graph.
+    manifest_path = catalog_artifact_path(
+        DATA_ROOT, {"path": active.get("version_manifest_path")}
+    )
+    if manifest_path is not None and manifest_path.name == "manifest.json":
+        value["reference_identities"] = manifest_path.parent / "reference" / "identities.parquet"
+        value["reference_relationships"] = manifest_path.parent / "reference" / "relationships.parquet"
     contract = active.get("spatial_contract") or {}
     value["canonical_geoparquet"] = (
         contract.get("file_type") == "GeoParquet"
@@ -314,6 +323,57 @@ def load_marine_geometry_for_points(
     return combined.reset_index(drop=True), {
         position: sorted(ids) for position, ids in candidate_ids.items()
     }
+
+
+def resolve_marine_family_points(
+    points: Iterable[dict[str, Any]], family: str, water_kind: str | None = None,
+) -> list[dict[str, Any]]:
+    """Contain points in exactly one selected Marine family bank."""
+    point_items = list(points)
+    domain = _active_domain_paths()
+    if domain is None:
+        raise ValueError("The selected Marine query layout is unavailable")
+    bank_key = (
+        "point_bank" if family == "marine_jurisdiction" else
+        {"zone": "water_bodies", "named": "named_water_areas"}.get(water_kind)
+        if family == "water_body" else None
+    )
+    if bank_key is None:
+        raise ValueError(f"Marine has no point route for family {family}")
+    if not point_items:
+        return []
+    path = domain[bank_key]
+    if not parquet_available(path):
+        raise ValueError(f"Selected Marine {family} bank is unavailable")
+    if bank_key == "point_bank" or domain.get("canonical_geoparquet"):
+        geometry_column = "geometry" if domain.get("canonical_geoparquet") else "geometry_wkb"
+        candidates = read_bbox_candidates_for_points(
+            path, point_items,
+            columns=(["loc_id", "name", geometry_column, "area_km2"]
+                     if bank_key == "point_bank" else ["loc_id", "name", geometry_column]),
+            raw_geoparquet=domain.get("canonical_geoparquet", False),
+        )
+        matches = _exact_jurisdiction_matches(point_items, candidates)
+        allowed = {(position, loc_id) for position, ids in matches.items() for loc_id in ids}
+        candidates = candidates[candidates.apply(
+            lambda row: (int(row["point_position"]), str(row["loc_id"])) in allowed,
+            axis=1,
+        )] if not candidates.empty else candidates
+    else:
+        candidates = read_geojson_containment_for_points(
+            path, point_items,
+            columns=["loc_id", "name", "geometry"],
+        )
+    return [
+        {"family": family,
+         "status": "matched" if not rows.empty else "no_point_overlap",
+         "matches": [
+             {"loc_id": str(row["loc_id"]), "name": row.get("name"), "family": family}
+             for row in rows.to_dict("records")
+         ]}
+        for position in range(len(point_items))
+        for rows in [candidates[candidates["point_position"] == position]]
+    ]
 
 
 def _exact_jurisdiction_matches(

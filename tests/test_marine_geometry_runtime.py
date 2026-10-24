@@ -4,6 +4,8 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
 
 import mapmover.runtime.marine_geometry as marine_runtime
 from mapmover.runtime.reference_exchange import _geometry_catalog_domains
@@ -18,6 +20,28 @@ from mapmover.runtime.geography_reference import is_named_water_loc_id
 
 
 class MarineGeometryRuntimeTests(unittest.TestCase):
+    def test_marine_reference_identity_uses_release_tables_without_country_graph(self):
+        from mapmover.runtime.loc_id_graph_info import graph_info_items
+
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            identities = root / "identities.parquet"
+            relationships = root / "relationships.parquet"
+            pq.write_table(pa.Table.from_pylist([{
+                "loc_id": "ABW-EEZ", "name": "Example EEZ",
+                "family": "marine_jurisdiction", "level": "eez",
+            }]), identities)
+            pq.write_table(pa.Table.from_pylist([{
+                "source_loc_id": "ABW-EEZ", "target_loc_id": "ABW",
+                "relationship": "marine_zone_country_association", "basis": "reviewed",
+            }]), relationships)
+            with patch.object(marine_runtime, "_active_domain_paths", return_value={
+                "reference_identities": identities, "reference_relationships": relationships,
+            }):
+                result = graph_info_items(["ABW-EEZ"])[0]
+        self.assertEqual(result["family"], "marine_jurisdiction")
+        self.assertEqual(result["connections"][0]["relationship_type"], "marine_zone_country_association")
+
     def test_physical_land_reader_passes_path_to_cloud_uri_resolver(self):
         from shapely.geometry import Polygon
 

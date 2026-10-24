@@ -155,13 +155,15 @@ class GeometryPointResolutionRuntimeTests(unittest.TestCase):
             "resolution_family": "marine",
         }
         with patch("mapmover.geometry_handlers.load_global_countries_frame", return_value=countries), patch(
-            "mapmover.runtime.loc_id_resolution._resolve_point_to_marine_stack", return_value=marine_result,
+            "mapmover.runtime.loc_id_resolution._resolve_points_to_marine_stacks", return_value=[marine_result],
         ) as marine_resolver:
             result = resolve_points_to_locations([{"lon": -130.0, "lat": 35.0}])[0]
 
         self.assertEqual(result["matched"]["loc_id"], "IHO1953-1")
         self.assertEqual(result["overlap_families"][0]["loc_id"], "USA-EEZ-MRGID-1")
-        marine_resolver.assert_called_once_with(-130.0, 35.0, include_geometry=False)
+        marine_resolver.assert_called_once()
+        self.assertEqual(len(marine_resolver.call_args.args[0]), 1)
+        self.assertEqual(marine_resolver.call_args.kwargs, {"include_geometry": False})
 
     def test_runtime_geometry_spine_prefers_smallest_covering_polygon(self):
         import pandas as pd
