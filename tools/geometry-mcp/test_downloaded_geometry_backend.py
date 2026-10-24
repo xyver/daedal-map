@@ -13,7 +13,8 @@ import pyarrow.parquet as pq
 from downloaded_geometry_backend import DownloadedGeometryBackend
 
 
-def _package(root: Path, name: str, profile: str, unit: str, files: dict[str, tuple[str, list[dict]]]):
+def _package(root: Path, name: str, profile: str, unit: str, files: dict[str, tuple[str, list[dict]]],
+             tier: str | None = None):
     base = root / name
     members = []
     for archive, (component, rows) in files.items():
@@ -24,13 +25,59 @@ def _package(root: Path, name: str, profile: str, unit: str, files: dict[str, tu
                         "sha256": hashlib.sha256(target.read_bytes()).hexdigest(),
                         "size_bytes": target.stat().st_size})
     sidecar = {"profile": profile, "release_unit_id": unit, "package_id": name,
-               "package_tier": "display" if unit == "MARINE" else "lite",
+               "package_tier": tier or ("display" if unit == "MARINE" else "lite"),
                "external_system": "overture_gers" if unit == "BRIDGES" else None,
                "files": members}
     (base / "geometry.json").write_text(json.dumps(sidecar), encoding="utf-8")
 
 
 class InstalledSideFamilyTest(unittest.TestCase):
+    def test_point_lookup_selects_one_installed_scope_and_bank(self):
+        polygon = '{"type":"Polygon","coordinates":[[[-1,-1],[1,-1],[1,1],[-1,1],[-1,-1]]]}'
+        def row(loc_id):
+            return {"loc_id": loc_id, "name": loc_id, "geometry": polygon,
+                    "bbox_min_lon": -1.0, "bbox_max_lon": 1.0,
+                    "bbox_min_lat": -1.0, "bbox_max_lat": 1.0}
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            _package(root, "global", "downloadable_geometry_package", "GLOBAL", {
+                "display/admin_0.parquet": ("display", [row("AAA")]),
+                "display/admin_1.parquet": ("display", [row("AAA-1")]),
+            }, tier="display")
+            _package(root, "marine", "downloadable_geometry_package", "MARINE", {
+                "display/jurisdictions.parquet": ("display", [row("AAA-EEZ")]),
+                "display/water_bodies.parquet": ("display", [row("XZONE")]),
+                "display/named_water_areas.parquet": ("display", [row("IHO-1")]),
+            })
+            country_row = {**row("USA-CA"), "admin_level": 1, "iso_a3": "USA"}
+            _package(root, "usa", "downloadable_geometry_package", "USA", {
+                "display/admin_0_3.parquet": ("display", [country_row]),
+                "display/families/watershed.parquet": ("display", [row("WATERSHED-1")]),
+            }, tier="display")
+            backend = DownloadedGeometryBackend(root)
+            self.assertEqual(backend.call("resolve_point", {
+                "lat": 0, "lon": 0, "family": "administrative",
+            })["error"]["code"], "point_scope_required")
+            self.assertFalse(backend.verified)
+            global_result = backend.call("resolve_point", {
+                "lat": 0, "lon": 0, "scope_id": "GLOBAL", "family": "administrative",
+            })
+            self.assertEqual(global_result["matched"]["loc_id"], "AAA")
+            self.assertEqual({p.name for p in backend.verified}, {"admin_0.parquet"})
+            backend.verified.clear()
+            named_result = backend.call("resolve_point", {
+                "lat": 0, "lon": 0, "scope_id": "MARINE", "family": "water_body",
+                "water_kind": "named",
+            })
+            self.assertEqual(named_result["family_result"]["matches"][0]["loc_id"], "IHO-1")
+            self.assertEqual({p.name for p in backend.verified}, {"named_water_areas.parquet"})
+            backend.verified.clear()
+            country_result = backend.call("resolve_point", {
+                "lat": 0, "lon": 0, "scope_id": "USA", "family": "administrative",
+            })
+            self.assertEqual(country_result["matched"]["loc_id"], "USA-CA")
+            self.assertEqual({p.name for p in backend.verified}, {"admin_0_3.parquet"})
+
     def test_marine_identity_and_bridge_relationships(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

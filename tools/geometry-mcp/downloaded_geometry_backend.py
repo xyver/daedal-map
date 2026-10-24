@@ -170,11 +170,14 @@ class DownloadedGeometryBackend:
                 rows.extend(pq.read_table(file["local_path"], filters=filters).to_pylist())
         return rows
 
-    def _load(self, *, geometry: bool = False, loc_ids=None, country=None, admin_level=None, point=None):
+    def _load(self, *, geometry: bool = False, loc_ids=None, country=None, admin_level=None, point=None,
+              selected_path: Path | None = None):
         wanted = {"loc_id", "parent_id", "admin_level", "type", "name", "iso_a3", "country_iso3", "family", "level", "centroid_lon", "centroid_lat", "has_polygon", "bbox_min_lon", "bbox_min_lat", "bbox_max_lon", "bbox_max_lat"}
         if geometry: wanted.update({"geometry", "geometry_wkb"})
         rows = []
         for package, file in self._records():
+            if selected_path is not None and file["local_path"] != selected_path:
+                continue
             meta = package["metadata"]
             if country and meta.get("country_code") not in {country, "GLOBAL"}: continue
             if file.get("component") not in ({"exact", "display"} if geometry else {"exact", "display", "reference"}): continue
@@ -343,11 +346,55 @@ class DownloadedGeometryBackend:
                 raise ValueError("point is outside WGS84 bounds")
         return points
 
+    def _selected_point_bank(self, scope: str, family: str, water_kind: str | None) -> Path | None:
+        """Choose one installed point bank from one declared scope and family."""
+        if scope == "GLOBAL":
+            names = {"exact/admin_0.parquet", "display/admin_0.parquet"}
+        elif scope == "MARINE":
+            stem = ("jurisdictions" if family == "marine_jurisdiction" else
+                    "named_water_areas" if water_kind == "named" else "water_bodies")
+            names = {f"exact/{stem}.parquet", f"display/{stem}.parquet"}
+        else:
+            names = {"display/admin_0_3.parquet"}
+        choices = []
+        for package, file in self._records():
+            meta = package["metadata"]
+            if str(meta.get("country_code") or "").upper() != scope:
+                continue
+            if meta.get("package_tier") not in {"display", "detail"}:
+                continue
+            archive = file["archive_path"].replace("\\", "/")
+            if scope not in {"GLOBAL", "MARINE"} and archive.startswith("exact/admin/admin_0/") and archive.endswith(".parquet"):
+                pass
+            elif archive not in names:
+                continue
+            rank = 2 if archive.startswith("exact/") else 1
+            choices.append((rank, file["local_path"]))
+        if not choices:
+            return None
+        highest = max(rank for rank, _path in choices)
+        selected = {path for rank, path in choices if rank == highest}
+        if len(selected) != 1:
+            raise ValueError(f"Ambiguous installed point bank for {scope} {family}; remove duplicate editions")
+        return next(iter(selected))
+
     def _point_result(self, item: dict[str, Any], *, shallow: str | None = None,
-                      family: str = "administrative", target_level: int | None = None) -> dict[str, Any]:
+                      family: str = "administrative", target_level: int | None = None,
+                      selected_path: Path | None = None, scope: str | None = None) -> dict[str, Any]:
         point = Point(item["lon"], item["lat"])
-        matches = self._dedupe([row for row in self._load(geometry=True, point=point)
-                                if row.get("family") == family and _shape(row["geometry"]).covers(point)])
+        selected_rows = self._load(geometry=True, point=point, selected_path=selected_path)
+        matches = self._dedupe([row for row in selected_rows
+                                if (scope == "MARINE" or row.get("family") == family)
+                                and _shape(row["geometry"]).covers(point)])
+        if scope == "MARINE":
+            return {
+                "point": {"lat": item["lat"], "lon": item["lon"]},
+                "family": family,
+                "family_result": {"family": family,
+                                  "status": "matched" if matches else "no_point_overlap",
+                                  "matches": [{"loc_id": row["loc_id"], "name": row.get("name"),
+                                               "family": family} for row in matches]},
+            }
         if shallow:
             anchor = self._identity(shallow)
             if anchor is None:
@@ -369,7 +416,7 @@ class DownloadedGeometryBackend:
             matches = [row for row in matches if row.get("admin_level") == target_level]
         if not matches:
             return {"point": {"lat": item["lat"], "lon": item["lon"]},
-                    "error": {"code": "no_match", "message": "No installed polygon covers this point and scope"}}
+                    "error": {"code": "no_point_overlap", "message": "No installed polygon covers this point in the selected scope"}}
         stack = [{"loc_id": row["loc_id"], "name": row.get("name"), "admin_level": row.get("admin_level"),
                   "family": "administrative"} for row in matches]
         deepest = max(stack, key=lambda row: (row.get("admin_level") or 0, row["loc_id"]))
@@ -385,11 +432,31 @@ class DownloadedGeometryBackend:
 
     def _resolve_points(self, args: dict[str, Any], *, deep: bool) -> dict[str, Any]:
         points = self._points(args)
-        if not any(p["metadata"].get("package_tier") in {"display", "detail"} for p in self.packages):
-            return _error("shape_route_unavailable", "Point resolution requires installed Display or Detail polygons")
+        scope = str(args.get("scope_id") or "").strip().upper() if not deep else ""
+        water_kind = str(args.get("water_kind") or "").strip() if not deep else ""
         family = args.get("family", "administrative") if deep else "administrative"
+        if not deep:
+            family = str(args.get("family") or "").strip()
+            if not scope:
+                return _error("point_scope_required", "Select one scope_id from the installed geometry catalog")
+            if scope not in {"GLOBAL", "MARINE"} and not (len(scope) == 3 and scope.isalpha()):
+                return _error("invalid_point_scope", "Select GLOBAL, MARINE, or one installed ISO3 country")
+            allowed = {"GLOBAL": {"administrative"},
+                       "MARINE": {"marine_jurisdiction", "water_body"}}
+            if not family:
+                return _error("point_family_required", "Select one family for the selected scope")
+            if family not in allowed.get(scope, {"administrative"}):
+                return _error("invalid_point_family", "Family has no point route in the selected scope")
+            if scope == "MARINE" and family == "water_body" and water_kind not in {"named", "zone"}:
+                return _error("water_kind_required", "Marine water_body requires water_kind named or zone")
+            if water_kind and (scope != "MARINE" or family != "water_body"):
+                return _error("water_kind_not_applicable", "water_kind applies only to MARINE water_body")
         if family != "administrative":
-            return _error("family_route_unavailable", "This installed package has no point route for the selected family", family=family)
+            if deep:
+                return _error("family_route_unavailable", "This installed package has no deep point route for the selected family", family=family)
+        selected_path = None if deep else self._selected_point_bank(scope, family, water_kind or None)
+        if not deep and selected_path is None:
+            return _error("selected_scope_unavailable", "No installed Display or Detail point bank covers the selected scope and family", scope_id=scope, family=family)
         level = args.get("target_admin_level") if deep else None
         if level is not None:
             try:
@@ -399,7 +466,8 @@ class DownloadedGeometryBackend:
             if not 4 <= level <= 6:
                 raise ValueError("target_admin_level must be Admin 4 through 6")
         results = [self._point_result(item, shallow=args.get("shallow_loc_id") if deep else None,
-                                      family=family, target_level=level) for item in points]
+                                      family=family, target_level=level,
+                                      selected_path=selected_path, scope=scope if not deep else None) for item in points]
         if "points" not in args:
             return {"request_id": args.get("request_id"), **results[0]}
         return {"request_id": args.get("request_id"), "batch_id": args.get("batch_id"),
