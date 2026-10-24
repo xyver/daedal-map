@@ -5,6 +5,7 @@ import logging
 import hashlib
 import json
 import re
+from pathlib import PurePosixPath
 from typing import Any
 
 from ..foundation_helpers import load_country_crosswalk, load_reference_dict
@@ -123,8 +124,30 @@ def prewarm_country_routing_indexes(catalog: dict[str, Any] | None = None) -> di
             total_bytes += local.stat().st_size
             warm_paths.append(relative)
         countries.append(country)
+    marine_reference_bytes = 0
+    marine_profile = next((
+        item for item in selected_catalog.get("domain_profiles") or []
+        if isinstance(item, dict)
+        and str(item.get("release_unit_id") or "").upper() == "MARINE"
+    ), None)
+    marine_release = marine_profile.get("active_release") if isinstance(marine_profile, dict) else None
+    if isinstance(marine_release, dict) and marine_release.get("publication_status") in {
+        "published", "approved_for_publication",
+    }:
+        manifest = str(marine_release.get("version_manifest_path") or "")
+        if not manifest.startswith("geometry/domains/MARINE/") or not manifest.endswith("/manifest.json"):
+            raise ValueError("Selected Marine release has no safe Reference manifest path")
+        marine_root = PurePosixPath(manifest).parent
+        for name in ("identities.parquet", "relationships.parquet"):
+            relative = str(marine_root / "reference" / name)
+            local = resolve_artifact_path(relative, lane="active", max_bytes=1024 * 1024)
+            if local is None:
+                raise RuntimeError(f"Selected Marine Reference artifact could not be cached: {relative}")
+            marine_reference_bytes += local.stat().st_size
+            warm_paths.append(relative)
     pinned_bytes = pin_artifact_paths(warm_paths)
-    result = {"countries": countries, "index_bytes": total_bytes, "pinned_bytes": pinned_bytes}
+    result = {"countries": countries, "index_bytes": total_bytes,
+              "marine_reference_bytes": marine_reference_bytes, "pinned_bytes": pinned_bytes}
     global _warmed_country_selection
     _warmed_country_selection = country_routing_selection(selected_catalog)
     logger.info("Country routing index pre-warmer complete: %s", result)

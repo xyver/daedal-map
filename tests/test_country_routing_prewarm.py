@@ -41,6 +41,8 @@ class CountryRoutingPrewarmTests(unittest.TestCase):
             exact + "loc_id_routes.parquet": b"admin routes",
             graph + "identity_routes.parquet": b"identity routes",
             discovery + "identifier_index.parquet": b"discovery routes",
+            "geometry/domains/MARINE/local_full/marine_v1/reference/identities.parquet": b"marine identities",
+            "geometry/domains/MARINE/local_full/marine_v1/reference/relationships.parquet": b"marine relationships",
         }
         digest = lambda value: hashlib.sha256(value).hexdigest()
         manifest = {
@@ -69,6 +71,11 @@ class CountryRoutingPrewarmTests(unittest.TestCase):
         catalog = {"country_profiles": [{
             "country_code": country, "release_status": "published",
             "release_id": release_id, "release_version": "1.0.0",
+        }], "domain_profiles": [{
+            "release_unit_id": "MARINE", "active_release": {
+                "publication_status": "published",
+                "version_manifest_path": "geometry/domains/MARINE/local_full/marine_v1/manifest.json",
+            },
         }]}
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -92,9 +99,14 @@ class CountryRoutingPrewarmTests(unittest.TestCase):
                     mock.patch.object(geometry_catalog, "load_geometry_catalog", return_value=catalog):
                 result = reference_prewarm.prewarm_country_routing_indexes()
                 self.assertEqual(result["countries"], [country])
-                self.assertEqual(result["index_bytes"], sum(map(len, payloads.values())))
+                self.assertEqual(result["index_bytes"], sum(
+                    len(value) for key, value in payloads.items() if "MARINE" not in key
+                ))
+                self.assertEqual(result["marine_reference_bytes"], sum(
+                    len(value) for key, value in payloads.items() if "MARINE" in key
+                ))
                 self.assertEqual(result["pinned_bytes"], 43)
-                self.assertEqual(len(pin.call_args.args[0]), 8)
+                self.assertEqual(len(pin.call_args.args[0]), 10)
                 self.assertTrue(reference_prewarm.country_routing_selection_is_warm(catalog))
 
                 (root / (graph + "identity_routes.parquet")).write_bytes(b"wrong bytes")
