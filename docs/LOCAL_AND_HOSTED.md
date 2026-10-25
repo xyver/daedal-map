@@ -53,9 +53,13 @@ RUNTIME_MODE=local
 DATA_ROOT=C:/path/to/your/data
 ```
 
-Set `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` only when you want the built-in
-local chat UI. Researchers using [Research MCP](RESEARCH_MCP.md) use the model
-in their MCP-capable subscription client instead.
+The current built-in Explore chat path uses Anthropic. Multi-provider in-app
+chat setup is still in development; a model key is not needed for local data
+operations. Researchers using [Research MCP](RESEARCH_MCP.md) use the model in
+their MCP-capable subscription client. An external Claude or Codex client can
+also open selected installed content in the local map through the existing
+[agent-to-map share link](AGENT_MAP_HANDOFF.md). Release-pinned saved projects
+remain under development.
 
 This is the clearest path for academic work:
 

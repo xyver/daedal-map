@@ -44,6 +44,33 @@ test('new Explore entity and share links use root while Ops links keep /ops', ()
   assert.match(buildShareStateUrl({ lane: 'ops', overlays: ['earthquakes'] }), /^\/ops\?/);
 });
 
+test('Explore share link retains a concrete metric for confirmed-order replay', () => {
+  const url = buildShareStateUrl({
+    lane: 'explore',
+    loads: [{
+      kind: 'source',
+      source_id: 'installed_source',
+      pack_id: 'installed_pack',
+      mode: 'metrics',
+      metric: 'population_total',
+      geo_level: 'admin_2',
+      year: 2020,
+      filters: { category: 'all' }
+    }]
+  });
+  const intent = parseRouteIntent({ pathname: '/', search: url.slice(1) });
+  assert.deepEqual(intent.share_state.loads, [{
+    kind: 'source',
+    source_id: 'installed_source',
+    pack_id: 'installed_pack',
+    mode: 'metrics',
+    metric: 'population_total',
+    geo_level: 'admin_2',
+    year: 2020,
+    filters: { category: 'all' }
+  }]);
+});
+
 test('switching from Ops to Explore writes the root URL', () => {
   const calls = mockWindow('/ops', '?feed=hurricanes_live');
   writeLane('explore');

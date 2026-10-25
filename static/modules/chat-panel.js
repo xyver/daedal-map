@@ -1099,6 +1099,9 @@ export const ChatManager = {
 
     const sourceId = String(entry?.source_id || '').trim();
     const packId = String(entry?.pack_id || '').trim() || resolvePackIdFromSourceId(sourceId);
+    const metric = String(entry?.metric || '').trim();
+    const hasOrderScope = ['region', 'geo_level', 'year', 'year_start', 'year_end']
+      .some((key) => entry?.[key] != null && entry[key] !== '') || entry?.lock_geo_level === true;
     const filters = entry?.filters && typeof entry.filters === 'object' && !Array.isArray(entry.filters)
       ? { ...entry.filters }
       : {};
@@ -1119,7 +1122,7 @@ export const ChatManager = {
       );
     }
 
-    if (!Object.keys(filters).length) {
+    if (!metric && !hasOrderScope && !Object.keys(filters).length) {
       return this.runDefaultLoad(
         {
           packId,
@@ -1140,10 +1143,14 @@ export const ChatManager = {
       pack_id: packId || undefined,
       filters
     };
+    if (metric) item.metric = metric;
+    for (const key of ['region', 'geo_level', 'year', 'year_start', 'year_end', 'lock_geo_level']) {
+      if (entry?.[key] != null) item[key] = entry[key];
+    }
     if (modeHint === 'events' || modeHint === 'event' || modeHint === 'metrics' || modeHint === 'geometry') {
       item.mode = modeHint === 'event' ? 'events' : modeHint;
     }
-    await this.executeOrder(
+    const result = await this.executeOrder(
       {
         items: [item],
         summary: `Loading shared view for ${sourceId}`
@@ -1155,7 +1162,7 @@ export const ChatManager = {
         suppressResultMessage: true
       }
     );
-    return true;
+    return Boolean(result);
   },
 
   async applyShareStateLoads(shareState = {}, options = {}) {

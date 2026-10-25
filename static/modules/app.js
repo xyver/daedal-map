@@ -948,9 +948,14 @@ export const App = {
       const focusToken = routeIntent?.focus ? (this.pendingRouteFocusCameraToken + 1) : 0;
       this.pendingRouteFocusCameraToken = focusToken;
       if (routeIntent?.share_state) {
-        const handledShareState = await this.applyShareState(routeIntent.share_state, { lane });
-        if (!handledShareState) {
-          console.warn('[ShareState] Route share state did not resolve to a load:', routeIntent.share_state);
+        try {
+          const handledShareState = await this.applyShareState(routeIntent.share_state, { lane });
+          if (!handledShareState && routeIntent.share_state.loads?.length) {
+            ChatManager.addMessage?.('Could not load the source in this shared map view. Check that its pack is installed locally.', 'assistant', { mode: lane });
+          }
+        } catch (error) {
+          console.warn('[ShareState] Route share state load failed:', error);
+          ChatManager.addMessage?.(`Could not load the shared map view: ${error.message || 'Unknown error'}`, 'assistant', { mode: lane });
         }
         const hasAdditionalRouteLoad = Boolean(
           routeIntent?.view_id
@@ -1324,8 +1329,17 @@ export const App = {
     if (packId) load.pack_id = packId;
     const modeHint = String(this.currentData?.data_type || this.currentData?.type || '').trim().toLowerCase();
     if (modeHint) load.mode = modeHint === 'data' ? 'metrics' : modeHint;
-    if (this.currentData?.filters && typeof this.currentData.filters === 'object' && !Array.isArray(this.currentData.filters)) {
-      load.filters = cloneSerializable(this.currentData.filters);
+    const orderItem = this.activeMetricOrderContext?.sourceId === sourceId
+      ? this.activeMetricOrderContext.order?.items?.[0]
+      : null;
+    const metric = String(orderItem?.metric || this.currentData?.metric_key || '').trim();
+    if (metric) load.metric = metric;
+    for (const key of ['region', 'geo_level', 'year', 'year_start', 'year_end', 'lock_geo_level']) {
+      if (orderItem?.[key] != null) load[key] = orderItem[key];
+    }
+    const filters = orderItem?.filters || this.currentData?.filters;
+    if (filters && typeof filters === 'object' && !Array.isArray(filters)) {
+      load.filters = cloneSerializable(filters);
     }
     return [load];
   },
