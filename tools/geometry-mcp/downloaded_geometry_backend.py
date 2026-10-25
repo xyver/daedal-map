@@ -296,11 +296,13 @@ class DownloadedGeometryBackend:
                 continue
             self._verify_file(file)
             schema = self.schemas[file["local_path"]]
-            columns = [name for name in ("family", "subtype") if name in schema.names]
-            if "family" not in columns:
+            columns = [name for name in ("family", "subtype", "admin_level") if name in schema.names]
+            if "family" not in columns and "admin_level" not in columns:
                 break
             for row in pq.read_table(file["local_path"], columns=columns).to_pylist():
-                family = public_geometry_family_id(row.get("family"), row.get("subtype"))
+                family = (public_geometry_family_id(row.get("family"), row.get("subtype"))
+                          if row.get("family") else
+                          "administrative" if row.get("admin_level") is not None else None)
                 if family:
                     families.add(str(family))
             break
@@ -313,9 +315,9 @@ class DownloadedGeometryBackend:
         if args["catalog"] != "geometry":
             raise ValueError("catalog must be data or geometry")
         scopes = sorted({str(p["metadata"]["country_code"]) for p in self.packages})
-        # Geometry bank IDs name artifacts. Marine publishes its families in
-        # the Reference identities table; a Bridge is a reference system, not
-        # a geometry family.
+        # Geometry bank IDs name artifacts. Reference identities supply the
+        # families, including Global's administrative level rows. A Bridge is
+        # a reference system, not a geometry family.
         families = set().union(*(self._package_families(package) for package in self.packages)) if self.packages else set()
         return {"ok": True, "catalog": "geometry", "detail": "download", "catalog_version": "local",
                 "families": [{"family_id": value} for value in sorted(families)],
