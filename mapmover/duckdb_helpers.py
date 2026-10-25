@@ -20,7 +20,7 @@ from typing import Iterable, Optional
 
 import pandas as pd
 
-from .runtime_config import force_remote_data_reads, get_data_plane_mode, get_runtime_config
+from .runtime_config import get_data_plane_mode, get_runtime_config
 from .catalog_surface import get_catalog_surface_override
 from .mcp_execution import mcp_duckdb_query
 from .runtime.published_artifacts import resolve_data_artifact_uri
@@ -96,7 +96,7 @@ def is_cloud_mode() -> bool:
 
 
 def _allow_local_source_fallback() -> bool:
-    if force_remote_data_reads():
+    if is_cloud_mode():
         return False
     override = get_catalog_surface_override()
     if override in {"published", "wip"}:

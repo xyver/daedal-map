@@ -43,6 +43,7 @@ class CountryRoutingPrewarmTests(unittest.TestCase):
             discovery + "identifier_index.parquet": b"discovery routes",
             "geometry/domains/MARINE/local_full/marine_v1/reference/identities.parquet": b"marine identities",
             "geometry/domains/MARINE/local_full/marine_v1/reference/relationships.parquet": b"marine relationships",
+            "geometry/runtime/global_admin0_point/component_bbox_index.parquet": b"global component index",
         }
         digest = lambda value: hashlib.sha256(value).hexdigest()
         manifest = {
@@ -68,7 +69,13 @@ class CountryRoutingPrewarmTests(unittest.TestCase):
             "current": {"release_id": release_id, "version": "1.0.0",
                         "manifest": {"path": manifest_path, "sha256": digest(manifest_bytes)}},
         }
-        catalog = {"country_profiles": [{
+        catalog = {"runtime_query_layouts": {"global_admin0_point": {
+            "layout_id": "global_admin0_point_query_v3",
+            "component_bbox_index": {
+                "path": "geometry/runtime/global_admin0_point/component_bbox_index.parquet",
+                "sha256": digest(payloads["geometry/runtime/global_admin0_point/component_bbox_index.parquet"]),
+            },
+        }}, "country_profiles": [{
             "country_code": country, "release_status": "published",
             "release_id": release_id, "release_version": "1.0.0",
         }], "domain_profiles": [{
@@ -100,14 +107,21 @@ class CountryRoutingPrewarmTests(unittest.TestCase):
                 result = reference_prewarm.prewarm_country_routing_indexes()
                 self.assertEqual(result["countries"], [country])
                 self.assertEqual(result["index_bytes"], sum(
-                    len(value) for key, value in payloads.items() if "MARINE" not in key
+                    len(value) for key, value in payloads.items()
+                    if "MARINE" not in key and "global_admin0_point" not in key
                 ))
                 self.assertEqual(result["marine_reference_bytes"], sum(
                     len(value) for key, value in payloads.items() if "MARINE" in key
                 ))
+                self.assertEqual(result["global_component_bbox_bytes"], len(
+                    payloads["geometry/runtime/global_admin0_point/component_bbox_index.parquet"]
+                ))
                 self.assertEqual(result["pinned_bytes"], 43)
-                self.assertEqual(len(pin.call_args.args[0]), 10)
+                self.assertEqual(len(pin.call_args.args[0]), 11)
                 self.assertTrue(reference_prewarm.country_routing_selection_is_warm(catalog))
+                changed = json.loads(json.dumps(catalog))
+                changed["runtime_query_layouts"]["global_admin0_point"]["component_bbox_index"]["sha256"] = "0" * 64
+                self.assertFalse(reference_prewarm.country_routing_selection_is_warm(changed))
 
                 (root / (graph + "identity_routes.parquet")).write_bytes(b"wrong bytes")
                 with self.assertRaisesRegex(ValueError, "hash mismatch"):

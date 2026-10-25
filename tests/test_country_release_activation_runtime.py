@@ -12,6 +12,18 @@ def test_cloud_geometry_catalog_follows_selected_active_lane() -> None:
     reader.assert_called_once_with("geometry/geometry_catalog.json", lane="active")
 
 
+def test_cloud_catalog_does_not_fall_back_to_local_files(tmp_path: Path) -> None:
+    local = tmp_path / "geometry_catalog.json"
+    local.write_text('{"geometry_banks":[{"bank_id":"local-only"}]}', encoding="utf-8")
+    with (
+        patch.object(geometry_catalog, "CATALOG_PATH", local),
+        patch.object(geometry_catalog, "_is_cloud_mode", return_value=True),
+        patch.object(geometry_catalog, "_fetch_geometry_catalog_from_s3", side_effect=OSError("remote unavailable")),
+    ):
+        result = geometry_catalog._load_geometry_catalog_cached(987654321)
+    assert result["geometry_banks"] == []
+
+
 def test_cloud_reference_graph_discovery_is_catalog_owned(tmp_path: Path) -> None:
     catalog = {"country_profiles": [{
         "country_code": "GBR",
@@ -76,6 +88,9 @@ def test_cloud_exact_identity_route_avoids_partition_index_fanout(tmp_path: Path
         patch.object(reference_graph, "is_cloud_mode", return_value=True),
         patch.object(reference_graph, "parquet_columns", return_value={"loc_id", "path"}),
         patch.object(reference_graph, "select_rows", return_value=frame) as reader,
+        patch.object(reference_graph, "_partition_source_map", return_value={
+            str(partition.relative_to(tmp_path)).replace("\\", "/"): partition,
+        }),
     ):
         paths = reference_graph._route_paths(
             root, reference_graph.IDENTITY_ROUTE_INDEX, "loc_id", ["USA-WBD-HUC12-010100020101"],
@@ -92,8 +107,10 @@ def test_relationship_route_selects_only_matching_endpoint_family(tmp_path: Path
     root = tmp_path / "graph"
     root.mkdir()
     pd.DataFrame([
-        {"source_family": "watershed", "target_family": "admin_2", "path": "wbd_county.parquet"},
-        {"source_family": "protected_area", "target_family": "admin_2", "path": "forest_county.parquet"},
+        {"source_family": "watershed", "target_family": "admin_2", "path": "wbd_county.parquet",
+         "sha256": "a" * 64, "evidence_class": "authoritative", "strict_parent": True},
+        {"source_family": "protected_area", "target_family": "admin_2", "path": "forest_county.parquet",
+         "sha256": "b" * 64, "evidence_class": "authoritative", "strict_parent": True},
     ]).to_parquet(root / "relationship_partitions.parquet", index=False)
     with patch.object(reference_graph, "DATA_ROOT", tmp_path):
         paths = reference_graph._relationship_route_paths(root, "watershed", "source_family")

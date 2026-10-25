@@ -55,6 +55,23 @@ class PublishedArtifactTests(unittest.TestCase):
 
         self.assertEqual(ref.key, "candidate/catalog.json")
 
+    def test_staging_remains_separate_from_published_and_hosted_tools_reject_it(self) -> None:
+        env = {"S3_BUCKET": "bucket", "S3_PREFIX": "staging"}
+        with mock.patch.dict(os.environ, env, clear=True), mock.patch.object(
+            published_artifacts, "get_runtime_config", return_value=self._config()
+        ):
+            self.assertEqual(published_artifacts.artifact_prefix("published"), "published")
+            with mock.patch.object(published_artifacts, "get_data_plane_mode", return_value="cloud"), \
+                    mock.patch.object(published_artifacts, "force_remote_data_reads", return_value=False):
+                with self.assertRaisesRegex(RuntimeError, "published artifact lane"):
+                    published_artifacts.artifact_ref("geometry/geometry_catalog.json", lane="active")
+            with mock.patch.object(published_artifacts, "get_data_plane_mode", return_value="cloud"), \
+                    mock.patch.object(published_artifacts, "force_remote_data_reads", return_value=True):
+                self.assertEqual(
+                    published_artifacts.artifact_ref("geometry/geometry_catalog.json", lane="active").key,
+                    "staging/geometry/geometry_catalog.json",
+                )
+
     def test_unsafe_relative_paths_are_rejected(self) -> None:
         with mock.patch.dict(os.environ, {"S3_BUCKET": "bucket"}, clear=True), mock.patch.object(
             published_artifacts, "get_runtime_config", return_value=self._config()
@@ -103,6 +120,23 @@ class PublishedArtifactTests(unittest.TestCase):
             uri = duckdb_helpers.path_to_uri(Path(temp_dir) / "global" / "pack" / "data.parquet")
 
         self.assertEqual(uri, "s3://bucket/active/global/pack/data.parquet")
+
+    def test_cloud_query_ignores_local_file_even_with_wip_switch(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            local = root / "geometry" / "global" / "point_bank.parquet"
+            local.parent.mkdir(parents=True)
+            local.write_bytes(b"local-only")
+            with mock.patch.dict(os.environ, {
+                "S3_BUCKET": "bucket", "S3_PREFIX": "published",
+                "USE_WIP_CATALOG": "1", "PUBLISHED_ARTIFACT_CACHE_ENABLED": "false",
+            }, clear=True), mock.patch.object(
+                published_artifacts, "get_runtime_config", return_value=self._config()
+            ), mock.patch.object(duckdb_helpers, "is_cloud_mode", return_value=True), mock.patch.object(
+                duckdb_helpers, "_get_data_root", return_value=root
+            ):
+                uri = duckdb_helpers.path_to_uri(local)
+            self.assertEqual(uri, "s3://bucket/published/geometry/global/point_bank.parquet")
 
     def test_hydrates_once_then_serves_verified_disk_hit(self) -> None:
         payload = b"verified artifact"

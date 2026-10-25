@@ -18,11 +18,17 @@ _warmed_country_selection: tuple[tuple[str, str, str], ...] = ()
 
 
 def country_routing_selection(catalog: dict[str, Any]) -> tuple[tuple[str, str, str], ...]:
-    return tuple(sorted(
+    selected = [
         (str(p.get("country_code") or ""), str(p.get("release_id") or ""), str(p.get("release_version") or ""))
         for p in catalog.get("country_profiles") or []
         if isinstance(p, dict) and p.get("release_status") in {"published", "approved_for_publication"}
-    ))
+    ]
+    global_layout = (catalog.get("runtime_query_layouts") or {}).get("global_admin0_point") or {}
+    if global_layout.get("layout_id") == "global_admin0_point_query_v3":
+        component = global_layout.get("component_bbox_index") or {}
+        selected.append(("GLOBAL_ADMIN0_POINT", "global_admin0_point_query_v3",
+                         str(component.get("sha256") or "")))
+    return tuple(sorted(selected))
 
 
 def country_routing_selection_is_warm(catalog: dict[str, Any]) -> bool:
@@ -145,9 +151,31 @@ def prewarm_country_routing_indexes(catalog: dict[str, Any] | None = None) -> di
                 raise RuntimeError(f"Selected Marine Reference artifact could not be cached: {relative}")
             marine_reference_bytes += local.stat().st_size
             warm_paths.append(relative)
+    global_component_bbox_bytes = 0
+    global_layout = (selected_catalog.get("runtime_query_layouts") or {}).get("global_admin0_point") or {}
+    if global_layout.get("layout_id") == "global_admin0_point_query_v3":
+        component = global_layout.get("component_bbox_index") or {}
+        relative = str(component.get("path") or "")
+        expected_hash = str(component.get("sha256") or "")
+        if (relative != "geometry/runtime/global_admin0_point/component_bbox_index.parquet"
+                or not re.fullmatch(r"[0-9a-f]{64}", expected_hash)):
+            raise ValueError("Global Admin0 component index lacks its admitted path or hash pin")
+        local = resolve_artifact_path(relative, lane="active", max_bytes=2 * 1024 * 1024)
+        if local is None:
+            raise RuntimeError("Global Admin0 component index could not be cached")
+        digest = hashlib.sha256()
+        with local.open("rb") as stream:
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                digest.update(chunk)
+        if digest.hexdigest() != expected_hash:
+            raise ValueError("Global Admin0 component index hash mismatch")
+        global_component_bbox_bytes = local.stat().st_size
+        warm_paths.append(relative)
     pinned_bytes = pin_artifact_paths(warm_paths)
     result = {"countries": countries, "index_bytes": total_bytes,
-              "marine_reference_bytes": marine_reference_bytes, "pinned_bytes": pinned_bytes}
+              "marine_reference_bytes": marine_reference_bytes,
+              "global_component_bbox_bytes": global_component_bbox_bytes,
+              "pinned_bytes": pinned_bytes}
     global _warmed_country_selection
     _warmed_country_selection = country_routing_selection(selected_catalog)
     logger.info("Country routing index pre-warmer complete: %s", result)

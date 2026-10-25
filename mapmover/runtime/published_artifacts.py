@@ -22,7 +22,7 @@ from datetime import datetime
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, Literal
 
-from ..runtime_config import get_runtime_config
+from ..runtime_config import force_remote_data_reads, get_data_plane_mode, get_runtime_config
 
 
 ArtifactLane = Literal["active", "published"]
@@ -95,7 +95,6 @@ def artifact_prefix(lane: ArtifactLane = "published") -> str:
         raise ValueError(f"Unsupported artifact lane: {lane}")
     return (
         os.environ.get("S3_PUBLISHED_PREFIX", "").strip()
-        or active
         or "published"
     ).strip("/")
 
@@ -112,6 +111,10 @@ def artifact_ref(
         raise RuntimeError("Published artifact access requires S3_BUCKET or cloud.bucket")
     relative = _normalize_relative_path(relative_path)
     prefix = artifact_prefix(lane)
+    if (lane == "active" and get_data_plane_mode() == "cloud"
+            and not force_remote_data_reads()
+            and prefix != artifact_prefix("published")):
+        raise RuntimeError("Hosted cloud tools require the published artifact lane")
     key = f"{prefix}/{relative}" if prefix else relative
     endpoint_url = os.environ.get("S3_ENDPOINT_URL", "").strip() or str(
         cloud_cfg.get("endpoint_url", "") or ""

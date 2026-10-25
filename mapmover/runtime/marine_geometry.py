@@ -330,6 +330,9 @@ def resolve_marine_family_points(
     points: Iterable[dict[str, Any]], family: str, water_kind: str | None = None,
 ) -> list[dict[str, Any]]:
     """Contain points in exactly one selected Marine family bank."""
+    from ..mcp_execution import mark_mcp_stage, record_mcp_artifact_io, record_mcp_file
+
+    mark_mcp_stage("marine_catalog_route")
     point_items = list(points)
     domain = _active_domain_paths()
     if domain is None:
@@ -351,18 +354,31 @@ def resolve_marine_family_points(
         bbox_path = domain["bbox_index"]
         if not parquet_available(bbox_path):
             raise ValueError("Selected Marine jurisdiction bbox index is unavailable")
+        record_mcp_file(bbox_path)
+        mark_mcp_stage("marine_bbox_index_read")
         bbox = read_bbox_candidates_for_points(
             bbox_path, point_items, columns=["loc_id", "subtype"],
         )
         bbox = bbox[bbox["subtype"] == family]
         candidate_ids = set(bbox["loc_id"].astype(str)) if not bbox.empty else set()
+        record_mcp_artifact_io("marine_bbox_candidate_ids", len(candidate_ids))
         geometry_column = "geometry" if domain.get("canonical_geoparquet") else "geometry_wkb"
+        if candidate_ids:
+            record_mcp_file(path)
+            mark_mcp_stage("marine_exact_row_read")
         rows = read_rows_by_ids(
             path, candidate_ids, id_column="loc_id",
             columns=["name", geometry_column, "area_km2",
                      "bbox_min_lon", "bbox_min_lat", "bbox_max_lon", "bbox_max_lat"],
             raw_geoparquet=domain.get("canonical_geoparquet", False),
         ) if candidate_ids else pd.DataFrame(columns=["loc_id", "name", geometry_column])
+        record_mcp_artifact_io("marine_exact_rows", len(rows))
+        record_mcp_artifact_io(
+            "marine_selected_geometry_bytes",
+            sum(len(value) for value in rows[geometry_column].dropna())
+            if geometry_column in rows else 0,
+        )
+        mark_mcp_stage("marine_shape_test")
         exact = _exact_jurisdiction_matches(point_items, rows)
         candidates = pd.concat([
             rows[rows["loc_id"].astype(str).isin(loc_ids)].assign(point_position=position)
@@ -370,11 +386,14 @@ def resolve_marine_family_points(
         ], ignore_index=True) if exact else pd.DataFrame(columns=["point_position", "loc_id", "name"])
     elif domain.get("canonical_geoparquet"):
         geometry_column = "geometry" if domain.get("canonical_geoparquet") else "geometry_wkb"
+        record_mcp_file(path)
+        mark_mcp_stage("marine_water_bbox_and_shape_read")
         candidates = read_bbox_candidates_for_points(
             path, point_items,
             columns=["loc_id", "name", geometry_column],
             raw_geoparquet=domain.get("canonical_geoparquet", False),
         )
+        mark_mcp_stage("marine_shape_test")
         matches = _exact_jurisdiction_matches(point_items, candidates)
         allowed = {(position, loc_id) for position, ids in matches.items() for loc_id in ids}
         candidates = candidates[candidates.apply(
@@ -382,10 +401,13 @@ def resolve_marine_family_points(
             axis=1,
         )] if not candidates.empty else candidates
     else:
+        record_mcp_file(path)
+        mark_mcp_stage("marine_water_containment_read")
         candidates = read_geojson_containment_for_points(
             path, point_items,
             columns=["loc_id", "name", "geometry"],
         )
+    mark_mcp_stage("marine_result_projection")
     return [
         {"family": family,
          "status": "matched" if not rows.empty else "no_point_overlap",
