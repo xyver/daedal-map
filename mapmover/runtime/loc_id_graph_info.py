@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from mcp_surface_shared import MARINE_JURISDICTION_FAMILIES
+from mcp_surface_shared import public_geometry_family_id
 
 from .reference_graph import (
     ReferenceRouteUnavailable,
@@ -69,8 +69,7 @@ def _marine_info_items(loc_ids: list[str]) -> dict[str, dict[str, Any]]:
         edges = connections[value]
         results[value] = {
             "loc_id": value, "name": identity.get("name"),
-            "family": (identity.get("subtype") if identity.get("subtype") in MARINE_JURISDICTION_FAMILIES
-                       else identity.get("family")),
+            "family": public_geometry_family_id(identity.get("family"), identity.get("subtype")),
             "admin_level": None, "parent_id": None, "connections": edges[:CONNECTION_LIMIT],
             "connection_count": min(len(edges), CONNECTION_LIMIT),
             "connection_limit": CONNECTION_LIMIT, "has_more": len(edges) > CONNECTION_LIMIT,

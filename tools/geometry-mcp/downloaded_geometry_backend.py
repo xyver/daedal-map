@@ -18,7 +18,8 @@ _PACKAGE_ROOT = Path(__file__).resolve().parents[2]
 for _runtime_root in (_PACKAGE_ROOT, _PACKAGE_ROOT / "runtime"):
     if (_runtime_root / "mcp_surface_shared.py").is_file() and str(_runtime_root) not in sys.path:
         sys.path.insert(0, str(_runtime_root))
-from mcp_surface_shared import MARINE_JURISDICTION_FAMILIES, MARINE_POINT_FAMILIES, build_tool_definitions
+from mcp_surface_shared import (MARINE_JURISDICTION_FAMILIES, MARINE_POINT_FAMILIES,
+                                build_tool_definitions, public_geometry_family_id)
 
 
 def _shape(value):
@@ -67,6 +68,7 @@ class DownloadedGeometryBackend:
         self.rows = []
         self.verified = {}
         self.schemas = {}
+        self.family_index = {}
         for sidecar in sorted(self.root.rglob("geometry.json")):
             payload = json.loads(sidecar.read_text(encoding="utf-8"))
             sidecar.resolve().relative_to(self.root)
@@ -214,9 +216,8 @@ class DownloadedGeometryBackend:
                     row["admin_level"] = 0
                 row["_package_id"] = package["metadata"].get("package_id")
                 row["_tier"] = package["metadata"].get("package_tier")
-                row["family"] = row.get("family") or ("water_body" if meta.get("release_unit_id") == "MARINE" and row.get("level") == "water_body" else "marine_jurisdiction" if meta.get("release_unit_id") == "MARINE" else "administrative")
-                if meta.get("release_unit_id") == "MARINE" and row.get("subtype") in MARINE_JURISDICTION_FAMILIES:
-                    row["family"] = row["subtype"]
+                family = row.get("family") or ("water_body" if meta.get("release_unit_id") == "MARINE" and row.get("level") == "water_body" else "marine_jurisdiction" if meta.get("release_unit_id") == "MARINE" else "administrative")
+                row["family"] = public_geometry_family_id(family, row.get("subtype"))
                 row["country"] = row.get("iso_a3") or row.get('country_iso3') or (meta.get("country_code") if meta.get("country_code") != "GLOBAL" else str(row["loc_id"]).split("-")[0])
                 row["polygon_kind"] = {"exact": "exact", "display": "simplified"}.get(file.get("component"))
                 if geometry and row.get("geometry") is None: continue
@@ -284,6 +285,28 @@ class DownloadedGeometryBackend:
         return {"ok": True, "topic": args["topic"], "available_tools": list(TOOL_DEFINITIONS),
                 "guidance": {"data_scope": "installed local packages"}}
 
+    def _package_families(self, package: dict[str, Any]) -> set[str]:
+        """Read the small installed Reference index, never the shape banks."""
+        sidecar = package["sidecar"]
+        if sidecar in self.family_index:
+            return self.family_index[sidecar]
+        families = set()
+        for file in package["files"]:
+            if file["archive_path"].replace("\\", "/") != "reference/identities.parquet":
+                continue
+            self._verify_file(file)
+            schema = self.schemas[file["local_path"]]
+            columns = [name for name in ("family", "subtype") if name in schema.names]
+            if "family" not in columns:
+                break
+            for row in pq.read_table(file["local_path"], columns=columns).to_pylist():
+                family = public_geometry_family_id(row.get("family"), row.get("subtype"))
+                if family:
+                    families.add(str(family))
+            break
+        self.family_index[sidecar] = families
+        return families
+
     def _call_get_catalog(self, args: dict[str, Any]) -> dict[str, Any]:
         if args["catalog"] == "data":
             return _error("data_catalog_unavailable", "No installed data catalog is attached to this Geometry library")
@@ -293,17 +316,7 @@ class DownloadedGeometryBackend:
         # Geometry bank IDs name artifacts. Marine publishes its families in
         # the Reference identities table; a Bridge is a reference system, not
         # a geometry family.
-        families = set()
-        for package in self.packages:
-            if package["metadata"].get("release_unit_id") != "MARINE":
-                families.add("administrative")
-                continue
-            for file in package["files"]:
-                if file["archive_path"].replace("\\", "/") == "reference/identities.parquet":
-                    self._verify_file(file)
-                    table = pq.read_table(file["local_path"], columns=["family", "subtype"])
-                    for row in table.to_pylist():
-                        families.add(row["subtype"] if row.get("subtype") in MARINE_JURISDICTION_FAMILIES else row["family"])
+        families = set().union(*(self._package_families(package) for package in self.packages)) if self.packages else set()
         return {"ok": True, "catalog": "geometry", "detail": "download", "catalog_version": "local",
                 "families": [{"family_id": value} for value in sorted(families)],
                 "scopes": [{"scope_id": value} for value in scopes],
@@ -328,15 +341,15 @@ class DownloadedGeometryBackend:
         installed_families = {row["family_id"] for row in catalog["families"]}
         if family and family not in installed_families:
             return _error("family_not_found", "No installed Geometry package covers this family", family_id=family)
-        packages = [p["metadata"] for p in self.packages if not scope or p["metadata"].get("country_code") == scope]
-        packages = [p for p in packages if not family or (family in MARINE_POINT_FAMILIES) == (p.get("release_unit_id") == "MARINE")]
+        packages = [p for p in self.packages if (not scope or p["metadata"].get("country_code") == scope)
+                    and (not family or family in self._package_families(p))]
         coverage = [{"scope_id": p["country_code"], "family_id": selected_family,
                      "package_id": p["package_id"], "package_tier": p["package_tier"],
                      "release_version": p.get("version")}
-                    for p in packages
+                    for package in packages
+                    for p in [package["metadata"]]
                     for selected_family in ([family] if family else
-                                            ([value for value in MARINE_POINT_FAMILIES if value in installed_families]
-                                             if p.get("release_unit_id") == "MARINE" else ["administrative"]))]
+                                            sorted(self._package_families(package)))]
         return {"ok": True, "catalog": "geometry", "family_id": family, "scope_id": scope,
                 "requested_year": args.get("year"), "coverage": coverage,
                 "admin_spine": {"release_unit_kind": "country"} if scope and scope != "MARINE" else {}}

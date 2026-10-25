@@ -16,6 +16,15 @@ MARINE_JURISDICTION_FAMILIES = (
 )
 MARINE_POINT_FAMILIES = (*MARINE_JURISDICTION_FAMILIES, "water_body")
 
+
+def public_geometry_family_id(family: str | None, subtype: str | None = None) -> str | None:
+    """Map an identity/storage label to the shared public family vocabulary."""
+    if family == "marine_jurisdiction":
+        return subtype if subtype in MARINE_JURISDICTION_FAMILIES else None
+    if isinstance(family, str) and family.startswith("admin_"):
+        return "administrative"
+    return family
+
 def _pack_id_description() -> str:
     return "Pack identifier from get_catalog. Newly catalog-admitted packs require no MCP schema change."
 

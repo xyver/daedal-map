@@ -32,6 +32,23 @@ def _package(root: Path, name: str, profile: str, unit: str, files: dict[str, tu
 
 
 class InstalledSideFamilyTest(unittest.TestCase):
+    def test_country_reference_index_lists_installed_side_families(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            _package(root, "country", "downloadable_geometry_package", "USA", {
+                "reference/identities.parquet": ("reference", [
+                    {"partition_id": "admin", "family": "admin_1"},
+                    {"partition_id": "watershed", "family": "watershed"},
+                    {"partition_id": "postal", "family": "postal_area"},
+                ]),
+            }, tier="lite")
+            backend = DownloadedGeometryBackend(root)
+            catalog = backend.call("get_catalog", {"catalog": "geometry"})
+            self.assertEqual({row["family_id"] for row in catalog["families"]},
+                             {"administrative", "watershed", "postal_area"})
+            geography = backend.call("get_geography", {"family_id": "watershed"})
+            self.assertEqual({row["scope_id"] for row in geography["coverage"]}, {"USA"})
+
     def test_point_lookup_selects_one_installed_scope_and_bank(self):
         polygon = '{"type":"Polygon","coordinates":[[[-1,-1],[1,-1],[1,1],[-1,1],[-1,-1]]]}'
         def row(loc_id):
