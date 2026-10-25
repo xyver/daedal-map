@@ -8,6 +8,7 @@ from typing import Any
 
 from ..duckdb_helpers import is_cloud_mode, parquet_columns
 from ..foundation_helpers import load_country_crosswalk
+from .geometry_catalog import load_geometry_catalog
 from ..paths import COUNTRY_GEOMETRY_DIR, GEOMETRY_DIR
 from .read_posture import prefer_local_geometry_reads
 from ..runtime_config import force_remote_data_reads
@@ -70,10 +71,15 @@ def resolve_country_display_release(iso3: str) -> dict[str, Any] | None:
     if not isinstance(manifest, dict) or str(manifest_unit.get("id") or "").upper() != country:
         return None
     display_prefix = str((manifest.get("runtime") or {}).get("display") or "").replace("\\", "/")
-    expected_prefix = f"geometry/countries/{country}/admin_spine/display/"
+    profile = next((item for item in load_geometry_catalog().get("country_profiles") or []
+                    if isinstance(item, dict) and str(item.get("country_code") or "").upper() == country), {})
+    canonical = profile.get("canonical_runtime_namespace_required") is True
+    expected_prefix = (f"geometry/countries/{country}/admin_spine/serving/display/" if canonical
+                       else f"geometry/countries/{country}/admin_spine/display/")
     if not display_prefix.startswith(expected_prefix) or not display_prefix.endswith("/"):
         return None
-    release_id = display_prefix.rstrip("/").rsplit("/", 1)[-1]
+    release_id = (str(manifest.get("release_id") or "") if canonical
+                  else display_prefix.rstrip("/").rsplit("/", 1)[-1])
     if not re.fullmatch(r"[a-z0-9_]+", release_id):
         return None
 

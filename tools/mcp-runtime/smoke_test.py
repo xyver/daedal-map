@@ -75,6 +75,16 @@ def _fixture(root: Path) -> None:
     )
 
 
+def _downloaded_fixture(root: Path) -> None:
+    package = root / "example-lite"
+    package.mkdir(parents=True)
+    (package / "geometry.json").write_text(json.dumps({
+        "profile": "downloadable_geometry_package", "package_tier": "lite",
+        "package_id": "example-lite", "country_code": "TST", "version": "1.0.0",
+        "components": ["reference"], "files": [],
+    }), encoding="utf-8")
+
+
 def main() -> int:
     verified_files = _verify_bundle_manifest()
     geometry_calls = {
@@ -97,6 +107,7 @@ def main() -> int:
         "get_tool_help": {"tool_name": "query_research_source_data"},
         "how_research_mcp_works": {},
         "where_is_research_data": {},
+        "get_catalog": {"catalog": "data"},
         "resolve_research_geography": {"locations": ["United States"]},
         "search_research_sources": {"query": "earthquakes"},
         "resolve_research_corpus_intent": {"query": "earthquakes"},
@@ -153,11 +164,39 @@ def main() -> int:
                     dispatched_calls[service] += 1
             modes[services] = mode
 
+        downloaded_calls = 0
+        if "geometry" in available:
+            downloaded_root = Path(temp_name) / "downloaded"
+            _downloaded_fixture(downloaded_root)
+            client = TestClient(create_app(downloaded_root, services="geometry"))
+            listed = _post(client, "/mcp/geometry", "tools/list")["result"]["tools"]
+            downloaded_arguments = {
+                "get_tool_help": {"tool_name": "get_shape"},
+                "get_catalog": {"catalog": "geometry"},
+                "get_pack": {"pack_id": "example"},
+                "get_geography": {"scope_id": "TST"},
+                "resolve_point": {"lat": 0.0, "lon": 0.0},
+                "resolve_deep_point": {"lat": 0.0, "lon": 0.0, "shallow_loc_id": "TST-1"},
+                "get_loc_id_info": {"loc_id": "TST"},
+                "identify_dataset_geography": {"columns": [{"name": "latitude", "values": ["0"]},
+                                                            {"name": "longitude", "values": ["0"]}]},
+                "identify_reference_system": {"identifier": "TST", "country_scope": "TST"},
+                "convert_reference": {"iso3": "TST", "from_system": "loc_id", "value": "TST"},
+                "compare_geographies": {"left_loc_id": "TST", "right_loc_id": "TST"},
+                "get_shape": {"loc_id": "TST"},
+            }
+            if {tool["name"] for tool in listed} != set(downloaded_arguments):
+                raise RuntimeError("Downloaded Geometry tool roster differs from the current contract")
+            for name, arguments in downloaded_arguments.items():
+                _call(client, "geometry", name, arguments)
+                downloaded_calls += 1
+
     print(json.dumps({
         "status": "PASS",
         "verified_files": verified_files,
         "modes": modes,
         "dispatched_calls": dispatched_calls,
+        "downloaded_geometry_calls": downloaded_calls,
     }, indent=2, sort_keys=True))
     return 0
 

@@ -38,11 +38,15 @@ def catalog_artifact_path(data_root: Path, record: Any) -> Path | None:
 
 def country_admin_spine_root(data_root: Path, country: str, profile: dict[str, Any]) -> Path:
     code = _country(country)
+    if profile.get("canonical_runtime_namespace_required") is True:
+        return data_root / "geometry" / "countries" / code / "admin_spine" / "serving" / "exact"
     return data_root / "geometry" / "countries" / code / "admin_spine" / "exact" / country_release_id(profile)
 
 
 def country_reference_root(data_root: Path, country: str, profile: dict[str, Any]) -> Path:
     code = _country(country)
+    if profile.get("canonical_runtime_namespace_required") is True:
+        return data_root / "geometry" / "countries" / code / "reference" / "graph"
     return data_root / "geometry" / "countries" / code / "reference" / country_release_id(profile)
 
 
@@ -100,6 +104,7 @@ def released_artifact_path(
     source_path: str,
     sha256: str,
     paths_by_hash: dict[str, tuple[str, ...]],
+    *, strict: bool = False,
 ) -> str:
     """Resolve an embedded source path through the release's hash authority.
 
@@ -111,6 +116,12 @@ def released_artifact_path(
     candidates = paths_by_hash.get(str(sha256 or "").strip().lower()) or ()
     if not candidates:
         raise ValueError(f"Released artifact hash is absent from the active manifest: {sha256}")
+    if strict:
+        if original not in candidates:
+            raise ValueError(f"Graph path is not declared by the active release: {original}")
+        if "/relationships/" in original or "/candidates/" in original:
+            raise ValueError(f"Graph path names an authoring namespace: {original}")
+        return original
     # A release manifest may intentionally retain both its release-owned path
     # and a byte-identical stable runtime projection.  When the graph index
     # already names one of those declared paths, that exact path is the
@@ -182,9 +193,5 @@ def global_admin0_display_path_from_geometry_root(
 
 
 def global_admin0_point_path(data_root: Path, record: Any, *, cloud_mode: bool) -> Path | None:
-    """Resolve the published bank, retaining only the local source-tree path."""
-    clean = catalog_artifact_path(data_root, record)
-    if clean is None or cloud_mode or clean.is_file():
-        return clean
-    source = data_root / "geometry/runtime/global_admin0_point/point_bank.parquet"
-    return source if source.is_file() else clean
+    """Resolve only the point bank selected by the active catalog."""
+    return catalog_artifact_path(data_root, record)

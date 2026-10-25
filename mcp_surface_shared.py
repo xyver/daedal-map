@@ -4,6 +4,27 @@ from mcp_data_contract_shared import decorate_data_tool_definition, decorate_sha
 from mcp_discovery_shared import data_access_workflow
 from mcp_geometry_contract_shared import decorate_geometry_tool_definition
 
+
+MARINE_JURISDICTION_FAMILIES = (
+    "exclusive_economic_zone",
+    "territorial_seas",
+    "contiguous_zones",
+    "extended_continental_shelves",
+    "internal_waters",
+    "archipelagic_waters",
+    "high_seas",
+)
+MARINE_POINT_FAMILIES = (*MARINE_JURISDICTION_FAMILIES, "water_body")
+
+
+def public_geometry_family_id(family: str | None, subtype: str | None = None) -> str | None:
+    """Map an identity/storage label to the shared public family vocabulary."""
+    if family == "marine_jurisdiction":
+        return subtype if subtype in MARINE_JURISDICTION_FAMILIES else None
+    if isinstance(family, str) and family.startswith("admin_"):
+        return "administrative"
+    return family
+
 def _pack_id_description() -> str:
     return "Pack identifier from get_catalog. Newly catalog-admitted packs require no MCP schema change."
 
@@ -117,8 +138,11 @@ def build_mcp_instructions(*, safety_notice: str | None = None) -> str:
         "JSON; execution tools do not parse prose. Start with get_catalog, then "
         "get_pack before querying a new pack. Call get_tool_help before an "
         "unfamiliar tool. When the only place input is coordinates, call "
-        "resolve_point first and use its returned country and shallow loc_id "
-        "stack to scope every later place-specific call. Only resolve_point "
+        "resolve_point with one explicit scope_id and family. Use GLOBAL "
+        "administrative to identify the country, then call the chosen ISO3 "
+        "administrative scope for a shallow loc_id. Use MARINE with one "
+        "selected Marine family for Marine-only containment. Never infer a "
+        "Marine fallback from a Global miss. Only resolve_point "
         "and resolve_deep_point accept coordinates; use the latter only with "
         "a returned shallow_loc_id and the original point. Use "
         "convert_reference for scoped names or outside "
@@ -243,11 +267,14 @@ def build_tool_definitions(*, include_paused: bool = False) -> list[dict]:
         },
         {
             "name": "resolve_point",
-            "title": "Resolve Point(s) (Shallow)",
-            "description": "Primary entry for a bare WGS84 coordinate or bounded point array. Finds the country and returns the deepest available shallow administrative loc_id chain: the global baseline reaches Admin 2, while adopted country query banks may reach Admin 3. Carry its country and loc_ids into later place-specific calls. It does not open deep partitions or side-family shape banks. Use a returned shallow loc_id with resolve_deep_point for Admin 4-6 or one explicit family. Single and bulk requests share this contract; access limits are based on point count.",
+            "title": "Resolve Point(s) in One Scope",
+            "description": "Resolve WGS84 coordinates in exactly one selected scope and family. GLOBAL administrative finds Admin0; an ISO3 administrative scope finds its shallow country bank. MARINE requires one specific jurisdiction family (for example exclusive_economic_zone or high_seas), or water_body with water_kind=named or zone. The broad marine_jurisdiction category has no point route. No call crosses scopes or opens another family's bank. Discover families with get_catalog(catalog='geometry').",
             "inputSchema": {
                 "type": "object",
                 "properties": {
+                    "scope_id": {"type": "string", "minLength": 3, "description": "GLOBAL, MARINE, or one published ISO3 country. No automatic fallback into another scope."},
+                    "family": {"type": "string", "enum": ["administrative", *MARINE_POINT_FAMILIES], "description": "One exact family within the selected scope."},
+                    "water_kind": {"type": "string", "enum": ["named", "zone"], "description": "Required only for MARINE water_body: named seas or water zones."},
                     "lat": {"type": "number", "minimum": -90, "maximum": 90, "description": "Latitude in WGS84 decimal degrees."},
                     "lon": {"type": "number", "minimum": -180, "maximum": 180, "description": "Longitude in WGS84 decimal degrees."},
                     "points": {
@@ -270,8 +297,8 @@ def build_tool_definitions(*, include_paused: bool = False) -> list[dict]:
                     "request_id": {"type": "string", "description": "Optional caller-supplied request id for tracing."},
                 },
                 "oneOf": [
-                    {"required": ["lat", "lon"], "not": {"required": ["points"]}},
-                    {"required": ["points"], "not": {"anyOf": [{"required": ["lat"]}, {"required": ["lon"]}]}},
+                    {"required": ["scope_id", "family", "lat", "lon"], "not": {"required": ["points"]}},
+                    {"required": ["scope_id", "family", "points"], "not": {"anyOf": [{"required": ["lat"]}, {"required": ["lon"]}]}},
                 ],
                 "additionalProperties": False,
             },

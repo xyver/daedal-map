@@ -40,6 +40,45 @@ LEGACY_PUBLIC_REFERENCE_PREFIX = "daedalmap.public."
 class ReferenceRouteUnavailable(RuntimeError):
     """An exact graph lookup cannot use its declared routing index safely."""
 
+
+def _candidate_admission_required(profile: dict[str, Any]) -> bool:
+    if (profile.get("candidate_admission_required") is True
+            or profile.get("canonical_runtime_namespace_required") is True):
+        return True
+    if str(profile.get("country_code") or "").upper() != "USA":
+        return False
+    version = str(profile.get("release_version") or "")
+    if not re.fullmatch(r"\d+\.\d+\.\d+", version):
+        return True
+    return tuple(map(int, version.split("."))) >= (1, 3, 6)
+
+
+def _candidate_admission_valid(manifest: dict[str, Any]) -> bool:
+    pins = manifest.get("source_manifest_hashes")
+    admission = manifest.get("candidate_admission") or {}
+    approved = admission.get("approved_source_manifest_hashes") if isinstance(admission, dict) else None
+    return (
+        manifest.get("status") == "PASS"
+        and isinstance(pins, dict) and bool(pins)
+        and isinstance(admission, dict)
+        and admission.get("status") == "approved_candidate"
+        and isinstance(admission.get("approved_package_count"), int)
+        and admission["approved_package_count"] > 0
+        and isinstance(approved, dict)
+        and len(approved) == admission["approved_package_count"]
+        and all(pins.get(path) == digest for path, digest in approved.items())
+        and admission.get("source_manifest_hashes") == pins
+    )
+
+
+def _require_candidate_admission(root: Path, profile: dict[str, Any]) -> None:
+    if _candidate_admission_required(profile) and not _candidate_admission_valid(
+        _graph_json(root / "manifest.json") or {}
+    ):
+        raise ReferenceRouteUnavailable(
+            f"{profile.get('country_code')} reference graph lacks approved_candidate admission"
+        )
+
 #: Every country publishes its graph in the same place and the same shape.
 #: There is one format - a hash-pinned partition index - so this module never
 #: branches on generation. A country is discovered by its directory, not by a
@@ -195,6 +234,10 @@ def _discover_roots(data_root_text: str, override: str, cloud_mode: bool) -> tup
             continue
         if cloud_mode:
             candidate = clean_candidate
+            try:
+                _require_candidate_admission(candidate, profile)
+            except ReferenceRouteUnavailable:
+                continue
         else:
             # Local authoring uses the admitted builder output. Published cloud
             # has exactly one supported path: the contained reference root.
@@ -246,6 +289,7 @@ def clear_reference_graph_cache() -> None:
     _country_discovery_index_current.cache_clear()
     _country_release_paths.cache_clear()
     _partition_source_map.cache_clear()
+    _compact_admin_route_specs.cache_clear()
 
 
 @lru_cache(maxsize=32)
@@ -273,12 +317,25 @@ def _country_release_paths(country: str) -> dict[str, tuple[str, ...]]:
     return released_artifact_paths_by_hash(manifest or {})
 
 
+def _strict_country_layout(country: str) -> bool:
+    profile = next((
+        item for item in load_geometry_catalog().get("country_profiles") or []
+        if isinstance(item, dict) and str(item.get("country_code") or "").upper() == country
+    ), {})
+    return bool(profile.get("canonical_runtime_namespace_required")) or (
+        country == "USA" and _candidate_admission_required(profile)
+    )
+
+
 def _published_partition_path(root: Path, source: Any, sha256: Any) -> Path:
     original = str(source or "")
     if not is_cloud_mode():
         return DATA_ROOT / original
     country = _country_for_root(root)
-    relative = released_artifact_path(original, str(sha256 or ""), _country_release_paths(country))
+    relative = released_artifact_path(
+        original, str(sha256 or ""), _country_release_paths(country),
+        strict=_strict_country_layout(country),
+    )
     return DATA_ROOT / relative
 
 
@@ -344,7 +401,9 @@ def graph_roots_for_loc_id(loc_id: str | None) -> list[Path]:
                     and str(profile.get("release_status") or "") in {
                         "approved_for_publication", "published",
                     }):
-                return [country_reference_root(DATA_ROOT, prefix, profile).resolve()]
+                root = country_reference_root(DATA_ROOT, prefix, profile).resolve()
+                _require_candidate_admission(root, profile)
+                return [root]
         return []
     country_roots = reference_graph_roots()
     if prefix in country_roots:
@@ -412,6 +471,8 @@ def _route_paths(
     root: Path, index_name: str, key: str, values: list[str], *, strict: bool = False,
 ) -> list[Path] | None:
     """Resolve optional exact routes without weakening older graph releases."""
+    if is_cloud_mode() and _strict_country_layout(_country_for_root(root)):
+        strict = True
     index_path = root / index_name
     if not values:
         return []
@@ -451,6 +512,67 @@ def _route_paths(
     if strict and any(str(value) not in path_map for value in rows):
         raise ReferenceRouteUnavailable(f"routing index references an unpinned partition: {index_name}")
     return list(dict.fromkeys(path_map.get(str(value), DATA_ROOT / str(value)) for value in rows if value))
+
+
+@lru_cache(maxsize=32)
+def _compact_admin_route_specs(root_text: str) -> tuple[tuple[str, int, str, str], ...]:
+    """Keep compact Admin routing at partition scale, not one row per shape."""
+    root = Path(root_text)
+    index = root / PARTITION_INDEXES["identities"]
+    columns = ["kind", "selector", "path", "sha256"]
+    if index.is_file():
+        rows = pq.read_table(index, columns=columns,
+                             filters=[("kind", "=", "admin_temporal_compact")]).to_pylist()
+    elif is_cloud_mode():
+        frame = select_rows(index, columns=columns,
+                            in_filters={"kind": ["admin_temporal_compact"]})
+        rows = frame.to_dict(orient="records")
+    else:
+        return ()
+    result: list[tuple[str, int, str, str]] = []
+    for row in rows:
+        selector = json.loads(str(row.get("selector") or "{}"))
+        state = str(selector.get("state") or "").upper()
+        level = int(selector.get("admin_level") or 0)
+        relative = str(row.get("path") or "")
+        digest = str(row.get("sha256") or "")
+        if not state or level < 0 or not relative or not digest:
+            raise ReferenceRouteUnavailable("compact Admin partition lacks a route selector")
+        result.append((state, level, relative, digest))
+    return tuple(result)
+
+
+def _compact_admin_paths(root: Path, values: list[str]) -> list[Path]:
+    selectors = set()
+    for value in values:
+        canonical = str(value).upper()
+        level = canonical.count("-")
+        match = re.match(r"^(USA-[A-Z]{2})(?:-|$)", canonical)
+        if canonical == "USA":
+            selectors.add(("US", 0))
+        elif match and level in {1, 2}:
+            selectors.add(("US", level))
+        elif match and level in {3, 4, 5}:
+            selectors.add((match.group(1), level))
+    if not selectors:
+        return []
+    return list(dict.fromkeys(
+        _published_partition_path(root, relative, digest)
+        for state, level, relative, digest in _compact_admin_route_specs(str(root))
+        if (state, level) in selectors
+    ))
+
+
+def _identity_route_paths(
+    root: Path, values: list[str], *, strict: bool = False,
+    include_compact_when_exact: bool = False,
+) -> list[Path] | None:
+    exact = _route_paths(root, IDENTITY_ROUTE_INDEX, "loc_id", values, strict=strict)
+    if exact is None:
+        return None
+    if exact and not include_compact_when_exact:
+        return exact
+    return list(dict.fromkeys([*exact, *_compact_admin_paths(root, values)]))
 
 
 def _relationship_route_records(
@@ -526,7 +648,9 @@ def _table_source_for_roots(
         if selected_paths is not None:
             routed = selected_paths
         elif table in {"identities", "identity_versions"} and loc_ids:
-            routed = _route_paths(root, IDENTITY_ROUTE_INDEX, "loc_id", loc_ids)
+            routed = _identity_route_paths(
+                root, loc_ids, include_compact_when_exact=table == "identity_versions",
+            )
         elif table == "aliases" and reference_system:
             routed = _route_paths(
                 root, ALIAS_SYSTEM_ROUTE_INDEX, "reference_system", [reference_system],
@@ -734,7 +858,7 @@ def identity(loc_id: str) -> dict[str, Any] | None:
         # Query roots one at a time so country authority wins deterministically
         # when its Admin0 loc_id is also present in the global fallback.
         for root in roots:
-            routed = _route_paths(root, IDENTITY_ROUTE_INDEX, "loc_id", [str(loc_id)])
+            routed = _identity_route_paths(root, [str(loc_id)])
             partition_paths = routed if routed is not None else _partition_paths(root, "identities")
             source = _table_source_for_roots("identities", [root], selected_paths=partition_paths)
             if not source:
@@ -836,7 +960,9 @@ def identity_at(loc_id: str, as_of: date | None = None) -> dict[str, Any] | None
         # otherwise the latter would mask every historical frame for an ID
         # shared with the current admin spine.
         for root in graph_roots_for_loc_id(loc_id):
-            routed = _route_paths(root, IDENTITY_ROUTE_INDEX, "loc_id", [str(loc_id)])
+            routed = _identity_route_paths(
+                root, [str(loc_id)], include_compact_when_exact=True,
+            )
             partition_paths = routed if routed is not None else _partition_paths(root, "identity_versions")
             source = _table_source_for_roots(
                 "identity_versions", [root], selected_paths=partition_paths,
@@ -901,7 +1027,9 @@ def identities(loc_ids: list[str], *, require_route: bool = False) -> list[dict[
         for root in roots:
             if not remaining:
                 break
-            routed = _route_paths(root, IDENTITY_ROUTE_INDEX, "loc_id", remaining, strict=require_route)
+            routed = _identity_route_paths(
+                root, remaining, strict=require_route, include_compact_when_exact=True,
+            )
             partition_paths = routed if routed is not None else _partition_paths(root, "identities")
             source = _table_source_for_roots("identities", [root], selected_paths=partition_paths)
             if not source:

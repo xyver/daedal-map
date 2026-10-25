@@ -1,10 +1,43 @@
 import unittest
+import json
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from mapmover import data_loading
 
 
 class SourceMetadataFallbackTests(unittest.TestCase):
+    def test_local_catalog_only_loads_overlay_metadata_without_recursing(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            source_dir = root / "global" / "sample"
+            source_dir.mkdir(parents=True)
+            (source_dir / "metadata.json").write_text(
+                json.dumps({"source_id": "sample", "data_version": "1.0"}), encoding="utf-8"
+            )
+            catalog_path = root / "catalog.json"
+            catalog_path.write_text(
+                json.dumps({"sources": [{"source_id": "sample", "pack_id": "sample_pack",
+                                       "path": "global/sample", "overlay": "Tests/Sample"}],
+                            "packs": [{"pack_id": "sample_pack"}]}),
+                encoding="utf-8",
+            )
+            with patch("mapmover.data_loading.DATA_ROOT", root), patch(
+                "mapmover.data_loading.get_data_plane_mode", return_value="local"
+            ), patch("mapmover.data_loading._use_wip_catalog_for_local_runtime", return_value=False), patch(
+                "mapmover.data_loading.get_catalog_path", return_value=catalog_path
+            ), patch("mapmover.data_loading._catalog_cache", None), patch(
+                "mapmover.data_loading._full_catalog_cache", None
+            ), patch("mapmover.data_loading._metadata_cache", {}), patch(
+                "mapmover.data_loading.load_full_catalog", side_effect=AssertionError("recursive full catalog load")
+            ), patch("mapmover.pack_state.load_pack_state", return_value={
+                "catalog_mode": "unmanaged_data_root", "installed_packs": []
+            }):
+                catalog = data_loading.load_catalog(force_refresh=True)
+            self.assertEqual(catalog["total_sources"], 1)
+            self.assertIn("Tests", catalog["overlay_tree"])
+
     def test_cloud_metadata_path_uses_active_catalog_before_wip_catalog(self):
         source_contract = {
             "source_id": "example_monthly_source",

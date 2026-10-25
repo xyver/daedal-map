@@ -20,7 +20,7 @@ from typing import Iterable, Optional
 
 import pandas as pd
 
-from .runtime_config import force_remote_data_reads, get_data_plane_mode, get_runtime_config
+from .runtime_config import get_data_plane_mode, get_runtime_config
 from .catalog_surface import get_catalog_surface_override
 from .mcp_execution import mcp_duckdb_query
 from .runtime.published_artifacts import resolve_data_artifact_uri
@@ -96,7 +96,7 @@ def is_cloud_mode() -> bool:
 
 
 def _allow_local_source_fallback() -> bool:
-    if force_remote_data_reads():
+    if is_cloud_mode():
         return False
     override = get_catalog_surface_override()
     if override in {"published", "wip"}:
@@ -1523,6 +1523,7 @@ def prewarm_disaster_sources(global_dir: Path) -> None:
 
     import logging
     log = logging.getLogger(__name__)
+    failures: list[str] = []
 
     # Prewarm the same relative-year window the Explore preset uses.
     preload_start_year, preload_end_year = get_default_preload_year_window(relative_years=10)
@@ -1574,6 +1575,7 @@ def prewarm_disaster_sources(global_dir: Path) -> None:
             log.info("prewarm earthquakes preload-range: %d rows in %.1fs", len(df), time.monotonic() - t0)
         except Exception as exc:
             log.warning("prewarm earthquakes preload-range failed: %s", exc)
+            failures.append("earthquakes")
 
     # --- tsunamis (Explore default is every recorded event) ------------------
     ts_path = global_dir / "disasters/tsunamis/events.parquet"
@@ -1594,6 +1596,7 @@ def prewarm_disaster_sources(global_dir: Path) -> None:
             log.info("prewarm tsunamis preload-range: %d rows in %.1fs", len(df), time.monotonic() - t0)
         except Exception as exc:
             log.warning("prewarm tsunamis preload-range failed: %s", exc)
+            failures.append("tsunamis")
 
     # --- floods (default preset is severity 2+, data currently ends in 2019) --
     fl_path = resolve_flood_events_path(global_dir)
@@ -1616,6 +1619,7 @@ def prewarm_disaster_sources(global_dir: Path) -> None:
                 log.info("prewarm floods preload-range: %d rows in %.1fs", len(df), time.monotonic() - t0)
             except Exception as exc:
                 log.warning("prewarm floods preload-range failed: %s", exc)
+                failures.append("floods")
 
     # --- volcanoes/eruptions (default preset is VEI 3+, exclude ongoing) -----
     vol_path = global_dir / "disasters/volcanoes/events.parquet"
@@ -1636,6 +1640,7 @@ def prewarm_disaster_sources(global_dir: Path) -> None:
             log.info("prewarm volcanoes preload-range: %d rows in %.1fs", len(df), time.monotonic() - t0)
         except Exception as exc:
             log.warning("prewarm volcanoes preload-range failed: %s", exc)
+            failures.append("volcanoes")
 
     # --- tornadoes (default preset is EF2+, post-fetch scale filter) ----------
     tor_path = global_dir / "disasters/tornadoes/events.parquet"
@@ -1654,6 +1659,7 @@ def prewarm_disaster_sources(global_dir: Path) -> None:
             log.info("prewarm tornadoes preload-range: %d rows in %.1fs", len(df), time.monotonic() - t0)
         except Exception as exc:
             log.warning("prewarm tornadoes preload-range failed: %s", exc)
+            failures.append("tornadoes")
 
     # --- hurricanes (storms.parquet + positions.parquet; route assembles join)
     # Warm DuckDB metadata cache for both files; route handler caches the join.
@@ -1700,16 +1706,11 @@ def prewarm_disaster_sources(global_dir: Path) -> None:
             log.info("prewarm hurricanes preload-range: %d joined rows in %.1fs", len(joined) if 'joined' in locals() else 0, time.monotonic() - t0)
         except Exception as exc:
             log.warning("prewarm hurricanes preload-range failed: %s", exc)
+            failures.append("hurricanes")
 
     # --- wildfires (the same global + USA + CAN union as the route) ---------
-    # This is a deliberately broad multi-source union. Do not make it a
-    # startup/readiness dependency by default: even predicate-pushed remote
-    # reads can consume the entire interactive budget on a cold deployment.
-    # A scheduled warmer may opt in once the process is ready.
-    if os.environ.get("PREWARM_WILDFIRES", "0").strip().lower() not in {"1", "true", "yes", "on"}:
-        log.info("prewarm wildfires skipped (set PREWARM_WILDFIRES=1 for background warming)")
-        log.info("Pre-warmer complete")
-        return
+    # This broader union runs last, after the smaller startup tasks and six
+    # other disaster slices, so the first visitor does not own its cold read.
     preload_ck = make_preload_cache_key("wildfires", min_area_km2=500, include_perimeter=False)
     if cache_get(preload_ck) is None:
         try:
@@ -1753,6 +1754,7 @@ def prewarm_disaster_sources(global_dir: Path) -> None:
                         wildfire_frames.append(regional_df)
                 except Exception as exc:
                     log.warning("prewarm wildfires %s source failed: %s", source_name, exc)
+                    failures.append(f"wildfires:{source_name}")
 
             global_df = select_filtered_event_rows(
                 global_dir / "disasters/wildfires/events.parquet",
@@ -1778,5 +1780,8 @@ def prewarm_disaster_sources(global_dir: Path) -> None:
             log.info("prewarm wildfires preload-range: %d rows in %.1fs", len(df), time.monotonic() - t0)
         except Exception as exc:
             log.warning("prewarm wildfires preload-range failed: %s", exc)
+            failures.append("wildfires")
 
+    if failures:
+        raise RuntimeError("Disaster prewarm failed for: " + ", ".join(failures))
     log.info("Pre-warmer complete")

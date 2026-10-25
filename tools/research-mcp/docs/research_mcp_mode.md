@@ -3,7 +3,8 @@
 The Research MCP reads one selected `DATA_ROOT` and the `catalog.json` in that
 folder. The same root can be used by Mapping and Geometry MCP. Its data tools
 operate only over installed sources. `where_is_research_data` reports the
-active root; `tools/list` and `get_tool_help` give the exact available tool
+active root; `get_catalog(catalog="data")` lists installed packs and local
+source IDs. `tools/list` and `get_tool_help` give the exact available tool
 contracts.
 
 Research follows an explicit source boundary: select packs, bind source IDs,

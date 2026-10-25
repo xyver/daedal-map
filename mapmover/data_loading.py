@@ -909,7 +909,11 @@ def get_source_path(source_id: str):
     Returns:
         Path: Full path to source folder, or None if not found
     """
-    catalog = load_full_catalog()
+    # A cold local load builds the overlay tree from catalog.json. Resolving
+    # metadata for one overlay must use that raw catalog already in memory;
+    # load_full_catalog() falls back to load_catalog() when no WIP catalog is
+    # installed, which would recurse back into overlay construction.
+    catalog = _full_catalog_cache or _catalog_cache or load_full_catalog()
     for source in catalog.get("sources", []):
         if source.get("source_id") == source_id:
             # Use path field if present, otherwise fall back to old structure

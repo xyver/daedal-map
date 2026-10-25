@@ -1718,6 +1718,7 @@ def resolve_points_to_locations(
     admin_1_scope: str | None = None,
     include_marine_context: bool = True,
     shallow_banks_only: bool = False,
+    strict_scope: bool = False,
 ):
     """Resolve multiple points through one shared geometry-loading pass.
 
@@ -1785,11 +1786,11 @@ def resolve_points_to_locations(
     distinct_point_count = len(seen_coords)
     normalized_points = deduped_points
 
-    def _deduplicated_error_results(message: str) -> list[dict]:
+    def _deduplicated_error_results(message: str, *, code: str | None = None) -> list[dict]:
         early: list[dict | None] = [None] * original_point_count
         for item in normalized_points:
             early[item["index"]] = {
-                "error": item.get("error") or message,
+                "error": item.get("error") or ({"code": code, "message": message} if code else message),
                 "point": {"lon": item.get("lon"), "lat": item.get("lat")},
             }
         for source_index, target_indexes in duplicate_targets.items():
@@ -1803,7 +1804,7 @@ def resolve_points_to_locations(
     stage_started = time.perf_counter()
     if scope_iso3:
         mark_mcp_stage("point_country_identity")
-        identities = load_global_admin0_identities([scope_iso3])
+        identities = {scope_iso3: {"loc_id": scope_iso3, "name": scope_iso3}} if strict_scope else load_global_admin0_identities([scope_iso3])
         # MCP_UPGRADE_REMOVE: broad global-bank identity fallback for layouts
         # without the admitted compact Admin0 identity index.
         if identities is None:
@@ -1872,19 +1873,12 @@ def resolve_points_to_locations(
                             predicate_miss_country_df, lon, lat,
                         )
             if country_match is None:
-                # After the authoritative Admin0 check, try Marine for points
-                # still outside the country bank.
-                from .runtime.loc_id_resolution import _resolve_point_to_marine_stack
-
-                marine_result = _resolve_point_to_marine_stack(
-                    lon, lat, include_geometry=include_geometry,
-                )
-                if marine_result is not None:
-                    results[item["index"]] = marine_result
-                    continue
                 if used_global_index and not used_predicate_layout:
                     country_match = _find_containing_country_with_fallback(country_df, lon, lat)
             if country_match is None:
+                # Resolve every offshore point together below. The previous
+                # per-point attempt hydrated Marine banks here and repeated the
+                # same work in the batched fallback after this loop.
                 results[item["index"]] = {"error": "No containing country found", "point": {"lon": lon, "lat": lat}}
                 continue
             iso3 = str(country_match.get("loc_id") or "").strip()
@@ -1907,6 +1901,19 @@ def resolve_points_to_locations(
             stage_timing_ms=timing_ms,
             country_already_resolved=True,
         )
+        if strict_scope and (query_matches is None or any(match is None for match in query_matches)):
+            return _deduplicated_error_results(
+                f"Selected country shallow point bank is unavailable or has no match for {iso3}; no other scope was searched",
+                code="selected_scope_unavailable",
+            )
+        if strict_scope and any(
+            not any(int(row.get("admin_level") or 0) >= 1 for row in (match.get("stack") or []))
+            for match in query_matches
+        ):
+            return _deduplicated_error_results(
+                f"No {iso3} shallow polygon covers the selected point; no other scope was searched",
+                code="no_point_overlap",
+            )
         if query_matches is None:
             query_matches = [None] * len(country_items)
         # Standard point resolution intentionally opens only the national
@@ -2233,7 +2240,7 @@ def resolve_points_to_locations(
         and isinstance(results[item["index"]], dict)
         and results[item["index"]].get("error") == "No containing country found"
     ]
-    if marine_candidates:
+    if marine_candidates and include_marine_context:
         from .runtime.loc_id_resolution import _resolve_points_to_marine_stacks
 
         stage_started = time.perf_counter()

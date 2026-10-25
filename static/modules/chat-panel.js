@@ -1534,7 +1534,7 @@ export const ChatManager = {
       const loadedLabels = [];
       const loadedOverlayIds = [];
       const failedLabels = [];
-      const concurrency = Math.max(1, Math.min(3, actions.length));
+      const concurrency = Math.max(1, Math.min(Number(action.concurrency) || 3, 3, actions.length));
       let nextIndex = 0;
       let completedCount = 0;
 
@@ -1945,8 +1945,32 @@ export const ChatManager = {
   async handlePresetButton(btn) {
     btn.disabled = true;
     const originalText = btn.textContent;
+    const isDisasterPreset = ['explore:disasters_2020_2025', 'explore:disasters_10_years'].includes(btn.dataset.presetId);
     btn.innerHTML = '<span class="btn-spinner"></span> Loading...';
     try {
+      if (isDisasterPreset) {
+        const controller = new AbortController();
+        const timer = window.setTimeout(() => controller.abort(), 5000);
+        let response;
+        try {
+          response = await fetch('/health/ready', { cache: 'no-store', signal: controller.signal });
+        } finally {
+          window.clearTimeout(timer);
+        }
+        if (!response.ok) {
+          const health = await response.json().catch(() => null);
+          const warming = ['warming', 'not_started'].includes(health?.prewarm?.state);
+          this.addMessage(
+            warming
+              ? 'The server is still preparing after deployment. Try the disaster layers again in a few minutes.'
+              : 'The server is not ready to load disaster layers. Please try again shortly.',
+            'assistant',
+            { mode: 'explore' }
+          );
+          btn.textContent = originalText;
+          return;
+        }
+      }
       const handled = await this.runDefaultLoad(
         {
           presetId: btn.dataset.presetId,
@@ -1973,11 +1997,14 @@ export const ChatManager = {
       }
     } catch (error) {
       console.error('Preset action failed:', error);
+      if (isDisasterPreset) {
+        this.addMessage('The disaster layers could not be loaded. Please try again shortly.', 'assistant', { mode: 'explore' });
+      }
       btn.textContent = originalText;
-      btn.disabled = false;
       return;
+    } finally {
+      btn.disabled = false;
     }
-    btn.disabled = false;
   },
 
   initMessagePanes() {

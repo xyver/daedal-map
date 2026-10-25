@@ -85,6 +85,48 @@ def _tool_call(client: TestClient, name: str, arguments: dict | None = None, *, 
 
 
 class McpReferenceExchangeToolsTests(unittest.TestCase):
+    def test_point_requires_one_explicit_scope_and_family(self) -> None:
+        with mock.patch("mapmover.runtime.global_admin0_query.resolve_global_scope_points") as global_route, \
+             mock.patch("mapmover.runtime.marine_geometry.resolve_marine_family_points") as marine_route:
+            missing_scope = _tool_call(self.client, "resolve_point", {
+                "lat": 35, "lon": -130, "family": "high_seas",
+            })
+            missing_family = _tool_call(self.client, "resolve_point", {
+                "lat": 35, "lon": -130, "scope_id": "MARINE",
+            })
+            wrong_family = _tool_call(self.client, "resolve_point", {
+                "lat": 35, "lon": -130, "scope_id": "GLOBAL", "family": "water_body",
+            })
+            missing_water_kind = _tool_call(self.client, "resolve_point", {
+                "lat": 35, "lon": -130, "scope_id": "MARINE", "family": "water_body",
+            })
+            broad_family = _tool_call(self.client, "resolve_point", {
+                "lat": 35, "lon": -130, "scope_id": "MARINE", "family": "marine_jurisdiction",
+            })
+        self.assertEqual(missing_scope["error"]["code"], "point_scope_required")
+        self.assertEqual(missing_family["error"]["code"], "point_family_required")
+        self.assertEqual(wrong_family["error"]["code"], "invalid_point_family")
+        self.assertEqual(missing_water_kind["error"]["code"], "water_kind_required")
+        self.assertEqual(broad_family["error"]["code"], "invalid_point_family")
+        global_route.assert_not_called()
+        marine_route.assert_not_called()
+
+    def test_global_point_does_not_search_marine(self) -> None:
+        with mock.patch("mapmover.runtime.marine_geometry.resolve_marine_family_points") as marine_route:
+            result = _tool_call(self.client, "resolve_point", {
+                "lat": 35, "lon": -130, "scope_id": "GLOBAL", "family": "administrative",
+            })
+        self.assertEqual(result["error"]["code"], "no_point_overlap")
+        marine_route.assert_not_called()
+
+    def test_marine_point_selects_one_family(self) -> None:
+        result = _tool_call(self.client, "resolve_point", {
+            "lat": 35, "lon": -130, "scope_id": "MARINE", "family": "high_seas",
+        })
+        self.assertEqual(result["family"], "high_seas")
+        self.assertEqual(result["family_result"]["status"], "matched")
+        self.assertEqual(result["family_result"]["matches"][0]["family"], "high_seas")
+
     def test_geometry_lineage_analytics_is_bounded_and_material_specific(self) -> None:
         metadata = _geometry_lineage_analytics_metadata({
             "items": [
@@ -519,7 +561,7 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
             payload = _tool_call(
                 self.client,
                 "resolve_point",
-                {
+                {"scope_id": "USA", "family": "administrative",
                     "request_id": "mcp-bulk-test",
                     "batch_id": "batch-1",
                     "points": [
@@ -574,7 +616,7 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
             payload = _tool_call(
                 self.client,
                 "resolve_point",
-                {
+                {"scope_id": "USA", "family": "administrative",
                     "request_id": "capacity-test",
                     "points": [
                         {"lon": -123.1, "lat": 49.2},
@@ -620,7 +662,7 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
             payload = _tool_call(
                 self.client,
                 "resolve_point",
-                {"request_id": "timeout-test", "lon": -123.1, "lat": 49.2},
+                {"scope_id": "USA", "family": "administrative", "request_id": "timeout-test", "lon": -123.1, "lat": 49.2},
             )
 
         self.assertEqual(payload["error"]["code"], "mcp_execution_timeout")
@@ -658,7 +700,7 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
             payload = _tool_call(
                 self.client,
                 "resolve_point",
-                {"points": [{"lon": 0, "lat": 0} for _ in range(101)]},
+                {"scope_id": "USA", "family": "administrative", "points": [{"lon": 0, "lat": 0} for _ in range(101)]},
             )
 
         self.assertTrue(payload["payment_required"])
@@ -685,12 +727,12 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         )
         self.assertEqual(payload["error"]["code"], "shallow_point_contract_violation")
 
-    def test_shallow_point_rejects_family_instead_of_ignoring_it(self) -> None:
+    def test_shallow_point_rejects_family_outside_selected_scope(self) -> None:
         payload = _tool_call(
             self.client, "resolve_point",
-            {"lat": 29.7604, "lon": -95.3698, "family": "watershed"},
+            {"lat": 29.7604, "lon": -95.3698, "scope_id": "GLOBAL", "family": "watershed"},
         )
-        self.assertEqual(payload["error"]["code"], "shallow_point_contract_violation")
+        self.assertEqual(payload["error"]["code"], "invalid_point_family")
 
     def test_shallow_point_rejects_depth_selector_before_resolution(self) -> None:
         with mock.patch("mapmover.geometry_handlers.resolve_points_to_locations") as resolver:
@@ -759,7 +801,7 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         self.assertEqual(shallow["error"]["code"], "shallow_point_contract_violation")
         self.assertEqual(deep["error"]["code"], "deep_admin_level_required")
 
-    def test_standard_bulk_passes_admin3_io_ceiling_without_country_scope(self) -> None:
+    def test_standard_bulk_passes_admin3_io_ceiling_with_selected_country_scope(self) -> None:
         identity = CallerIdentity(KIND_ACCOUNT, "user-1", CONFIDENCE_VERIFIED, auth_user_id="user-1")
 
         def fake_resolve(points, include_geometry=False, **_kwargs):
@@ -779,13 +821,13 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
             payload = _tool_call(
                 self.client,
                 "resolve_point",
-                {"points": [{"lon": -118.2, "lat": 34.0} for _ in range(101)]},
+                {"scope_id": "USA", "family": "administrative", "points": [{"lon": -118.2, "lat": 34.0} for _ in range(101)]},
             )
 
         self.assertEqual(payload["target_admin_level"], "up_to_admin_3")
         self.assertIsNone(resolver.call_args.kwargs["target_admin_level"])
         self.assertEqual(resolver.call_args.kwargs["max_admin_level"], 3)
-        self.assertIsNone(resolver.call_args.kwargs["country_scope"])
+        self.assertEqual(resolver.call_args.kwargs["country_scope"], "USA")
         self.assertFalse(resolver.call_args.kwargs["include_marine_context"])
         self.assertTrue(resolver.call_args.kwargs["shallow_banks_only"])
 
@@ -867,7 +909,7 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
             return [{"point": points[0], "matched": {"loc_id": "USA-CA-037", "admin_level": 2}, "stack": [{"loc_id": "USA"}, {"loc_id": "USA-CA"}]}]
 
         for tool, arguments, shallow in (
-            ("resolve_point", {"lat": 34.0, "lon": -118.2}, True),
+            ("resolve_point", {"lat": 34.0, "lon": -118.2, "scope_id": "USA", "family": "administrative"}, True),
             ("resolve_deep_point", {"lat": 34.0, "lon": -118.2, "shallow_loc_id": "USA-CA"}, False),
         ):
             with self.subTest(tool=tool):
@@ -906,7 +948,7 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
             payload = _tool_call(
                 self.client,
                 "resolve_point",
-                {"points": [{"lon": -118.2, "lat": 34.0} for _ in range(101)]},
+                {"scope_id": "USA", "family": "administrative", "points": [{"lon": -118.2, "lat": 34.0} for _ in range(101)]},
             )
         self.assertEqual(payload["point_count"], 101)
         self.assertEqual(payload["resolved_count"], 101)
@@ -944,7 +986,7 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
             payload = _tool_call(
                 self.client,
                 "resolve_point",
-                {"points": [{"lon": 0, "lat": 0} for _ in range(101)]},
+                {"scope_id": "USA", "family": "administrative", "points": [{"lon": 0, "lat": 0} for _ in range(101)]},
             )
 
         self.assertEqual(payload["error"]["code"], "commercial_access_unavailable")
@@ -984,7 +1026,7 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
             payload = _tool_call(
                 self.client,
                 "resolve_point",
-                {"points": [{"lon": 0, "lat": 0} for _ in range(101)]},
+                {"scope_id": "USA", "family": "administrative", "points": [{"lon": 0, "lat": 0} for _ in range(101)]},
             )
 
         self.assertEqual(payload["point_count"], 101)
@@ -1022,7 +1064,7 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
                 payload = _tool_call(
                     self.client,
                     "resolve_point",
-                    {"points": [{"lon": 0, "lat": 0, "row_index": index} for index in range(101)]},
+                    {"scope_id": "USA", "family": "administrative", "points": [{"lon": 0, "lat": 0, "row_index": index} for index in range(101)]},
                     headers={"Authorization": "Bearer tok_test_bypass"},
                 )
 
@@ -1048,7 +1090,7 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
                 payload = _tool_call(
                     self.client,
                     "resolve_point",
-                    {"points": [{"lon": 0, "lat": 0} for _ in range(3)]},
+                    {"scope_id": "USA", "family": "administrative", "points": [{"lon": 0, "lat": 0} for _ in range(3)]},
                 )
 
         self.assertEqual(payload["limits"]["free_batch_limit"], 2)
@@ -1092,7 +1134,7 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
                 payload = _tool_call(
                     self.client,
                     "resolve_point",
-                    {
+                    {"scope_id": "USA", "family": "administrative",
                         "points": [{"lon": 0, "lat": 0} for _ in range(3)],
                     },
                 )
@@ -1113,7 +1155,7 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
             payload = _tool_call(
                 self.client,
                 "resolve_point",
-                {"points": [{"lon": 0, "lat": 0} for _ in range(4)]},
+                {"scope_id": "USA", "family": "administrative", "points": [{"lon": 0, "lat": 0} for _ in range(4)]},
             )
         self.assertFalse(payload["payment_required"])
         self.assertEqual(payload["error"]["code"], "interactive_limit_exceeded")
@@ -1316,7 +1358,7 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         self.assertNotIn("include_info", tools["get_shape"]["inputSchema"]["properties"])
         self.assertNotIn("detail", tools["get_shape"]["inputSchema"]["properties"])
         self.assertNotIn("scope", tools["get_shape"]["inputSchema"]["properties"])
-        self.assertIn("bare WGS84 coordinate or bounded point array", tools["resolve_point"]["description"])
+        self.assertIn("exactly one selected scope and family", tools["resolve_point"]["description"])
 
     def test_point_help_matches_discovery_and_rejects_unsupported_selectors(self) -> None:
         tools = {

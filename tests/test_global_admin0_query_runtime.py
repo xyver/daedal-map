@@ -4,7 +4,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pandas as pd
-from shapely.geometry import box
+from shapely.geometry import MultiPolygon, box
 
 from mapmover.runtime.geometry_predicate_query import stable_hash_shard
 from mapmover.runtime.global_admin0_query import (
@@ -77,9 +77,66 @@ class GlobalAdmin0QueryRuntimeTests(unittest.TestCase):
         ])
         self.assertNotIn("geometry_review", matches[1])
 
+    def test_v3_layout_requires_component_index(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            directory = root / "geometry/runtime/global_admin0_point"
+            directory.mkdir(parents=True)
+            bank = directory / "point_bank.parquet"
+            index = directory / "component_bbox_index.parquet"
+            pd.DataFrame([{"candidate_id": "AAA~full"}]).to_parquet(bank, index=False)
+            catalog = {"catalog_fingerprint": "v3-test", "runtime_query_layouts": {
+                "global_admin0_point": {
+                    "layout_id": "global_admin0_point_query_v3",
+                    "source_fingerprint": "source-v3",
+                    "representation": "full",
+                    "authoritative_for_containment": True,
+                    "point_bank": {"path": "geometry/runtime/global_admin0_point/point_bank.parquet"},
+                    "component_bbox_index": {
+                        "path": "geometry/runtime/global_admin0_point/component_bbox_index.parquet"},
+                },
+            }}
+            with (
+                patch("mapmover.runtime.global_admin0_query.load_geometry_catalog", return_value=catalog),
+                patch("mapmover.runtime.global_admin0_query.GEOMETRY_DIR", root / "geometry"),
+                patch("mapmover.runtime.global_admin0_query.is_cloud_mode", return_value=False),
+            ):
+                self.assertIsNone(_active_layout())
+                pd.DataFrame([{"candidate_id": "AAA~full"}]).to_parquet(index, index=False)
+                layout = _active_layout()
+                self.assertEqual(layout["component_bbox_index"], index)
+
     def test_missing_layout_requests_full_fallback(self):
         with patch("mapmover.runtime.global_admin0_query._active_layout", return_value=None):
             self.assertIsNone(resolve_global_admin0_query_points([{"lon": 0, "lat": 0}]))
+
+    def test_component_boxes_skip_distant_parts_and_select_exact_land(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bank = root / "point_bank.parquet"
+            index = root / "component_bbox_index.parquet"
+            land = MultiPolygon([box(0, 0, 1, 1), box(10, 10, 11, 11)])
+            pd.DataFrame([{
+                "candidate_id": "AAA~full", "loc_id": "AAA", "name": "Archipelago",
+                "source_kind": "global_full", "area_sq_degrees": land.area,
+                "geometry_wkb": land.wkb,
+                "bbox_min_lon": 0.0, "bbox_min_lat": 0.0,
+                "bbox_max_lon": 11.0, "bbox_max_lat": 11.0,
+            }]).to_parquet(bank, index=False, row_group_size=1)
+            pd.DataFrame([
+                {"candidate_id": "AAA~full", "bbox_min_lon": x,
+                 "bbox_min_lat": y, "bbox_max_lon": x + 1,
+                 "bbox_max_lat": y + 1}
+                for x, y in [(0.0, 0.0), (10.0, 10.0)]
+            ]).to_parquet(index, index=False)
+            layout = {"layout_id": "global_admin0_point_query_v3",
+                      "point_bank": bank, "component_bbox_index": index}
+            with patch("mapmover.runtime.global_admin0_query._active_layout", return_value=layout):
+                results = resolve_global_admin0_query_points([
+                    {"lon": 5.0, "lat": 5.0}, {"lon": 0.5, "lat": 0.5},
+                ])
+        self.assertIsNone(results[0])
+        self.assertEqual(results[1]["loc_id"], "AAA")
 
     def test_exact_shape_lookup_reads_only_selected_full_shards(self):
         with tempfile.TemporaryDirectory() as tmp:

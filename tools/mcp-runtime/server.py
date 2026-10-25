@@ -153,7 +153,8 @@ def create_app(
                     try:
                         if not isinstance(params, dict): raise ValueError("Invalid tool parameters")
                         output = downloaded_backend.call(str(params.get("name")), params.get("arguments", {}))
-                        result = {"content": [{"type": "text", "text": json.dumps(output)}], "structuredContent": output, "isError": False}
+                        result = {"content": [{"type": "text", "text": json.dumps(output)}], "structuredContent": output,
+                                  "isError": bool(output.get("ok") is False or output.get("error"))}
                     except (ValueError, KeyError, TypeError) as exc:
                         result = {"content": [{"type": "text", "text": str(exc)}], "isError": True}
                 elif method == "ping": result = {}

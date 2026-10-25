@@ -15,7 +15,38 @@ test('the 10-year disaster preset has a bounded seven-layer load', () => {
   const action = resolveDefaultLoadAction({ presetId: 'explore:disasters_2020_2025' });
   assert.equal(action.type, 'multi_default_load');
   assert.equal(action.actions.length, 7);
-  assert.equal(action.timeoutMs, 90_000);
+  assert.equal(action.timeoutMs, 180_000);
+  assert.equal(action.concurrency, 1);
+});
+
+test('the disaster button defers a load while startup prewarm is running', async () => {
+  const originalFetch = globalThis.fetch;
+  const messages = [];
+  let loadCalls = 0;
+  globalThis.fetch = async () => ({
+    ok: false,
+    json: async () => ({ prewarm: { state: 'warming' } })
+  });
+  const context = {
+    mode: 'explore',
+    addMessage(message) { messages.push(message); },
+    async runDefaultLoad() { loadCalls += 1; return true; }
+  };
+  const button = {
+    dataset: { presetId: 'explore:disasters_2020_2025', mode: 'explore' },
+    textContent: 'Load 10-year disasters',
+    disabled: false,
+    innerHTML: ''
+  };
+  try {
+    await ChatManager.handlePresetButton.call(context, button);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+  assert.equal(loadCalls, 0);
+  assert.equal(button.disabled, false);
+  assert.equal(button.textContent, 'Load 10-year disasters');
+  assert.match(messages[0], /still preparing/i);
 });
 
 test('a stalled multi-load aborts its requests and reports the failure', async () => {

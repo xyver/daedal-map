@@ -30,12 +30,14 @@ _INFO_CACHE: dict[str, tuple[float, int, bytes, str | None, dict[str, str]]] = {
 # A single 15s value previously surfaced cold-start/heavy calls as a generic
 # "upstream request failed" 502 with nothing logged on the private side (it
 # timed out before responding, it did not raise). Split so connects still fail
-# fast; both env-overridable for tuning without a code change.
+# fast; both env-overridable for tuning without a code change. A cold hosted
+# Research pack-contract read exceeded 60s immediately after deployment, so
+# the default read budget allows one full cold R2/query-runtime warmup.
 PRIVATE_MCP_PROXY_CONNECT_TIMEOUT_SECONDS = float(
     os.getenv("PRIVATE_MCP_PROXY_CONNECT_TIMEOUT_SECONDS", "5") or 5.0
 )
 PRIVATE_MCP_PROXY_READ_TIMEOUT_SECONDS = float(
-    os.getenv("PRIVATE_MCP_PROXY_READ_TIMEOUT_SECONDS", "60") or 60.0
+    os.getenv("PRIVATE_MCP_PROXY_READ_TIMEOUT_SECONDS", "120") or 120.0
 )
 PRIVATE_MCP_PROXY_TIMEOUT = (
     PRIVATE_MCP_PROXY_CONNECT_TIMEOUT_SECONDS,

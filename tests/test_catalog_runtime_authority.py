@@ -56,6 +56,7 @@ def test_api_catalog_build_does_not_fetch_explore_overlay_metadata() -> None:
         "source_id": "earthquakes_events", "pack_id": "earthquakes",
         "catalog_surfaces": ["api", "explore"],
         "overlay": {"path": "disasters/earthquakes"},
+        "last_updated": "2026-10-25",
     }], "packs": []}
     state = {"catalog_mode": "unmanaged_data_root", "installed_packs": []}
     with (
@@ -68,7 +69,8 @@ def test_api_catalog_build_does_not_fetch_explore_overlay_metadata() -> None:
         metadata.assert_not_called()
         explore_catalog = build_active_catalog(catalog, catalog_surface="explore")
         assert explore_catalog["overlay_tree"]
-        metadata.assert_called_once_with("earthquakes_events")
+        assert explore_catalog["overlay_tree"]["disasters"]["children"]["earthquakes"]["sources"][0]["data_version"] == "2026-10-25"
+        metadata.assert_not_called()
 
 
 def test_normal_catalog_owns_agent_pack_admission_and_current_facts() -> None:
@@ -190,7 +192,9 @@ def test_app_refresh_uses_force_reads_without_clearing_serving_caches() -> None:
     assert counts == {"published": 1, "wip": 1, "geometry": 1, "ops_feeds": 1, "agent_packs": 1}
     published.assert_called_once_with(force_refresh=True)
     wip.assert_called_once_with(force_refresh=True)
-    geometry.assert_called_once_with()
+    geometry.assert_called_once()
+    assert geometry.call_args.args == ()
+    assert callable(geometry.call_args.kwargs["validate"])
     feeds.assert_called_once_with(force_refresh=True)
     agent.assert_called_once_with(force_refresh=True)
     guide.assert_called_once_with(force_refresh=True)
@@ -386,6 +390,38 @@ def test_api_published_source_does_not_require_python_registry_entry() -> None:
     assert result.parquet_name == "yearly.parquet"
     assert result.query_mode == "single_source"
     assert result.time_field == "year"
+
+
+def test_published_aggregate_primary_file_does_not_repeat_admin2_folder() -> None:
+    source = {
+        "source_id": "earthquake_aggregates",
+        "pack_id": "earthquakes",
+        "path": "global/disasters/earthquakes/sources/aggregates",
+        "catalog_surfaces": ["api", "mcp"],
+        "runtime_primary_file": "admin2/yearly.parquet",
+        "location_field": "loc_id",
+        "temporal_coverage": {"field": "year", "granularity": "yearly"},
+        "metrics": {"event_count": {"name": "Event count"}},
+    }
+    source_path = Path("published/global/disasters/earthquakes/sources/aggregates")
+    column_paths = []
+
+    def columns(path):
+        column_paths.append(path)
+        return {"loc_id", "year", "event_count"}
+
+    api_query_runtime.clear_api_source_spec_cache()
+    with (
+        mock.patch.object(api_query_runtime, "load_catalog", return_value={"sources": [source]}),
+        mock.patch.object(api_query_runtime, "load_source_metadata", return_value=source),
+        mock.patch.object(api_query_runtime, "get_source_path", return_value=source_path),
+        mock.patch.object(api_query_runtime, "parquet_available", return_value=True),
+        mock.patch.object(api_query_runtime, "parquet_columns", side_effect=columns),
+    ):
+        spec = api_query_runtime.get_api_source_spec("earthquake_aggregates")
+
+    assert spec is not None
+    assert column_paths == [source_path / "admin2/yearly.parquet"]
 
 
 def test_python_source_specializer_cannot_override_catalog_api_admission() -> None:

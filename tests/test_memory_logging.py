@@ -2,6 +2,7 @@ import json
 import threading
 import tempfile
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from mapmover import memory_logging as history
@@ -30,6 +31,22 @@ class MemoryHistoryTests(unittest.TestCase):
         self.assertIn('glibc_allocator', row)
         self.assertIn('python_runtime', row)
         self.assertTrue(all('entry_estimates' not in owner for owner in row['owners'].values()))
+
+    def test_storage_snapshot_records_volume_and_bounded_cache_without_file_walk(self):
+        with tempfile.TemporaryDirectory() as directory:
+            cache = SimpleNamespace(artifact_cache_status=lambda: {
+                'root': directory, 'enabled': True, 'bytes': 52_000_000,
+                'quota_bytes': 2_147_483_648, 'entry_count': 3,
+                'disk_hits': 7, 'hydrations': 2,
+            })
+            row = history._storage_snapshot(cache)
+            self.assertEqual(row['artifact_cache']['bytes'], 52_000_000)
+            self.assertEqual(row['artifact_cache']['entry_count'], 3)
+            self.assertGreater(row['filesystem']['total_bytes'], 0)
+            self.assertEqual(
+                row['filesystem']['used_bytes'] + row['filesystem']['free_bytes'],
+                row['filesystem']['total_bytes'],
+            )
 
     def test_monitor_records_and_stops_without_waiting_for_interval(self):
         sampled = threading.Event()

@@ -11,7 +11,7 @@ from shapely.geometry import Point
 from shapely.wkb import loads as load_wkb
 
 from ..paths import GEOMETRY_DIR
-from ..duckdb_helpers import is_cloud_mode
+from ..duckdb_helpers import is_cloud_mode, parquet_available
 from .geometry_catalog import load_geometry_catalog
 from .geometry_storage_layout import catalog_artifact_path, global_admin0_point_path
 from .geometry_predicate_query import (
@@ -55,6 +55,14 @@ def _active_layout() -> dict[str, Any] | None:
     point_bank = global_admin0_point_path(
         GEOMETRY_DIR.parent, layout.get("point_bank"), cloud_mode=is_cloud_mode(),
     )
+    component_bbox_index = catalog_artifact_path(
+        GEOMETRY_DIR.parent, layout.get("component_bbox_index"),
+    )
+    if layout.get("layout_id") == "global_admin0_point_query_v3" and (
+        point_bank is None or component_bbox_index is None
+        or not parquet_available(component_bbox_index)
+    ):
+        return None
     shard_count = int(layout.get("shard_count") or 0)
     bbox_index = catalog_artifact_path(GEOMETRY_DIR.parent, layout.get("bbox_index"))
     point_shards = {
@@ -67,6 +75,8 @@ def _active_layout() -> dict[str, Any] | None:
         value = {
             "layout_id": layout.get("layout_id"),
             "point_bank": point_bank,
+            **({"component_bbox_index": component_bbox_index}
+               if component_bbox_index is not None else {}),
         }
     elif (
         layout.get("shard_function") == "sha256_mod"
@@ -95,25 +105,38 @@ def resolve_global_admin0_query_points(
     release requires the compact Admin0 index; stale indexes must fail closed.
     """
     point_items = list(points)
-    from ..mcp_execution import mark_mcp_stage
+    from ..mcp_execution import mark_mcp_stage, record_mcp_artifact_io, record_mcp_file
 
     mark_mcp_stage("point_global_layout")
     layout = _active_layout()
     if layout is None:
         return None
     try:
-        mark_mcp_stage("point_global_bbox_candidates")
-        candidate_path = layout.get("point_bank") or layout["bbox_index"]
+        candidate_path = (layout.get("component_bbox_index")
+                          or layout.get("point_bank") or layout["bbox_index"])
+        record_mcp_file(candidate_path)
+        mark_mcp_stage(
+            "point_global_component_bbox_candidates"
+            if layout.get("component_bbox_index") else "point_global_bbox_candidates"
+        )
         bbox = read_bbox_candidates_for_points(
             candidate_path, point_items,
-            columns=["candidate_id", "loc_id", "name", "source_kind", "area_sq_degrees"],
+            columns=["candidate_id"] if layout.get("component_bbox_index") else
+                    ["candidate_id", "loc_id", "name", "source_kind", "area_sq_degrees"],
         )
         candidate_ids = set(bbox["candidate_id"].astype(str)) if not bbox.empty else set()
+        record_mcp_artifact_io("point_global_candidate_ids", len(candidate_ids))
         exact_columns = [
             "loc_id", "name", "source_kind", "area_sq_degrees", "geometry_wkb",
             "bbox_min_lon", "bbox_min_lat", "bbox_max_lon", "bbox_max_lat",
         ]
         mark_mcp_stage("point_global_exact_shapes")
+        if candidate_ids:
+            if layout.get("point_bank"):
+                record_mcp_file(layout["point_bank"])
+            else:
+                for path in layout["point_shards"].values():
+                    record_mcp_file(path)
         exact = (
             read_rows_by_ids(
                 layout["point_bank"], candidate_ids,
@@ -142,9 +165,9 @@ def resolve_global_admin0_query_points(
         except Exception:
             continue
 
-    candidates_by_position: dict[int, list[str]] = {}
+    candidates_by_position: dict[int, set[str]] = {}
     for row in bbox.to_dict("records"):
-        candidates_by_position.setdefault(int(row["point_position"]), []).append(str(row["candidate_id"]))
+        candidates_by_position.setdefault(int(row["point_position"]), set()).add(str(row["candidate_id"]))
 
     results: list[pd.Series | None] = []
     for position, item in enumerate(point_items):
@@ -154,7 +177,7 @@ def resolve_global_admin0_query_points(
             results.append(None)
             continue
         matches: list[tuple[float, str, str, dict[str, Any]]] = []
-        for candidate_id in candidates_by_position.get(position, []):
+        for candidate_id in sorted(candidates_by_position.get(position, set())):
             row = rows_by_id.get(candidate_id)
             geometry = geometries.get(candidate_id)
             if row is None or geometry is None or not geometry.covers(point):
@@ -177,6 +200,40 @@ def resolve_global_admin0_query_points(
             "source_system": selected.get("source_kind"),
             **({"geometry_review": geometry_review} if geometry_review else {}),
         }))
+    return results
+
+
+def resolve_global_scope_points(points: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Resolve only the selected Global Admin0 point layout."""
+    point_items = list(points)
+    matches = resolve_global_admin0_query_points(point_items)
+    if matches is None:
+        return [{"point": {"lon": float(point["lon"]), "lat": float(point["lat"])},
+                 "error": {"code": "selected_scope_unavailable",
+                           "message": "The selected Global point query layout is unavailable; no other scope was searched"}}
+                for point in point_items]
+    results: list[dict[str, Any]] = []
+    for point, match in zip(point_items, matches):
+        coordinate = {"lon": float(point["lon"]), "lat": float(point["lat"])}
+        if match is None:
+            results.append({"point": coordinate, "error": {
+                "code": "no_point_overlap", "message": "No Global administrative polygon covers this point"
+            }})
+            continue
+        loc_id = str(match.get("loc_id") or "")
+        name = str(match.get("name") or loc_id)
+        selected = {"loc_id": loc_id, "name": name, "admin_level": 0, "family": "administrative"}
+        results.append({
+            "point": coordinate,
+            "country": {"loc_id": loc_id, "name": name},
+            "matched": selected,
+            "stack": [selected],
+            "deepest_resolved_loc_id": loc_id,
+            "deepest_resolved_admin_level": 0,
+            "deepest_resolved_family": "administrative",
+            "resolution_family": "administrative",
+            "query_layout": "global_admin0_point",
+        })
     return results
 
 

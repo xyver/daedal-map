@@ -50,7 +50,7 @@ If the selected local data root has no global `geometry/geometry_catalog.json`
 but contains one or more extracted Geometry package `geometry.json` sidecars,
 the server uses its offline package-scoped reader. It reads only sidecar-listed
 Parquet members and supports catalog discovery, location lookup, point
-resolution, geometry checks/reads, and GeoJSON export. It never falls back to
+resolution and geometry checks/reads. It never falls back to
 the app or cloud. Detail provides exact polygons, Display provides simplified
 polygons, and Lite provides reference identities only. Every member read is
 verified against its sidecar size and SHA-256. Reads and exports remain scoped
@@ -62,14 +62,15 @@ example `D:\DaedalMapData\Germany`, `D:\DaedalMapData\France`, and
 parent directory to `server.py --data-root`; single-package roots also work.
 Restart the server after installing/removing packages to refresh discovery.
 
-In downloaded-package mode, use `read_geometry_catalog`, `get_tool_help`,
-`loc_id_info`, `get_geometry`, `resolve_point`, and
-`create_geometry_export`. Export takes explicit `loc_ids` or `country` with an
-optional `admin_level` and returns a GeoJSON FeatureCollection to save locally.
-It refuses missing polygons or selections above `max_features` (up to 10,000)
-instead of silently returning a partial export. Source licences travel with the
-result. Full-data-root mode retains the broader production tool inventory;
-always use `tools/list` to discover the operations available in your mode.
+Downloaded-package mode exposes the current 12-tool Geography MCP roster and
+the same tool schemas as the hosted facade: `get_tool_help`, `get_catalog`,
+`get_pack`, `get_geography`, `resolve_point`, `resolve_deep_point`,
+`get_loc_id_info`, `identify_dataset_geography`,
+`identify_reference_system`, `convert_reference`, `compare_geographies`, and
+`get_shape`. It returns typed unavailable results when installed packages lack
+the needed data. Lite is reference-only; Display and Detail add polygons.
+`get_shape` accepts exact `loc_id` values and includes GeoJSON only when
+`include_polygon=true`. Use `tools/list` for the active contract.
 
 Run only one server with `--services geometry` or `--services research`. The
 default port is 7010 for Geometry and 7011 for Research, allowing both servers
@@ -162,7 +163,7 @@ Point your MCP client at `http://127.0.0.1:7010/mcp/geometry` and ask:
 List my installed geometry packages and their capabilities.
 ```
 
-The client should call `read_geometry_catalog`. The same direct PowerShell smoke
+The client should call `get_catalog` with `catalog="geometry"`. The same direct PowerShell smoke
 test is:
 
 ```powershell
@@ -171,8 +172,8 @@ $body = @{
   id = 1
   method = "tools/call"
   params = @{
-    name = "read_geometry_catalog"
-    arguments = @{ view = "capabilities" }
+    name = "get_catalog"
+    arguments = @{ catalog = "geometry" }
   }
 } | ConvertTo-Json -Depth 5
 
@@ -186,10 +187,9 @@ Invoke-RestMethod `
 
 Then use this sequence:
 
-1. `read_geometry_catalog` with `view="capabilities"` and a country when known.
+1. `get_catalog` with `catalog="geometry"`, then `get_geography` for one family or scope.
 2. `get_tool_help` with the exact tool you intend to call.
-3. `resolve_point` for coordinates when polygon data is installed. The broader
-   `identify_reference_system` / `resolve_reference` tools require full-data-root
-   mode; they are not advertised in downloaded-package mode.
-4. `loc_id_info` to inspect the resolved identity and relationships.
-5. `get_geometry` with `include_polygon=false` to check availability; repeat with `include_polygon=true` only when coordinates are needed.
+3. `resolve_point` for coordinates when polygon data is installed, or
+   `identify_reference_system` for an identifier in a declared country scope.
+4. `get_loc_id_info` to inspect the resolved identity and direct relationships.
+5. `get_shape` for an exact ID; request `include_polygon=true` only when coordinates are needed.

@@ -8,6 +8,7 @@ startup warm work has completed in the current process.
 from __future__ import annotations
 
 import threading
+import time
 from datetime import datetime, timezone
 
 
@@ -65,6 +66,16 @@ def run_prewarm_task(task: str, func, *args, **kwargs) -> None:
         raise
     else:
         complete_prewarm_task(task)
+
+
+def run_prewarm_task_after(task: str, dependencies: tuple[str, ...], func, *args, **kwargs) -> None:
+    """Warm a large source after the initial tasks have settled, without blocking startup."""
+    while True:
+        states = prewarm_readiness()["tasks"]
+        if all(states.get(name, {}).get("state") in {"ready", "failed"} for name in dependencies):
+            break
+        time.sleep(0.5)
+    run_prewarm_task(task, func, *args, **kwargs)
 
 
 def prewarm_readiness() -> dict[str, object]:

@@ -12,11 +12,11 @@ import re
 from fnmatch import fnmatchcase
 from functools import lru_cache
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from ..paths import GEOMETRY_DIR
 from ..catalog_cache_policy import control_catalog_cache_epoch
-from ..runtime_config import force_remote_data_reads, get_data_plane_mode
+from ..runtime_config import get_data_plane_mode
 from .published_artifacts import read_artifact_json
 from geometry_catalog_shared import (
     build_geometry_capability_summary,
@@ -55,7 +55,7 @@ def _merge_crosswalks(payload: dict[str, Any]) -> dict[str, Any]:
             crosswalks = read_artifact_json("geometry/crosswalk_catalog.json", lane="active")
         except Exception:
             crosswalks = None
-    if not isinstance(crosswalks, dict) and not force_remote_data_reads():
+    if not isinstance(crosswalks, dict) and not _is_cloud_mode():
         try:
             crosswalks = json.loads(CROSSWALK_CATALOG_PATH.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
@@ -94,7 +94,7 @@ def _load_geometry_catalog_cached(_epoch: int) -> dict[str, Any]:
         except Exception:
             pass
 
-    if not force_remote_data_reads():
+    if not _is_cloud_mode():
         try:
             payload = json.loads(CATALOG_PATH.read_text(encoding="utf-8"))
             if isinstance(payload, dict):
@@ -124,7 +124,7 @@ def load_geometry_catalog() -> dict[str, Any]:
     return _load_geometry_catalog_cached(epoch)
 
 
-def refresh_geometry_catalog() -> dict[str, Any]:
+def refresh_geometry_catalog(*, validate: Callable[[dict[str, Any]], None] | None = None) -> dict[str, Any]:
     """Prefetch the next catalog epoch without changing the current geometry view."""
     global _geometry_catalog_prefetch
     if _is_cloud_mode():
@@ -136,6 +136,8 @@ def refresh_geometry_catalog() -> dict[str, Any]:
     ):
         raise RuntimeError("geometry catalog refresh returned no records")
     catalog = _merge_crosswalks(payload)
+    if validate is not None:
+        validate(catalog)
     _geometry_catalog_prefetch = (_catalog_cache_epoch() + 1, catalog)
     return catalog
 
@@ -153,7 +155,7 @@ def _load_country_geometry_catalog_cached(country: str, _epoch: int) -> dict[str
                 return payload
         except Exception:
             pass
-    if not force_remote_data_reads():
+    if not _is_cloud_mode():
         for path in (
             GEOMETRY_DIR.parent / relative,
             GEOMETRY_DIR / "countries" / country / f"{country}_catalog.json",

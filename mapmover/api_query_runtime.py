@@ -931,7 +931,15 @@ def _build_dynamic_source_spec(source_id: str) -> ApiSourceSpec | None:
         wrapper_aggregate_path = aggregate_dir / parquet_name
 
     local_pack_path = DATA_ROOT / "global" / str(source_defaults["pack_id"]) / parquet_name
-    if wrapper_aggregate_path is not None and (wrapper_aggregate_path.exists() or parquet_available(wrapper_aggregate_path)):
+    # A source-owned runtime file may already include its aggregate subfolder
+    # (for example, admin2/yearly.parquet). The wrapper path starts inside
+    # aggregates/admin2, so appending that relative path again duplicates
+    # admin2 and creates a nonexistent published object key.
+    if (
+        wrapper_aggregate_path is not None
+        and Path(parquet_name).parent == Path(".")
+        and (wrapper_aggregate_path.exists() or parquet_available(wrapper_aggregate_path))
+    ):
         parquet_path = wrapper_aggregate_path
     elif primary_candidate.exists() or parquet_available(primary_candidate):
         parquet_path = primary_candidate

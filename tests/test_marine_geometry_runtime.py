@@ -4,6 +4,8 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
 
 import mapmover.runtime.marine_geometry as marine_runtime
 from mapmover.runtime.reference_exchange import _geometry_catalog_domains
@@ -18,6 +20,65 @@ from mapmover.runtime.geography_reference import is_named_water_loc_id
 
 
 class MarineGeometryRuntimeTests(unittest.TestCase):
+    def test_selected_marine_family_filters_bbox_before_exact_read(self):
+        bbox_path = Path("marine/predicate/bbox_index.parquet")
+        bank_path = Path("marine/predicate/high_seas.parquet")
+        with (
+            patch.object(marine_runtime, "_active_domain_paths", return_value={
+                "bbox_index": bbox_path, "point_banks": {"high_seas": bank_path},
+                "canonical_geoparquet": False,
+            }),
+            patch.object(marine_runtime, "parquet_available", return_value=True),
+            patch.object(marine_runtime, "read_bbox_candidates_for_points",
+                         return_value=pd.DataFrame([
+                             {"point_position": 0, "loc_id": "XOP-HS", "subtype": "high_seas"},
+                             {"point_position": 0, "loc_id": "XOP-EEZ", "subtype": "exclusive_economic_zone"},
+                         ])) as bbox,
+            patch.object(marine_runtime, "read_rows_by_ids",
+                         return_value=pd.DataFrame([{"loc_id": "XOP-HS", "name": "High Seas"}])) as exact,
+            patch.object(marine_runtime, "_exact_jurisdiction_matches",
+                         return_value={0: {"XOP-HS"}}),
+        ):
+            result = marine_runtime.resolve_marine_family_points(
+                [{"lon": -130, "lat": 35}], "high_seas",
+            )
+        self.assertEqual(result[0]["matches"][0]["loc_id"], "XOP-HS")
+        self.assertEqual(bbox.call_args.args[0], bbox_path)
+        self.assertEqual(exact.call_args.args[0], bank_path)
+        self.assertEqual(exact.call_args.args[1], {"XOP-HS"})
+        self.assertEqual(exact.call_count, 1)
+
+    def test_unscoped_point_reader_rejects_family_split_release(self):
+        with patch.object(marine_runtime, "_active_domain_paths", return_value={
+            "point_banks": {"high_seas": Path("marine/predicate/high_seas.parquet")},
+        }):
+            with self.assertRaisesRegex(ValueError, "Select one Marine family"):
+                marine_runtime.load_marine_geometry_at_point(-130, 35)
+            with self.assertRaisesRegex(ValueError, "Select one Marine family"):
+                marine_runtime.load_marine_geometry_for_points([{"lon": -130, "lat": 35}])
+
+    def test_marine_reference_identity_uses_release_tables_without_country_graph(self):
+        from mapmover.runtime.loc_id_graph_info import graph_info_items
+
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            identities = root / "identities.parquet"
+            relationships = root / "relationships.parquet"
+            pq.write_table(pa.Table.from_pylist([{
+                "loc_id": "ABW-EEZ", "name": "Example EEZ",
+                "family": "marine_jurisdiction", "subtype": "exclusive_economic_zone", "level": "eez",
+            }]), identities)
+            pq.write_table(pa.Table.from_pylist([{
+                "source_loc_id": "ABW-EEZ", "target_loc_id": "ABW",
+                "relationship": "marine_zone_country_association", "basis": "reviewed",
+            }]), relationships)
+            with patch.object(marine_runtime, "_active_domain_paths", return_value={
+                "reference_identities": identities, "reference_relationships": relationships,
+            }):
+                result = graph_info_items(["ABW-EEZ"])[0]
+        self.assertEqual(result["family"], "exclusive_economic_zone")
+        self.assertEqual(result["connections"][0]["relationship_type"], "marine_zone_country_association")
+
     def test_physical_land_reader_passes_path_to_cloud_uri_resolver(self):
         from shapely.geometry import Polygon
 

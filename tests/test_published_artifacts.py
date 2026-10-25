@@ -55,6 +55,23 @@ class PublishedArtifactTests(unittest.TestCase):
 
         self.assertEqual(ref.key, "candidate/catalog.json")
 
+    def test_staging_remains_separate_from_published_and_hosted_tools_reject_it(self) -> None:
+        env = {"S3_BUCKET": "bucket", "S3_PREFIX": "staging"}
+        with mock.patch.dict(os.environ, env, clear=True), mock.patch.object(
+            published_artifacts, "get_runtime_config", return_value=self._config()
+        ):
+            self.assertEqual(published_artifacts.artifact_prefix("published"), "published")
+            with mock.patch.object(published_artifacts, "get_data_plane_mode", return_value="cloud"), \
+                    mock.patch.object(published_artifacts, "force_remote_data_reads", return_value=False):
+                with self.assertRaisesRegex(RuntimeError, "published artifact lane"):
+                    published_artifacts.artifact_ref("geometry/geometry_catalog.json", lane="active")
+            with mock.patch.object(published_artifacts, "get_data_plane_mode", return_value="cloud"), \
+                    mock.patch.object(published_artifacts, "force_remote_data_reads", return_value=True):
+                self.assertEqual(
+                    published_artifacts.artifact_ref("geometry/geometry_catalog.json", lane="active").key,
+                    "staging/geometry/geometry_catalog.json",
+                )
+
     def test_unsafe_relative_paths_are_rejected(self) -> None:
         with mock.patch.dict(os.environ, {"S3_BUCKET": "bucket"}, clear=True), mock.patch.object(
             published_artifacts, "get_runtime_config", return_value=self._config()
@@ -103,6 +120,23 @@ class PublishedArtifactTests(unittest.TestCase):
             uri = duckdb_helpers.path_to_uri(Path(temp_dir) / "global" / "pack" / "data.parquet")
 
         self.assertEqual(uri, "s3://bucket/active/global/pack/data.parquet")
+
+    def test_cloud_query_ignores_local_file_even_with_wip_switch(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            local = root / "geometry" / "global" / "point_bank.parquet"
+            local.parent.mkdir(parents=True)
+            local.write_bytes(b"local-only")
+            with mock.patch.dict(os.environ, {
+                "S3_BUCKET": "bucket", "S3_PREFIX": "published",
+                "USE_WIP_CATALOG": "1", "PUBLISHED_ARTIFACT_CACHE_ENABLED": "false",
+            }, clear=True), mock.patch.object(
+                published_artifacts, "get_runtime_config", return_value=self._config()
+            ), mock.patch.object(duckdb_helpers, "is_cloud_mode", return_value=True), mock.patch.object(
+                duckdb_helpers, "_get_data_root", return_value=root
+            ):
+                uri = duckdb_helpers.path_to_uri(local)
+            self.assertEqual(uri, "s3://bucket/published/geometry/global/point_bank.parquet")
 
     def test_hydrates_once_then_serves_verified_disk_hit(self) -> None:
         payload = b"verified artifact"
@@ -214,6 +248,34 @@ class PublishedArtifactTests(unittest.TestCase):
             self.assertFalse(admitted)
             self.assertTrue(recent.is_file())
             self.assertIn("recent", entries)
+
+    def test_pinned_routing_artifact_survives_quota_eviction(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir, mock.patch.dict(os.environ, {
+            "PUBLISHED_ARTIFACT_CACHE_DIR": temp_dir,
+            "PUBLISHED_ARTIFACT_CACHE_QUOTA_MB": "1",
+            "PUBLISHED_ARTIFACT_CACHE_EVICTION_GRACE_SECONDS": "0",
+        }, clear=True):
+            objects = Path(temp_dir) / "objects" / "aa"
+            objects.mkdir(parents=True)
+            pinned = objects / "routing.parquet"
+            other = objects / "other.parquet"
+            pinned.write_bytes(b"r" * 500_000)
+            other.write_bytes(b"o" * 500_000)
+            entries = {
+                "routing": {"local_path": str(pinned), "bytes": 500_000,
+                            "sha256": published_artifacts._sha256_file(pinned), "last_accessed": 0},
+                "other": {"local_path": str(other), "bytes": 500_000,
+                          "sha256": published_artifacts._sha256_file(other), "last_accessed": 0},
+            }
+            published_artifacts._write_index(entries)
+            with mock.patch.object(published_artifacts, "artifact_ref", return_value=mock.Mock(uri="routing")):
+                self.assertEqual(published_artifacts.pin_artifact_paths(["routing"], max_bytes=600_000), 500_000)
+            entries = published_artifacts._load_index()
+            self.assertTrue(published_artifacts._evict_for(entries, 500_000, keep_key="incoming"))
+            self.assertIn("routing", entries)
+            self.assertNotIn("other", entries)
+            self.assertTrue(pinned.is_file())
+            self.assertFalse(other.exists())
 
 
 if __name__ == "__main__":
