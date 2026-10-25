@@ -462,6 +462,38 @@ class DownloadedGeometryBackend:
             result.update(shallow_loc_id=shallow, family=family)
         return result
 
+    def _selected_deep_bank(self, anchor: dict[str, Any], level: int | None) -> Path | None:
+        """Select one country Detail partition from the shallow Admin 1 ancestor."""
+        ancestor = anchor
+        seen = set()
+        while (ancestor and ancestor.get("admin_level") != 1
+               and ancestor.get("loc_id") not in seen):
+            seen.add(ancestor["loc_id"])
+            parent = ancestor.get("parent_id")
+            ancestor = self._identity(parent) if parent else None
+        if not ancestor or ancestor.get("admin_level") != 1:
+            return None
+        state_id = ancestor["loc_id"]
+        country = str(anchor["country"]).upper()
+        candidates = []
+        for package, file in self._records():
+            if (str(package["metadata"].get("country_code") or "").upper() != country
+                    or package["metadata"].get("package_tier") != "detail"):
+                continue
+            archive = file["archive_path"].replace("\\", "/")
+            match = re.fullmatch(r"exact/admin/admin_([4-6])/[^/]+\.parquet", archive)
+            if not match or (level is not None and int(match.group(1)) != level):
+                continue
+            if Path(archive).stem.split("_", 1)[-1] == state_id:
+                candidates.append((int(match.group(1)), file["local_path"]))
+        if not candidates:
+            return None
+        highest = max(depth for depth, _ in candidates)
+        paths = {path for depth, path in candidates if depth == highest}
+        if len(paths) != 1:
+            raise ValueError(f"Ambiguous installed deep point bank for {state_id} Admin {highest}")
+        return next(iter(paths))
+
     def _resolve_points(self, args: dict[str, Any], *, deep: bool) -> dict[str, Any]:
         points = self._points(args)
         scope = str(args.get("scope_id") or "").strip().upper() if not deep else ""
@@ -486,9 +518,13 @@ class DownloadedGeometryBackend:
         if family != "administrative":
             if deep:
                 return _error("family_route_unavailable", "This installed package has no deep point route for the selected family", family=family)
-        selected_path = None if deep else self._selected_point_bank(scope, family, water_kind or None)
-        if not deep and selected_path is None:
-            return _error("selected_scope_unavailable", "No installed Display or Detail point bank covers the selected scope and family", scope_id=scope, family=family)
+        if deep:
+            anchor = self._identity(str(args["shallow_loc_id"]))
+            if anchor is None:
+                return _error("shallow_scope_not_found", "shallow_loc_id is absent from installed packages")
+            scope = str(anchor["country"]).upper()
+            if scope in {"GLOBAL", "MARINE"}:
+                return _error("family_route_unavailable", "Deep point lookup requires one installed country scope")
         level = args.get("target_admin_level") if deep else None
         if level is not None:
             try:
@@ -497,9 +533,13 @@ class DownloadedGeometryBackend:
                 raise ValueError("target_admin_level must be an Admin level") from exc
             if not 4 <= level <= 6:
                 raise ValueError("target_admin_level must be Admin 4 through 6")
+        selected_path = (self._selected_deep_bank(anchor, level) if deep else
+                         self._selected_point_bank(scope, family, water_kind or None))
+        if selected_path is None:
+            return _error("selected_scope_unavailable", "No installed point bank covers the selected scope, family, and level", scope_id=scope, family=family)
         results = [self._point_result(item, shallow=args.get("shallow_loc_id") if deep else None,
                                       family=family, target_level=level,
-                                      selected_path=selected_path, scope=scope if not deep else None) for item in points]
+                                      selected_path=selected_path, scope=scope) for item in points]
         if "points" not in args:
             return {"request_id": args.get("request_id"), **results[0]}
         return {"request_id": args.get("request_id"), "batch_id": args.get("batch_id"),

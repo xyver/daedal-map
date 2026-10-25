@@ -118,6 +118,54 @@ class InstalledSideFamilyTest(unittest.TestCase):
             self.assertEqual(country_result["matched"]["loc_id"], "USA-CA")
             self.assertEqual({p.name for p in backend.verified}, {"admin_0_3.parquet"})
 
+    def test_deep_point_does_not_borrow_global_shape_bank(self):
+        polygon = '{"type":"Polygon","coordinates":[[[-1,-1],[1,-1],[1,1],[-1,1],[-1,-1]]]}'
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            _package(root, "global", "downloadable_geometry_package", "GLOBAL", {
+                "display/admin_0.parquet": ("display", [{"loc_id": "AAA", "geometry": polygon,
+                    "bbox_min_lon": -1.0, "bbox_max_lon": 1.0, "bbox_min_lat": -1.0, "bbox_max_lat": 1.0}]),
+                "display/admin_1.parquet": ("display", [{"loc_id": "AAA-1", "parent_id": "AAA",
+                    "admin_level": 1, "geometry": polygon, "bbox_min_lon": -1.0,
+                    "bbox_max_lon": 1.0, "bbox_min_lat": -1.0, "bbox_max_lat": 1.0}]),
+            }, tier="display")
+            _package(root, "country", "downloadable_geometry_package", "AAA", {
+                "reference/identities.parquet": ("reference", [{"loc_id": "AAA", "admin_level": 0,
+                    "iso_a3": "AAA"}]),
+            }, tier="lite")
+            backend = DownloadedGeometryBackend(root)
+            result = backend.call("resolve_deep_point", {
+                "lat": 0, "lon": 0, "shallow_loc_id": "AAA",
+            })
+            self.assertEqual(result["error"]["code"], "selected_scope_unavailable")
+
+    def test_deep_point_selects_one_country_detail_partition(self):
+        polygon = '{"type":"Polygon","coordinates":[[[-1,-1],[1,-1],[1,1],[-1,1],[-1,-1]]]}'
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            _package(root, "global", "downloadable_geometry_package", "GLOBAL", {
+                "display/admin_1.parquet": ("display", [{"loc_id": "AAA-X", "parent_id": "AAA",
+                    "admin_level": 1, "geometry": polygon}]),
+            }, tier="display")
+            _package(root, "country", "downloadable_geometry_package", "AAA", {
+                "reference/identities.parquet": ("reference", [
+                    {"loc_id": "AAA", "admin_level": 0, "iso_a3": "AAA"},
+                    {"loc_id": "AAA-X", "parent_id": "AAA", "admin_level": 1, "iso_a3": "AAA"},
+                    {"loc_id": "AAA-X-4", "parent_id": "AAA-X", "admin_level": 4, "iso_a3": "AAA"},
+                ]),
+                "exact/admin/admin_4/0001_AAA-X.parquet": ("exact", [{
+                    "loc_id": "AAA-X-4", "parent_id": "AAA-X", "admin_level": 4,
+                    "iso_a3": "AAA", "geometry": polygon,
+                    "bbox_min_lon": -1.0, "bbox_max_lon": 1.0,
+                    "bbox_min_lat": -1.0, "bbox_max_lat": 1.0,
+                }]),
+            }, tier="detail")
+            backend = DownloadedGeometryBackend(root)
+            result = backend.call("resolve_deep_point", {
+                "lat": 0, "lon": 0, "shallow_loc_id": "AAA-X", "target_admin_level": 4,
+            })
+            self.assertEqual(result["matched"]["loc_id"], "AAA-X-4")
+
     def test_marine_identity_and_bridge_relationships(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
