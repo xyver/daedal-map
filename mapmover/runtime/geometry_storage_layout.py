@@ -193,9 +193,5 @@ def global_admin0_display_path_from_geometry_root(
 
 
 def global_admin0_point_path(data_root: Path, record: Any, *, cloud_mode: bool) -> Path | None:
-    """Resolve the published bank, retaining only the local source-tree path."""
-    clean = catalog_artifact_path(data_root, record)
-    if clean is None or cloud_mode or clean.is_file():
-        return clean
-    source = data_root / "geometry/runtime/global_admin0_point/point_bank.parquet"
-    return source if source.is_file() else clean
+    """Resolve only the point bank selected by the active catalog."""
+    return catalog_artifact_path(data_root, record)

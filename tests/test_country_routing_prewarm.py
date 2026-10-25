@@ -43,7 +43,7 @@ class CountryRoutingPrewarmTests(unittest.TestCase):
             discovery + "identifier_index.parquet": b"discovery routes",
             "geometry/domains/MARINE/local_full/marine_v1/reference/identities.parquet": b"marine identities",
             "geometry/domains/MARINE/local_full/marine_v1/reference/relationships.parquet": b"marine relationships",
-            "geometry/runtime/global_admin0_point/component_bbox_index.parquet": b"global component index",
+            "geometry/runtime/global_admin0_point/releases/1.1.1/component_bbox_index.parquet": b"global component index",
         }
         digest = lambda value: hashlib.sha256(value).hexdigest()
         manifest = {
@@ -71,9 +71,10 @@ class CountryRoutingPrewarmTests(unittest.TestCase):
         }
         catalog = {"runtime_query_layouts": {"global_admin0_point": {
             "layout_id": "global_admin0_point_query_v3",
+            "full_release": {"version": "1.1.1"},
             "component_bbox_index": {
-                "path": "geometry/runtime/global_admin0_point/component_bbox_index.parquet",
-                "sha256": digest(payloads["geometry/runtime/global_admin0_point/component_bbox_index.parquet"]),
+                "path": "geometry/runtime/global_admin0_point/releases/1.1.1/component_bbox_index.parquet",
+                "sha256": digest(payloads["geometry/runtime/global_admin0_point/releases/1.1.1/component_bbox_index.parquet"]),
             },
         }}, "country_profiles": [{
             "country_code": country, "release_status": "published",
@@ -114,7 +115,7 @@ class CountryRoutingPrewarmTests(unittest.TestCase):
                     len(value) for key, value in payloads.items() if "MARINE" in key
                 ))
                 self.assertEqual(result["global_component_bbox_bytes"], len(
-                    payloads["geometry/runtime/global_admin0_point/component_bbox_index.parquet"]
+                    payloads["geometry/runtime/global_admin0_point/releases/1.1.1/component_bbox_index.parquet"]
                 ))
                 self.assertEqual(result["pinned_bytes"], 43)
                 self.assertEqual(len(pin.call_args.args[0]), 11)

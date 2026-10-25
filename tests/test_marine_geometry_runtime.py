@@ -22,10 +22,10 @@ from mapmover.runtime.geography_reference import is_named_water_loc_id
 class MarineGeometryRuntimeTests(unittest.TestCase):
     def test_selected_marine_family_filters_bbox_before_exact_read(self):
         bbox_path = Path("marine/predicate/bbox_index.parquet")
-        bank_path = Path("marine/predicate/point_bank.parquet")
+        bank_path = Path("marine/predicate/high_seas.parquet")
         with (
             patch.object(marine_runtime, "_active_domain_paths", return_value={
-                "bbox_index": bbox_path, "point_bank": bank_path,
+                "bbox_index": bbox_path, "point_banks": {"high_seas": bank_path},
                 "canonical_geoparquet": False,
             }),
             patch.object(marine_runtime, "parquet_available", return_value=True),
@@ -47,6 +47,15 @@ class MarineGeometryRuntimeTests(unittest.TestCase):
         self.assertEqual(exact.call_args.args[0], bank_path)
         self.assertEqual(exact.call_args.args[1], {"XOP-HS"})
         self.assertEqual(exact.call_count, 1)
+
+    def test_unscoped_point_reader_rejects_family_split_release(self):
+        with patch.object(marine_runtime, "_active_domain_paths", return_value={
+            "point_banks": {"high_seas": Path("marine/predicate/high_seas.parquet")},
+        }):
+            with self.assertRaisesRegex(ValueError, "Select one Marine family"):
+                marine_runtime.load_marine_geometry_at_point(-130, 35)
+            with self.assertRaisesRegex(ValueError, "Select one Marine family"):
+                marine_runtime.load_marine_geometry_for_points([{"lon": -130, "lat": 35}])
 
     def test_marine_reference_identity_uses_release_tables_without_country_graph(self):
         from mapmover.runtime.loc_id_graph_info import graph_info_items

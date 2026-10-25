@@ -88,18 +88,31 @@ def _active_domain_paths() -> Optional[dict[str, Any]]:
         key: catalog_artifact_path(GEOMETRY_DIR.parent, artifacts.get(key))
         for key in (
             "jurisdictions", "water_bodies", "named_water_areas", "physical_surface",
-            "bbox_index", "point_bank",
+            "bbox_index",
         )
     }
     if any(path is None for path in paths.values()):
         return None
+    point_banks = artifacts.get("point_banks")
+    if point_banks is not None:
+        if not isinstance(point_banks, dict) or set(point_banks) != set(MARINE_JURISDICTION_FAMILIES):
+            return None
+        resolved_point_banks = {
+            family: catalog_artifact_path(GEOMETRY_DIR.parent, point_banks[family])
+            for family in MARINE_JURISDICTION_FAMILIES
+        }
+        if any(path is None for path in resolved_point_banks.values()):
+            return None
+        paths["point_banks"] = resolved_point_banks
+    else:
+        paths["point_bank"] = catalog_artifact_path(GEOMETRY_DIR.parent, artifacts.get("point_bank"))
+        if paths["point_bank"] is None:
+            return None
     country_components = {
         str(country).upper(): path
         for country, record in (artifacts.get("country_components") or {}).items()
         if (path := catalog_artifact_path(GEOMETRY_DIR.parent, record)) is not None
     }
-    if any(paths.get(key) is None for key in paths):
-        return None
     value = {**paths, "country_components": country_components}
     # Marine's compact Reference identities are released beside its geometry
     # banks. Keep the route on the active release instead of sending Marine
@@ -149,8 +162,10 @@ def has_marine_geometry() -> bool:
     if is_cloud_mode():
         return True
     required = ("jurisdictions", "water_bodies", "named_water_areas", "physical_surface",
-                "bbox_index", "point_bank")
-    return all(Path(domain[key]).is_file() for key in required)
+                "bbox_index")
+    banks = domain.get("point_banks") or {"all": domain["point_bank"]}
+    return (all(Path(domain[key]).is_file() for key in required)
+            and all(Path(path).is_file() for path in banks.values()))
 
 
 @lru_cache(maxsize=4)
@@ -221,6 +236,8 @@ def _read_bank(path: Path, want: Optional[set], columns: Optional[list[str]] = N
 def load_marine_geometry_at_point(lon: float, lat: float) -> pd.DataFrame:
     """Load bbox-filtered candidates from the approved marine point bank."""
     domain = _active_domain_paths()
+    if domain and "point_banks" in domain:
+        raise ValueError("Select one Marine family before resolving a point")
     if domain:
         bbox_candidates = read_bbox_candidates(
             domain["bbox_index"], float(lon), float(lat), columns=["loc_id"],
@@ -265,6 +282,8 @@ def load_marine_geometry_for_points(
     domain = _active_domain_paths()
     if not domain:
         return None
+    if "point_banks" in domain:
+        raise ValueError("Select one Marine family before resolving points")
     if not point_items:
         return pd.DataFrame(columns=_MARINE_POINT_COLUMNS), {}
 
@@ -346,8 +365,8 @@ def resolve_marine_family_points(
         raise ValueError(f"Marine has no point route for family {family}")
     if not point_items:
         return []
-    path = (domain["point_bank"]
-            if bank_key in MARINE_JURISDICTION_FAMILIES else domain[bank_key])
+    path = (domain["point_banks"][bank_key] if "point_banks" in domain else domain["point_bank"]
+            ) if bank_key in MARINE_JURISDICTION_FAMILIES else domain[bank_key]
     if not parquet_available(path):
         raise ValueError(f"Selected Marine {family} bank is unavailable")
     if bank_key in MARINE_JURISDICTION_FAMILIES:

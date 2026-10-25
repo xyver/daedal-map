@@ -157,7 +157,11 @@ def prewarm_country_routing_indexes(catalog: dict[str, Any] | None = None) -> di
         component = global_layout.get("component_bbox_index") or {}
         relative = str(component.get("path") or "")
         expected_hash = str(component.get("sha256") or "")
-        if (relative != "geometry/runtime/global_admin0_point/component_bbox_index.parquet"
+        full_version = str((global_layout.get("full_release") or {}).get("version") or "")
+        expected_path = (f"geometry/runtime/global_admin0_point/releases/"
+                         f"{full_version}/component_bbox_index.parquet")
+        if (not re.fullmatch(r"\d+\.\d+\.\d+", full_version)
+                or relative != expected_path
                 or not re.fullmatch(r"[0-9a-f]{64}", expected_hash)):
             raise ValueError("Global Admin0 component index lacks its admitted path or hash pin")
         local = resolve_artifact_path(relative, lane="active", max_bytes=2 * 1024 * 1024)
