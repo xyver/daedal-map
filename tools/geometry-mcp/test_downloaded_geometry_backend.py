@@ -165,6 +165,8 @@ class InstalledSideFamilyTest(unittest.TestCase):
                 "lat": 0, "lon": 0, "shallow_loc_id": "AAA-X", "target_admin_level": 4,
             })
             self.assertEqual(result["matched"]["loc_id"], "AAA-X-4")
+            self.assertEqual([path.name for path in backend.verified if "exact" in path.parts or "display" in path.parts],
+                             ["0001_AAA-X.parquet"])
 
     def test_marine_identity_and_bridge_relationships(self):
         with tempfile.TemporaryDirectory() as temporary:

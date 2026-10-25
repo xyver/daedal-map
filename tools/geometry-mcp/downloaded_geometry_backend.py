@@ -173,7 +173,8 @@ class DownloadedGeometryBackend:
         return rows
 
     def _load(self, *, geometry: bool = False, loc_ids=None, country=None, admin_level=None, point=None,
-              selected_path: Path | None = None):
+              selected_path: Path | None = None, reference_only: bool = False,
+              strict_country: bool = False):
         wanted = {"loc_id", "parent_id", "admin_level", "type", "name", "iso_a3", "country_iso3", "family", "subtype", "level", "centroid_lon", "centroid_lat", "has_polygon", "bbox_min_lon", "bbox_min_lat", "bbox_max_lon", "bbox_max_lat"}
         if geometry: wanted.update({"geometry", "geometry_wkb"})
         rows = []
@@ -181,8 +182,8 @@ class DownloadedGeometryBackend:
             if selected_path is not None and file["local_path"] != selected_path:
                 continue
             meta = package["metadata"]
-            if country and meta.get("country_code") not in {country, "GLOBAL"}: continue
-            if file.get("component") not in ({"exact", "display"} if geometry else {"exact", "display", "reference"}): continue
+            if country and meta.get("country_code") not in ({country} if strict_country else {country, "GLOBAL"}): continue
+            if file.get("component") not in ({"reference"} if reference_only else {"exact", "display"} if geometry else {"exact", "display", "reference"}): continue
             archive = file["archive_path"].replace("\\", "/")
             if file.get("component") == "reference" and "/partitions/identities/" not in archive and archive != "reference/identities.parquet":
                 continue
@@ -428,7 +429,8 @@ class DownloadedGeometryBackend:
                                                "family": family} for row in matches]},
             }
         if shallow:
-            anchor = self._identity(shallow)
+            identity = (lambda loc_id: self._identity_in_scope(loc_id, scope)) if scope else self._identity
+            anchor = identity(shallow)
             if anchor is None:
                 return {"point": {"lat": item["lat"], "lon": item["lon"]},
                         "error": {"code": "shallow_scope_not_found", "message": "shallow_loc_id is absent from installed packages"}}
@@ -439,7 +441,7 @@ class DownloadedGeometryBackend:
                     if current["loc_id"] == shallow:
                         return True
                     visited.add(current["loc_id"])
-                    current = self._identity(current.get("parent_id")) if current.get("parent_id") else None
+                    current = identity(current.get("parent_id")) if current.get("parent_id") else None
                 return False
             matches = [row for row in matches if under_scope(row) and (row.get("admin_level") or 0) > (anchor.get("admin_level") or 0)]
         else:
@@ -464,17 +466,17 @@ class DownloadedGeometryBackend:
 
     def _selected_deep_bank(self, anchor: dict[str, Any], level: int | None) -> Path | None:
         """Select one country Detail partition from the shallow Admin 1 ancestor."""
+        country = str(anchor["country"]).upper()
         ancestor = anchor
         seen = set()
         while (ancestor and ancestor.get("admin_level") != 1
                and ancestor.get("loc_id") not in seen):
             seen.add(ancestor["loc_id"])
             parent = ancestor.get("parent_id")
-            ancestor = self._identity(parent) if parent else None
+            ancestor = self._identity_in_scope(parent, country) if parent else None
         if not ancestor or ancestor.get("admin_level") != 1:
             return None
         state_id = ancestor["loc_id"]
-        country = str(anchor["country"]).upper()
         candidates = []
         for package, file in self._records():
             if (str(package["metadata"].get("country_code") or "").upper() != country
@@ -519,10 +521,12 @@ class DownloadedGeometryBackend:
             if deep:
                 return _error("family_route_unavailable", "This installed package has no deep point route for the selected family", family=family)
         if deep:
-            anchor = self._identity(str(args["shallow_loc_id"]))
+            scope = str(args["shallow_loc_id"]).split("-", 1)[0].upper()
+            if len(scope) != 3 or not scope.isalpha():
+                return _error("shallow_scope_not_found", "shallow_loc_id must select one installed country")
+            anchor = self._identity_in_scope(str(args["shallow_loc_id"]), scope)
             if anchor is None:
                 return _error("shallow_scope_not_found", "shallow_loc_id is absent from installed packages")
-            scope = str(anchor["country"]).upper()
             if scope in {"GLOBAL", "MARINE"}:
                 return _error("family_route_unavailable", "Deep point lookup requires one installed country scope")
         level = args.get("target_admin_level") if deep else None
@@ -557,6 +561,11 @@ class DownloadedGeometryBackend:
 
     def _identity(self, loc_id: str) -> dict[str, Any] | None:
         rows = self._dedupe(self._load(loc_ids=[loc_id]))
+        return rows[0] if rows else None
+
+    def _identity_in_scope(self, loc_id: str, scope: str) -> dict[str, Any] | None:
+        rows = self._dedupe(self._load(loc_ids=[loc_id], country=scope,
+                                       strict_country=True, reference_only=True))
         return rows[0] if rows else None
 
     def _loc_info_item(self, loc_id: str) -> dict[str, Any]:
