@@ -2659,7 +2659,7 @@ async def get_ai_plugin_json():
             "type": "openapi",
             "url": f"{app_url}/openapi.json",
         },
-        "logo_url": "https://daedalmap.com/site-static/daedalmap_logo_v1.png",
+        "logo_url": "https://daedalmap.com/site-static/favicon_v3.png",
         "contact_email": "contact@daedalmap.com",
         "legal_info_url": "https://daedalmap.com/about",
     }
