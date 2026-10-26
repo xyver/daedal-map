@@ -10,8 +10,11 @@ The launcher defaults to DaedalMap release and Store checks. **Settings →
 Launcher connection → Run Local Custom** copies installed Mapping and any
 installed Network expansion into `launcher-data/custom/` so those files can be
 edited without rebuilding program ZIPs. It stops DaedalMap release and Store
-checks. Switching modes offers **Restart now** or **Later**. Install Mapping
-while connected before entering Local Custom.
+checks. Installed programs, data packs, and geometry remain visible from the
+same library in both modes; Local Custom shows installed items without remote
+update actions. Switching modes offers **Restart now** or **Later**. Install
+Mapping while connected before entering Local Custom. A different
+`--library-root` creates a separate library, regardless of connection mode.
 
 For source development, create a Python environment with the Mapping runtime
 requirements and run:

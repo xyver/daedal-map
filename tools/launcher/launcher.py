@@ -619,12 +619,10 @@ def has_usable_installed_engine(state: EngineState | None = None) -> bool:
 
 
 def visible_launcher_tabs(mapping_installed: bool, installed_products: set[str]) -> set[str]:
-    if local_source_mode():
-        return {"home", "library", "geometry", "advanced", "runtime", "network"}
     tabs = {"home", "library", "geometry", "programs", "advanced"}
-    if mapping_installed:
+    if mapping_installed or local_source_mode():
         tabs.add("runtime")
-    if NETWORK_PRODUCT in installed_products:
+    if NETWORK_PRODUCT in installed_products or local_network_source_root() is not None:
         tabs.add("network")
     if "daedalmap-research-mcp" in installed_products:
         tabs.add("research")
@@ -1924,7 +1922,8 @@ class LauncherApp:
             self.pack_filter_buttons["cloud"].configure(state=DISABLED)
             self.geometry_filter_buttons["cloud"].configure(state=DISABLED)
             for button in (self.refresh_store_button, self.refresh_geometry_button,
-                           self.import_data_button, self.import_geometry_button):
+                           self.import_data_button, self.import_geometry_button,
+                           self.refresh_programs_button, self.import_program_button):
                 button.configure(state=DISABLED)
         self.install_button.configure(state=DISABLED)
         if not has_usable_installed_engine():
@@ -2407,7 +2406,7 @@ class LauncherApp:
         mode_panel = Frame(frame, **panel_kwargs())
         mode_panel.pack(fill="x", pady=(0, section_gap))
         Label(mode_panel, text="Launcher connection", **label_kwargs("section")).pack(anchor="w", padx=12, pady=(12, 2))
-        Label(mode_panel, text="Local custom makes editable copies of installed Mapping and Network inside this launcher folder and skips DaedalMap release and store checks.",
+        Label(mode_panel, text="Both modes use the same launcher library. Local custom makes editable copies of Mapping and Network and pauses DaedalMap release and store checks. Installed programs, data, and geometry stay visible.",
               **label_kwargs("muted")).pack(anchor="w", padx=12, pady=(0, 8))
         mode_buttons = Frame(mode_panel, bg=THEME["colors"]["panel_bg"])
         mode_buttons.pack(fill="x", padx=12, pady=(0, 8))

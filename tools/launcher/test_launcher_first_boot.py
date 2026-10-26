@@ -910,7 +910,9 @@ def test_explicit_local_source_uses_source_network_and_shared_library(tmp_path, 
     assert env["DAEDALMAP_NETWORK_AUTO_START"] == "0"
     assert env["DAEDALMAP_LOCAL_SOURCE_MODE"] == "1"
     assert launcher.visible_launcher_tabs(True, set()) == {
-        "home", "library", "geometry", "advanced", "runtime", "network"}
+        "home", "programs", "library", "geometry", "advanced", "runtime", "network"}
+    assert {"programs", "research", "geometry_mcp"} <= launcher.visible_launcher_tabs(
+        True, {"daedalmap-research-mcp", "daedalmap-geometry-mcp"})
 
 
 def test_local_custom_mapping_runs_without_network_source(tmp_path, monkeypatch) -> None:
