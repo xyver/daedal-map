@@ -34,14 +34,31 @@ def _check_roots(source: Path, target: Path) -> None:
     if any((target / name).exists() for name in ("state.json", "programs.json")) or (
             target / "runtime" / "state" / "pack_state.json").exists():
         raise ValueError("The destination already has installs; migration requires a fresh library")
-    catalog = target / "runtime" / "data" / "catalog.json"
-    if catalog.exists() and json.loads(catalog.read_text(encoding="utf-8")).get("sources"):
-        raise ValueError("The destination already has data; migration requires a fresh library")
+
+
+def _check_existing_data(source: Path, target: Path) -> None:
+    """Allow a partial manual copy only when it contains no unique data."""
+    existing = target / "runtime" / "data"
+    if not existing.exists():
+        return
+    source_data = source / "runtime" / "data"
+    for relative, file in _files(existing).items():
+        original = source_data / relative
+        if original.is_file() and filecmp.cmp(file, original, shallow=False):
+            continue
+        if relative == Path("catalog.json"):
+            catalog = json.loads(file.read_text(encoding="utf-8"))
+            if not catalog.get("sources") and not catalog.get("packs"):
+                continue
+        raise ValueError(f"The destination contains data absent or different in AppData: {file}")
 
 
 def _files(root: Path) -> dict[Path, Path]:
     result: dict[Path, Path] = {}
-    for parent, directories, names in os.walk(root, followlinks=False):
+    def fail(error: OSError) -> None:
+        raise error
+
+    for parent, directories, names in os.walk(root, followlinks=False, onerror=fail):
         for name in directories + names:
             item = Path(parent) / name
             if item.is_symlink() or (hasattr(item, "is_junction") and item.is_junction()):
@@ -92,6 +109,7 @@ def migrate(source: Path, target: Path) -> tuple[int, bool]:
     source, target = source.resolve(), target.resolve()
     _check_roots(source, target)
     source_files = _files(source)
+    _check_existing_data(source, target)
     stage = target.parent / f".{target.name}-migration-{uuid.uuid4().hex}"
     backup = target.parent / f".{target.name}-before-migration-{uuid.uuid4().hex}"
     if not stage.resolve().is_relative_to(target.parent.resolve()) or not backup.resolve().is_relative_to(target.parent.resolve()):

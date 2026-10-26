@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from migrate_legacy_library import migrate
 
 
@@ -31,7 +33,8 @@ def test_migration_moves_installs_into_portable_default_and_preserves_mode(tmp_p
     target.mkdir(parents=True)
     (target / "launcher_mode.json").write_text('{"mode":"local_custom"}', encoding="utf-8")
     (target / "runtime" / "data").mkdir(parents=True)
-    (target / "runtime" / "data" / "catalog.json").write_text('{"sources":[]}', encoding="utf-8")
+    (target / "runtime" / "data" / "catalog.json").write_text(
+        (data / "catalog.json").read_text(encoding="utf-8"), encoding="utf-8")
 
     count, removed = migrate(source, target)
 
@@ -45,3 +48,21 @@ def test_migration_moves_installs_into_portable_default_and_preserves_mode(tmp_p
     migrated = json.loads((target / "runtime" / "state" / "pack_state.json").read_text())
     assert migrated["installed_packs"][0]["catalog_path"] == str(target / "runtime" / "packs" / "earthquakes" / "data" / "catalog.json")
     assert json.loads((target / "runtime" / "data" / "catalog.json").read_text())["sources"][0]["runtime_data_root"] == str(target / "runtime" / "packs" / "earthquakes" / "data")
+
+
+def test_migration_keeps_unique_destination_data(tmp_path: Path) -> None:
+    source = tmp_path / "AppData" / "DaedalMapLauncher"
+    state = source / "runtime" / "state"
+    state.mkdir(parents=True)
+    (state / "pack_state.json").write_text('{"installed_packs":[]}', encoding="utf-8")
+    (source / "runtime" / "data").mkdir()
+    target = tmp_path / "Portable" / "launcher-data"
+    data = target / "runtime" / "data"
+    data.mkdir(parents=True)
+    (data / "my-data.parquet").write_bytes(b"unique")
+
+    with pytest.raises(ValueError, match="absent or different"):
+        migrate(source, target)
+
+    assert source.exists()
+    assert (data / "my-data.parquet").read_bytes() == b"unique"
