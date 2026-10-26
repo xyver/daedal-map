@@ -602,6 +602,19 @@ def test_packaged_launcher_always_uses_its_own_portable_library(tmp_path, monkey
     assert launcher._default_app_root() == owner / "launcher-data"
 
 
+def test_source_launcher_defaults_to_its_own_library_even_with_legacy_appdata(tmp_path, monkeypatch) -> None:
+    owner = tmp_path / "launcher"
+    owner.mkdir()
+    legacy = tmp_path / "appdata" / "DaedalMapLauncher"
+    legacy.mkdir(parents=True)
+    (legacy / "runtime_config.json").write_text("{}", encoding="utf-8")
+    monkeypatch.delenv("DAEDALMAP_LAUNCHER_ROOT", raising=False)
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "appdata"))
+    monkeypatch.setattr(launcher.sys, "frozen", False, raising=False)
+    monkeypatch.setattr(launcher, "__file__", str(owner / "launcher.py"))
+    assert launcher._default_app_root() == owner / "launcher-data"
+
+
 def test_local_custom_setting_is_persistent_and_blocks_launcher_downloads(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(launcher, "APP_ROOT", tmp_path)
     monkeypatch.setattr(launcher, "LAUNCHER_MODE_PATH", tmp_path / "launcher_mode.json")

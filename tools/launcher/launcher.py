@@ -196,12 +196,6 @@ def _default_app_root() -> Path:
         return Path(override).expanduser().resolve()
     owner = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent
     portable = owner / "launcher-data"
-    if getattr(sys, "frozen", False):
-        return portable
-    legacy = _local_appdata() / "DaedalMapLauncher"
-    # Keep the older source-checkout trial usable without changing the ZIP default.
-    if not portable.exists() and (legacy / "runtime_config.json").exists():
-        return legacy
     return portable
 
 

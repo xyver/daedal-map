@@ -6,6 +6,13 @@ This is the public source for the Windows launcher. The portable ZIP contains
 environments, settings, logs, and data stay there by default. Settings can
 move the data library to another location.
 
+For an older launcher library in `%LOCALAPPDATA%\DaedalMapLauncher`, close the
+launcher and run `python tools/launcher/migrate_legacy_library.py --source
+"$env:LOCALAPPDATA\DaedalMapLauncher" --target "<portable launcher folder>\launcher-data"`
+from PowerShell with access to the old files. The migration checks the copy,
+updates saved paths, and removes the old folder after verification. It requires
+an empty portable library.
+
 The launcher defaults to DaedalMap release and Store checks. **Settings →
 Launcher connection → Run Local Custom** copies installed Mapping and any
 installed Network expansion into `launcher-data/custom/` so those files can be
