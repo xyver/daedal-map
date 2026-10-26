@@ -17,7 +17,7 @@ For source development, create a Python environment with the Mapping runtime
 requirements and run:
 
 ```powershell
-python programs/launcher/launcher.py --local-source
+python tools/launcher/launcher.py --local-source
 ```
 
 `--local-source` is a developer override that runs the repository checkout;
@@ -25,7 +25,7 @@ the normal launcher setting uses the self-contained portable folder. The
 source launcher looks for `.venv/Scripts/python.exe` in this checkout or a
 parent directory. `--library-root PATH` selects an isolated launcher library.
 
-Run the launcher tests with `python -m pytest -q programs/launcher`. Build a
+Run the launcher tests with `python -m pytest -q tools/launcher`. Build a
 Windows test ZIP with `build_launcher.ps1 -BuildPython <python.exe> -UvExe
 <uv.exe> -OutputRoot <output-directory>`; the script verifies the pinned uv
 helper before bundling. Publication credentials, release staging, and hosted
