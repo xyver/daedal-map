@@ -174,10 +174,24 @@ def _prepare_pack_data(extract_root: Path, pack_root: Path, package: dict, versi
         raise ValueError("Pack release and package versions differ")
     data = pack_root / "data"
     sources: dict[str, Path] = {}
+    reference_geometry_path: Path | None = None
     for entry in package.get("files") or []:
         source_id = str(entry.get("source_id") or "")
         source_path = _relative(entry.get("source_path"))
         archive_path = _relative(entry.get("archive_path"))
+        if entry.get("reference_geometry") is True:
+            if (reference_geometry_path is not None or source_id != "admitted_reference_geometry"
+                    or archive_path.parts != ("data", "geometry", "geometry.parquet")
+                    or source_path.parts[:1] != ("geometry",)):
+                raise ValueError("Invalid reference geometry mapping in pack")
+            member = extract_root / archive_path
+            if not member.is_file():
+                raise ValueError(f"Missing reference geometry member: {archive_path}")
+            reference_geometry_path = Path("geometry") / "data_packs" / pack_id / "geometry.parquet"
+            target = data / reference_geometry_path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(member, target)
+            continue
         if (not TOKEN.fullmatch(source_id) or source_path.parts[0] not in {"global", "countries"}
                 or archive_path.parts[:3] != ("data", "sources", source_id)
                 or source_path.name != archive_path.name or len(source_path.parts) < 3):
@@ -213,6 +227,8 @@ def _prepare_pack_data(extract_root: Path, pack_root: Path, package: dict, versi
         "catalog_surfaces": sorted({v for s in catalog_sources for v in s.get("catalog_surfaces") or []}),
         "license": package.get("pack_license"),
     }
+    if reference_geometry_path is not None:
+        pack["reference_geometry_path"] = reference_geometry_path.as_posix()
     fragment = {"sources": catalog_sources, "packs": [pack], "total_sources": len(catalog_sources), "total_packs": 1}
     _write_json(data / "catalog.json", fragment)
     _write_json(data / "index.json", {"pack_id": pack_id, "source_ids": sorted(sources)})

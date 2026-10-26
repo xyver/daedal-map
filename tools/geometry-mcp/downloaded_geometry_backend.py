@@ -387,7 +387,9 @@ class DownloadedGeometryBackend:
             if meta.get("package_tier") not in {"display", "detail"}:
                 continue
             archive = file["archive_path"].replace("\\", "/")
-            if scope not in {"GLOBAL", "MARINE"} and archive.startswith("exact/admin/admin_0/") and archive.endswith(".parquet"):
+            if (scope not in {"GLOBAL", "MARINE"}
+                    and archive.startswith(("exact/admin/admin_0/", "display/admin/admin_0/"))
+                    and archive.endswith(".parquet")):
                 pass
             elif archive not in names:
                 continue
