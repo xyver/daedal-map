@@ -114,6 +114,10 @@ The catalogs are the authority for what is available now:
 
 ## Downloads
 
+The Windows launcher's public source, build script, and tests are in
+[programs/launcher](programs/launcher/README.md). Its portable download keeps
+programs and its managed runtime in the launcher folder by default.
+
 The [Downloads page](https://www.daedalmap.com/downloadable/) has three kinds
 of file:
 
