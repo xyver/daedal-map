@@ -1,5 +1,28 @@
 # Lake County Road Network Editor
 
+## Mapping expansion: first global viewer test
+
+Network now has a local Mapping adapter in `app/mapping_extension.py` and
+`app/static/mapping_extension.js`. With the optional Network package present,
+the local Mapping runtime shows a **Network layers** panel on its existing
+MapLibre map. It discovers validated `network-pack-v1` folders under
+`DATA_ROOT/networks/packs/`; a source checkout can set `NETWORK_PACKS_DIR` to
+`network/data/packs` to inspect the current rail, power, and river candidates.
+The pack reader checks manifest hashes before displaying a layer. The UI opens
+any of the four current pack types: road, rail, power, and river.
+
+This is a prepared-pack viewer test. Raw PBF, GeoPackage, Shapefile, GeoJSON,
+and GeoParquet imports still need type-specific graph adapters. Editing,
+scenario controls, export, and the expansion-bundled exact-geometry resolver
+for edit-time `loc_id` relationships are next. The Lake County window below is
+retained as a road-behavior reference while those controls move into Mapping.
+
+Run the focused contract check from `network/` with the workspace environment:
+
+```powershell
+& '..\..\.venv\Scripts\python.exe' -m unittest discover -s tests -p 'test_mapping_extension.py' -v
+```
+
 Local-only prototype for road-closure scenarios. The source now lives in
 `network/` inside the public DaedalMap repository. It remains runnable on its
 own for now: it does not import the Mapping app and accepts prepared/source

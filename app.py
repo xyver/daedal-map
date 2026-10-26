@@ -104,7 +104,7 @@ BASE_DIR = Path(__file__).resolve().parent
 
 # Dashboard-activated policy is runtime state, never generated catalog state.
 # An explicit JSON/file env still has higher precedence for emergency deploys.
-from mapmover.paths import STATE_DIR
+from mapmover.paths import RUNTIME_MODE, STATE_DIR
 os.environ.setdefault(RUNTIME_POLICY_FILE_ENV, str(STATE_DIR / "access_policy_active.json"))
 
 HARD_GATED_SURFACES = frozenset({"agent_api_paid", "agent_api_mcp", "point_lookup"})
@@ -950,6 +950,17 @@ app.include_router(weather_router)
 app.include_router(chat_router)
 app.include_router(ops_router)
 app.include_router(research_router)
+
+# Network is an optional local Mapping expansion. Its pack reader and UI ship
+# together, while hosted Mapping never exposes local filesystem routes.
+if RUNTIME_MODE == "local":
+    try:
+        from network.app.mapping_extension import router as network_mapping_router
+    except ModuleNotFoundError as exc:
+        if exc.name not in {"network", "network.app", "network.app.mapping_extension"}:
+            raise
+    else:
+        app.include_router(network_mapping_router)
 
 
 

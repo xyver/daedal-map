@@ -930,6 +930,15 @@ export const App = {
     // Initialize map
     await MapAdapter.init();
 
+    if (document.body?.dataset.localWrapper === 'true') {
+      // The optional Network package supplies both the API and map controls.
+      fetch('/api/local/network/packs').then(async (response) => {
+        if (!response.ok) return;
+        const { initNetworkExpansion } = await import('/api/local/network/ui.js');
+        await initNetworkExpansion();
+      }).catch((error) => console.warn('Network expansion could not start:', error));
+    }
+
     // Live overlays (toggleable, all modes; need the map to exist).
     AuroraOverlay.init({ MapAdapter });
     NwsAlertsOverlay.init({ MapAdapter });
