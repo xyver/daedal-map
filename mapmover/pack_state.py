@@ -15,7 +15,7 @@ import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .paths import DATA_ROOT, PACKS_ROOT, SETTINGS_PATH, STATE_DIR, ensure_dir
+from .paths import DATA_ROOT, PACKS_ROOT, RUNTIME_MODE, SETTINGS_PATH, STATE_DIR, ensure_dir
 from .catalog_surface import filter_catalog_for_product_surface
 
 
@@ -423,6 +423,22 @@ def build_active_catalog(full_catalog: dict, state: dict | None = None, catalog_
                 continue
             src["runtime_data_root"] = entry.get("data_root")
             filtered_sources.append(src)
+        if RUNTIME_MODE == "local":
+            data_root = DATA_ROOT.resolve()
+            for src in sources:
+                if not src.get("local_folder"):
+                    continue
+                relative = Path(str(src.get("path") or ""))
+                folder = (data_root / relative).resolve()
+                if (not relative.parts or relative.is_absolute() or not folder.is_relative_to(data_root)
+                        or not folder.is_dir()):
+                    continue
+                local_source = dict(src)
+                local_source["runtime_data_root"] = str(data_root)
+                filtered_sources = [item for item in filtered_sources
+                                    if item.get("source_id") != src.get("source_id")]
+                filtered_sources.append(local_source)
+                active_pack_ids.add(src["pack_id"])
         active_sources = filtered_sources
         active_pack_ids = sorted(active_pack_ids)
 

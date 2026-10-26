@@ -6,12 +6,12 @@ This is the public source for the Windows launcher. The portable ZIP contains
 environments, settings, logs, and data stay there by default. Settings can
 move the data library to another location.
 
-For an older launcher library in `%LOCALAPPDATA%\DaedalMapLauncher`, close the
-launcher and run `python tools/launcher/migrate_legacy_library.py --source
-"$env:LOCALAPPDATA\DaedalMapLauncher" --target "<portable launcher folder>\launcher-data"`
-from PowerShell with access to the old files. The migration checks the copy,
-updates saved paths, and removes the old folder after verification. It requires
-an empty portable library.
+In Settings, **Open Data Folder** opens `launcher-data/runtime/data` by default.
+Drop a folder containing Parquet files there. The launcher detects changes and
+offers **Update Catalog**; the same action is always available in Settings.
+Folders with `metadata.json` retain their source details, while a plain
+top-level Parquet folder gets a basic local research entry. Restart Mapping if
+it is already running when the catalog changes.
 
 The launcher defaults to DaedalMap release and Store checks. **Settings →
 Launcher connection → Run Local Custom** copies installed Mapping and any

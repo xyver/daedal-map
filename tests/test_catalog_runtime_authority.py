@@ -71,6 +71,31 @@ def test_api_catalog_build_does_not_fetch_explore_overlay_metadata() -> None:
         metadata.assert_called_once_with("earthquakes_events")
 
 
+def test_local_folder_remains_visible_with_managed_packs(tmp_path: Path) -> None:
+    import mapmover.pack_state as pack_state
+
+    folder = tmp_path / "my_tables"
+    folder.mkdir()
+    catalog = {"sources": [{"source_id": "my_tables", "pack_id": "local_my_tables",
+                            "path": "my_tables", "local_folder": True,
+                            "catalog_surfaces": ["research"]}],
+               "packs": [{"pack_id": "local_my_tables", "source_ids": ["my_tables"]}]}
+    state = {"catalog_mode": "managed_packs", "installed_packs": [], "active_pack_ids": []}
+    with (mock.patch.object(pack_state, "DATA_ROOT", tmp_path),
+          mock.patch.object(pack_state, "RUNTIME_MODE", "local")):
+        result = build_active_catalog(catalog, state, catalog_surface="research")
+    assert [source["source_id"] for source in result["sources"]] == ["my_tables"]
+    assert result["sources"][0]["runtime_data_root"] == str(tmp_path)
+    state["installed_packs"] = [{"pack_id": "local_my_tables", "data_root": "C:/old/pack"}]
+    with (mock.patch.object(pack_state, "DATA_ROOT", tmp_path),
+          mock.patch.object(pack_state, "RUNTIME_MODE", "local")):
+        assert build_active_catalog(catalog, state, catalog_surface="research")["sources"][0]["runtime_data_root"] == str(tmp_path)
+    state["installed_packs"] = []
+    with (mock.patch.object(pack_state, "DATA_ROOT", tmp_path),
+          mock.patch.object(pack_state, "RUNTIME_MODE", "cloud")):
+        assert build_active_catalog(catalog, state, catalog_surface="research")["sources"] == []
+
+
 def test_normal_catalog_owns_agent_pack_admission_and_current_facts() -> None:
     published = {
         "packs": [

@@ -48,6 +48,7 @@ from map_launch_page import MapLaunchPage
 from launcher_release import LAUNCHER_VERSION, PUBLIC_BASE_URL as LAUNCHER_RELEASE_BASE_URL, check_release, download_release, is_newer_version
 from geometry_store import (GEOMETRY_TIERS, GeometryStoreError, geometry_info_url, group_geometry_releases,
                             installed_geometry, install_geometry_zip, releases_from_storefront)
+from local_catalog import catalog_needs_refresh, refresh_catalog, save_snapshot, scan_data_folder
 from styled_dialog import messagebox
 
 
@@ -1032,6 +1033,33 @@ def packs_for_view(available: list[AvailablePack], pack_state: dict, view: str) 
             for pack_id, version in installed.items()]
 
 
+def local_folder_packs(data_root: Path, installed_ids: set[str]) -> list[tuple[AvailablePack, LocalPackStatus, bool]]:
+    """Show folders indexed in the local catalog even without a package receipt."""
+    try:
+        catalog = json.loads((data_root / "catalog.json").read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError):
+        return []
+    rows = []
+    for pack in catalog.get("packs", []):
+        if not isinstance(pack, dict):
+            continue
+        pack_id = str(pack.get("pack_id") or "")
+        if not pack_id or pack_id in installed_ids:
+            continue
+        version = str(pack.get("pack_version") or "local")
+        rows.append((AvailablePack(pack_id, version, source_name=str(pack.get("pack_name") or pack_id),
+                                   description="Available from the local data folder."),
+                     LocalPackStatus(version, True), False))
+    return rows
+
+
+def installed_data_entries() -> list[dict]:
+    entries = [entry for entry in load_pack_state().get("installed_packs", []) if isinstance(entry, dict)]
+    installed_ids = {str(entry.get("pack_id") or "") for entry in entries}
+    return [*entries, *({"pack_id": pack.pack_id, "version": pack.version}
+                       for pack, _, _ in local_folder_packs(RUNTIME_DATA_ROOT, installed_ids))]
+
+
 def public_base_url() -> str:
     explicit = os.environ.get("DAEDALMAP_PUBLIC_BASE_URL", "").strip().rstrip("/")
     if explicit:
@@ -1781,6 +1809,7 @@ class LauncherApp:
         self.research_var = StringVar(value="")
         self.llm_var = StringVar(value="")
         self.advanced_var = StringVar(value="")
+        self.data_catalog_var = StringVar(value="Checking data folder...")
         self.launcher_mode_var = StringVar(value="")
         self.install_button_var = StringVar(value="Checking...")
         self.install_button_idle_label = "Checking..."
@@ -1836,6 +1865,9 @@ class LauncherApp:
         self.programs_loaded_once = False
         self.catalog_refresh_in_flight = False
         self.catalog_source = "loading"
+        self.data_scan_in_flight = False
+        self.last_data_scan_time = 0.0
+        self.last_data_prompt_signature = ""
 
         page_pad = THEME["spacing"]["page_pad"]
         section_gap = THEME["spacing"]["section_gap"]
@@ -2387,13 +2419,19 @@ class LauncherApp:
         Label(advanced_panel, text="Settings", **label_kwargs("section")).pack(anchor="w", padx=12, pady=(12, 0))
         Label(
             advanced_panel,
-            text="A new library starts beside the launcher. Choose another folder if you need more space.",
+            text="Data starts in this launcher folder. Drop a folder of Parquet files into Data Folder; the launcher will offer to update its catalog. Choose another location only if you need more space.",
             **label_kwargs("muted"),
         ).pack(anchor="w", padx=12, pady=(4, 8))
         advanced_buttons = Frame(advanced_panel, bg=THEME["colors"]["panel_bg"])
         advanced_buttons.pack(fill="x", padx=12, pady=(0, 8))
         self.storage_button = Button(advanced_buttons, text="Change Library Location", command=self.choose_storage_location_clicked, **button_kwargs("primary"))
         self.storage_button.pack(side=LEFT, padx=(0, THEME["spacing"]["button_gap"]))
+        Button(advanced_buttons, text="Open Data Folder", command=self.open_data_folder_clicked,
+               **button_kwargs("primary")).pack(side=LEFT, padx=(0, THEME["spacing"]["button_gap"]))
+        Button(advanced_buttons, text="Update Catalog", command=self.update_data_catalog_clicked,
+               **button_kwargs("primary")).pack(side=LEFT)
+        Label(advanced_panel, textvariable=self.data_catalog_var, **label_kwargs("muted"),
+              wraplength=1100, justify=LEFT).pack(anchor="w", padx=12, pady=(0, 8))
         self.advanced_status_text = self._create_selectable_text(advanced_panel, height=8, muted=False)
         self.advanced_status_text.pack(fill="x", padx=12, pady=(0, 12))
 
@@ -2709,6 +2747,7 @@ class LauncherApp:
                     save_state(state)
             self.refresh_installed_label()
             self.scan_incoming_data()
+            self.kick_data_folder_scan()
             self.kick_remote_status_refresh(min_interval_seconds=REMOTE_STATUS_MIN_INTERVAL_SECONDS)
         finally:
             try:
@@ -2766,6 +2805,71 @@ class LauncherApp:
                                    f"{path.name}\n\nCheck this ZIP and add it to your data library?"):
                 self.import_data_zip_path(path, confirmed=True)
             break
+
+    def kick_data_folder_scan(self) -> None:
+        if self.data_scan_in_flight or time.time() - self.last_data_scan_time < 20:
+            return
+        self.last_data_scan_time = time.time()
+        self.data_scan_in_flight = True
+        data_root = RUNTIME_DATA_ROOT
+        snapshot = RUNTIME_STATE_DIR / "data_folder_snapshot.json"
+
+        def work() -> None:
+            try:
+                sources, fingerprint = scan_data_folder(data_root)
+                changed = catalog_needs_refresh(data_root, snapshot, sources, fingerprint)
+                self.root.after(0, lambda: self.apply_data_folder_scan(
+                    data_root, snapshot, sources, fingerprint, changed))
+            except Exception as exc:
+                self.root.after(0, lambda message=str(exc): self.data_catalog_var.set(
+                    f"Data folder needs review: {message}"))
+            finally:
+                self.data_scan_in_flight = False
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def apply_data_folder_scan(self, data_root: Path, snapshot: Path, sources: list[dict],
+                               fingerprint: str, changed: bool) -> None:
+        if data_root != RUNTIME_DATA_ROOT:
+            return
+        if changed and not catalog_needs_refresh(data_root, snapshot, sources, fingerprint):
+            changed = False
+        self.data_catalog_var.set(
+            f"Data folder: {data_root}  |  {len(sources)} sources  |  "
+            f"Catalog {'needs updating' if changed else 'current'}")
+        if not changed:
+            if not snapshot.exists():
+                save_snapshot(snapshot, fingerprint)
+            return
+        if self.last_data_prompt_signature == fingerprint or (self.worker and self.worker.is_alive()):
+            return
+        self.last_data_prompt_signature = fingerprint
+        if messagebox.askyesno("Data folder changed",
+                               f"Data changed in:\n{data_root}\n\nUpdate the local catalog now?",
+                               confirm_label="Update Catalog", cancel_label="Later"):
+            self.update_data_catalog_clicked()
+
+    def open_data_folder_clicked(self) -> None:
+        RUNTIME_DATA_ROOT.mkdir(parents=True, exist_ok=True)
+        os.startfile(RUNTIME_DATA_ROOT)
+
+    def update_data_catalog_clicked(self) -> None:
+        data_root = RUNTIME_DATA_ROOT
+        snapshot = RUNTIME_STATE_DIR / "data_folder_snapshot.json"
+
+        def work() -> None:
+            sources, fingerprint = scan_data_folder(data_root)
+            catalog = refresh_catalog(data_root, snapshot, sources, fingerprint)
+            self.append_log(f"Updated local catalog from {data_root}: {catalog['total_sources']} sources")
+            self.root.after(0, lambda: self.data_catalog_var.set(
+                f"Data folder: {data_root}  |  {catalog['total_sources']} sources  |  Catalog current"))
+            self.root.after(0, self.refresh_installed_label)
+            self.root.after(0, self.update_pack_list)
+            self.root.after(0, self.refresh_research_views)
+            if is_runtime_reachable():
+                self.root.after(0, lambda: self.set_status("Catalog updated. Restart Mapping to load the new data."))
+
+        self.run_worker("Updating data catalog", work)
 
     def invalidate_size_cache(self) -> None:
         self.size_cache_time = 0.0
@@ -2960,7 +3064,9 @@ class LauncherApp:
     def refresh_installed_label(self) -> None:
         state = load_state()
         pack_state = load_pack_state()
-        installed_pack_count = len(pack_state.get("installed_packs", []))
+        installed_ids = {str(entry.get("pack_id") or "") for entry in pack_state.get("installed_packs", [])
+                         if isinstance(entry, dict)}
+        installed_pack_count = len(installed_ids) + len(local_folder_packs(RUNTIME_DATA_ROOT, installed_ids))
         installed_programs = load_program_state()["installed_programs"]
         installed_program_count = len(installed_programs)
         installed_products = {
@@ -3015,7 +3121,9 @@ class LauncherApp:
         self._set_selectable_text(self.advanced_status_text, advanced_text)
     def set_store_status(self, mode: str, detail: str = "") -> None:
         pack_state = load_pack_state()
-        installed_pack_count = len(pack_state.get("installed_packs", []))
+        installed_ids = {str(entry.get("pack_id") or "") for entry in pack_state.get("installed_packs", [])
+                         if isinstance(entry, dict)}
+        installed_pack_count = len(installed_ids) + len(local_folder_packs(RUNTIME_DATA_ROOT, installed_ids))
         if mode == "local":
             text = f"Local custom mode: DaedalMap Store is disconnected. {installed_pack_count} data packs installed."
             self.store_var.set(text)
@@ -3078,8 +3186,7 @@ class LauncherApp:
             str(self.research_pack_list.get(index)).split(" (", 1)[0].strip()
             for index in self.research_pack_list.curselection()
         } if hasattr(self, "research_pack_list") else set()
-        pack_state = load_pack_state()
-        installed = [entry for entry in pack_state.get("installed_packs", []) if isinstance(entry, dict)]
+        installed = installed_data_entries()
         self.research_pack_list.delete(0, END)
         for idx, entry in enumerate(installed):
             pack_id = str(entry.get("pack_id") or "").strip()
@@ -3114,8 +3221,7 @@ class LauncherApp:
     def get_selected_research_pack_ids(self) -> list[str]:
         if not hasattr(self, "research_pack_list"):
             return []
-        pack_state = load_pack_state()
-        installed = [entry for entry in pack_state.get("installed_packs", []) if isinstance(entry, dict)]
+        installed = installed_data_entries()
         selected_ids: list[str] = []
         for index in self.research_pack_list.curselection():
             idx = int(index)
@@ -3270,7 +3376,13 @@ class LauncherApp:
         self.pack_action_vars.clear()
         terms = self.pack_search_var.get().strip().lower().split()
         filtered = []
-        for pack, status, in_cloud in packs_for_view(self.available_packs, load_pack_state(), self.pack_filter):
+        pack_state = load_pack_state()
+        rows = packs_for_view(self.available_packs, pack_state, self.pack_filter)
+        if self.pack_filter == "installed":
+            installed_ids = {str(entry.get("pack_id") or "") for entry in pack_state.get("installed_packs", [])
+                             if isinstance(entry, dict)}
+            rows.extend(local_folder_packs(RUNTIME_DATA_ROOT, installed_ids))
+        for pack, status, in_cloud in rows:
             haystack = " ".join((pack.source_name, pack.description, pack.pack_id,
                                  pack.topic_category, pack.package_tier)).lower()
             if not all(term in haystack for term in terms):
@@ -3438,6 +3550,8 @@ class LauncherApp:
         self.invalidate_size_cache()
         self.refresh_installed_label()
         self.refresh_map_tile_status()
+        self.last_data_scan_time = 0
+        self.kick_data_folder_scan()
         self.append_log(f"Updated local storage root to {chosen_root}")
         if is_runtime_reachable():
             message = (
