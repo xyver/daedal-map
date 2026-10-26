@@ -78,7 +78,7 @@ class InstalledSideFamilyTest(unittest.TestCase):
             })
             country_row = {**row("USA-CA"), "admin_level": 1, "iso_a3": "USA"}
             _package(root, "usa", "downloadable_geometry_package", "USA", {
-                "display/admin_0_3.parquet": ("display", [country_row]),
+                "display/admin/admin_0/0000_admin_0_3.parquet": ("display", [country_row]),
                 "display/families/watershed.parquet": ("display", [row("WATERSHED-1")]),
             }, tier="display")
             backend = DownloadedGeometryBackend(root)
@@ -116,7 +116,7 @@ class InstalledSideFamilyTest(unittest.TestCase):
                 "lat": 0, "lon": 0, "scope_id": "USA", "family": "administrative",
             })
             self.assertEqual(country_result["matched"]["loc_id"], "USA-CA")
-            self.assertEqual({p.name for p in backend.verified}, {"admin_0_3.parquet"})
+            self.assertEqual({p.name for p in backend.verified}, {"0000_admin_0_3.parquet"})
 
     def test_deep_point_does_not_borrow_global_shape_bank(self):
         polygon = '{"type":"Polygon","coordinates":[[[-1,-1],[1,-1],[1,1],[-1,1],[-1,-1]]]}'
