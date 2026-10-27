@@ -1,5 +1,7 @@
 # Network
 
+Program changes: [Network changelog](CHANGELOG.md).
+
 The current [Network source](../../network/README.md) lives under `network/`.
 It is an optional Mapping expansion: Mapping owns the single interactive map,
 and Network supplies validated rail, river, and power layers. Network also has

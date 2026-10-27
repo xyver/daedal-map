@@ -1,5 +1,7 @@
 # DaedalMap Launcher
 
+Program changes: [Launcher changelog](CHANGELOG.md).
+
 For the custom program, data, geometry, and Network work still to implement,
 see the [custom work requirements](../../docs/custom-work/README.md).
 

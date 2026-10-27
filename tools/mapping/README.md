@@ -1,5 +1,7 @@
 # Mapping
 
+Program changes: [Mapping changelog](CHANGELOG.md).
+
 Mapping is the base interactive map program. Its implementation currently spans
 root `app.py`, `mapmover/`, `static/`, `templates/`, and shared root modules.
 This folder is its source entry; moving the runtime here requires preserving
