@@ -786,6 +786,24 @@ def test_installed_data_pack_stays_in_installed_view_with_update_action() -> Non
     assert launcher.InstallActionState.compare("1.0", installed[0][0].version).action == "Update"
 
 
+def test_local_catalog_pack_is_installed_in_cloud_view_without_download_receipt(tmp_path, monkeypatch) -> None:
+    (tmp_path / "catalog.json").write_text(json.dumps({"packs": [
+        {"pack_id": "earthquakes", "pack_version": "1.1.0", "pack_name": "Earthquakes"}
+    ]}), encoding="utf-8")
+    state = {"installed_packs": [], "active_pack_ids": []}
+    monkeypatch.setattr(launcher, "RUNTIME_DATA_ROOT", tmp_path)
+    monkeypatch.setattr(launcher, "load_pack_state", lambda: state)
+    local_rows = launcher.local_folder_packs(tmp_path, set())
+    current = launcher.AvailablePack("earthquakes", "1.2.0", "earthquakes-lite")
+
+    cloud = launcher.packs_for_view([current], state, "cloud", local_rows)
+    installed = launcher.packs_for_view([current], state, "installed", local_rows)
+    assert cloud[0][1].installed_version == "1.1.0"
+    assert cloud[0][1].active
+    assert len(installed) == 1 and installed[0][0] is current
+    assert launcher.get_local_pack_status("earthquakes").installed_version == "1.1.0"
+
+
 def test_geometry_download_cancel_then_resumes_verified_partial(tmp_path, monkeypatch) -> None:
     payload = b"a full geometry ZIP transfer"
     destination = tmp_path / "geometry.zip"

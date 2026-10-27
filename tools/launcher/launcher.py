@@ -1014,22 +1014,32 @@ def get_local_pack_status(pack_id: str) -> LocalPackStatus:
         if str(entry.get("pack_id") or "").strip() == pack_id:
             installed_version = str(entry.get("version") or "").strip()
             break
+    if not installed_version:
+        local_rows = local_folder_packs(RUNTIME_DATA_ROOT, set())
+        installed_version = next((pack.version for pack, _, _ in local_rows
+                                  if pack.pack_id == pack_id), "")
     active = pack_id in {str(pid).strip() for pid in state.get("active_pack_ids", [])}
-    return LocalPackStatus(installed_version=installed_version, active=active)
+    return LocalPackStatus(installed_version=installed_version, active=active or bool(installed_version))
 
 
-def packs_for_view(available: list[AvailablePack], pack_state: dict, view: str) -> list[tuple[AvailablePack, LocalPackStatus, bool]]:
+def packs_for_view(available: list[AvailablePack], pack_state: dict, view: str,
+                   local_rows: list[tuple[AvailablePack, LocalPackStatus, bool]] | None = None) -> list[tuple[AvailablePack, LocalPackStatus, bool]]:
     installed = {
         str(entry.get("pack_id") or "").strip(): str(entry.get("version") or "").strip()
         for entry in pack_state.get("installed_packs", []) if isinstance(entry, dict) and entry.get("pack_id")
     }
     active = {str(pack_id).strip() for pack_id in pack_state.get("active_pack_ids", [])}
+    local_by_id = {pack.pack_id: pack for pack, _, _ in (local_rows or [])}
+    for pack_id, pack in local_by_id.items():
+        installed.setdefault(pack_id, pack.version)
+        active.add(pack_id)
     if view == "cloud":
         return [(pack, LocalPackStatus(installed.get(pack.pack_id, ""), pack.pack_id in active), True)
                 for pack in available]
-    by_id = {pack.pack_id: pack for pack in available}
+    cloud_by_id = {pack.pack_id: pack for pack in available}
+    by_id = {**local_by_id, **cloud_by_id}
     return [(by_id.get(pack_id) or AvailablePack(pack_id, version, source_name=pack_id),
-             LocalPackStatus(version, pack_id in active), pack_id in by_id)
+             LocalPackStatus(version, pack_id in active), pack_id in cloud_by_id)
             for pack_id, version in installed.items()]
 
 
@@ -3377,11 +3387,10 @@ class LauncherApp:
         terms = self.pack_search_var.get().strip().lower().split()
         filtered = []
         pack_state = load_pack_state()
-        rows = packs_for_view(self.available_packs, pack_state, self.pack_filter)
-        if self.pack_filter == "installed":
-            installed_ids = {str(entry.get("pack_id") or "") for entry in pack_state.get("installed_packs", [])
-                             if isinstance(entry, dict)}
-            rows.extend(local_folder_packs(RUNTIME_DATA_ROOT, installed_ids))
+        installed_ids = {str(entry.get("pack_id") or "") for entry in pack_state.get("installed_packs", [])
+                         if isinstance(entry, dict)}
+        local_rows = local_folder_packs(RUNTIME_DATA_ROOT, installed_ids)
+        rows = packs_for_view(self.available_packs, pack_state, self.pack_filter, local_rows)
         for pack, status, in_cloud in rows:
             haystack = " ".join((pack.source_name, pack.description, pack.pack_id,
                                  pack.topic_category, pack.package_tier)).lower()
@@ -3411,20 +3420,15 @@ class LauncherApp:
             actions = Frame(card, bg=THEME["colors"]["card_bg"])
             actions.pack(fill="x", padx=14, pady=(9, 12))
             if in_cloud:
-                action_state = InstallActionState.compare(status.installed_version, pack.version)
-                if action_state.version_label:
-                    Label(actions, text=action_state.version_label, bg=THEME["colors"]["card_bg"],
-                          fg=THEME["colors"]["accent"], font=THEME["fonts"]["mono"]).pack(side=LEFT, padx=(0, 8))
-                else:
-                    action_var = StringVar(value=action_state.action)
-                    action = Button(actions, textvariable=action_var,
-                                    command=lambda value=pack: self.install_selected_pack_clicked(value),
-                                    **button_kwargs("accent"))
-                    action.pack(side=LEFT, padx=(0, 8))
-                    self.pack_action_vars[(pack.package_id, pack.version)] = action_var
-                    self.pack_action_buttons.append(action)
-                    if self.worker and self.worker.is_alive():
-                        action.configure(state=DISABLED)
+                action_var = StringVar(value="Update" if status.installed_version else "Install")
+                action = Button(actions, textvariable=action_var,
+                                command=lambda value=pack: self.install_selected_pack_clicked(value),
+                                **button_kwargs("accent"))
+                action.pack(side=LEFT, padx=(0, 8))
+                self.pack_action_vars[(pack.package_id, pack.version)] = action_var
+                self.pack_action_buttons.append(action)
+                if self.worker and self.worker.is_alive():
+                    action.configure(state=DISABLED)
                 Button(actions, text="Pack page", command=lambda value=pack: self.open_pack_page(value),
                        **button_kwargs("primary")).pack(side=LEFT)
             elif status.installed_version:
