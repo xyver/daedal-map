@@ -1,9 +1,8 @@
 # Launcher changelog
 
-Versions below describe program changes. A **candidate** has been built
-locally but has not been published to the download catalog.
+Versions below describe published program changes.
 
-## 0.1.6 — candidate (2026-10-27)
+## 0.1.6 — released (2026-10-27)
 
 ### Added
 
@@ -27,4 +26,3 @@ locally but has not been published to the download catalog.
 
 - The spreadsheet editor runs without Mapping. The Network map requires a
   compatible Mapping program and Network interface version 1.
-- A public 0.1.6 launcher download has not been published.

@@ -1,9 +1,8 @@
 # Network changelog
 
-Versions below describe program changes. A **candidate** has been built
-locally but has not been published to the download catalog.
+Versions below describe published program changes.
 
-## 0.1.0 — candidate (2026-10-27)
+## 0.1.0 — released (2026-10-27)
 
 ### Added
 
@@ -22,4 +21,3 @@ locally but has not been published to the download catalog.
   included in this program ZIP.
 - Draft edits cannot yet be validated and published as a new pack version.
   The archived Lake County map editor is excluded.
-- A public 0.1.0 Network download has not been published.

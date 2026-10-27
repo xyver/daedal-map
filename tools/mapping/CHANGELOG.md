@@ -1,9 +1,8 @@
 # Mapping changelog
 
-Versions below describe program changes. A **candidate** has been built
-locally but has not been published to the download catalog.
+Versions below describe published program changes.
 
-## 0.1.1 — candidate (2026-10-27)
+## 0.1.1 — released (2026-10-27)
 
 ### Added
 
@@ -20,4 +19,3 @@ locally but has not been published to the download catalog.
 - The Mapping ZIP contains no Network implementation or Network data. Mapping
   works without the expansion.
 - Network interface version 1 is required for the visual overlay.
-- A public 0.1.1 Mapping download has not been published.

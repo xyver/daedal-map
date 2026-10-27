@@ -85,8 +85,9 @@ server. Connected mode uses packaged releases instead.
 For the Network controls to appear in Local Custom, also link a compatible
 Mapping checkout at `launcher-data/local-programs/daedalmap-mapping/program.json`
 using product `daedalmap-mapping` and a `source_root` containing `app.py` and
-`requirements.txt`. The installed Mapping 0.1.0 release lacks the Network UI
-hook. The spreadsheet editor runs without Mapping. Both links remain saved
+`requirements.txt`. Mapping 0.1.1 includes the Network UI hook; earlier 0.1.0
+installations need an update for the map overlay. The spreadsheet editor runs
+without Mapping. Both links remain saved
 across mode switches; neither creates a ZIP. A compatible installed Network
 program also shows **Open Network Editor** in Programs → Installed and reads
 packs from `launcher-data/runtime/data/networks/packs/`.

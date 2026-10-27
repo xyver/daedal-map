@@ -29,7 +29,7 @@ Editable cells are saved as draft Parquet under the launcher's data library in
 `networks/editor_drafts/<pack_id>/edits.parquet`; the source packs remain
 immutable. Graph IDs and feature IDs are fixed. The Network program release
 builder includes this spreadsheet and the Mapping adapter; data packs remain
-separate. A public Network download has not yet been published.
+separate. Network 0.1.0 is available as a separate program download.
 
 The editor also starts directly from the `county-map` checkout, without the
 launcher or Mapping:
