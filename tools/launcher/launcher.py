@@ -4060,17 +4060,19 @@ class LauncherApp:
                 self.program_action_buttons.append(use_action)
             else:
                 use_action.configure(state=DISABLED)
-            if local_source:
+            network_root = (local_network or installed_network_root()) if item.product == NETWORK_PRODUCT else None
+            editor_action = None
+            if network_root and self.program_filter == "installed" and (local_source or installed_entry):
                 editor_action = Button(actions, text="Open Network Editor",
                                        command=self.open_network_editor_clicked,
                                        **button_kwargs("primary"))
                 editor_action.pack(side=LEFT, padx=(0, 8))
-                if (local_network / "network" / "spreadsheet_editor.py").is_file():
+                if (network_root / "network" / "spreadsheet_editor.py").is_file():
                     self.program_action_buttons.append(editor_action)
                 else:
                     editor_action.configure(state=DISABLED)
             if self.worker and self.worker.is_alive():
-                for action in (install_action, use_action, editor_action if local_source else None):
+                for action in (install_action, use_action, editor_action):
                     if isinstance(action, Button):
                         action.configure(state=DISABLED)
             Button(actions, text="About", command=lambda value=item: self.show_program_about(value),
@@ -4222,9 +4224,9 @@ class LauncherApp:
             raise LauncherError(f"Program files are installed, but runtime setup is incomplete: {exc}") from exc
 
     def open_network_editor_clicked(self) -> None:
-        source = local_network_source_root()
+        source = local_network_source_root() or installed_network_root()
         if source is None:
-            messagebox.showinfo("Network editor unavailable", "Link a Network source checkout in Local Custom mode first.")
+            messagebox.showinfo("Network editor unavailable", "Install Network or link a Network source checkout first.")
             return
         editor_root = source / "network"
         if not (editor_root / "spreadsheet_editor.py").is_file():
@@ -4248,7 +4250,10 @@ class LauncherApp:
             log_path = LOGS_ROOT / "network-editor.log"
             handle = log_path.open("a", encoding="utf-8")
             env = build_runtime_env()
-            env["NETWORK_PACKS_DIR"] = str(editor_root / "data" / "packs")
+            source_packs = editor_root / "data" / "packs"
+            library_packs = RUNTIME_DATA_ROOT / "networks" / "packs"
+            env["NETWORK_PACKS_DIR"] = str(source_packs if local_network_source_root() and
+                                            any(source_packs.glob("*/manifest.json")) else library_packs)
             env["NETWORK_EDITOR_DRAFTS_DIR"] = str(RUNTIME_DATA_ROOT / "networks" / "editor_drafts")
             command = [str(python), "-m", "uvicorn", "network.spreadsheet_editor:app", "--host", DEFAULT_HOST,
                        "--port", str(NETWORK_EDITOR_PORT)]

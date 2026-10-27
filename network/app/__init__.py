@@ -1,1 +1,1 @@
-"""Lake County editable road-network service."""
+"""DaedalMap Network graph pack runtime and Mapping adapter."""

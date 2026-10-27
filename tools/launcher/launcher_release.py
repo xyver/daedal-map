@@ -11,7 +11,7 @@ import urllib.request
 import uuid
 from pathlib import Path
 
-LAUNCHER_VERSION = "0.1.5"
+LAUNCHER_VERSION = "0.1.6"
 PRODUCT = "daedalmap-launcher"
 PLATFORM = "windows-x86_64"
 CHANNEL = "stable"

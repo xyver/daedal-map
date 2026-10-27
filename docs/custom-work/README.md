@@ -153,8 +153,9 @@ renaming its product ID does not make an arbitrary program runnable.
   is off. Mapping also starts without Network.
 - [x] Provide a standalone Network CLI and spreadsheet editor without a
   second map. Mapping supplies the visual overlay when both are present.
-- [ ] Bundle the spreadsheet editor in the separate Network program ZIP and
-  expose **Open Network Editor** for installed Network, without Mapping.
+- [x] Include the spreadsheet editor in the separate Network program ZIP
+  builder and expose **Open Network Editor** for installed Network, without
+  Mapping. A clean installed-release smoke is still required.
 - [ ] Test local source, installed release, and missing Network cases before
   packaging. Then build a separate Network artifact, validate Mapping interface
   compatibility, and add its release to the maintained program catalog.

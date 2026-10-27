@@ -26,8 +26,9 @@ validated candidate packs under `network/data/packs` without starting Mapping
 or showing a map. Nodes, links, and features are paged, searchable tables.
 Editable cells are saved as draft Parquet under the launcher's data library in
 `networks/editor_drafts/<pack_id>/edits.parquet`; the source packs remain
-immutable. Graph IDs and feature IDs are fixed. The packaged Network program
-currently has only the Mapping view; packaging the spreadsheet editor is next.
+immutable. Graph IDs and feature IDs are fixed. The Network program release
+builder includes this spreadsheet and the Mapping adapter; data packs remain
+separate. A public Network download has not yet been published.
 
 The editor also starts directly from the `county-map` checkout, without the
 launcher or Mapping:

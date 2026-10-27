@@ -474,12 +474,18 @@ def test_program_cards_name_their_actual_use_action() -> None:
     assert launcher.program_use_label("daedalmap-network", False, mapping_installed=True) == "Open Network Map"
 
 
-def test_local_network_editor_starts_its_own_source_server(tmp_path, monkeypatch) -> None:
+@pytest.mark.parametrize("from_source", [True, False])
+def test_network_editor_starts_from_source_or_installed_program(tmp_path, monkeypatch, from_source) -> None:
     source = tmp_path / "source"
     editor = source / "network"
     editor.mkdir(parents=True)
     (editor / "spreadsheet_editor.py").write_text("", encoding="utf-8")
-    monkeypatch.setattr(launcher, "local_network_source_root", lambda: source)
+    if from_source:
+        pack = editor / "data" / "packs" / "fixture"
+        pack.mkdir(parents=True)
+        (pack / "manifest.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(launcher, "local_network_source_root", lambda: source if from_source else None)
+    monkeypatch.setattr(launcher, "installed_network_root", lambda: None if from_source else source)
     monkeypatch.setattr(launcher, "LOGS_ROOT", tmp_path)
     monkeypatch.setattr(launcher, "RUNTIME_DATA_ROOT", tmp_path / "library")
     monkeypatch.setattr(launcher, "initialize_runtime_root", lambda _log: None)
@@ -506,7 +512,8 @@ def test_local_network_editor_starts_its_own_source_server(tmp_path, monkeypatch
     command, options = started[0]
     assert command[-5:] == ["network.spreadsheet_editor:app", "--host", launcher.DEFAULT_HOST, "--port", "8124"]
     assert options["cwd"] == str(source)
-    assert options["env"]["NETWORK_PACKS_DIR"] == str(editor / "data" / "packs")
+    expected_packs = editor / "data" / "packs" if from_source else tmp_path / "library" / "networks" / "packs"
+    assert options["env"]["NETWORK_PACKS_DIR"] == str(expected_packs)
     assert options["env"]["NETWORK_EDITOR_DRAFTS_DIR"] == str(tmp_path / "library" / "networks" / "editor_drafts")
     assert len(opened) == 1
     assert opened[0].startswith(f"http://{launcher.DEFAULT_HOST}:8124/?editor=spreadsheet&opened=")
