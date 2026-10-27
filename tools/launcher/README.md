@@ -67,17 +67,26 @@ create `launcher-data/local-programs/daedalmap-network/program.json`:
 {"product": "daedalmap-network", "source_root": "C:/path/to/checkout-containing-network"}
 ```
 
-The source folder must contain `network/extension.json` and
-`network/app/mapping_extension.py`. Select **Switch to Local Custom** in Settings and
-restart the launcher after adding the manifest. Network appears as **Local
-source** with **Open Source** and **Open Mapping**. Restart Mapping after
-editing Network files. Connected mode uses packaged releases instead.
+The source folder must contain `network/extension.json`,
+`network/app/mapping_extension.py`, and `network/spreadsheet_editor.py`.
+Select **Switch to Local Custom** in Settings and restart the launcher after
+adding the manifest. Network appears as **Local source** with **Open Network
+Map** and **Open Network Editor**. The map button opens Network on Mapping's
+map, even when **Start with Mapping** is off. The editor button starts a
+standalone, non-map spreadsheet at `http://127.0.0.1:8124/`. It reads
+validated packs from the Network checkout and stores draft Parquet edits under
+`launcher-data/runtime/data/networks/editor_drafts/`. Restart Mapping after
+Python changes to its Network adapter; restart the editor after changes to its
+server. Connected mode uses packaged releases instead.
 
 For the Network controls to appear in Local Custom, also link a compatible
 Mapping checkout at `launcher-data/local-programs/daedalmap-mapping/program.json`
 using product `daedalmap-mapping` and a `source_root` containing `app.py` and
 `requirements.txt`. The installed Mapping 0.1.0 release lacks the Network UI
-hook. Both links remain saved across mode switches; neither creates a ZIP.
+hook. The spreadsheet editor runs without Mapping. Both links remain saved
+across mode switches; neither creates a ZIP. The first packaged Network ZIP
+still needs to include the spreadsheet files and expose the editor action for
+installed programs.
 
 Run the launcher tests with `python -m pytest -q tools/launcher`. Build a
 Windows test ZIP with `build_launcher.ps1 -BuildPython <python.exe> -UvExe

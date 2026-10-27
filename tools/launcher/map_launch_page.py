@@ -32,7 +32,9 @@ const status=document.getElementById('status');let ticks=0;
 async function check(){
   try{const response=await fetch('/status',{cache:'no-store'});const state=await response.json();
     if(state.error){status.textContent=state.error;return}
-    if(state.ready){status.textContent='Map ready. Opening…';location.replace(state.map_url);return}
+    if(state.ready){status.textContent='Map ready. Opening…';
+      const network=new URLSearchParams(location.search).get('network')==='1';
+      location.replace(state.map_url+(network?'/?network=1':''));return}
     ticks++;status.textContent=ticks<8?'Starting the local map server…':
       ticks<20?'Loading the map and your data library…':'Still preparing; the launcher is checking the local server…';
   }catch{status.textContent='Waiting for the launcher…'}

@@ -53,6 +53,7 @@ from styled_dialog import messagebox
 
 DEFAULT_PRODUCT = "daedalmap"
 NETWORK_PRODUCT = "daedalmap-network"
+NETWORK_EDITOR_PORT = 8124
 
 
 @dataclass(frozen=True)
@@ -453,12 +454,12 @@ def load_map_tile_preferences() -> dict:
     if not isinstance(payload, dict):
         payload = {}
     return {
-        "mode": payload.get("mode") if payload.get("mode") in {"offline_basic", "offline_detail"} else "offline_basic",
+        "mode": payload.get("mode") if payload.get("mode") in {"online", "offline_basic", "offline_detail"} else "online",
     }
 
 
 def save_map_tile_preferences(mode: str) -> None:
-    if mode not in {"offline_basic", "offline_detail"}:
+    if mode not in {"online", "offline_basic", "offline_detail"}:
         raise LauncherError("Unsupported map detail mode")
     APP_ROOT.mkdir(parents=True, exist_ok=True)
     temporary = MAP_TILES_CONFIG_PATH.with_suffix(".json.tmp")
@@ -1409,13 +1410,13 @@ def program_cards_for_filter(programs: list[AvailableProgram], installed_entries
         rows.append((item, entry, False))
     if local_network:
         rows.append((AvailableProgram(NETWORK_PRODUCT, "Network", "local source", "", "", "", 0,
-                                      "Editable Network source. Restart Mapping to load changes."), None, False))
+                                      "Open network layers in Mapping or edit network tables in a standalone spreadsheet."), None, False))
     return rows
 
 
 def program_kind_label(product: str) -> str:
     if product == NETWORK_PRODUCT:
-        return "MAPPING EXPANSION"
+        return "NETWORK TOOL"
     if product in MCP_PRODUCTS:
         return "MCP SERVICE"
     if product == "daedalmap-historical-version-generator":
@@ -1425,7 +1426,7 @@ def program_kind_label(product: str) -> str:
 
 def program_use_label(product: str, running: bool, *, mapping_installed: bool = False) -> str:
     if product == NETWORK_PRODUCT:
-        return "Open Mapping" if mapping_installed else "Export Parquet"
+        return "Open Network Map" if mapping_installed else "Export Parquet"
     if product in MCP_PRODUCTS:
         return "Stop" if running else "Start"
     return "Open Files"
@@ -1857,8 +1858,7 @@ class LauncherApp:
     def __init__(self, root: Tk):
         self.root = root
         self.map_launch_page: MapLaunchPage | None = None
-        self.root.title("DaedalMap | LOCAL CUSTOM" if local_custom_mode() else
-                        "DaedalMap | LOCAL SOURCE" if local_source_mode() else "DaedalMap")
+        self.root.title("DaedalMap")
         self.root.geometry(default_launcher_window_geometry(root.winfo_screenwidth(), root.winfo_screenheight()))
         self.root.configure(**app_root_kwargs())
         self.brand_icon: PhotoImage | None = None
@@ -1956,15 +1956,6 @@ class LauncherApp:
 
         top = Frame(root, **panel_kwargs())
         top.pack(fill="x", padx=page_pad, pady=page_pad)
-        if local_source_mode():
-            Label(top, text=(("LOCAL CUSTOM MODE  |  Editable programs stay in this launcher folder  |  "
-                              if local_custom_mode() else
-                              "LOCAL SOURCE MODE  |  Mapping runs from source; Network loads when present  |  ") +
-                             f"Data library: {RUNTIME_ROOT}"),
-                  bg=THEME["colors"]["panel_bg"], fg=THEME["colors"]["accent"],
-                  font=("Segoe UI", 10, "bold"), wraplength=1200,
-                  justify=LEFT).pack(fill="x", padx=14, pady=(10, 0))
-
         header_row = Frame(top, bg=THEME["colors"]["panel_bg"])
         header_row.pack(fill="x", padx=14, pady=(12, 8))
         if self.brand_mark is not None:
@@ -1974,19 +1965,22 @@ class LauncherApp:
         hero_copy.pack(side=LEFT, fill="x", expand=True)
         Label(hero_copy, text="DAEDALMAP", bg=THEME["colors"]["panel_bg"],
               fg=THEME["colors"]["accent"], font=("Segoe UI", 10, "bold")).pack(anchor="w")
-        Label(hero_copy, text="Your local map library", bg=THEME["colors"]["panel_bg"],
+        Label(hero_copy, text="Your map library", bg=THEME["colors"]["panel_bg"],
               fg=THEME["colors"]["text"], font=("Segoe UI", 20, "bold")).pack(anchor="w", pady=(1, 1))
         Label(hero_copy, text="Data packs and tools, together on this computer.",
               **label_kwargs("muted")).pack(anchor="w")
 
         indicator_row = Frame(header_row, bg=THEME["colors"]["panel_bg"])
         indicator_row.pack(side=RIGHT)
-        self.launcher_mode_badge = Label(indicator_row, textvariable=self.launcher_mode_badge_var,
-                                         font=("Segoe UI", 10, "bold"), padx=10, pady=5)
-        self.launcher_mode_badge.pack(side=LEFT, padx=(0, 12))
         self.online_dot_label = Label(indicator_row, textvariable=self.online_dot_var, bg=THEME["colors"]["panel_bg"], fg=THEME["colors"]["muted_text"], font=("Segoe UI Symbol", 12))
         self.online_dot_label.pack(side=LEFT, padx=(0, 6))
-        Label(indicator_row, textvariable=self.online_var, **label_kwargs("muted")).pack(side=LEFT)
+        self.launcher_mode_badge = Label(indicator_row, textvariable=self.launcher_mode_badge_var,
+                                         font=("Segoe UI", 10, "bold"), padx=10, pady=5)
+        self.online_status_label = Label(indicator_row, textvariable=self.online_var, **label_kwargs("muted"))
+        if local_source_mode():
+            self.launcher_mode_badge.pack(side=LEFT)
+        else:
+            self.online_status_label.pack(side=LEFT)
         Label(indicator_row, textvariable=self.launcher_update_var, **label_kwargs("muted")).pack(
             side=LEFT, padx=(12, 0))
         self.launcher_update_button = Button(indicator_row, text="Download Update",
@@ -2055,7 +2049,6 @@ class LauncherApp:
             self.refresh_store_clicked()
         else:
             self.set_store_status("local")
-            self.online_var.set("Local custom")
             self.online_dot_label.configure(fg=THEME["colors"]["accent"])
         self.root.after(500, self.poll_navigation)
         if not local_source_mode():
@@ -2445,12 +2438,15 @@ class LauncherApp:
 
         map_panel = Frame(frame, **panel_kwargs())
         map_panel.pack(fill="x", pady=(0, THEME["spacing"]["section_gap"]))
-        Label(map_panel, text="Map detail", **label_kwargs("section")).pack(anchor="w", padx=12, pady=(12, 0))
-        Label(map_panel, text="Choose an offline world map. Reload the map after changing this.",
+        Label(map_panel, text="Basemap", **label_kwargs("section")).pack(anchor="w", padx=12, pady=(12, 0))
+        Label(map_panel, text="Use online streets and labels, or choose an offline world map. Reload the map after changing this.",
               **label_kwargs("muted")).pack(anchor="w", padx=12, pady=(4, 6))
         Label(map_panel, textvariable=self.map_tiles_status_var, **label_kwargs("muted")).pack(anchor="w", padx=12, pady=(0, 6))
         map_buttons = Frame(map_panel, bg=THEME["colors"]["panel_bg"])
         map_buttons.pack(fill="x", padx=12, pady=(0, 6))
+        self.use_online_map_button = Button(map_buttons, text="Use online map", command=self.use_online_map_clicked,
+                                            **button_kwargs("primary"))
+        self.use_online_map_button.pack(side=LEFT, padx=(0, 8))
         self.use_basic_map_button = Button(map_buttons, text="Use built-in offline map", command=self.use_basic_map_clicked,
                                            **button_kwargs("primary"))
         self.use_basic_map_button.pack(side=LEFT, padx=(0, 8))
@@ -2742,11 +2738,10 @@ class LauncherApp:
             "research_mcp_button",
             "geometry_mcp_button",
             "storage_button",
+            "use_online_map_button",
             "use_basic_map_button",
             "download_map_detail_button",
             "use_detail_map_button",
-            "remote_map_style_entry",
-            "use_remote_map_button",
         ]:
             widget = getattr(self, widget_name, None)
             if widget is not None:
@@ -3706,10 +3701,19 @@ class LauncherApp:
 
     def refresh_map_tile_status(self) -> None:
         preferences = load_map_tile_preferences()
-        labels = {"offline_basic": "Built-in offline world", "offline_detail": "Detailed offline world"}
-        detail = "detailed download installed" if map_detail_available() else "detailed download available (~23 MB)"
+        labels = {"online": "Online streets and labels", "offline_basic": "Built-in offline world",
+                  "offline_detail": "Detailed offline world"}
+        detail = ("detailed download installed" if map_detail_available() else
+                  "detailed download available when connected (~23 MB)" if local_source_mode() else
+                  "detailed download available (~23 MB)")
         self.map_tiles_status_var.set(f"Current: {labels[preferences['mode']]}  /  {detail}")
         self.use_detail_map_button.configure(state=NORMAL if map_detail_available() else DISABLED)
+        self.download_map_detail_button.configure(state=DISABLED if local_source_mode() else NORMAL)
+
+    def use_online_map_clicked(self) -> None:
+        save_map_tile_preferences("online")
+        self.refresh_map_tile_status()
+        self.set_status("Online map selected. Reload Explore Map to see it.")
 
     def use_basic_map_clicked(self) -> None:
         save_map_tile_preferences("offline_basic")
@@ -4007,9 +4011,9 @@ class LauncherApp:
             action_state = InstallActionState.compare(
                 str(installed_entry.get("version") or "") if installed_entry else "", item.version)
             if local_source:
-                install_label = "Open Source"
-                install_command = lambda path=local_network: os.startfile(path)
-                install_enabled = True
+                install_label = "Open Network Map"
+                install_command = lambda: self.launch_clicked(open_network=True)
+                install_enabled = local_mapping_source_root() is not None
             elif local_trial:
                 install_label = "Rebuild Local"
                 install_command = lambda value=item: self.rebuild_local_program_clicked(value)
@@ -4051,13 +4055,22 @@ class LauncherApp:
                                 command=(lambda value=item: self.stop_selected_program_clicked(value))
                                 if is_running else (lambda value=item: self.run_selected_program_clicked(value)),
                                 **button_kwargs("primary"))
-            if installed_entry or local_source and mapping_installed:
+            if installed_entry and not local_source:
                 use_action.pack(side=LEFT, padx=(0, 8))
                 self.program_action_buttons.append(use_action)
             else:
                 use_action.configure(state=DISABLED)
+            if local_source:
+                editor_action = Button(actions, text="Open Network Editor",
+                                       command=self.open_network_editor_clicked,
+                                       **button_kwargs("primary"))
+                editor_action.pack(side=LEFT, padx=(0, 8))
+                if (local_network / "network" / "spreadsheet_editor.py").is_file():
+                    self.program_action_buttons.append(editor_action)
+                else:
+                    editor_action.configure(state=DISABLED)
             if self.worker and self.worker.is_alive():
-                for action in (install_action, use_action):
+                for action in (install_action, use_action, editor_action if local_source else None):
                     if isinstance(action, Button):
                         action.configure(state=DISABLED)
             Button(actions, text="About", command=lambda value=item: self.show_program_about(value),
@@ -4208,14 +4221,66 @@ class LauncherApp:
         except RuntimeSetupError as exc:
             raise LauncherError(f"Program files are installed, but runtime setup is incomplete: {exc}") from exc
 
+    def open_network_editor_clicked(self) -> None:
+        source = local_network_source_root()
+        if source is None:
+            messagebox.showinfo("Network editor unavailable", "Link a Network source checkout in Local Custom mode first.")
+            return
+        editor_root = source / "network"
+        if not (editor_root / "spreadsheet_editor.py").is_file():
+            messagebox.showinfo("Network editor unavailable", "This Network source has no spreadsheet editor.")
+            return
+        url = f"http://{DEFAULT_HOST}:{NETWORK_EDITOR_PORT}/?editor=spreadsheet&opened={time.time_ns()}"
+        running = self.program_processes.get("network-editor")
+        if running is not None and running.poll() is None:
+            webbrowser.open_new_tab(url)
+            return
+        if self.worker and self.worker.is_alive():
+            messagebox.showinfo("Launcher Busy", "The launcher is already doing work.")
+            return
+        if wait_for_port(DEFAULT_HOST, NETWORK_EDITOR_PORT, timeout_seconds=0.1):
+            messagebox.showerror("Network editor port in use", f"Port {NETWORK_EDITOR_PORT} is already used outside this launcher. Stop that server before opening the editor.")
+            return
+
+        def work() -> None:
+            python = self.prepare_program_runtime()
+            initialize_runtime_root(self.append_log)
+            log_path = LOGS_ROOT / "network-editor.log"
+            handle = log_path.open("a", encoding="utf-8")
+            env = build_runtime_env()
+            env["NETWORK_PACKS_DIR"] = str(editor_root / "data" / "packs")
+            env["NETWORK_EDITOR_DRAFTS_DIR"] = str(RUNTIME_DATA_ROOT / "networks" / "editor_drafts")
+            command = [str(python), "-m", "uvicorn", "network.spreadsheet_editor:app", "--host", DEFAULT_HOST,
+                       "--port", str(NETWORK_EDITOR_PORT)]
+            try:
+                process = subprocess.Popen(command, cwd=str(source), env=env,
+                                           stdout=handle, stderr=subprocess.STDOUT,
+                                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            except Exception:
+                handle.close()
+                raise
+            self.program_processes["network-editor"] = process
+            self.program_log_handles["network-editor"] = handle
+            if not wait_for_port(DEFAULT_HOST, NETWORK_EDITOR_PORT, timeout_seconds=20.0):
+                code = process.poll()
+                if code is None:
+                    process.terminate()
+                self.program_processes.pop("network-editor", None)
+                self.program_log_handles.pop("network-editor", None).close()
+                raise LauncherError(f"Network editor did not start; exit={code}. See {log_path}")
+            self.append_log(f"Network editor ready at {url} (PID {process.pid})")
+            self.root.after(0, lambda: webbrowser.open_new_tab(url))
+
+        self.run_worker("Opening Network Editor", work)
+
 
     def run_selected_program_clicked(self, program: AvailableProgram) -> None:
         if program.product == NETWORK_PRODUCT:
             if local_network_source_root() is None and installed_network_root() is None:
                 messagebox.showinfo("Network unavailable", "The installed Network expansion is missing or incompatible. Reinstall it before opening Mapping.")
                 return
-            if has_usable_installed_engine():
-                self.launch_clicked()
+            if has_usable_installed_engine() or local_mapping_source_root() is not None:
+                self.launch_clicked(open_network=True)
                 return
             packs_dir = RUNTIME_DATA_ROOT / "networks" / "packs"
             if not any(packs_dir.glob("*/manifest.json")):
@@ -4517,12 +4582,12 @@ class LauncherApp:
         self.root.after(0, self.update_pack_list)
         self.root.after(0, self.refresh_research_views)
 
-    def launch_clicked(self) -> None:
+    def launch_clicked(self, *, open_network: bool = False) -> None:
         if self.worker and self.worker.is_alive():
             messagebox.showinfo("Launcher Busy", "The launcher is already doing work.")
             return
         if is_runtime_reachable():
-            self.open_browser()
+            self.open_browser(open_network=open_network)
             return
         if (not has_usable_installed_engine() and local_mapping_source_root() is None
                 and local_mapping_packages_root() is None
@@ -4538,7 +4603,7 @@ class LauncherApp:
         launch_page = self.map_launch_page
         launch_page.error = ""
         self.append_log(f"Opening local map start page: {launch_page.url}")
-        webbrowser.open(launch_page.url)
+        webbrowser.open(launch_page.url + ("?network=1" if open_network else ""))
 
         def work():
             try:
@@ -4626,8 +4691,8 @@ class LauncherApp:
         if open_browser_on_ready:
             self.open_browser()
 
-    def open_browser(self) -> None:
-        url = f"http://{DEFAULT_HOST}:{DEFAULT_PORT}"
+    def open_browser(self, *, open_network: bool = False) -> None:
+        url = f"http://{DEFAULT_HOST}:{DEFAULT_PORT}" + ("/?network=1" if open_network else "")
         self.append_log(f"Opening {url}")
         webbrowser.open(url)
 

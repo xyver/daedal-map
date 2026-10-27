@@ -1,11 +1,11 @@
 # Custom Work in the DaedalMap Launcher
 
-This is the requirements checklist for people building their own programs,
-expansions, data packs, and geometry alongside DaedalMap. The launcher should
-support local testing from editable files. Packaging and publication come after
-the work is ready to share.
+This guide records the current local workflow and the remaining general
+program-catalog work for people building programs, expansions, data packs, and
+geometry alongside DaedalMap. Local testing uses editable files; packaging and
+publication come when the work is ready to share.
 
-## Target workflow to implement
+## Current workflow
 
 1. Unzip the launcher. Its programs, managed Python environment, settings, and
    data start inside `launcher-data/` beside the launcher.
@@ -14,9 +14,10 @@ the work is ready to share.
    downloads and updates. The colored badge shows the active mode; a pending
    change is highlighted until restart. The launcher offers **Restart now** or
    **Later**.
-3. Put an editable program in the local programs folder, or put a data folder
-   in the data folder. The launcher detects changes and offers to update the
-   appropriate local catalog.
+3. Link an editable Network checkout with a small `program.json`, or put a
+   data folder in the data folder. The launcher detects data changes and offers
+   to update the local data catalog. Automatic discovery of arbitrary custom
+   programs is still planned.
 4. Run and inspect the local program through the same launcher UI without
    building a ZIP. Keep using the same installed data and geometry in either
    connection mode.
@@ -25,7 +26,8 @@ the work is ready to share.
    required for local testing.
 
 The existing **Open Data Folder** and **Update Catalog** actions cover local
-data. The equivalent local **program** catalog and UI are still required.
+data. Network has a working source link; a general local program catalog and
+folder scan for arbitrary programs are still required.
 
 ## Link a program without packaging
 
@@ -52,12 +54,15 @@ launcher with:
 
 That folder must contain `network/extension.json` with product
 `daedalmap-network` and `mapping_interface` 1, plus
-`network/app/mapping_extension.py`. Choose **Switch to Local Custom** in Settings and
-restart the launcher to see **Network / Local source** in **Programs**.
-**Open Source** opens the editable checkout;
-**Open Mapping** starts installed Mapping with that Network source when Mapping
-is available. Restart Mapping after changing Network files. Data packs remain
-in the shared launcher library. The source link works without a Network ZIP.
+`network/app/mapping_extension.py` and `network/spreadsheet_editor.py`. Choose
+**Switch to Local Custom** in Settings and restart the launcher to see
+**Network / Local source** in **Programs**. **Open Network Map** opens the
+Network overlay in Mapping; **Open Network Editor** starts a standalone
+spreadsheet on port 8124 without Mapping. It lists validated source packs from
+`network/data/packs` and saves draft cell edits as Parquet in the launcher data
+library under `networks/editor_drafts/<pack_id>/edits.parquet`. Pack files are
+unchanged. Restart the relevant server after Python edits. The source link
+works without a Network ZIP.
 In Connected mode, Network appears only if a packaged release is installed or
 listed in the maintained Store catalog.
 
@@ -143,13 +148,13 @@ renaming its product ID does not make an arbitrary program runnable.
 - [x] Show an unpublished Network source in **Programs** through a local
   program manifest. Its absence from the maintained Store catalog does not
   prevent local launcher testing.
-- [ ] Keep Network a separate optional program/download. When Mapping and
-  Network are both installed, offer **Start with Mapping** on Network settings;
-  also provide a way to start Network from inside Mapping when that toggle is
-  off. Mapping must work without Network.
-- [ ] Make standalone Network a command line and Parquet table workflow, not
-  another map viewer. It must run without Mapping. Mapping provides the map
-  when both are present.
+- [x] Keep Network optional in local source mode. **Start with Mapping** is on
+  the Network settings page, and Mapping can open the overlay when that toggle
+  is off. Mapping also starts without Network.
+- [x] Provide a standalone Network CLI and spreadsheet editor without a
+  second map. Mapping supplies the visual overlay when both are present.
+- [ ] Bundle the spreadsheet editor in the separate Network program ZIP and
+  expose **Open Network Editor** for installed Network, without Mapping.
 - [ ] Test local source, installed release, and missing Network cases before
   packaging. Then build a separate Network artifact, validate Mapping interface
   compatibility, and add its release to the maintained program catalog.

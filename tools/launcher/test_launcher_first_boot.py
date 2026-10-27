@@ -63,7 +63,9 @@ def test_map_launch_page_reports_startup_and_failure() -> None:
     page = MapLaunchPage("http://127.0.0.1:1")
     try:
         with urllib.request.urlopen(page.url, timeout=2) as response:
-            assert b"Opening Explore Map" in response.read()
+            content = response.read()
+            assert b"Opening Explore Map" in content
+            assert b"network?'/?network=1'" in content
         with urllib.request.urlopen(page.url + "status", timeout=2) as response:
             assert json.load(response)["ready"] is False
         page.error = "Map startup failed"
@@ -95,6 +97,15 @@ def test_open_map_shows_wait_page_before_runtime_setup(monkeypatch) -> None:
     app.launch_clicked()
 
     assert events == ["page", ("browser", Page.url), ("runtime", {"open_browser_on_ready": False})]
+    events.clear()
+    app.launch_clicked(open_network=True)
+    assert events == [("browser", Page.url + "?network=1"),
+                      ("runtime", {"open_browser_on_ready": False})]
+    events.clear()
+    monkeypatch.setattr(launcher, "is_runtime_reachable", lambda: True)
+    app.open_browser = lambda **kwargs: events.append(("ready", kwargs))
+    app.launch_clicked(open_network=True)
+    assert events == [("ready", {"open_network": True})]
 
 
 def test_install_action_state_matches_program_and_data_cards() -> None:
@@ -458,9 +469,48 @@ def test_program_cards_name_their_actual_use_action() -> None:
     assert launcher.program_use_label("daedalmap-research-mcp", False) == "Start"
     assert launcher.program_use_label("daedalmap-geometry-mcp", True) == "Stop"
     assert launcher.program_use_label("daedalmap-historical-version-generator", False) == "Open Files"
-    assert launcher.program_kind_label("daedalmap-network") == "MAPPING EXPANSION"
+    assert launcher.program_kind_label("daedalmap-network") == "NETWORK TOOL"
     assert launcher.program_use_label("daedalmap-network", False) == "Export Parquet"
-    assert launcher.program_use_label("daedalmap-network", False, mapping_installed=True) == "Open Mapping"
+    assert launcher.program_use_label("daedalmap-network", False, mapping_installed=True) == "Open Network Map"
+
+
+def test_local_network_editor_starts_its_own_source_server(tmp_path, monkeypatch) -> None:
+    source = tmp_path / "source"
+    editor = source / "network"
+    editor.mkdir(parents=True)
+    (editor / "spreadsheet_editor.py").write_text("", encoding="utf-8")
+    monkeypatch.setattr(launcher, "local_network_source_root", lambda: source)
+    monkeypatch.setattr(launcher, "LOGS_ROOT", tmp_path)
+    monkeypatch.setattr(launcher, "RUNTIME_DATA_ROOT", tmp_path / "library")
+    monkeypatch.setattr(launcher, "initialize_runtime_root", lambda _log: None)
+    monkeypatch.setattr(launcher, "build_runtime_env", lambda: {"DATA_ROOT": "shared-library"})
+    port_checks = iter((False, True))
+    monkeypatch.setattr(launcher, "wait_for_port", lambda *_args, **_kwargs: next(port_checks))
+    started = []
+    process = SimpleNamespace(pid=1234, poll=lambda: None)
+    monkeypatch.setattr(launcher.subprocess, "Popen", lambda command, **kwargs:
+                        (started.append((command, kwargs)) or process))
+    opened = []
+    monkeypatch.setattr(launcher.webbrowser, "open_new_tab", opened.append)
+    app = object.__new__(launcher.LauncherApp)
+    app.worker = None
+    app.program_processes = {}
+    app.program_log_handles = {}
+    app.root = SimpleNamespace(after=lambda _delay, action: action())
+    app.append_log = lambda _message: None
+    app.prepare_program_runtime = lambda: Path(sys.executable)
+    app.run_worker = lambda _label, action: action()
+
+    app.open_network_editor_clicked()
+
+    command, options = started[0]
+    assert command[-5:] == ["network.spreadsheet_editor:app", "--host", launcher.DEFAULT_HOST, "--port", "8124"]
+    assert options["cwd"] == str(source)
+    assert options["env"]["NETWORK_PACKS_DIR"] == str(editor / "data" / "packs")
+    assert options["env"]["NETWORK_EDITOR_DRAFTS_DIR"] == str(tmp_path / "library" / "networks" / "editor_drafts")
+    assert len(opened) == 1
+    assert opened[0].startswith(f"http://{launcher.DEFAULT_HOST}:8124/?editor=spreadsheet&opened=")
+    app.program_log_handles["network-editor"].close()
 
 
 def test_historical_cli_installs_without_service_runtime(tmp_path, monkeypatch) -> None:
@@ -1637,10 +1687,12 @@ def test_first_boot_keeps_user_data_and_creates_shared_catalog(tmp_path, monkeyp
     assert runtime_env["STATE_DIR"] == str(runtime / "state")
 
 
-def test_old_online_map_preference_uses_offline_map(tmp_path, monkeypatch) -> None:
+def test_online_map_is_default_without_accepting_custom_remote_url(tmp_path, monkeypatch) -> None:
     config = tmp_path / "map_tiles.json"
     config.write_text('{"mode":"remote","remote_style_url":"https://example.test/style.json"}', encoding="utf-8")
     monkeypatch.setattr(launcher, "MAP_TILES_CONFIG_PATH", config)
-    assert launcher.load_map_tile_preferences()["mode"] == "offline_basic"
+    assert launcher.load_map_tile_preferences()["mode"] == "online"
     with pytest.raises(launcher.LauncherError):
         launcher.save_map_tile_preferences("remote")
+    launcher.save_map_tile_preferences("online")
+    assert launcher.load_map_tile_preferences()["mode"] == "online"
