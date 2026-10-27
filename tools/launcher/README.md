@@ -1,5 +1,8 @@
 # DaedalMap Launcher
 
+For the custom program, data, geometry, and Network work still to implement,
+see the [custom work requirements](../../docs/custom-work/README.md).
+
 This is the public source for the Windows launcher. The portable ZIP contains
 `DaedalMapLauncher.exe`, `_internal/`, and `uv.exe`. On first use it creates
 `launcher-data/` beside the EXE. Installed programs, managed Python

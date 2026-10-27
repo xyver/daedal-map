@@ -22,6 +22,7 @@ map for contributors and researchers.
 | Understand shared versus mode-specific behavior | [RUNTIME_UNIFICATION.md](RUNTIME_UNIFICATION.md) |
 | Learn where code lives | [ARCHITECTURE.md](ARCHITECTURE.md) |
 | Set up a development workflow | [DEVELOPMENT.md](DEVELOPMENT.md) |
+| Build and test custom launcher programs or data | [custom-work/README.md](custom-work/README.md) |
 | Understand a request from chat to map | [QUERY_AND_DISPLAY.md](QUERY_AND_DISPLAY.md) |
 | Use or extend HTTP and MCP surfaces | [API_AND_MCP.md](API_AND_MCP.md) |
 | Research using my MCP-capable subscription | [RESEARCH_MCP.md](RESEARCH_MCP.md) |
