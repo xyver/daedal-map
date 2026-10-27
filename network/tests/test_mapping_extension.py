@@ -29,6 +29,10 @@ class MappingExpansionTests(unittest.TestCase):
             app = FastAPI()
             app.include_router(router)
             with patch.dict("os.environ", {"NETWORK_PACKS_DIR": str(root)}), TestClient(app) as client:
+                self.assertEqual(client.get("/api/local/network/status").json(), {"auto_start": True})
+                with patch.dict("os.environ", {"DAEDALMAP_LOCAL_SOURCE_MODE": "1"}):
+                    self.assertEqual(client.get("/api/local/network/status").json(),
+                                     {"auto_start": True, "source_mode": True})
                 listed = client.get("/api/local/network/packs")
                 self.assertEqual(listed.status_code, 200)
                 self.assertEqual({item["network_type"] for item in listed.json()["packs"]},

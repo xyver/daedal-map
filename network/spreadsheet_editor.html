@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>DaedalMap Network Editor</title>
+<style>
+  :root{font:14px system-ui,sans-serif;color:#e6edf5;background:#0b1421}
+  body{margin:0} header{padding:20px 28px;border-bottom:1px solid #324357;background:#101d2d}
+  h1{font-size:22px;margin:0 0 7px} p{margin:0;color:#a9b8c8} main{padding:20px 28px}
+  .controls{display:flex;gap:12px;align-items:end;flex-wrap:wrap;margin-bottom:16px}
+  label{display:grid;gap:5px;color:#b6c7d9} select,input,button{background:#18283b;color:#fff;border:1px solid #53677e;border-radius:5px;padding:8px;font:inherit}
+  button{cursor:pointer} button:hover{background:#23415d} #status{margin-left:auto;color:#8fd3f0}
+  .table-wrap{max-height:70vh;overflow:auto;border:1px solid #384c61;border-radius:6px}
+  table{border-collapse:collapse;min-width:100%;white-space:nowrap} th,td{border-bottom:1px solid #283c50;padding:8px 10px;text-align:left;max-width:440px;overflow:hidden;text-overflow:ellipsis}
+  th{position:sticky;top:0;background:#1a2a3d;z-index:1} tr:nth-child(even){background:#101f30}
+  td.editable{cursor:pointer;color:#aee0ff} td.editable:hover{background:#23415d}
+  .pager{display:flex;align-items:center;gap:12px;margin-top:14px} #message{min-height:22px;color:#ffbc80;margin-bottom:8px}
+  dialog{background:#14253a;color:#fff;border:1px solid #6383a4;border-radius:8px;width:min(700px,90vw)}
+  dialog textarea{box-sizing:border-box;width:100%;min-height:150px;background:#0e1b2b;color:#fff;font:13px Consolas,monospace;border:1px solid #6383a4;padding:10px}
+  dialog menu{display:flex;justify-content:end;gap:8px;padding:0;margin-bottom:0}
+</style>
+<header><h1>Network spreadsheet editor</h1><p>Inspect and edit pack tables. Changes save as draft Parquet in your data library; source packs are untouched.</p></header>
+<main>
+  <div class="controls">
+    <label>Network pack<select id="pack"></select></label>
+    <label>Table<select id="table"><option value="nodes">Nodes</option><option value="links">Links</option><option value="features">Features</option></select></label>
+    <label>Find rows<input id="search" placeholder="ID or value"></label>
+    <button id="find">Find</button><span id="status"></span>
+  </div>
+  <div id="message" role="status"></div>
+  <div class="table-wrap"><table><thead id="head"></thead><tbody id="body"></tbody></table></div>
+  <div class="pager"><button id="prev">Previous</button><span id="page"></span><button id="next">Next</button></div>
+</main>
+<dialog id="edit"><form method="dialog"><h2 id="edit-title">Edit cell</h2><p style="margin-bottom:12px">Press Save to validate and store this draft cell.</p><textarea id="value"></textarea><menu><button value="cancel">Cancel</button><button id="save" value="save">Save</button></menu></form></dialog>
+<script>
+const $=id=>document.getElementById(id);let offset=0,total=0,selected=null,editing=null;
+const message=text=>{$('message').textContent=text};
+async function request(path,options){const r=await fetch(path,options);const data=await r.json();if(!r.ok)throw new Error(data.detail||r.statusText);return data}
+async function loadPacks(){try{const packs=await request('/api/packs');$('pack').replaceChildren(...packs.map(p=>{const o=document.createElement('option');o.value=p.pack_id;o.textContent=`${p.pack_id} (${p.network_type})`;return o}));if(!packs.length)message('No validated Network packs found. Add packs to the configured Network packs folder.');else await loadRows()}catch(e){message(e.message)}}
+async function loadRows(){if(!$('pack').value)return;try{message('');const p=encodeURIComponent($('pack').value),t=$('table').value,q=encodeURIComponent($('search').value);const data=await request(`/api/packs/${p}/${t}?offset=${offset}&limit=100&q=${q}`);total=data.total;selected=data.rows;$('status').textContent=`${data.draft_edits} draft cell${data.draft_edits===1?'':'s'}`;$('page').textContent=`${total?offset+1:0}–${Math.min(offset+data.rows.length,total)} of ${total}`;$('prev').disabled=offset===0;$('next').disabled=offset+100>=total;const columns=data.rows.length?Object.keys(data.rows[0]):[];$('head').replaceChildren();$('body').replaceChildren();const tr=document.createElement('tr');for(const col of columns){const th=document.createElement('th');th.textContent=col;tr.append(th)}$('head').append(tr);for(const row of data.rows){const tr=document.createElement('tr');for(const col of columns){const td=document.createElement('td');td.textContent=row[col]===null?'':String(row[col]);td.title=td.textContent;if(data.editable.includes(col)){td.className='editable';td.tabIndex=0;td.onclick=()=>openEdit(row,col);td.onkeydown=e=>{if(e.key==='Enter')openEdit(row,col)}}tr.append(td)}$('body').append(tr)}}catch(e){message(e.message)}}
+function openEdit(row,field){const table=$('table').value,id=row[{nodes:'node_id',links:'link_id',features:'feature_id'}[table]];editing={table,id,field};$('edit-title').textContent=`${id} · ${field}`;$('value').value=typeof row[field]==='string'?row[field]:JSON.stringify(row[field]);$('edit').showModal();$('value').focus()}
+$('edit').addEventListener('close',async()=>{if($('edit').returnValue!=='save'||!editing)return;const {table,id,field}=editing;let value=$('value').value;if(field==='directed'){if(!['true','false'].includes(value.trim())){message('Use true or false for directed.');return}value=value.trim()==='true'}try{const p=encodeURIComponent($('pack').value);await request(`/api/packs/${p}/${table}/${encodeURIComponent(id)}/${field}`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({value})});await loadRows()}catch(e){message(e.message)}});
+$('pack').onchange=()=>{offset=0;loadRows()};$('table').onchange=()=>{offset=0;loadRows()};$('find').onclick=()=>{offset=0;loadRows()};$('search').onkeydown=e=>{if(e.key==='Enter'){$('find').click()}};$('prev').onclick=()=>{offset=Math.max(0,offset-100);loadRows()};$('next').onclick=()=>{offset+=100;loadRows()};loadPacks();
+</script></html>

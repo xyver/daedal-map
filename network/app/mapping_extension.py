@@ -23,6 +23,14 @@ _MAX_VISIBLE_FEATURES = 20_000
 _STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 
+@router.get("/status")
+def network_status() -> dict[str, bool]:
+    status = {"auto_start": os.getenv("DAEDALMAP_NETWORK_AUTO_START", "1") == "1"}
+    if os.getenv("DAEDALMAP_LOCAL_SOURCE_MODE", "") == "1":
+        status["source_mode"] = True
+    return status
+
+
 def pack_root(data_root: Path) -> Path:
     """Use the Mapping library by default; allow an explicit source-run fixture."""
     override = os.getenv("NETWORK_PACKS_DIR", "").strip()
