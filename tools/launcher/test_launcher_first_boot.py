@@ -509,6 +509,7 @@ def test_local_trial_python_is_used_only_in_development(tmp_path, monkeypatch) -
     monkeypatch.setenv("DAEDALMAP_LAUNCHER_DEV", "1")
     assert runtime_manager.prepare_shared_environment(tmp_path, entries, lambda _: None) == python
     monkeypatch.delenv("DAEDALMAP_LAUNCHER_DEV")
+    monkeypatch.setenv("DAEDALMAP_LAUNCHER_LOCAL_CUSTOM", "1")
     monkeypatch.setattr(runtime_manager, "bundled_uv_executable", lambda _root: tmp_path / "missing-uv.exe")
     with pytest.raises(runtime_manager.RuntimeSetupError, match="runtime helper is missing"):
         runtime_manager.prepare_shared_environment(tmp_path, entries, lambda _: None)
@@ -518,6 +519,27 @@ def test_source_launcher_looks_for_runtime_helper_in_its_library(tmp_path, monke
     monkeypatch.delenv("DAEDALMAP_UV_EXE", raising=False)
     monkeypatch.setattr(runtime_manager.sys, "frozen", False, raising=False)
     assert runtime_manager.bundled_uv_executable(tmp_path) == tmp_path / "uv.exe"
+
+
+def test_connected_source_launcher_restores_missing_runtime_helper(tmp_path, monkeypatch) -> None:
+    import bootstrap_source_uv
+
+    helper = tmp_path / "uv.exe"
+    calls = []
+    monkeypatch.delenv("DAEDALMAP_UV_EXE", raising=False)
+    monkeypatch.delenv("DAEDALMAP_LAUNCHER_LOCAL_CUSTOM", raising=False)
+    monkeypatch.setattr(runtime_manager.sys, "frozen", False, raising=False)
+    monkeypatch.setattr(runtime_manager, "bundled_uv_executable", lambda _root: helper)
+    def install(root, *, log):
+        calls.append(root)
+        helper.write_bytes(b"uv")
+        log("installed")
+    monkeypatch.setattr(bootstrap_source_uv, "install_uv", install)
+    monkeypatch.setattr(runtime_manager.subprocess, "run", lambda *_args, **_kwargs:
+                        SimpleNamespace(returncode=0, stdout="uv 0.13.5", stderr=""))
+
+    assert runtime_manager.ensure_runtime_helper(tmp_path, lambda _: None) == helper
+    assert calls == [tmp_path]
 
 
 def test_local_program_card_keeps_source_trial_selected_over_store_release() -> None:

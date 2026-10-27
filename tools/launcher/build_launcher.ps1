@@ -6,6 +6,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $wrapperRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+$uvPin = Get-Content -LiteralPath (Join-Path $wrapperRoot 'uv_pin.json') -Raw | ConvertFrom-Json
 $programsRoot = Split-Path -Parent $wrapperRoot
 $publicRoot = Split-Path -Parent $programsRoot
 $output = [System.IO.Path]::GetFullPath($OutputRoot)
@@ -18,11 +19,11 @@ $zip = Join-Path $output 'DaedalMapLauncher-windows-test.zip'
 if (-not (Test-Path -LiteralPath $BuildPython -PathType Leaf)) { throw "Build Python missing: $BuildPython" }
 if (-not (Test-Path -LiteralPath $UvExe -PathType Leaf)) { throw "uv.exe missing: $UvExe" }
 $uvVersion = (& $UvExe --version).Trim()
-if ($LASTEXITCODE -ne 0 -or $uvVersion -notmatch '^uv 0\.13\.5(?:\s|$)') {
-    throw "Expected uv 0.13.5 for this launcher build; found: $uvVersion"
+if ($LASTEXITCODE -ne 0 -or $uvVersion -notmatch ('^uv ' + [regex]::Escape($uvPin.version) + '(?:\s|$)')) {
+    throw "Expected uv $($uvPin.version) for this launcher build; found: $uvVersion"
 }
 $uvHash = (Get-FileHash -LiteralPath $UvExe -Algorithm SHA256).Hash.ToLowerInvariant()
-if ($uvHash -ne 'f45d1cb9d9140ca6d3f4005fdfc0ebeccf849fd04d1dc85804155cb923f1597b') {
+if ($uvHash -ne $uvPin.exe_sha256) {
     throw "uv.exe does not match the pinned Windows build"
 }
 if (-not (Test-Path -LiteralPath (Join-Path $publicRoot 'local_data_store.py') -PathType Leaf)) {

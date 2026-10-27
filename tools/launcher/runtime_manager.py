@@ -31,6 +31,34 @@ def bundled_uv_executable(app_root: Path | None = None) -> Path:
     return Path(app_root).resolve() / "uv.exe" if app_root is not None else owner / "launcher-data" / "uv.exe"
 
 
+def ensure_runtime_helper(app_root: Path, log: Callable[[str], None]) -> Path:
+    """Recover a missing helper for a connected source launcher."""
+    uv = bundled_uv_executable(app_root)
+    if not uv.is_file():
+        if (getattr(sys, "frozen", False) or os.environ.get("DAEDALMAP_UV_EXE")
+                or os.environ.get("DAEDALMAP_LAUNCHER_LOCAL_CUSTOM") == "1"):
+            raise RuntimeSetupError(f"Launcher runtime helper is missing: {uv}")
+        log("Installing the pinned launcher runtime helper into this library")
+        try:
+            from bootstrap_source_uv import install_uv
+            install_uv(app_root, log=log)
+        except Exception as exc:
+            raise RuntimeSetupError(
+                f"Launcher runtime helper is missing: {uv}. Automatic setup failed: {exc}. "
+                f'Run python tools/launcher/bootstrap_source_uv.py --library-root "{app_root}"'
+            ) from exc
+    if not uv.is_file():
+        raise RuntimeSetupError(f"Launcher runtime helper is missing after setup: {uv}")
+    try:
+        result = subprocess.run([str(uv), "--version"], capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise RuntimeSetupError(f"Launcher runtime helper cannot start: {uv}: {exc}") from exc
+    if result.returncode or not result.stdout.strip().startswith("uv "):
+        raise RuntimeSetupError(f"Launcher runtime helper cannot start: {uv}: {result.stderr.strip()}")
+    log(f"Launcher runtime helper: {result.stdout.strip()}")
+    return uv
+
+
 def _run(command: list[str], *, env: dict[str, str], log: Callable[[str], None], cwd: Path) -> None:
     creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
     process = subprocess.Popen(command, cwd=str(cwd), env=env, stdout=subprocess.PIPE,
@@ -91,13 +119,7 @@ def prepare_shared_environment(app_root: Path, programs: list[dict],
             raise RuntimeSetupError(f"Local test Python is missing: {python}")
         log(f"Using existing local test Python: {python}")
         return python
-    uv = bundled_uv_executable(app_root)
-    if not uv.is_file():
-        raise RuntimeSetupError(
-            f"Launcher runtime helper is missing: {uv}. For a source checkout, run "
-            "python tools/launcher/bootstrap_source_uv.py --library-root "
-            f'"{app_root}"'
-        )
+    uv = ensure_runtime_helper(app_root, log)
     app_root = Path(app_root).resolve()
     environments = app_root / "environments"
     locks = app_root / "locks"

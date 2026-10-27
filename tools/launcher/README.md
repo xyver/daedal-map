@@ -38,8 +38,12 @@ the normal launcher setting uses the self-contained portable folder. The
 source launcher looks for `.venv/Scripts/python.exe` in this checkout or a
 parent directory. `--library-root PATH` selects an isolated launcher library.
 When the source launcher runs an installed release, it looks for `uv.exe` in
-that library. A source checkout can install the pinned helper with
-`python tools/launcher/bootstrap_source_uv.py --library-root "<launcher-data>"`.
+that library. Connected source launchers install the pinned helper there if it
+is missing. For an offline setup, run
+`python tools/launcher/bootstrap_source_uv.py --library-root "<launcher-data>" --wheel "<uv-wheel>"`.
+`uv_pin.json` records the tested version and checksums; the launcher build
+checks the supplied executable against that pin. Upstream uv releases do not
+silently change an installed launcher.
 
 Run the launcher tests with `python -m pytest -q tools/launcher`. Build a
 Windows test ZIP with `build_launcher.ps1 -BuildPython <python.exe> -UvExe

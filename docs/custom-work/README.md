@@ -108,6 +108,10 @@ data. The equivalent local **program** catalog and UI are still required.
 - [ ] Verify local edits are visible after a program restart without rebuilding
   artifacts. Verify installed data and geometry remain visible through mode
   switches and launcher updates.
+- [ ] With each launcher release, verify the bundled `uv.exe` against
+  `tools/launcher/uv_pin.json`. Confirm a connected source launcher can restore
+  a missing helper inside its own library; a disconnected launcher must not
+  fetch one unexpectedly.
 - [ ] Keep source folders, disposable test output, reusable build tools, and
   release records in their intended locations. Do not fill the public repo
   with one-off test data or receipts.
