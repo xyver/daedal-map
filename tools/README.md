@@ -8,13 +8,13 @@ download and source export, even when it imports shared runtime code.
 | Tool | Source entry | Current implementation | Relationship |
 |---|---|---|---|
 | [Mapping](mapping/README.md) | `tools/mapping/` | Root `app.py`, `mapmover/`, frontend assets | Base interactive program |
-| [Network](network/README.md) | `tools/network/` | `network/` | Standalone editor; Mapping can later display validated Network layers |
+| [Network](network/README.md) | `tools/network/` | `network/` | Optional Mapping overlay plus a standalone spreadsheet and Parquet CLI |
 | [Research MCP](research-mcp/README.md) | `tools/research-mcp/` | Local facade and selected requirements here; shared server in `tools/mcp-runtime/` | Headless standalone program |
 | [Geometry MCP](geometry-mcp/README.md) | `tools/geometry-mcp/` | Downloaded-package backend and selected requirements here; shared server in `tools/mcp-runtime/` | Headless standalone program |
 | [AI](ai/README.md) | `tools/ai/` | Chat/provider code currently mixed into Mapping | Optional Mapping expansion |
 
-The entry folders establish ownership. Mapping, Network, and AI still need
-contained source moves. The MCP exporter assembles each MCP's public tool
+The entry folders establish ownership. Mapping and Network still run from
+their current source locations; AI still needs a contained source move. The MCP exporter assembles each MCP's public tool
 folder and its exact shared-runtime closure into a separate ZIP; archiving a
 single folder without that closure would be incomplete.
 

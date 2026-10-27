@@ -11,46 +11,50 @@ Their implementation is moving there in stages:
 | Tool | Current source | Small checkout/export today |
 |---|---|---|
 | Mapping | Root runtime and frontend | Multiple public directories; standalone export pending |
-| Network | `network/` | Sparse checkout and independent project recipe below |
+| Network | `network/` | Sparse checkout for the standalone spreadsheet and CLI below |
 | Research MCP | `tools/research-mcp/`, shared `tools/mcp-runtime/`, public reader modules | Public source-run path and local candidate ZIP; publication pending |
 | Geometry MCP | `tools/geometry-mcp/`, shared `tools/mcp-runtime/`, public geometry modules | Public source-run path and local candidate ZIP; publication pending |
 | AI expansion | Chat/provider code mixed into Mapping | Separate source and artifact pending; requires Mapping |
 
-## Network prototype: available now
+## Network source checkout
 
-The current Network prototype is contained in `network/` for its normal Docker
-run. Git's sparse checkout fetches the repository metadata and the files needed
-for that directory, rather than the other program trees:
+Network's spreadsheet and Parquet CLI run from `network/` without Mapping.
+Its optional visual overlay uses the Mapping source checkout. Git's sparse
+checkout fetches the Network files without the other program trees:
 
 ```powershell
 git clone --filter=blob:none --sparse https://github.com/xyver/daedal-map.git daedalmap-network
 git -C daedalmap-network sparse-checkout set tools network
-Set-Location daedalmap-network/network
+Set-Location daedalmap-network
 ```
 
-Follow [Network data setup](../network/docs/DATA_SETUP.md) and the
-[Network run instructions](../network/README.md). Use a published tag or exact
-commit in place of the default branch when reproducing a release. The
-`network/legacy/road_access/` helper imports `mapmover`; add `mapmover` to the
-sparse checkout if you specifically need that legacy helper:
+Install `network/requirements-runtime.txt`, then point `NETWORK_PACKS_DIR` at
+a folder of validated `network-pack-v1` packs. Candidate packs are gitignored
+and are not included in a source checkout. Start the spreadsheet with
+`python -m uvicorn network.spreadsheet_editor:app --host 127.0.0.1 --port 8124`,
+or run `python -m network.cli list`. The [Network guide](../network/README.md)
+covers the launcher link and Mapping overlay. Use a published tag or exact
+commit instead of the default branch when reproducing a release. The archived
+`network/legacy/road_access/` helper imports `mapmover`; add `mapmover` only
+if you specifically need that legacy helper:
 
 ```powershell
 git -C .. sparse-checkout set tools network mapmover
 ```
 
-To turn the normal Network prototype into an independent project, run this from
+To turn the Network source into an independent project, run this from
 the directory containing `daedalmap-network` after the sparse checkout:
 
 ```powershell
 Copy-Item -LiteralPath .\daedalmap-network\network -Destination .\my-network-tool -Recurse
 git -C my-network-tool init
 git -C my-network-tool add .
-git -C my-network-tool commit -m "Start from DaedalMap Network prototype"
+git -C my-network-tool commit -m "Start from DaedalMap Network source"
 ```
 
 Keep the copied `LICENSE` and record the upstream commit in the new project's
 README with `git -C daedalmap-network rev-parse HEAD`. This copies
-the normal Network prototype only; the legacy helper needs the additional
+the Network source only; the legacy helper needs the additional
 `mapmover` source mentioned above.
 
 ## Mapping and AI: current source layout

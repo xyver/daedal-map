@@ -1,11 +1,15 @@
 # Network
 
-Network is a standalone editor and scenario program. Its runnable prototype
-currently lives in [`network/`](../../network/README.md), with its own Docker
-build and dependencies. This folder is its source entry. Move the program here
-after the existing prototype, build context, and data mounts have been checked
-against the new path. Mapping's future Network layer adapter must use a
-versioned display contract; Mapping does not import Network's editor runtime.
+The current [Network source](../../network/README.md) lives under `network/`.
+It is an optional Mapping expansion: Mapping owns the single interactive map,
+and Network supplies validated rail, river, and power layers. Network also has
+a standalone, non-map spreadsheet editor and a Parquet export CLI. The
+spreadsheet runs without Mapping; the old Lake County road map editor is
+archived reference code.
 
-The [single-tool guide](../../docs/WORK_ON_ONE_TOOL.md#network-prototype-available-now)
-has a working sparse checkout and independent-project recipe today.
+The Network source is not yet a maintained program download. Its first
+separate ZIP must include the Mapping adapter, graph reader, CLI, spreadsheet
+server and HTML, and runtime requirements. Network data packs stay separate
+from program ZIPs and live in the launcher data library. The
+[single-tool guide](../../docs/WORK_ON_ONE_TOOL.md#network-source-checkout)
+shows a small checkout for source work.

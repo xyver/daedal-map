@@ -1,4 +1,4 @@
-# Lake County Road Network Editor
+# Network
 
 ## Mapping expansion: first global viewer test
 
@@ -11,17 +11,164 @@ MapLibre map. It discovers validated `network-pack-v1` folders under
 The pack reader checks manifest hashes before displaying a layer. The UI opens
 any of the four current pack types: road, rail, power, and river.
 
-This is a prepared-pack viewer test. Raw PBF, GeoPackage, Shapefile, GeoJSON,
-and GeoParquet imports still need type-specific graph adapters. Editing,
-scenario controls, export, and the expansion-bundled exact-geometry resolver
-for edit-time `loc_id` relationships are next. The Lake County window below is
-retained as a road-behavior reference while those controls move into Mapping.
+The preferred edit loop uses the public launcher in Local Custom mode with
+linked Mapping and Network checkouts. From the public launcher checkout, the
+source entry point can use the same data library without building program ZIPs:
+
+```powershell
+python tools/launcher/launcher.py --local-source --library-root "<launcher-data-folder>"
+```
+
+In the local launcher Programs tab, **Open Network Map** opens Network on the
+Mapping map, including when automatic Network startup is off. **Open Network
+Editor** opens a standalone spreadsheet at `http://127.0.0.1:8124/`. It reads
+validated candidate packs under `network/data/packs` without starting Mapping
+or showing a map. Nodes, links, and features are paged, searchable tables.
+Editable cells are saved as draft Parquet under the launcher's data library in
+`networks/editor_drafts/<pack_id>/edits.parquet`; the source packs remain
+immutable. Graph IDs and feature IDs are fixed. The packaged Network program
+currently has only the Mapping view; packaging the spreadsheet editor is next.
+
+The editor also starts directly from the `county-map` checkout, without the
+launcher or Mapping:
+
+```powershell
+& ..\.venv\Scripts\python.exe -m uvicorn network.spreadsheet_editor:app --host 127.0.0.1 --port 8124
+```
+
+Set `NETWORK_PACKS_DIR` to another validated pack folder and
+`NETWORK_EDITOR_DRAFTS_DIR` to another draft folder when needed.
+
+Choose **Open Local Map** in its Explore Map tab. The launcher and map mark the
+session **LOCAL SOURCE MODE**. It uses this checkout's Mapping and Network
+code, the workspace Python, and the launcher's existing data packs. Stop and
+reopen the map after Python edits; refresh the browser after JavaScript edits.
+
+The direct `serve.py` entry point is only a developer fixture for the Mapping
+overlay. It runs a map and is not the standalone Network editor. From the
+workspace root:
+
+```powershell
+& .\.venv\Scripts\python.exe county-map/network/serve.py
+```
+
+Open `http://127.0.0.1:7000/`, select a Network layer, and inspect nodes or
+links. Stop and rerun the server after Python edits or refresh the browser
+after JavaScript edits. The repeatable localhost smoke in
+`county-map-private/wrapper/README.md` checks the launcher integration without a ZIP.
+This direct entry point uses an empty `.scratch` library and will show the
+first-data-pack prompt even if the normal launcher already has installed data.
+
+The separate Network trial package also runs without Mapping as a CLI. List
+validated graph packs or export nodes and spatial features as GeoParquet plus
+links and future `loc_id` relationships as Parquet. The current relationship
+table is empty and explicitly marked `not_enriched`; the manifest separately
+marks a feature's own reference `loc_id` as `not_assigned`. The exported
+`containing_loc_id` column is currently null. Enrichment will choose the
+smallest admin spine polygon containing the full geometry, moving to a common
+parent when the feature crosses siblings:
+
+```powershell
+Set-Location county-map
+& ..\.venv\Scripts\python.exe -m network.cli --packs-dir network/data/packs list
+& ..\.venv\Scripts\python.exe -m network.cli --packs-dir network/data/packs export-all --output ..\.scratch\network-parquet
+```
+
+The launcher can export the same tables into its shared library. Mapping is
+the only map UI. The archived Lake County editor below is retained solely as
+a source reference and is not part of the current program or launcher path.
+
+### River size and flow
+
+The current Northern California HydroRIVERS pack stores each reach's
+`stream_order`, length, downstream reach ID, basin ID, and boundary status in
+its feature properties. It does **not** store discharge. Its 2,803 reaches
+include 1,403 order 1 reaches, so a default view that draws every reach is
+dense. HydroRIVERS source data also provides `DIS_AV_CMS`, an estimated long
+term average discharge in cubic meters per second **for a reach**, not a
+measured flow at each graph node. The current builder does not import it.
+Future river display controls can first filter or style by stream order:
+**All** shows 2,803 reaches in this trial, **order 3+** shows 741, and
+**order 5+** shows 115. These are useful display presets for this candidate,
+not universal definitions of river size. Add discharge thresholds after the
+builder preserves and validates that field. See the
+[HydroRIVERS technical documentation](https://data.hydrosheds.org/file/technical-documentation/HydroRIVERS_TechDoc_v10.pdf).
+
+### Source fields retained in candidate packs
+
+These three Northern California packs are **local, gitignored candidates**, not
+published Network data downloads. Their builders select a bounded region and
+only a few source attributes. The raw source files remain separate and have
+not been altered. No release process discarded columns; the omissions happen
+in the candidate builders before `network-pack-v1` is written. The field
+selection kept graph IDs and attributes needed for an initial inspection UI,
+but it was not a reviewed policy for a full data pack.
+
+| Source | Kept or transformed | Present in source but omitted from candidate |
+| --- | --- | --- |
+| HydroRIVERS | Reach ID, downstream ID, length, Strahler order, basin level 12 ID, line geometry | Main river ID, distances to outlet and headwater, local catchment and total upstream area, endorheic flag, average discharge, classical and flow orders (`MAIN_RIV`, `DIST_DN_KM`, `DIST_UP_KM`, `CATCH_SKM`, `UPLAND_SKM`, `ENDORHEIC`, `DIS_AV_CMS`, `ORD_CLAS`, `ORD_FLOW`) |
+| NARN rail arcs | Arc and endpoint IDs, miles converted to `distance_km`, first owner, state, network class, passenger flag, line geometry | County and district codes, other owners and track-rights holders, division/subdivision/branch/yard, track count, source `KM`, timezone, source shape length and related fields |
+| NARN rail nodes | Referenced node IDs and point geometry | Country, state and county codes, district, passenger and station flags, boundary flag. The builder reads `PASSNGRSTN` but currently does not save it. |
+| Federal transmission lines | Line ID, first and second substation labels, status, voltage, line geometry; graph endpoints inferred from rounded line ends | Type, owner, voltage class, inferred flag, NAICS, source, source/validation dates and method, source shape lengths and object IDs. Four multipart features were skipped because the initial builder handles only single lines. |
+
+The river and rail selections should be reviewed before a downloadable data
+pack is built. Discharge, upstream area, river ordering and rail track/owner
+attributes have clear uses for filtering and analysis; their absence should
+not be treated as a property of the source. Power topology remains
+inspection-only because the inferred endpoint matches have not been verified.
+Each future pack release should record a source-field inventory and explicit
+reasons for omissions alongside its provenance and redistribution review.
+
+### California rail geometry assignment trial
+
+`network.geometry_assign` is the first bounded Geometry consumer for Network.
+It reads the NARN candidate and the pinned USA Geometry detail 1.3.5 ZIP,
+isolates lines fully covered by `USA-CA`, resolves referenced rail nodes by
+exact point containment, and verifies each track against its full line. It
+writes `node_loc_ids.parquet`, `feature_loc_ids.parquet`, and `report.json` to a
+separate output folder without changing either source artifact:
+
+```powershell
+Set-Location county-map
+& ..\.venv\Scripts\python.exe -m network.geometry_assign `
+  --pack-dir network/data/packs/usa-narn-rail-norcal-2024 `
+  --geometry-zip ../county-map-data/downloadable/geometry/USA/united-states-geometry-detail/stable/1.3.5/united-states-geometry-detail-1.3.5.zip `
+  --state-loc-id USA-CA --output ../.scratch/network-ca-geometry-v1
+```
+
+This v1 trial stops at Admin 3 and records a common parent for points or
+lines on shared boundaries. It does not yet produce all intersected-area or
+clipped-length relationships, so these placement tables are not a complete
+geographic analysis export.
+
+For larger real-source tests, `python -m network.geometry_benchmark` accepts a
+validated rail, power, or river pack, `--geometry-zip`, `--sizes`, and a small
+JSON `--output`. It samples links with a fixed seed, discards each size's
+temporary Parquet tables, and records separate geometry read, index, scope,
+node, line, and write timings. The national source packs used for the first
+scale trial are temporary local inputs, not package assets; its durable result
+is in the private Network Geometry scale note. `--profile-only` measures state
+spread, vertices, and spatial-index candidates; `--points-only` repeats
+equal-sized node batches on one loaded exact index to isolate point-predicate
+cost from line and export work.
+
+Raw PBF, GeoPackage, Shapefile, GeoJSON, and GeoParquet imports still need
+type-specific graph adapters. The spreadsheet currently records draft cell
+edits; draft validation and publishing back to a new pack version are next.
+The Lake County window below is archived reference material only.
 
 Run the focused contract check from `network/` with the workspace environment:
 
 ```powershell
 & '..\..\.venv\Scripts\python.exe' -m unittest discover -s tests -p 'test_mapping_extension.py' -v
 ```
+
+## Archived Lake County road editor reference
+
+The remaining sections describe the archived Lake County road scenario editor.
+They are retained for feature inspiration and historical reproduction. The
+current launcher, standalone spreadsheet, Network pack viewer, and future
+program ZIP do not launch or bundle that editor.
 
 Local-only prototype for road-closure scenarios. The source now lives in
 `network/` inside the public DaedalMap repository. It remains runnable on its
@@ -31,7 +178,7 @@ shared Mapping display interface.
 
 The [Network tool entry](../tools/network/README.md) records the planned
 contained source location and the current migration boundary. The
-[single-tool guide](../docs/WORK_ON_ONE_TOOL.md#network-prototype-available-now)
+[single-tool guide](../docs/WORK_ON_ONE_TOOL.md#network-source-checkout)
 shows how to check out and adapt only this prototype.
 
 The program source is licensed under [MIT](LICENSE), matching the public

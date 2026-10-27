@@ -127,9 +127,10 @@ This repository is the open runtime: the FastAPI server, MCP and HTTP API, and
 map frontend. Use it to self-host, run against your own data, or extend the
 engine.
 
-The [Network prototype](network/README.md) also lives in this repository.
-It has its own Docker setup and dependencies under `network/`, so the map
-runtime does not need them to start.
+The [Network expansion](network/README.md) also lives in this repository.
+It adds optional rail, river, and power layers to the local Mapping map and
+provides a separate spreadsheet editor and Parquet CLI that run without
+Mapping. The older Lake County road map editor is archived reference code.
 
 To develop one local program without checking out every source directory, see
 [Work on one local tool](docs/WORK_ON_ONE_TOOL.md). The
