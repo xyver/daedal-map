@@ -37,3 +37,22 @@ For usable commands and the present gaps, see
 [Work on one local tool](../docs/WORK_ON_ONE_TOOL.md). GitHub forks of this
 repository include all source history; a person starting a separate project
 can instead initialize a new repository from one complete source export.
+
+## Updating a program
+
+1. Edit and run the program from source in Launcher Local Custom mode. Keep
+   data and geometry packs in the launcher data library, outside program ZIPs.
+2. Add user-facing changes, compatibility changes, and known limits to that
+   program's changelog: [Launcher](launcher/CHANGELOG.md),
+   [Mapping](mapping/CHANGELOG.md), or [Network](network/CHANGELOG.md). Keep
+   candidate notes marked as unpublished until promotion succeeds.
+3. Run the relevant source tests, then freeze a clean Git commit and build a
+   separate versioned artifact for each changed program. Network remains an
+   optional expansion; check its spreadsheet and CLI without Mapping, then
+   check its map adapter with Mapping. Check Mapping without Network too.
+4. Install each candidate into a fresh launcher library and verify the
+   actual ZIP, manifest hash, startup, and update path. A source launcher
+   test does not replace a test of the frozen Launcher executable.
+5. Promote an approved artifact through the maintained release process and
+   verify the public download, pointer, and catalog. Then change its
+   changelog heading from candidate to released and record the release date.

@@ -11,6 +11,8 @@ locally but has not been published to the download catalog.
   source links and installed programs in the same launcher library.
 - Network's local source card opens its Mapping overlay or standalone
   spreadsheet. An installed Network program can also open the spreadsheet.
+- Network is identified as an expansion. **Open with Mapping** requires Mapping;
+  **Open Network Editor** remains available without it. About explains both uses.
 - The default online basemap has streets and labels; the built-in and detailed
   offline world maps remain selectable.
 

@@ -469,9 +469,21 @@ def test_program_cards_name_their_actual_use_action() -> None:
     assert launcher.program_use_label("daedalmap-research-mcp", False) == "Start"
     assert launcher.program_use_label("daedalmap-geometry-mcp", True) == "Stop"
     assert launcher.program_use_label("daedalmap-historical-version-generator", False) == "Open Files"
-    assert launcher.program_kind_label("daedalmap-network") == "NETWORK TOOL"
-    assert launcher.program_use_label("daedalmap-network", False) == "Export Parquet"
-    assert launcher.program_use_label("daedalmap-network", False, mapping_installed=True) == "Open Network Map"
+    assert launcher.program_kind_label("daedalmap-network") == "NETWORK EXPANSION"
+    assert launcher.program_use_label("daedalmap-network", False) == "Open with Mapping"
+    assert launcher.program_use_label("daedalmap-network", False, mapping_installed=True) == "Open with Mapping"
+
+
+def test_network_mapping_action_requires_mapping_in_current_mode(monkeypatch) -> None:
+    monkeypatch.setattr(launcher, "has_usable_installed_engine", lambda: True)
+    monkeypatch.setattr(launcher, "local_mapping_source_root", lambda: None)
+    monkeypatch.setenv("DAEDALMAP_LAUNCHER_LOCAL_SOURCE", "1")
+    assert launcher.mapping_available_for_network() is False
+    monkeypatch.setattr(launcher, "local_mapping_source_root", lambda: Path("mapping"))
+    assert launcher.mapping_available_for_network() is True
+    monkeypatch.delenv("DAEDALMAP_LAUNCHER_LOCAL_SOURCE")
+    monkeypatch.setattr(launcher, "has_usable_installed_engine", lambda: False)
+    assert launcher.mapping_available_for_network() is False
 
 
 @pytest.mark.parametrize("from_source", [True, False])

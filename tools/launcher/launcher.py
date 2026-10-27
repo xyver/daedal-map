@@ -1410,13 +1410,13 @@ def program_cards_for_filter(programs: list[AvailableProgram], installed_entries
         rows.append((item, entry, False))
     if local_network:
         rows.append((AvailableProgram(NETWORK_PRODUCT, "Network", "local source", "", "", "", 0,
-                                      "Open network layers in Mapping or edit network tables in a standalone spreadsheet."), None, False))
+                                      "Network expansion for Mapping, with a standalone spreadsheet editor."), None, False))
     return rows
 
 
 def program_kind_label(product: str) -> str:
     if product == NETWORK_PRODUCT:
-        return "NETWORK TOOL"
+        return "NETWORK EXPANSION"
     if product in MCP_PRODUCTS:
         return "MCP SERVICE"
     if product == "daedalmap-historical-version-generator":
@@ -1426,10 +1426,16 @@ def program_kind_label(product: str) -> str:
 
 def program_use_label(product: str, running: bool, *, mapping_installed: bool = False) -> str:
     if product == NETWORK_PRODUCT:
-        return "Open Network Map" if mapping_installed else "Export Parquet"
+        return "Open with Mapping"
     if product in MCP_PRODUCTS:
         return "Stop" if running else "Start"
     return "Open Files"
+
+
+def mapping_available_for_network() -> bool:
+    if local_source_mode():
+        return local_mapping_source_root() is not None
+    return has_usable_installed_engine()
 
 
 def verify_program_release(program: AvailableProgram, log) -> None:
@@ -3960,7 +3966,7 @@ class LauncherApp:
         self.program_action_buttons.clear()
         self.program_action_vars.clear()
         installed_entries = load_program_state()["installed_programs"]
-        mapping_installed = has_usable_installed_engine()
+        mapping_installed = mapping_available_for_network()
         local_network = local_network_source_root() if self.program_filter == "installed" else None
         cards = program_cards_for_filter(self.available_programs, installed_entries,
                                          self.program_filter, local_network)
@@ -3996,7 +4002,8 @@ class LauncherApp:
             Label(card, text=item.title, bg=THEME["colors"]["card_bg"],
                   fg=THEME["colors"]["text"], font=THEME["fonts"]["card"],
                   wraplength=370, justify=LEFT, anchor="nw", height=2).pack(fill="x", padx=14)
-            description = item.description or "Local DaedalMap tool."
+            description = ("Expand Mapping with network layers, or edit network tables on their own."
+                           if item.product == NETWORK_PRODUCT else item.description or "Local DaedalMap tool.")
             Label(card, text=description, bg=THEME["colors"]["card_bg"],
                   fg=THEME["colors"]["muted_text"], font=THEME["fonts"]["body"],
                   justify=LEFT, anchor="nw", wraplength=370, height=2).pack(fill="x", padx=14, pady=(5, 5))
@@ -4011,9 +4018,9 @@ class LauncherApp:
             action_state = InstallActionState.compare(
                 str(installed_entry.get("version") or "") if installed_entry else "", item.version)
             if local_source:
-                install_label = "Open Network Map"
+                install_label = "Open with Mapping"
                 install_command = lambda: self.launch_clicked(open_network=True)
-                install_enabled = local_mapping_source_root() is not None
+                install_enabled = mapping_installed
             elif local_trial:
                 install_label = "Rebuild Local"
                 install_command = lambda value=item: self.rebuild_local_program_clicked(value)
@@ -4057,7 +4064,10 @@ class LauncherApp:
                                 **button_kwargs("primary"))
             if installed_entry and not local_source:
                 use_action.pack(side=LEFT, padx=(0, 8))
-                self.program_action_buttons.append(use_action)
+                if item.product != NETWORK_PRODUCT or mapping_installed:
+                    self.program_action_buttons.append(use_action)
+                else:
+                    use_action.configure(state=DISABLED)
             else:
                 use_action.configure(state=DISABLED)
             network_root = (local_network or installed_network_root()) if item.product == NETWORK_PRODUCT else None
@@ -4117,7 +4127,12 @@ class LauncherApp:
         Label(panel, text=program.title, bg=THEME["colors"]["panel_bg"],
               fg=THEME["colors"]["text"], font=THEME["fonts"]["card"]).pack(
                   anchor="w", padx=18)
-        if program.product == "daedalmap-historical-version-generator":
+        if program.product == NETWORK_PRODUCT:
+            paragraphs = (
+                "Network is an optional expansion for Mapping. Open with Mapping to see network layers and inspect nodes, links, and features on the map.",
+                "Open Network Editor to work with network tables in a standalone spreadsheet. It runs without Mapping. Network data packs are separate downloads.",
+            )
+        elif program.product == "daedalmap-historical-version-generator":
             paragraphs = (
                 "For version-specific research projects and to match someone else's work precisely, "
                 "send a geometry data pack back in time to a previous version number.",
@@ -4284,13 +4299,11 @@ class LauncherApp:
             if local_network_source_root() is None and installed_network_root() is None:
                 messagebox.showinfo("Network unavailable", "The installed Network expansion is missing or incompatible. Reinstall it before opening Mapping.")
                 return
-            if has_usable_installed_engine() or local_mapping_source_root() is not None:
+            if mapping_available_for_network():
                 self.launch_clicked(open_network=True)
                 return
-            packs_dir = RUNTIME_DATA_ROOT / "networks" / "packs"
-            if not any(packs_dir.glob("*/manifest.json")):
-                messagebox.showinfo("No Network packs", "Install a Network data pack before exporting tables.")
-                return
+            messagebox.showinfo("Mapping required", "Install Mapping to open Network layers on the map. The Network Editor works without Mapping.")
+            return
         entries = load_program_state()["installed_programs"]
         entry = next((item for item in reversed(entries) if item.get("product") == program.product), None)
         if entry is None:

@@ -19,8 +19,9 @@ source entry point can use the same data library without building program ZIPs:
 python tools/launcher/launcher.py --local-source --library-root "<launcher-data-folder>"
 ```
 
-In the local launcher Programs tab, **Open Network Map** opens Network on the
-Mapping map, including when automatic Network startup is off. **Open Network
+In the local launcher Programs tab, **Open with Mapping** opens Network on the
+Mapping map, including when automatic Network startup is off. The button is
+disabled until compatible Mapping is available. **Open Network
 Editor** opens a standalone spreadsheet at `http://127.0.0.1:8124/`. It reads
 validated candidate packs under `network/data/packs` without starting Mapping
 or showing a map. Nodes, links, and features are paged, searchable tables.

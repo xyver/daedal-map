@@ -72,9 +72,10 @@ create `launcher-data/local-programs/daedalmap-network/program.json`:
 The source folder must contain `network/extension.json`,
 `network/app/mapping_extension.py`, and `network/spreadsheet_editor.py`.
 Select **Switch to Local Custom** in Settings and restart the launcher after
-adding the manifest. Network appears as **Local source** with **Open Network
-Map** and **Open Network Editor**. The map button opens Network on Mapping's
-map, even when **Start with Mapping** is off. The editor button starts a
+adding the manifest. Network appears as **Local source** with **Open with
+Mapping** and **Open Network Editor**. The first button opens Network on
+Mapping's map, even when **Start with Mapping** is off, and is disabled until
+Mapping is available. The editor button starts a
 standalone, non-map spreadsheet at `http://127.0.0.1:8124/`. It reads
 validated packs from the Network checkout and stores draft Parquet edits under
 `launcher-data/runtime/data/networks/editor_drafts/`. Restart Mapping after
