@@ -4,6 +4,7 @@
  */
 
 import { CONFIG } from './config.js';
+import './local-catalog-notice.js';
 import { GeometryCache, LocationInfoCache } from './cache.js';
 import { DisplayRuntime } from './display-runtime.js';
 import { cancelActiveRequests, fetchMsgpack, postMsgpack } from './utils/fetch.js';
@@ -46,6 +47,7 @@ import { MetricDisplayRegistry } from './metric-display-registry.js';
 import { OpsTimeline } from './ops-timeline.js';
 
 const CHAT_MAP_LANES = ['explore', 'research', 'ops'];
+const FORCE_NETWORK_OPEN = new URLSearchParams(window.location.search).get('network') === '1';
 const DISPLAY_GEOMETRY_TYPES = new Set(['zcta', 'tribal', 'watershed', 'park']);
 const DISPLAY_SOURCE_EVENT_TYPE_HINTS = [
   ['earthquakes', 'earthquake'],
@@ -929,6 +931,47 @@ export const App = {
     // Initialize map
     await MapAdapter.init();
 
+    if (document.body?.dataset.localWrapper === 'true') {
+      // The optional package registers its API at startup. Its UI starts only
+      // when requested or when the launcher preference asks for it.
+      fetch('/api/local/network/status').then(async (response) => {
+        if (!response.ok) return;
+        const { auto_start: autoStart } = await response.json();
+        const mapContainer = document.getElementById('mapContainer');
+        if (!mapContainer) return;
+        const button = document.createElement('button');
+        button.id = 'openNetworkExpansion';
+        button.type = 'button';
+        button.textContent = 'Open Network';
+        button.style.cssText = 'position:absolute;bottom:70px;right:14px;z-index:1101;padding:7px 10px;border:1px solid #57728b;border-radius:6px;background:#101d2b;color:#eaf4ff;cursor:pointer;';
+        mapContainer.append(button);
+        let networkUi;
+        let opened = false;
+        async function toggleNetwork() {
+          button.disabled = true;
+          try {
+            networkUi ||= await import('/api/local/network/ui.js');
+            if (opened) {
+              networkUi.closeNetworkExpansion();
+              opened = false;
+            } else {
+              await networkUi.initNetworkExpansion();
+              opened = true;
+            }
+            button.textContent = opened ? 'Close Network' : 'Open Network';
+          } catch (error) {
+            console.warn('Network expansion could not start:', error);
+            button.title = String(error?.message || error);
+            button.textContent = 'Retry Network';
+          } finally {
+            button.disabled = false;
+          }
+        }
+        button.addEventListener('click', toggleNetwork);
+        if (autoStart || FORCE_NETWORK_OPEN) await toggleNetwork();
+      }).catch((error) => console.warn('Network expansion could not start:', error));
+    }
+
     // Live overlays (toggleable, all modes; need the map to exist).
     AuroraOverlay.init({ MapAdapter });
     NwsAlertsOverlay.init({ MapAdapter });
@@ -947,9 +990,14 @@ export const App = {
       const focusToken = routeIntent?.focus ? (this.pendingRouteFocusCameraToken + 1) : 0;
       this.pendingRouteFocusCameraToken = focusToken;
       if (routeIntent?.share_state) {
-        const handledShareState = await this.applyShareState(routeIntent.share_state, { lane });
-        if (!handledShareState) {
-          console.warn('[ShareState] Route share state did not resolve to a load:', routeIntent.share_state);
+        try {
+          const handledShareState = await this.applyShareState(routeIntent.share_state, { lane });
+          if (!handledShareState && routeIntent.share_state.loads?.length) {
+            ChatManager.addMessage?.('Could not load the source in this shared map view. Check that its pack is installed locally.', 'assistant', { mode: lane });
+          }
+        } catch (error) {
+          console.warn('[ShareState] Route share state load failed:', error);
+          ChatManager.addMessage?.(`Could not load the shared map view: ${error.message || 'Unknown error'}`, 'assistant', { mode: lane });
         }
         const hasAdditionalRouteLoad = Boolean(
           routeIntent?.view_id
@@ -1323,8 +1371,17 @@ export const App = {
     if (packId) load.pack_id = packId;
     const modeHint = String(this.currentData?.data_type || this.currentData?.type || '').trim().toLowerCase();
     if (modeHint) load.mode = modeHint === 'data' ? 'metrics' : modeHint;
-    if (this.currentData?.filters && typeof this.currentData.filters === 'object' && !Array.isArray(this.currentData.filters)) {
-      load.filters = cloneSerializable(this.currentData.filters);
+    const orderItem = this.activeMetricOrderContext?.sourceId === sourceId
+      ? this.activeMetricOrderContext.order?.items?.[0]
+      : null;
+    const metric = String(orderItem?.metric || this.currentData?.metric_key || '').trim();
+    if (metric) load.metric = metric;
+    for (const key of ['region', 'geo_level', 'year', 'year_start', 'year_end', 'lock_geo_level']) {
+      if (orderItem?.[key] != null) load[key] = orderItem[key];
+    }
+    const filters = orderItem?.filters || this.currentData?.filters;
+    if (filters && typeof filters === 'object' && !Array.isArray(filters)) {
+      load.filters = cloneSerializable(filters);
     }
     return [load];
   },
@@ -2494,6 +2551,10 @@ export const App = {
   setupSatelliteToggle() {
     const checkbox = document.getElementById('satCheckbox');
     if (checkbox) {
+      if (document.body?.dataset.localWrapper === 'true') {
+        checkbox.closest('label')?.remove();
+        return;
+      }
       // Restore saved state
       try {
         const saved = localStorage.getItem('countymap_satellite_enabled');

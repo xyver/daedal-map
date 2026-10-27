@@ -18,6 +18,16 @@ function hideWildfireOverlay(deps) {
   console.log('OverlayController: Hid wildfire overlay for animation');
 }
 
+function enterWildfireFocus(controller, deps, returnViewState, animated = false) {
+  if (controller.enterFocusedOverlayMode) {
+    controller.enterFocusedOverlayMode(returnViewState,
+      controller.captureFocusedOverlayIds?.(['wildfires']) || ['wildfires']);
+  } else {
+    hideWildfireOverlay(deps);
+  }
+  if (!animated) deps.TimeSlider?.hide?.();
+}
+
 function restoreWildfireOverlay(controller, deps, viewState = null) {
   controller.restoreViewState?.(viewState, ['wildfires']);
   console.log('OverlayController: Restored wildfire overlay');
@@ -47,32 +57,38 @@ export function handleWildfireImpact(controller, data, deps) {
   const { MapAdapter } = deps;
   const { fireName, latitude, longitude, areaKm2, radiusKm } = data;
   const returnViewState = controller.captureViewState?.();
-  console.log(`OverlayController: Starting wildfire impact animation for ${fireName} (${areaKm2} km2)`);
-  if (!latitude || !longitude) return console.warn('OverlayController: No coordinates for wildfire impact animation');
+  const hasArea = Number.isFinite(Number(radiusKm)) && Number(radiusKm) > 0;
+  console.log(`OverlayController: Starting wildfire ${hasArea ? 'area' : 'point'} view for ${fireName} (${areaKm2 ?? 'unknown'} km2)`);
+  if (latitude == null || longitude == null || !Number.isFinite(Number(latitude)) || !Number.isFinite(Number(longitude))) {
+    return console.warn('OverlayController: No coordinates for wildfire impact view');
+  }
   MapAdapter?.hidePopup?.();
   MapAdapter.popupLocked = false;
-  hideWildfireOverlay(deps);
+  enterWildfireFocus(controller, deps, returnViewState);
   MapAdapter.focusOnFeatures([pointFeature(longitude, latitude)], { singlePointZoom: 9 });
+  addIgnitionMarker(longitude, latitude, deps);
   const sourceId = 'wildfire-impact-radius';
   const fillId = 'wildfire-impact-fill';
   const strokeId = 'wildfire-impact-stroke';
   if (MapAdapter.map.getLayer(fillId)) MapAdapter.map.removeLayer(fillId);
   if (MapAdapter.map.getLayer(strokeId)) MapAdapter.map.removeLayer(strokeId);
   if (MapAdapter.map.getSource(sourceId)) MapAdapter.map.removeSource(sourceId);
-  MapAdapter.map.addSource(sourceId, { type: 'geojson', data: createCircleFeature(longitude, latitude, radiusKm) });
-  MapAdapter.map.addLayer({ id: fillId, type: 'fill', source: sourceId, paint: { 'fill-color': '#ff5722', 'fill-opacity': 0 } });
-  MapAdapter.map.addLayer({ id: strokeId, type: 'line', source: sourceId, paint: { 'line-color': '#d84315', 'line-width': 3, 'line-opacity': 0 } });
-  const startTimeMs = performance.now();
-  const animate = () => {
-    const progress = Math.min(1, (performance.now() - startTimeMs) / 2000);
-    const ease = 1 - Math.pow(1 - progress, 3);
-    if (MapAdapter.map.getLayer(fillId)) {
-      MapAdapter.map.setPaintProperty(fillId, 'fill-opacity', ease * 0.4);
-      MapAdapter.map.setPaintProperty(strokeId, 'line-opacity', ease * 0.9);
-    }
-    if (progress < 1) requestAnimationFrame(animate);
-  };
-  setTimeout(animate, 1600);
+  if (hasArea) {
+    MapAdapter.map.addSource(sourceId, { type: 'geojson', data: createCircleFeature(longitude, latitude, radiusKm) });
+    MapAdapter.map.addLayer({ id: fillId, type: 'fill', source: sourceId, paint: { 'fill-color': '#ff5722', 'fill-opacity': 0 } });
+    MapAdapter.map.addLayer({ id: strokeId, type: 'line', source: sourceId, paint: { 'line-color': '#d84315', 'line-width': 3, 'line-opacity': 0 } });
+    const startTimeMs = performance.now();
+    const animate = () => {
+      const progress = Math.min(1, (performance.now() - startTimeMs) / 2000);
+      const ease = 1 - Math.pow(1 - progress, 3);
+      if (MapAdapter.map.getLayer(fillId)) {
+        MapAdapter.map.setPaintProperty(fillId, 'fill-opacity', ease * 0.4);
+        MapAdapter.map.setPaintProperty(strokeId, 'line-opacity', ease * 0.9);
+      }
+      if (progress < 1) requestAnimationFrame(animate);
+    };
+    setTimeout(animate, 1600);
+  }
   controller._wildfireImpactState = { sourceId, fillId, strokeId, returnViewState };
   addGenericExitButton('wildfire-exit-btn', 'Exit Fire View', '#ff5722', () => exitWildfireImpact(controller, deps));
 }
@@ -84,6 +100,7 @@ export function exitWildfireImpact(controller, deps, skipRestore = false) {
     if (MapAdapter.map.getLayer(fillId)) MapAdapter.map.removeLayer(fillId);
     if (MapAdapter.map.getLayer(strokeId)) MapAdapter.map.removeLayer(strokeId);
     if (MapAdapter.map.getSource(sourceId)) MapAdapter.map.removeSource(sourceId);
+    removeIgnitionMarker(deps);
     controller._wildfireImpactState = null;
     if (!skipRestore) restoreWildfireOverlay(controller, deps, returnViewState);
   }
@@ -97,6 +114,7 @@ export function handleWildfirePerimeter(controller, data, deps) {
   console.log(`OverlayController: Starting wildfire perimeter animation for ${fireName}`);
   MapAdapter?.hidePopup?.();
   MapAdapter.popupLocked = false;
+  enterWildfireFocus(controller, deps, returnViewState);
   // Wrap in an array so single-feature radius padding does not apply.
   const focused = geometry ? MapAdapter.focusOnFeatures([geometry], { maxZoom: 12 }) : false;
   if (!focused && latitude && longitude) {
@@ -111,25 +129,45 @@ export function handleWildfirePerimeter(controller, data, deps) {
   MapAdapter.map.addSource(sourceId, { type: 'geojson', data: geometry });
   MapAdapter.map.addLayer({ id: fillId, type: 'fill', source: sourceId, paint: { 'fill-color': '#ff5722', 'fill-opacity': 0 } });
   MapAdapter.map.addLayer({ id: strokeId, type: 'line', source: sourceId, paint: { 'line-color': '#d84315', 'line-width': 2, 'line-opacity': 0 } });
-  const startTimeMs = performance.now();
-  const animate = () => {
-    const progress = Math.min(1, (performance.now() - startTimeMs) / 2500);
-    const ease = 1 - Math.pow(1 - progress, 3);
-    if (MapAdapter.map.getLayer(fillId)) {
-      MapAdapter.map.setPaintProperty(fillId, 'fill-opacity', ease * 0.5);
-      MapAdapter.map.setPaintProperty(strokeId, 'line-opacity', ease * 0.9);
-    }
-    if (progress < 1) requestAnimationFrame(animate);
+  const state = { sourceId, fillId, strokeId, returnViewState, revealToken: 0, revealTimer: null };
+  controller._wildfirePerimeterState = state;
+  const reveal = () => {
+    const token = ++state.revealToken;
+    if (!MapAdapter.map.getLayer(fillId)) return;
+    MapAdapter.map.setPaintProperty(fillId, 'fill-opacity', 0);
+    MapAdapter.map.setPaintProperty(strokeId, 'line-opacity', 0);
+    const started = performance.now();
+    const animate = () => {
+      if (controller._wildfirePerimeterState !== state || token !== state.revealToken) return;
+      const progress = Math.min(1, (performance.now() - started) / 2500);
+      const ease = 1 - Math.pow(1 - progress, 3);
+      if (MapAdapter.map.getLayer(fillId)) {
+        MapAdapter.map.setPaintProperty(fillId, 'fill-opacity', ease * 0.5);
+        MapAdapter.map.setPaintProperty(strokeId, 'line-opacity', ease * 0.9);
+      }
+      if (progress < 1) requestAnimationFrame(animate);
+    };
+    requestAnimationFrame(animate);
   };
-  setTimeout(animate, 1600);
-  controller._wildfirePerimeterState = { sourceId, fillId, strokeId, returnViewState };
+  state.revealTimer = setTimeout(reveal, 600);
   addGenericExitButton('wildfire-perim-exit-btn', 'Exit Fire View', '#ff5722', () => exitWildfirePerimeter(controller, deps));
+  document.getElementById('wildfire-perim-replay-btn')?.remove();
+  const replay = document.createElement('button');
+  replay.id = 'wildfire-perim-replay-btn';
+  replay.textContent = 'Replay shape reveal';
+  replay.title = 'This fire has a final perimeter but no dated growth frames';
+  replay.style.cssText = 'position:fixed;top:130px;left:50%;transform:translateX(-50%);padding:8px 14px;background:#73391f;color:white;border:0;border-radius:6px;cursor:pointer;z-index:1000';
+  replay.addEventListener('click', reveal);
+  document.body.appendChild(replay);
 }
 
 export function exitWildfirePerimeter(controller, deps, skipRestore = false) {
   const { MapAdapter } = deps;
   if (controller._wildfirePerimeterState) {
-    const { sourceId, fillId, strokeId, returnViewState } = controller._wildfirePerimeterState;
+    const state = controller._wildfirePerimeterState;
+    const { sourceId, fillId, strokeId, returnViewState } = state;
+    clearTimeout(state.revealTimer);
+    state.revealToken += 1;
     if (MapAdapter.map.getLayer(fillId)) MapAdapter.map.removeLayer(fillId);
     if (MapAdapter.map.getLayer(strokeId)) MapAdapter.map.removeLayer(strokeId);
     if (MapAdapter.map.getSource(sourceId)) MapAdapter.map.removeSource(sourceId);
@@ -137,6 +175,7 @@ export function exitWildfirePerimeter(controller, deps, skipRestore = false) {
     if (!skipRestore) restoreWildfireOverlay(controller, deps, returnViewState);
   }
   document.getElementById('wildfire-perim-exit-btn')?.remove();
+  document.getElementById('wildfire-perim-replay-btn')?.remove();
 }
 
 export function handleFireAnimation(controller, data, deps) {
@@ -149,7 +188,7 @@ export function handleFireAnimation(controller, data, deps) {
   const endMs = startMs + durationDays * 24 * 60 * 60 * 1000;
   MapAdapter?.hidePopup?.();
   MapAdapter.popupLocked = false;
-  hideWildfireOverlay(deps);
+  enterWildfireFocus(controller, deps, returnViewState, true);
   const [derivedLon, derivedLat] = computeGeometryCenter(perimeter.geometry);
   const centerLon = longitude || derivedLon;
   const centerLat = latitude || derivedLat;
@@ -164,16 +203,20 @@ export function handleFireAnimation(controller, data, deps) {
   MapAdapter.map.addSource(sourceId, { type: 'geojson', data: perimeter });
   MapAdapter.map.addLayer({ id: layerId, type: 'fill', source: sourceId, paint: { 'fill-color': '#ff4400', 'fill-opacity': 0 } });
   MapAdapter.map.addLayer({ id: strokeId, type: 'line', source: sourceId, paint: { 'line-color': '#ff6600', 'line-width': 2, 'line-opacity': 0 } });
-  const scaleId = `fire-${eventId.substring(0, 12)}`;
+  const scaleId = `fire-${String(eventId).substring(0, 12)}`;
   const fireDate = new Date(startTime).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
   const timestamps = [];
-  for (let t = startMs; t <= endMs; t += 24 * 60 * 60 * 1000) timestamps.push(t);
+  const dayMs = 24 * 60 * 60 * 1000;
+  const sampleStep = Math.max(dayMs, Math.ceil(durationDays / 365) * dayMs);
+  for (let t = startMs; t <= endMs && timestamps.length < 366; t += sampleStep) timestamps.push(t);
+  if (timestamps[timestamps.length - 1] !== endMs) timestamps.push(endMs);
   if (TimeSlider) {
-    const added = TimeSlider.addScale({ id: scaleId, label: `Fire ${fireDate}`, granularity: 'daily', useTimestamps: true, currentTime: startMs, timeRange: { min: startMs, max: endMs, available: timestamps }, mapRenderer: 'fire-animation' });
+    const added = TimeSlider.addScale({ id: scaleId, label: `Fire extent (estimated) ${fireDate}`, granularity: 'daily', useTimestamps: true, currentTime: startMs, timeRange: { min: startMs, max: endMs, available: timestamps }, mapRenderer: 'fire-animation' });
     if (added) {
       controller.activeFireScaleId = scaleId;
       TimeSlider.setActiveScale(scaleId);
       TimeSlider.enterEventAnimation?.(startMs, endMs);
+      TimeSlider.show?.();
     }
   }
   controller._fireAnimState = { sourceId, layerId, strokeId, startMs, endMs, scaleId, returnViewState };
@@ -207,7 +250,7 @@ export function handleFireProgression(controller, data, deps) {
   timestamps.sort((a, b) => a - b);
   MapAdapter?.hidePopup?.();
   MapAdapter.popupLocked = false;
-  hideWildfireOverlay(deps);
+  enterWildfireFocus(controller, deps, returnViewState, true);
   const firstSnap = snapshots[0];
   const [derivedLon, derivedLat] = computeGeometryCenter(firstSnap.geometry);
   const centerLon = longitude || derivedLon;
@@ -236,6 +279,7 @@ export function handleFireProgression(controller, data, deps) {
       controller.activeFireScaleId = scaleId;
       TimeSlider.setActiveScale(scaleId);
       TimeSlider.enterEventAnimation?.(minTime, maxTime);
+      TimeSlider.show?.();
     }
   }
   controller._fireAnimState = { sourceIdA, sourceIdB, layerIdA, layerIdB, strokeIdA, strokeIdB, startMs: minTime, endMs: maxTime, scaleId, snapshotMap, timestamps, currentLayer: 'A', lastSnapshotTime: minTime, returnViewState };
@@ -271,6 +315,7 @@ export function handleFireProgression(controller, data, deps) {
 
 export function exitFireAnimation(controller, deps, skipRestore = false) {
   const { MapAdapter, TimeSlider } = deps;
+  TimeSlider?.pause?.();
   if (controller._fireAnimState) {
     const { sourceIdA, sourceIdB, layerIdA, layerIdB, strokeIdA, strokeIdB, scaleId, returnViewState } = controller._fireAnimState;
     [layerIdA, layerIdB, strokeIdA, strokeIdB].forEach(id => { if (id && MapAdapter.map.getLayer(id)) MapAdapter.map.removeLayer(id); });

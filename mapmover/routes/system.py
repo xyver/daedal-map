@@ -18,7 +18,7 @@ from urllib.parse import urlparse
 
 import msgpack
 from fastapi import APIRouter, Request, Response
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 
 from agent_surface_shared import agent_ai_plugin_description_for_model
 from mapmover.auth_context import build_session_cache_key, get_authenticated_user
@@ -60,6 +60,16 @@ def clear_public_pack_catalog_cache() -> None:
     for mode in (False, True):
         _public_pack_list_cache[mode] = {"value": None, "cached_at": 0.0}
     _public_pack_detail_cache.clear()
+
+
+def _refresh_runtime_pack_catalog() -> None:
+    """Make an installed-pack change visible immediately to local app readers."""
+    from mapmover.data_loading import clear_catalog_cache
+
+    clear_catalog_cache()
+    clear_metadata_cache()
+    clear_public_pack_catalog_cache()
+    initialize_catalog()
 
 
 def clear_release_marker_cache() -> None:
@@ -361,13 +371,10 @@ def _downloadable_public_base_url() -> str:
     explicit = str(os.getenv("DAEDALMAP_PUBLIC_BASE_URL", "")).strip().rstrip("/")
     if explicit:
         return explicit
-    shared = str(os.getenv("S3_PUBLIC_BASE_URL", "")).strip().rstrip("/")
-    if shared:
-        return shared
     engine_url = str(os.getenv("DAEDALMAP_ENGINE_CURRENT_URL", "")).strip()
     if engine_url and "/downloadable/engine/" in engine_url:
         return engine_url.split("/downloadable/engine/", 1)[0].rstrip("/")
-    return "https://global-map-data.s3.amazonaws.com"
+    return "https://downloads.daedalmap.com"
 
 
 def _read_public_json(url: str) -> dict:
@@ -380,64 +387,64 @@ def _read_public_json(url: str) -> dict:
     return data if isinstance(data, dict) else {}
 
 
-def _downloadable_pack_store_entry(entry: dict, public_base: str) -> dict:
-    pack_id = str(entry.get("pack_id") or "").strip()
-    if not pack_id:
-        return {}
-
-    normalized = dict(entry)
-    current_url = str(entry.get("current_manifest_url") or f"{public_base}/downloadable/packs/{pack_id}/stable/current.json").strip()
-    version_url = ""
-    release_url = ""
-    edition = ""
-    try:
-        current = _read_public_json(current_url)
-        version_url = str(current.get("version_manifest_url") or "").strip()
-        if version_url:
-            version = _read_public_json(version_url)
-        elif current.get("package_profile") == "geometry":
-            release_url = str(current.get("release_manifest_url") or "").strip()
-            edition = str(current.get("edition") or "").strip()
-            release = _load_json_from_ref(release_url, current.get("release_manifest_sha256"))
-            version = _geometry_edition_projection(release, current)
-        else:
-            version = {}
-    except Exception:
-        current = {}
-        version = {}
-
-    artifact = version.get("artifact") if isinstance(version.get("artifact"), dict) else {}
-    size_bytes = int(artifact.get("size_bytes") or 0) if str(artifact.get("size_bytes") or "").strip() else 0
-    files = version.get("files") if isinstance(version.get("files"), list) else []
-    installed_size_bytes = 0
-    for item in files:
+def _storefront_pack_entries(catalog: dict) -> list[dict]:
+    """Project the same published data cards used by launcher Data into local settings."""
+    categories = catalog.get("categories") if isinstance(catalog, dict) else None
+    data = categories.get("data") if isinstance(categories, dict) else None
+    if not isinstance(data, list):
+        raise ValueError("Storefront catalog has no data pack list")
+    entries = []
+    for item in data:
         if not isinstance(item, dict):
             continue
-        raw_size = item.get("size_bytes")
-        if raw_size in (None, ""):
-            raw_size = item.get("size")
+        manifest_url = str(item.get("manifestUrl") or "").strip()
+        parsed = urlparse(manifest_url)
+        parts = parsed.path.split("/")
         try:
-            installed_size_bytes += int(raw_size or 0)
-        except (TypeError, ValueError):
+            marker = parts.index("packs")
+            pack_id, path_package_id, channel = parts[marker + 1:marker + 4]
+        except (ValueError, IndexError):
             continue
-    normalized.update(
-        {
+        package_id = str(item.get("packageId") or "").strip()
+        if (not pack_id or not package_id or package_id != path_package_id or
+                channel != "stable" or parsed.scheme != "https"):
+            continue
+        current_url = parsed._replace(path="/".join(parts[:marker + 4]) + "/current.json",
+                                      params="", query="", fragment="").geturl()
+        size = item.get("size") if isinstance(item.get("size"), int) else 0
+        entries.append({
+            "pack_id": pack_id,
+            "package_id": package_id,
+            "package_tier": str(item.get("tier") or "lite").strip(),
             "current_manifest_url": current_url,
-            "version_manifest_url": version_url or str(entry.get("version_manifest_url") or "").strip(),
-            "release_manifest_url": release_url or str(entry.get("release_manifest_url") or "").strip(),
-            "edition": edition or str(entry.get("edition") or "").strip(),
-            "current_version": str(version.get("version") or current.get("current_version") or entry.get("current_version") or "").strip(),
-            "source_name": str(version.get("source_name") or current.get("source_name") or entry.get("source_name") or pack_id).strip(),
-            "description": str(version.get("description") or current.get("description") or entry.get("description") or "").strip(),
-            "notes": list(version.get("notes") or current.get("notes") or entry.get("notes") or []),
-            "download_url": str(artifact.get("download_url") or "").strip(),
-            "size_bytes": size_bytes,
-            "size_mb": round(size_bytes / (1024 * 1024), 2) if size_bytes > 0 else 0.0,
-            "installed_size_bytes": installed_size_bytes,
-            "installed_size_mb": round(installed_size_bytes / (1024 * 1024), 2) if installed_size_bytes > 0 else 0.0,
-        }
-    )
-    return normalized
+            "version_manifest_url": manifest_url,
+            "current_version": str(item.get("version") or "").strip(),
+            "source_name": str(item.get("title") or pack_id).strip(),
+            "description": str(item.get("description") or "").strip(),
+            "tags": item.get("badges") if isinstance(item.get("badges"), list) else [],
+            "size_bytes": size,
+            "size_mb": round(size / (1024 * 1024), 2) if size > 0 else 0.0,
+        })
+    return entries
+
+
+def _select_downloadable_pack_current_url(index_data: dict, pack_id: str, package_id: str, public_base: str) -> str:
+    """Select only an edition advertised by the public download index."""
+    packs = index_data.get("packs") if isinstance(index_data, dict) else None
+    matches = [
+        entry for entry in (packs if isinstance(packs, list) else [])
+        if isinstance(entry, dict) and str(entry.get("pack_id") or "").strip() == pack_id
+    ]
+    if not package_id:
+        package_id = f"{pack_id}-lite"
+    selected = next((entry for entry in matches if str(entry.get("package_id") or "").strip() == package_id), None)
+    if selected is None or not re.fullmatch(r"[A-Za-z0-9_-]+", pack_id) or not re.fullmatch(r"[A-Za-z0-9_-]+", package_id):
+        raise ValueError("Pack edition is not in the downloadable catalog")
+    current_url = f"{public_base}/downloadable/packs/{pack_id}/{package_id}/stable/current.json"
+    advertised_url = str(selected.get("current_manifest_url") or current_url).strip()
+    if advertised_url != current_url:
+        raise ValueError("Pack edition manifest URL does not match the download origin")
+    return current_url
 
 
 def _read_runtime_config_payload(path: Path) -> dict:
@@ -2479,7 +2486,14 @@ async def get_catalog_sources(req: Request):
 
     auth_user = get_authenticated_user(req)
     using_wip = request_uses_wip_catalog(req, auth_user)
-    entitled = _get_entitled_packs(req)
+    # The local wrapper's catalog is already restricted to the packs in its
+    # shared library. Hosted account entitlements must not hide those packs
+    # from an unsigned-in localhost session.
+    local_library = (
+        os.getenv("DAEDALMAP_ACCESS_MODE", "").strip().lower() == "local_wrapper"
+        and _local_wrapper_state_allowed(req)
+    )
+    entitled = None if local_library else _get_entitled_packs(req)
     all_sources = (load_full_catalog() if using_wip else load_catalog()).get("sources", [])
 
     SUMMARY_KEYS = {"source_id", "pack_id", "source_name", "category", "data_type", "scope", "topic_tags"}
@@ -2750,7 +2764,13 @@ async def get_catalog_overlays(req: Request):
     auth_user = get_authenticated_user(req)
     using_wip = request_uses_wip_catalog(req, auth_user)
     catalog = load_full_catalog() if using_wip else load_catalog()
-    entitled = _get_entitled_packs(req)
+    # Local library visibility is determined by its active installed packs,
+    # not by hosted account entitlements.
+    local_library = (
+        os.getenv("DAEDALMAP_ACCESS_MODE", "").strip().lower() == "local_wrapper"
+        and _local_wrapper_state_allowed(req)
+    )
+    entitled = None if local_library else _get_entitled_packs(req)
 
     all_sources = catalog.get("sources", [])
 
@@ -2851,7 +2871,7 @@ async def set_local_catalog_surface(req: Request):
 
 @router.post("/api/local/data-plane")
 async def set_local_data_plane(req: Request):
-    """Switch localhost reads between installed files and the cloud lane."""
+    """Keep local desktop reads on installed files, including old callers."""
     from mapmover.data_cascade import clear_cache as clear_data_cascade_cache
     from mapmover.duckdb_helpers import cache_clear, reset_thread_connection_pool
     from mapmover.foundation_helpers import clear_foundation_helper_cache
@@ -2874,6 +2894,8 @@ async def set_local_data_plane(req: Request):
             body = await req.json()
         except Exception:
             body = {}
+    if str((body or {}).get("mode") or "").strip().lower() != "local":
+        return msgpack_error("Explore Map reads installed local data only.", 400)
     previous_mode = get_data_plane_mode()
     try:
         mode = set_local_data_plane_mode((body or {}).get("mode"))
@@ -3008,9 +3030,7 @@ async def set_runtime_active_packs(req: Request):
         catalog_mode = body.get("catalog_mode") or None
         state = set_active_pack_ids(active_pack_ids, catalog_mode=catalog_mode)
         materialization = materialize_active_data_root(load_full_catalog(), state)
-        clear_metadata_cache()
-        clear_public_pack_catalog_cache()
-        initialize_catalog()
+        _refresh_runtime_pack_catalog()
         logger.info(
             "Hosted runtime packs updated: user_id=%s active_pack_ids=%s catalog_mode=%s",
             (get_authenticated_user(req) or {}).get("id"),
@@ -3052,9 +3072,7 @@ async def install_runtime_pack_local(req: Request):
             activate=activate,
             replace_existing=replace_existing,
         )
-        clear_metadata_cache()
-        clear_public_pack_catalog_cache()
-        initialize_catalog()
+        _refresh_runtime_pack_catalog()
         logger.info(
             "Runtime pack installed from local catalog: user_id=%s pack_id=%s activate=%s",
             (get_authenticated_user(req) or {}).get("id"),
@@ -3084,9 +3102,7 @@ async def uninstall_runtime_pack(req: Request):
             return msgpack_error("pack_id is required", 400)
 
         result = uninstall_pack(pack_id, load_full_catalog())
-        clear_metadata_cache()
-        clear_public_pack_catalog_cache()
-        initialize_catalog()
+        _refresh_runtime_pack_catalog()
         logger.info(
             "Runtime pack uninstalled: user_id=%s pack_id=%s",
             (get_authenticated_user(req) or {}).get("id"),
@@ -3123,9 +3139,7 @@ async def install_runtime_pack_manifest(req: Request):
             activate=activate,
             replace_existing=replace_existing,
         )
-        clear_metadata_cache()
-        clear_public_pack_catalog_cache()
-        initialize_catalog()
+        _refresh_runtime_pack_catalog()
         logger.info(
             "Runtime pack installed from manifest: user_id=%s manifest_path=%s activate=%s",
             (get_authenticated_user(req) or {}).get("id"),
@@ -3174,9 +3188,7 @@ async def install_runtime_pack_ref(req: Request):
             activate=activate,
             replace_existing=replace_existing,
         )
-        clear_metadata_cache()
-        clear_public_pack_catalog_cache()
-        initialize_catalog()
+        _refresh_runtime_pack_catalog()
         logger.info(
             "Runtime pack installed from manifest ref: user_id=%s manifest_ref=%s activate=%s",
             (get_authenticated_user(req) or {}).get("id"),
@@ -3212,29 +3224,112 @@ async def get_local_wrapper_pack_status(req: Request):
         return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
 
 
+@router.get("/api/local-wrapper/catalog/discovered")
+async def get_local_catalog_discovered(req: Request):
+    """Report complete, uncataloged source folders placed in local DATA_ROOT."""
+    _context, error = _require_local_or_admin(req)
+    if error:
+        return error
+    from mapmover.local_catalog_discovery import ensure_empty_catalog, scan_local_archives, scan_unindexed_sources
+    from mapmover.pack_state import load_pack_state
+    from mapmover.paths import RUNTIME_MODE
+    if RUNTIME_MODE != "local":
+        return JSONResponse({"ok": False, "error": "Local catalog discovery is unavailable in hosted mode"}, status_code=403)
+    ensure_empty_catalog()
+    from mapmover.paths import CATALOG_PATH
+    catalog = json.loads(CATALOG_PATH.read_text(encoding="utf-8"))
+    state = load_pack_state()
+    first_open = not catalog.get("sources") and not state.get("installed_packs")
+    return JSONResponse({"ok": True, "sources": scan_unindexed_sources(), "archives": scan_local_archives(),
+                         "first_open": first_open,
+                         "source_mode": os.getenv("DAEDALMAP_LOCAL_SOURCE_MODE", "") == "1"})
+
+
+@router.post("/api/local-wrapper/catalog/add")
+async def add_local_catalog_discovered(req: Request):
+    """Import one reviewed local pack into the managed catalog."""
+    _context, error = _require_local_or_admin(req)
+    if error:
+        return error
+    from mapmover.local_catalog_discovery import catalog_fragment_for_candidates, scan_unindexed_sources
+    from mapmover.pack_manager import install_pack_from_local_catalog
+    from mapmover.pack_state import get_installed_pack_ids, load_pack_state
+    from mapmover.paths import CATALOG_PATH, RUNTIME_MODE
+    if RUNTIME_MODE != "local":
+        return JSONResponse({"ok": False, "error": "Local catalog import is unavailable in hosted mode"}, status_code=403)
+    try:
+        body = await decode_request_body(req)
+        pack_id = str(body.get("pack_id") or "").strip()
+        if not pack_id:
+            return JSONResponse({"ok": False, "error": "pack_id is required"}, status_code=400)
+        fragment = catalog_fragment_for_candidates(pack_id, scan_unindexed_sources())
+        replacing = pack_id in get_installed_pack_ids(load_pack_state())
+        if replacing:
+            current = json.loads(CATALOG_PATH.read_text(encoding="utf-8"))
+            existing = [source for source in current.get("sources", []) if source.get("pack_id") == pack_id]
+            if not existing:
+                return JSONResponse({"ok": False, "error": "Activate this pack before adding local files"}, status_code=400)
+            fragment["sources"] = existing + fragment["sources"]
+            fragment["total_sources"] = len(fragment["sources"])
+            fragment["packs"][0]["source_ids"] = sorted(source["source_id"] for source in fragment["sources"])
+            fragment["packs"][0]["source_count"] = len(fragment["sources"])
+        result = install_pack_from_local_catalog(
+            pack_id, fragment, activate=True, replace_existing=replacing, allow_managed_source_root=True,
+        )
+        _refresh_runtime_pack_catalog()
+        return JSONResponse({"ok": True, "pack_id": pack_id, "source_count": result.get("source_count"),
+                             "materialization": result.get("materialization")})
+    except (ValueError, RuntimeError) as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+    except Exception as exc:
+        logger.error(f"Error adding discovered local data: {exc}")
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+
+
+@router.post("/api/local-wrapper/catalog/add-archive")
+async def add_local_catalog_archive(req: Request):
+    """Import a reviewed ZIP already placed in the local data folder."""
+    _context, error = _require_local_or_admin(req)
+    if error:
+        return error
+    from mapmover.local_catalog_discovery import scan_local_archives
+    from mapmover.local_pack_catalog import import_local_pack_zip
+    from mapmover.paths import DATA_ROOT, RUNTIME_MODE
+    if RUNTIME_MODE != "local":
+        return JSONResponse({"ok": False, "error": "Local catalog import is unavailable in hosted mode"}, status_code=403)
+    try:
+        body = await decode_request_body(req)
+        relative_path = str(body.get("path") or "")
+        archive = next((entry for entry in scan_local_archives() if entry["path"] == relative_path), None)
+        if archive is None:
+            return JSONResponse({"ok": False, "error": "Pack ZIP not found in the data folder"}, status_code=400)
+        result = import_local_pack_zip(DATA_ROOT / archive["path"])
+        _refresh_runtime_pack_catalog()
+        return JSONResponse({"ok": True, "pack_id": result["pack_id"],
+                             "source_count": result.get("source_count"),
+                             "materialization": result.get("materialization")})
+    except (ValueError, RuntimeError, OSError) as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+    except Exception as exc:
+        logger.error(f"Error importing local pack ZIP: {exc}")
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+
+
 @router.get("/api/local-wrapper/packs/store")
 async def get_local_wrapper_pack_store(req: Request):
-    """Proxy the public downloadable pack index so localhost browser UI avoids CORS issues."""
+    """Project the shared public storefront catalog for the localhost library."""
     _context, error = _require_local_or_admin(req)
     if error:
         return error
 
-    public_base = _downloadable_public_base_url()
-    index_url = f"{public_base}/downloadable/packs/index.json"
+    catalog_url = str(os.getenv("DAEDALMAP_STOREFRONT_CATALOG_URL") or
+                      "https://www.daedalmap.com/downloadable/storefront_catalog.json").strip()
     try:
-        index_data = _read_public_json(index_url)
-        packs = index_data.get("packs")
-        enriched = []
-        for pack in packs if isinstance(packs, list) else []:
-            if not isinstance(pack, dict):
-                continue
-            record = _downloadable_pack_store_entry(pack, public_base)
-            if record:
-                enriched.append(record)
+        catalog = await asyncio.to_thread(_read_public_json, catalog_url)
+        enriched = _storefront_pack_entries(catalog)
         return JSONResponse({
             "ok": True,
-            "public_base_url": public_base,
-            "index_url": index_url,
+            "catalog_url": catalog_url,
             "packs": enriched,
         })
     except urllib.error.URLError as exc:
@@ -3257,21 +3352,24 @@ async def install_local_wrapper_pack(req: Request):
     try:
         body = await decode_request_body(req)
         pack_id = str(body.get("pack_id") or "").strip()
+        package_id = str(body.get("package_id") or "").strip()
         activate = bool(body.get("activate", True))
         replace_existing = bool(body.get("replace_existing", True))
         if not pack_id:
             return JSONResponse({"ok": False, "error": "pack_id is required"}, status_code=400)
 
         public_base = _downloadable_public_base_url()
-        manifest_ref = f"{public_base}/downloadable/packs/{pack_id}/stable/current.json"
+        index_data = _read_public_json(f"{public_base}/downloadable/packs/index.json")
+        try:
+            manifest_ref = _select_downloadable_pack_current_url(index_data, pack_id, package_id, public_base)
+        except ValueError as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
         result = install_pack_from_manifest_ref(
             manifest_ref,
             activate=activate,
             replace_existing=replace_existing,
         )
-        clear_metadata_cache()
-        clear_public_pack_catalog_cache()
-        initialize_catalog()
+        _refresh_runtime_pack_catalog()
         logger.info(
             "Local wrapper pack installed from public manifest ref: user_id=%s pack_id=%s activate=%s",
             (get_authenticated_user(req) or {}).get("id"),
@@ -3565,7 +3663,57 @@ def _render_app_shell() -> str:
         quote = needle[-1]
         stamped = needle[:-1] + f"?v={_v(rel)}" + quote
         html = html.replace(needle, stamped)
+    if os.getenv("DAEDALMAP_ACCESS_MODE", "").strip().lower() == "local_wrapper":
+        html = html.replace("<head>", "<head>\n  <script>window.DAEDALMAP_LOCAL_WRAPPER = true;</script>", 1)
+        html = html.replace('  <link rel="preconnect" href="https://unpkg.com" crossorigin>\n', "", 1)
+        html = html.replace('  <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>\n', "", 1)
+        html = html.replace('  <script src="/static/js/dm-visitor.js"></script>\n', "", 1)
+        source_attribute = ' data-local-source="true"' if os.getenv("DAEDALMAP_LOCAL_SOURCE_MODE", "") == "1" else ""
+        custom_attribute = ' data-local-custom="true"' if os.getenv("DAEDALMAP_LOCAL_CUSTOM_MODE", "") == "1" else ""
+        html = html.replace("<body>", f'<body data-local-wrapper="true"{source_attribute}{custom_attribute}>', 1)
+        html = html.replace('data-tutorial-title="Account and Session"',
+                            'data-tutorial-title="Explore Map"', 1)
+        html = html.replace(
+            'data-tutorial-body="Manage account access here, switch between account-backed and guest behavior, or collapse the sidebar to focus on the map."',
+            'data-tutorial-body="Use the launcher for map and data settings, or collapse the sidebar to focus on the map."',
+            1,
+        )
     return html
+
+
+_LOCAL_MAP_DETAIL_FILES = {"ne_10m_land.geojson", "ne_10m_admin_0_countries.geojson"}
+
+
+@router.get("/api/local-map-tiles/config")
+async def get_local_map_tiles_config(request: Request):
+    if not _local_wrapper_state_allowed(request):
+        return JSONResponse({"error": "Local map settings are unavailable"}, status_code=404)
+    config_path = Path(os.getenv("DAEDALMAP_MAP_TILES_CONFIG") or "")
+    try:
+        payload = json.loads(config_path.read_text(encoding="utf-8")) if config_path.is_file() else {}
+    except (OSError, ValueError):
+        payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
+    detail_root = Path(os.getenv("DAEDALMAP_MAP_TILES_ROOT") or "")
+    detail_available = bool(str(detail_root) not in {"", "."} and all(
+        (detail_root / filename).is_file() for filename in _LOCAL_MAP_DETAIL_FILES))
+    mode = payload.get("mode") if payload.get("mode") in {"online", "offline_basic", "offline_detail"} else "online"
+    if mode == "offline_detail" and not detail_available:
+        mode = "offline_basic"
+    return {"mode": mode, "remote_style_url": "https://tiles.openfreemap.org/styles/dark" if mode == "online" else "",
+            "detail_available": detail_available}
+
+
+@router.get("/api/local-map-tiles/detail/{filename}")
+async def get_local_map_detail_file(request: Request, filename: str):
+    if not _local_wrapper_state_allowed(request) or filename not in _LOCAL_MAP_DETAIL_FILES:
+        return JSONResponse({"error": "Map detail file unavailable"}, status_code=404)
+    detail_root = Path(os.getenv("DAEDALMAP_MAP_TILES_ROOT") or "")
+    path = detail_root / filename
+    if str(detail_root) in {"", "."} or not path.is_file():
+        return JSONResponse({"error": "Map detail file unavailable"}, status_code=404)
+    return FileResponse(path, media_type="application/geo+json")
 
 
 @router.get("/", response_class=HTMLResponse)
@@ -3602,6 +3750,26 @@ async def serve_settings_page(request: Request):
     if runtime_mode and runtime_mode != "local":
         return HTMLResponse("<h1>Not Found</h1>", status_code=404)
 
+    if os.getenv("DAEDALMAP_ACCESS_MODE", "").strip().lower() == "local_wrapper":
+        requested = str(request.query_params.get("tab") or "settings").lower()
+        tabs = {"settings": ("advanced", "Settings"), "library": ("library", "Data"),
+                "research": ("research", "Research"), "llm": ("llm", "AI"),
+                "runtime": ("runtime", "Explore Map"), "self-host": ("advanced", "Settings")}
+        tab, title = tabs.get(requested, tabs["settings"])
+        navigation = STATE_DIR / "launcher_navigation.json"
+        navigation.parent.mkdir(parents=True, exist_ok=True)
+        temporary = navigation.with_suffix(".json.tmp")
+        temporary.write_text(json.dumps({"tab": tab}), encoding="utf-8")
+        os.replace(temporary, navigation)
+        return HTMLResponse(
+            '<!doctype html><html><head><meta charset="utf-8"><title>DaedalMap Launcher</title></head>'
+            '<body style="font:16px system-ui;background:#091723;color:#eef7fb;padding:3rem">'
+            f'<h1>Open {title} in DaedalMap Launcher</h1>'
+            '<p>The launcher manages program settings and data downloads. '
+            'If it is open, this page has requested the matching tab.</p>'
+            '<p>You can close this browser tab.</p></body></html>'
+        )
+
     llm_ready = bool(os.getenv("ANTHROPIC_API_KEY", "").strip() or os.getenv("OPENAI_API_KEY", "").strip())
     llm_status = "Configured" if llm_ready else "Missing"
     llm_note = (
@@ -3609,8 +3777,6 @@ async def serve_settings_page(request: Request):
         if llm_ready
         else "Set OPENAI_API_KEY or ANTHROPIC_API_KEY in .env before using chat."
     )
-    downloadable_public_base = _downloadable_public_base_url()
-    pack_store_index_url = f"{downloadable_public_base}/downloadable/packs/index.json"
     hosted_account_url = f"{SITE_URL}/account" if SITE_URL and not _is_localish_url(SITE_URL) else ""
     hosted_research_url = f"{hosted_account_url}?tab=research" if hosted_account_url else ""
     hosted_self_host_url = f"{hosted_account_url}?tab=self-host" if hosted_account_url else ""
@@ -4284,6 +4450,8 @@ async def serve_settings_page(request: Request):
                     storageConfigUrl: "/api/local-wrapper/storage-config",
                 }};
                 let libraryStoreLoaded = false;
+                let libraryStoreError = '';
+                let localPackStatusError = '';
                 let localLibraryEntries = [];
                 let localInstalledPacks = [];
                 let localActivePackIds = new Set();
@@ -4337,9 +4505,11 @@ async def serve_settings_page(request: Request):
                 }}
 
                 function getInstalledResearchPacks() {{
-                    return localLibraryEntries.filter(function(entry) {{
-                        return !!entry.installed;
-                    }});
+                    return localInstalledPacks.map(function(installed) {{
+                        const packId = String(installed?.pack_id || '').trim();
+                        const catalogEntry = localLibraryEntries.find(function(entry) {{ return entry.pack_id === packId; }}) || {{}};
+                        return Object.assign({{}}, catalogEntry, installed, {{ pack_id: packId, installed: true }});
+                    }}).filter(function(entry) {{ return !!entry.pack_id; }});
                 }}
 
                 function formatResearchPackMeta(entry) {{
@@ -4570,19 +4740,20 @@ async def serve_settings_page(request: Request):
                 }}
 
                 function renderLibraryView() {{
-                    const connectionEl = document.getElementById('libraryConnectionStatus');
                     const availableEl = document.getElementById('libraryAvailablePacks');
                     const localEl = document.getElementById('libraryLocalPacks');
-                    if (!connectionEl || !availableEl || !localEl) return;
+                    if (!availableEl || !localEl) return;
 
-                    connectionEl.innerHTML = '<span class="status-indicator status-online"></span> Connected to downloadable pack catalog';
-
-                    if (!localLibraryEntries.length) {{
+                    if (libraryStoreError) {{
+                        availableEl.innerHTML = '<div class="empty-state">Downloadable catalog unavailable. Check the connection and refresh the store.</div>';
+                    }} else if (!localLibraryEntries.length) {{
                         availableEl.innerHTML = '<div class="empty-state">No downloadable packs found.</div>';
                     }} else {{
                         availableEl.innerHTML = localLibraryEntries.map(function(entry) {{
                             const packId = String(entry?.pack_id || '').trim();
                             const title = escapeHtml(String(entry?.source_name || packId).trim() || packId);
+                            const packageId = String(entry?.package_id || '').trim();
+                            const tier = escapeHtml(String(entry?.package_tier || '').trim());
                             const desc = escapeHtml(String(entry?.description || '').trim() || '');
                             const installed = !!entry.installed;
                             const version = String(entry?.current_version || '').trim();
@@ -4598,20 +4769,23 @@ async def serve_settings_page(request: Request):
                                 + '<div class="pack-meta">'
                                 + (sourceCount > 0 ? '<span>' + sourceCount + ' source' + (sourceCount === 1 ? '' : 's') + '</span>' : '')
                                 + (version ? '<span>v' + escapeHtml(version) + '</span>' : '')
+                                + (tier ? '<span>' + tier + '</span>' : '')
                                 + '<span>Download: ' + escapeHtml(sizeText) + '</span>'
-                                + '<span>Installs to: ' + escapeHtml(installedSizeText) + '</span>'
+                                + (Number(entry?.installed_size_bytes || 0) > 0 ? '<span>Installs to: ' + escapeHtml(installedSizeText) + '</span>' : '')
                                 + '</div>'
                                 + '<div class="pack-description">' + (desc || 'No description yet.') + '</div>'
                                 + (tags.length ? '<div class="pack-tags">' + tags.map(function(tag) {{ return '<span class="tag">' + escapeHtml(String(tag)) + '</span>'; }}).join('') + '</div>' : '')
                                 + '<div class="pack-actions">'
                                 + (installed
-                                    ? '<button class="btn-installed" type="button" disabled>Installed</button><button class="btn-secondary" type="button" data-install-pack-id="' + escapeHtml(packId) + '">Reinstall</button>'
-                                    : '<button class="btn-primary" type="button" data-install-pack-id="' + escapeHtml(packId) + '">Install</button>')
+                                    ? '<button class="btn-installed" type="button" disabled>Installed</button><button class="btn-secondary" type="button" data-install-pack-id="' + escapeHtml(packId) + '" data-package-id="' + escapeHtml(packageId) + '">Reinstall / Switch Edition</button>'
+                                    : '<button class="btn-primary" type="button" data-install-pack-id="' + escapeHtml(packId) + '" data-package-id="' + escapeHtml(packageId) + '">Install</button>')
                                 + '</div></div>';
                         }}).join('');
                     }}
 
-                    const installedEntries = localLibraryEntries.filter(function(entry) {{ return !!entry.installed; }});
+                    const installedEntries = localLibraryEntries.filter(function(entry, index, entries) {{
+                        return !!entry.installed && entries.findIndex(function(candidate) {{ return candidate.pack_id === entry.pack_id; }}) === index;
+                    }});
                     const orphanInstalled = localInstalledPacks.filter(function(installed) {{
                         const packId = String(installed?.pack_id || '').trim();
                         return packId && !installedEntries.some(function(entry) {{ return String(entry?.pack_id || '').trim() === packId; }});
@@ -4630,7 +4804,9 @@ async def serve_settings_page(request: Request):
                         }};
                     }});
                     const localEntries = installedEntries.concat(orphanInstalled);
-                    if (!localEntries.length) {{
+                    if (localPackStatusError) {{
+                        localEl.innerHTML = '<div class="empty-state">Could not read local pack state.</div>';
+                    }} else if (!localEntries.length) {{
                         localEl.innerHTML = '<div class="empty-state">No local packs installed yet. Install one from the catalog above.</div>';
                     }} else {{
                         localEl.innerHTML = localEntries.map(function(entry) {{
@@ -4655,14 +4831,14 @@ async def serve_settings_page(request: Request):
                                 + '<span><code>' + escapeHtml(packId) + '</code></span>'
                                 + '</div>'
                                 + '<div class="pack-description">' + desc + '</div>'
-                                + '<div class="pack-actions"><button class="btn-secondary" type="button" data-install-pack-id="' + escapeHtml(packId) + '">Reinstall / Activate</button></div>'
+                                + (libraryStoreError ? '' : '<div class="pack-actions"><button class="btn-secondary" type="button" data-install-pack-id="' + escapeHtml(packId) + '">Reinstall Lite / Activate</button></div>')
                                 + '</div>';
                         }}).join('');
                     }}
 
                     document.querySelectorAll('[data-install-pack-id]').forEach(function(button) {{
                         button.addEventListener('click', function() {{
-                            installLibraryPack(String(button.getAttribute('data-install-pack-id') || ''));
+                            installLibraryPack(String(button.getAttribute('data-install-pack-id') || ''), String(button.getAttribute('data-package-id') || ''));
                         }});
                     }});
                 }}
@@ -4676,46 +4852,55 @@ async def serve_settings_page(request: Request):
                     connectionEl.innerHTML = '<span class="status-indicator status-warn-dot"></span> Connecting to downloadable pack catalog...';
                     availableEl.innerHTML = '<div class="loading">Loading downloadable pack catalog...</div>';
                     localEl.innerHTML = '<div class="loading">Loading local pack state...</div>';
-                    try {{
-                        const [indexResp, localResp] = await Promise.all([
-                            fetch(settingsConfig.packStoreUrl, {{ credentials: 'same-origin' }}),
-                            fetch(settingsConfig.localPackStatusUrl, {{ credentials: 'same-origin' }}),
-                        ]);
-                        if (!indexResp.ok) throw new Error('Pack index HTTP ' + indexResp.status);
-                        if (!localResp.ok) throw new Error('Local pack status HTTP ' + localResp.status);
-                        const indexData = await indexResp.json();
-                        const localData = await localResp.json();
-                        if (indexData?.ok === false) throw new Error(indexData?.error || 'Pack store unavailable.');
-                        const entries = Array.isArray(indexData?.packs) ? indexData.packs : [];
-                        const installedPacks = Array.isArray(localData?.installed_packs) ? localData.installed_packs : [];
-                        const activeIds = new Set(Array.isArray(localData?.active_pack_ids) ? localData.active_pack_ids.map(String) : []);
-                        const installedById = new Map(installedPacks.map(function(entry) {{
-                            return [String(entry?.pack_id || '').trim(), entry];
-                        }}));
-                        localInstalledPacks = installedPacks;
-                        localActivePackIds = activeIds;
-                        localLibraryEntries = entries.map(function(entry) {{
-                            const packId = String(entry?.pack_id || '').trim();
-                            const installed = installedById.get(packId) || null;
-                            return Object.assign({{}}, entry, {{
-                                pack_id: packId,
-                                installed: !!installed,
-                                active: activeIds.has(packId),
-                                installed_version: installed ? String(installed.version || '').trim() : '',
-                            }});
-                        }});
-                        renderLibraryView();
-                        renderResearchPackCards();
-                        renderSavedLocalCorpora();
-                        libraryStoreLoaded = true;
-                    }} catch (error) {{
-                        connectionEl.innerHTML = '<span class="status-indicator status-offline"></span> ' + escapeHtml(error?.message || 'Could not load downloadable pack store.');
-                        availableEl.innerHTML = '<div class="empty-state">Could not connect to the downloadable pack catalog.</div>';
-                        localEl.innerHTML = '<div class="empty-state">Local pack state unavailable.</div>';
+                    const [storeResult, localResult] = await Promise.allSettled([
+                        fetch(settingsConfig.packStoreUrl, {{ credentials: 'same-origin' }}).then(async function(response) {{
+                            if (!response.ok) throw new Error('Pack index HTTP ' + response.status);
+                            const payload = await response.json();
+                            if (payload?.ok === false) throw new Error(payload.error || 'Pack store unavailable.');
+                            return payload;
+                        }}),
+                        fetch(settingsConfig.localPackStatusUrl, {{ credentials: 'same-origin' }}).then(async function(response) {{
+                            if (!response.ok) throw new Error('Local pack status HTTP ' + response.status);
+                            const payload = await response.json();
+                            if (payload?.ok === false) throw new Error(payload.error || 'Local pack state unavailable.');
+                            return payload;
+                        }}).then(function(payload) {{
+                            const count = Array.isArray(payload?.installed_packs) ? payload.installed_packs.length : 0;
+                            localEl.innerHTML = '<div class="loading">' + count + ' local pack' + (count === 1 ? '' : 's') + ' found. Loading downloadable catalog...</div>';
+                            return payload;
+                        }}),
+                    ]);
+                    libraryStoreError = storeResult.status === 'rejected' ? String(storeResult.reason?.message || 'Pack store unavailable.') : '';
+                    localPackStatusError = localResult.status === 'rejected' ? String(localResult.reason?.message || 'Local pack state unavailable.') : '';
+                    const entries = libraryStoreError ? [] : (Array.isArray(storeResult.value?.packs) ? storeResult.value.packs : []);
+                    if (!localPackStatusError) {{
+                        const localData = localResult.value;
+                        localInstalledPacks = Array.isArray(localData?.installed_packs) ? localData.installed_packs : [];
+                        localActivePackIds = new Set(Array.isArray(localData?.active_pack_ids) ? localData.active_pack_ids.map(String) : []);
                     }}
+                    const installedById = new Map(localInstalledPacks.map(function(entry) {{
+                        return [String(entry?.pack_id || '').trim(), entry];
+                    }}));
+                    localLibraryEntries = entries.map(function(entry) {{
+                        const packId = String(entry?.pack_id || '').trim();
+                        const installed = installedById.get(packId) || null;
+                        return Object.assign({{}}, entry, {{
+                            pack_id: packId,
+                            installed: !!installed,
+                            active: localActivePackIds.has(packId),
+                            installed_version: installed ? String(installed.version || '').trim() : '',
+                        }});
+                    }});
+                    connectionEl.innerHTML = libraryStoreError
+                        ? '<span class="status-indicator status-offline"></span> Downloadable store offline; local packs remain available.'
+                        : '<span class="status-indicator status-online"></span> Connected to downloadable pack catalog';
+                    renderLibraryView();
+                    renderResearchPackCards();
+                    renderSavedLocalCorpora();
+                    libraryStoreLoaded = true;
                 }}
 
-                async function installLibraryPack(packId) {{
+                async function installLibraryPack(packId, packageId) {{
                     const connectionEl = document.getElementById('pageConnectionStatus');
                     if (!packId || !connectionEl) return;
                     connectionEl.innerHTML = '<span class="status-indicator status-warn-dot"></span> Installing ' + escapeHtml(packId) + '...';
@@ -4723,7 +4908,7 @@ async def serve_settings_page(request: Request):
                         const response = await fetch(settingsConfig.localPackInstallUrl, {{
                             method: 'POST',
                             headers: {{ 'Content-Type': 'application/json' }},
-                            body: JSON.stringify({{ pack_id: packId, activate: true, replace_existing: true }}),
+                            body: JSON.stringify({{ pack_id: packId, package_id: packageId, activate: true, replace_existing: true }}),
                             credentials: 'same-origin',
                         }});
                         const payload = await response.json();
@@ -4784,6 +4969,7 @@ async def serve_settings_page(request: Request):
                 switchTab(params.get('tab') || 'settings');
             }})();
         </script>
+        <script type="module" src="/static/modules/local-catalog-notice.js"></script>
     </body>
     </html>
     """

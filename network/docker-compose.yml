@@ -1,0 +1,14 @@
+services:
+  editor:
+    build: .
+    ports:
+      - "8123:8123"
+    environment:
+      ROAD_EDITOR_DATA_DIR: /app/data
+    volumes:
+      - ./data:/app/data
+      # External inputs are deliberately mounted rather than copied. This lets
+      # the editor travel to another repository without importing its data-prep
+      # code or duplicating large OSM/data artifacts.
+      - ${ROAD_EDITOR_OSM_DIR:?Set ROAD_EDITOR_OSM_DIR to the folder containing california-latest.osm.pbf}:/inputs/osm:ro
+      - ${ROAD_EDITOR_SOURCE_DATA_DIR:?Set ROAD_EDITOR_SOURCE_DATA_DIR to the County Map/DaedalMap data root}:/inputs/source-data:ro

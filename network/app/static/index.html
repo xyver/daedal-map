@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Lake County Road Network Editor</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <aside>
+    <h1>Road Network Editor</h1>
+    <p><a class="choose-network" href="/packs">Choose network →</a></p>
+    <p class="scope">Lake County, CA · regional driving context</p>
+    <button id="how-it-works" class="how-it-works" type="button">How it works</button>
+    <details class="sidebar-section tile-settings">
+      <summary>Map tiles</summary>
+      <p>Starter tiles use OpenStreetMap. Set an XYZ tile URL for this local Mapping view and the Network pack view.</p>
+      <label for="basemap-url">XYZ tile URL</label>
+      <input id="basemap-url" type="text" spellcheck="false">
+      <label for="basemap-attribution">Required attribution</label>
+      <input id="basemap-attribution" type="text">
+      <button id="basemap-save" type="button">Use these tiles</button>
+      <button id="basemap-reset" type="button">Use starter tiles</button>
+      <p id="basemap-status" role="status"></p>
+      <p>Local XYZ folders can use <code>/tiles/{z}/{x}/{y}.png</code> after placing them in <code>data/tiles/</code>.</p>
+    </details>
+    <details class="sidebar-section">
+      <summary>Route calculation</summary>
+      <label class="route-limit" for="route-minutes">Travel-time limit (minutes)</label>
+      <div class="route-controls"><input id="route-minutes" type="number" min="1" max="720" step="1" value="30"><button id="calculate-routes" type="button">Calculate routes</button></div>
+      <p id="route-results" class="route-results">Click an empty map area and choose <strong>Set start point</strong> before calculating.</p>
+    </details>
+    <details class="sidebar-section">
+      <summary>Shelter changes</summary>
+      <p class="shelter-legend"><span class="shelter-swatch closed"></span>NSS shelter snapshot <span class="shelter-swatch open"></span>Open shelter</p>
+      <p id="live-shelter-status" class="live-shelter-status">Checking FEMA Open Shelters…</p>
+      <p id="shelter-changes" class="shelter-changes">No shelter changes. Using the baseline dataset.</p>
+      <div id="shelter-changes-list" class="shelter-changes-list"></div>
+      <button id="reset-shelters" class="reset-shelters" type="button">Reset shelters to baseline</button>
+    </details>
+    <details class="sidebar-section">
+      <summary>Road edits</summary>
+      <p>Click a road segment to cycle its scenario state:</p>
+      <ol class="cycle"><li><span class="open"></span>Open both ways</li><li><span class="forward"></span>One way: drawn direction</li><li><span class="reverse"></span>One way: reverse direction</li><li><span class="closed"></span>Closed</li></ol>
+      <p id="status">Loading baseline…</p>
+      <p id="selection">No road segment selected.</p>
+      <h2>Road types</h2>
+      <p class="filter-help">Show only selected types.</p>
+      <div id="road-type-filters" class="road-type-filters">
+        <label><input type="checkbox" value="motorway,motorway_link" checked> Motorway <small>43</small></label>
+        <label><input type="checkbox" value="trunk,trunk_link" checked> Trunk <small>453</small></label>
+        <label><input type="checkbox" value="primary,primary_link" checked> Primary <small>604</small></label>
+        <label><input type="checkbox" value="secondary,secondary_link" checked> Secondary <small>1,448</small></label>
+        <label><input type="checkbox" value="tertiary,tertiary_link" checked> Tertiary <small>959</small></label>
+        <label><input type="checkbox" value="unclassified,living_street" checked> Unclassified <small>1,673</small></label>
+        <label><input type="checkbox" value="residential" checked> Residential <small>12,236</small></label>
+        <label><input type="checkbox" value="service" checked> Service <small>12,505</small></label>
+        <label><input type="checkbox" value="track" checked> Track <small>8,704</small></label>
+        <label><input type="checkbox" value="road,raceway" checked> Other <small>15</small></label>
+      </div>
+      <button id="clear-road-changes" class="clear-road-changes" type="button">Clear all road changes</button>
+    </details>
+    <div class="scenario-controls scenario-controls-footer">
+      <input id="scenario-name" type="text" maxlength="80" placeholder="Scenario name">
+      <button id="save-scenario" type="button">Save scenario</button>
+      <select id="saved-scenarios"><option value="">Load saved scenario…</option></select>
+      <button id="load-scenario" type="button">Load scenario</button>
+    </div>
+    <p class="note">Saved scenarios keep your road edits, shelter changes, and start point together.</p>
+  </aside>
+  <main id="map" aria-label="Clickable Lake County road network"></main>
+  <dialog id="how-it-works-dialog" class="how-it-works-dialog" aria-labelledby="how-it-works-title">
+    <div class="guide-header"><h2 id="how-it-works-title">How this map works</h2><button id="close-how-it-works" type="button" aria-label="Close guide">Close</button></div>
+    <p>Use this map to test road closures, one-way roads, shelters, and travel times around Lake County.</p>
+    <ol class="guide-steps">
+      <li><strong>Edit roads.</strong> Click a road segment to cycle it from open, to either one-way direction, to closed, then back to open. Changed segments show a matching arrow or X.</li>
+      <li><strong>Adjust shelters.</strong> Click empty map space near a road to add a snapped custom shelter. Click any shelter pin to inspect it, close/reopen it, or delete a custom shelter.</li>
+      <li><strong>Set a start point.</strong> Click an empty location near a road and choose <em>Set start point</em>. The house snaps to the graph so routes use the road network rather than straight-line distance.</li>
+      <li><strong>Calculate routes.</strong> Choose a travel-time limit, then calculate. The sidebar lists reachable shelters; select one to highlight its route.</li>
+      <li><strong>Save your work.</strong> Save a scenario to keep your road edits, shelter changes, and start point. Load it later to continue where you left off.</li>
+    </ol>
+    <section class="guide-scope"><h3>Map area</h3><p>The map focuses on Lake County. Nearby roads and shelters are included so routes can cross a county line when that is the practical way to travel.</p></section>
+  </dialog>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
+  <script src="/static/basemap.js"></script>
+  <script src="/static/editor.js"></script>
+</body>
+</html>

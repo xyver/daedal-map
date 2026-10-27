@@ -1120,6 +1120,10 @@ def initialize_catalog():
     """
     global data_catalog
 
+    if get_data_plane_mode() == "local":
+        from .local_catalog_discovery import ensure_empty_catalog
+        ensure_empty_catalog()
+
     data_catalog = load_catalog()
 
     if data_catalog.get("total_sources", 0) > 0:

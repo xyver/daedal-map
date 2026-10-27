@@ -25,6 +25,7 @@ import requests
 from geometry_download_shared import geometry_edition_projection as _geometry_edition_projection
 
 from .artifact_utils import safe_extract_zip, sha256_file
+from .local_pack_catalog import build_local_pack_catalog
 from .paths import CACHE_DIR, ensure_dir
 
 
@@ -125,26 +126,25 @@ def _stage_pack_zip_from_version_manifest(version_manifest: dict, stage_root: Pa
     extract_root = stage_root / "_extract"
     safe_extract_zip(artifact_zip, extract_root)
 
-    data_root = extract_root / "data"
-    if not (data_root / "catalog.json").exists():
-        raise RuntimeError(f"Downloaded pack artifact did not contain data/catalog.json for {pack_id}")
-
-    for child in extract_root.iterdir():
-        destination = stage_root / child.name
-        if destination.exists():
-            if destination.is_dir():
-                shutil.rmtree(destination)
-            else:
-                destination.unlink()
-        shutil.move(str(child), str(destination))
+    data_root = stage_root / "data"
+    build_local_pack_catalog(extract_root, data_root, version_manifest)
     shutil.rmtree(extract_root, ignore_errors=True)
+
+    staged_files = [
+        {
+            "path": path.relative_to(data_root).as_posix(),
+            "sha256": sha256_file(path),
+            "size": path.stat().st_size,
+        }
+        for path in sorted(data_root.rglob("*")) if path.is_file()
+    ]
 
     manifest_payload = {
         "version": 1,
         "pack_id": pack_id,
         "pack_version": pack_version,
         "generated_at": str(version_manifest.get("published_at") or ""),
-        "files": version_manifest.get("files") or [],
+        "files": staged_files,
     }
     manifest_hash = hashlib.sha256(json.dumps(manifest_payload, sort_keys=True).encode("utf-8")).hexdigest()
     manifest_payload["manifest_hash"] = manifest_hash
@@ -157,7 +157,7 @@ def _stage_pack_zip_from_version_manifest(version_manifest: dict, stage_root: Pa
         "stage_root": str(stage_root),
         "manifest_path": str(manifest_path),
         "data_root": str(stage_root / "data"),
-        "downloaded_files": [str(item.get("path") or "").strip() for item in version_manifest.get("files", []) if str(item.get("path") or "").strip()],
+        "downloaded_files": [item["path"] for item in staged_files],
         "artifact_url": artifact_url,
     }
 

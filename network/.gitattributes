@@ -1,0 +1,28 @@
+# Line endings: LF everywhere.
+#
+# core.autocrlf is false on this machine and there was no .gitattributes, so
+# git stored whatever bytes a tool happened to write. Python's
+# Path.write_text() converts \n to \r\n on Windows, so a small edit could
+# rewrite every line of a file and produce a diff of hundreds of phantom
+# changes. Normalizing here means the index is always LF regardless of what
+# wrote the file on disk.
+* text=auto eol=lf
+
+# .cmd is the one thing that genuinely wants CRLF - the Windows command
+# interpreter can mis-parse LF-only batch files.
+*.cmd text eol=crlf
+
+# Never touch binaries.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.zip binary
+*.gz binary
+*.parquet binary
+*.gpkg binary
+*.xlsx binary
+*.exe binary
+*.tar binary

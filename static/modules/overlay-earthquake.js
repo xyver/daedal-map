@@ -10,6 +10,11 @@ export async function handleSequenceChange(controller, sequenceId, eventId, deps
     return;
   }
   const cacheKey = eventId || sequenceId;
+  const reportLoad = (error = '') => {
+    document.dispatchEvent(new CustomEvent('earthquake-sequence-load-result', {
+      detail: { eventId, error }
+    }));
+  };
   let seqEvents;
   try {
     let endpoint;
@@ -19,13 +24,22 @@ export async function handleSequenceChange(controller, sequenceId, eventId, deps
     seqEvents = data.features || [];
   } catch (error) {
     console.error('OverlayController: Error fetching sequence data:', error);
+    reportLoad('Could not load aftershocks for this earthquake.');
     return;
   }
-  if (!seqEvents.length) return console.warn(`OverlayController: No events found for sequence ${cacheKey}`);
+  if (!seqEvents.length) {
+    console.warn(`OverlayController: No events found for sequence ${cacheKey}`);
+    reportLoad('No aftershock events were found for this earthquake.');
+    return;
+  }
   const selectedSequence = selectEarthquakeSequenceFeatures(seqEvents);
   seqEvents = selectedSequence.selectedFeatures;
   const mainshock = selectedSequence.mainshockFeature;
-  if (!mainshock) return console.warn(`OverlayController: Could not identify mainshock for sequence ${cacheKey}`);
+  if (!mainshock) {
+    console.warn(`OverlayController: Could not identify mainshock for sequence ${cacheKey}`);
+    reportLoad('Could not identify the mainshock for this sequence.');
+    return;
+  }
   const mainMag = mainshock.properties.magnitude || 5.5;
   const mainTime = new Date(mainshock.properties.timestamp || mainshock.properties.time).getTime();
   const windowEnd = mainTime + gardnerKnopoffTimeWindow(mainMag) * 24 * 60 * 60 * 1000;
@@ -54,7 +68,7 @@ export async function handleSequenceChange(controller, sequenceId, eventId, deps
   });
   const model = ModelRegistry?.getModelForType('earthquake');
   if (model?.clear) model.clear();
-  EventAnimator.start({
+  const started = EventAnimator.start({
     id: `seq-${String(cacheKey || 'earthquake').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 12)}`,
     label,
     mode: AnimationMode.EARTHQUAKE,
@@ -70,4 +84,5 @@ export async function handleSequenceChange(controller, sequenceId, eventId, deps
       session.restore();
     }
   });
+  reportLoad(started ? '' : 'Could not start the aftershock animation for this earthquake.');
 }

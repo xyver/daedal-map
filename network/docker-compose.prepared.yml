@@ -1,0 +1,20 @@
+# Run a previously prepared data/baseline folder. Unlike docker-compose.yml,
+# this file needs no California PBF or County Map data mount.
+services:
+  editor:
+    build: .
+    ports:
+      - "8123:8123"
+    environment:
+      ROAD_EDITOR_DATA_DIR: /app/data
+    volumes:
+      - ./data:/app/data
+  mcp:
+    build: .
+    environment:
+      ROAD_EDITOR_DATA_DIR: /app/data
+    volumes:
+      - ./data:/app/data
+    command: ["python", "mcp_server/server.py"]
+    stdin_open: true
+    tty: false

@@ -106,10 +106,9 @@ export const ChoroplethModel = {
 
   /**
    * Pre-compute gap-filled time data (called once at init/updateData/scale
-   * switch). For yearly mode: fills gaps between years (carrying forward
-   * last known values). For timestamp mode: only uses actual data points
-   * (no interpolation) -- playback snap-at-lookup (slider.getDataLookupKey)
-   * handles holding the frame between data points.
+   * switch). Carry each location's last known value through later frames.
+   * Timestamp mode only creates frames at authored times; playback holds the
+   * latest frame between those times via slider.getDataLookupKey.
    * @param {Object} slider - Owning TimeSlider (for minTime/maxTime/sortedTimes/useTimestamps + snap)
    */
   buildFilledTimeData(slider) {
@@ -119,7 +118,8 @@ export const ChoroplethModel = {
     const allLocIds = this.baseGeojson.features.map(f => f.properties.loc_id);
 
     if (slider.useTimestamps) {
-      // For timestamp mode, only fill for actual data points (no gap filling)
+      // Only create authored frames, while retaining each location's latest
+      // value when another location receives a newer snapshot.
       for (const time of slider.sortedTimes) {
         const dataKey = slider.getDataLookupKey(time);
         filled[dataKey] = {};
@@ -127,9 +127,15 @@ export const ChoroplethModel = {
 
         for (const locId of allLocIds) {
           if (timeValues[locId] && Object.keys(timeValues[locId]).length > 0) {
-            filled[dataKey][locId] = {
-              ...timeValues[locId],
+            lastKnown[locId] = {
+              data: timeValues[locId],
               data_time: time
+            };
+          }
+          if (lastKnown[locId]) {
+            filled[dataKey][locId] = {
+              ...lastKnown[locId].data,
+              data_time: lastKnown[locId].data_time
             };
           }
         }

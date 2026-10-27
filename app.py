@@ -10,6 +10,7 @@ This file is intentionally thin:
 
 import asyncio
 import io
+import json
 import os
 import sys
 import time
@@ -104,7 +105,7 @@ BASE_DIR = Path(__file__).resolve().parent
 
 # Dashboard-activated policy is runtime state, never generated catalog state.
 # An explicit JSON/file env still has higher precedence for emergency deploys.
-from mapmover.paths import STATE_DIR
+from mapmover.paths import RUNTIME_MODE, STATE_DIR
 os.environ.setdefault(RUNTIME_POLICY_FILE_ENV, str(STATE_DIR / "access_policy_active.json"))
 
 HARD_GATED_SURFACES = frozenset({"agent_api_paid", "agent_api_mcp", "point_lookup"})
@@ -950,6 +951,28 @@ app.include_router(weather_router)
 app.include_router(chat_router)
 app.include_router(ops_router)
 app.include_router(research_router)
+
+# Network is an optional local Mapping expansion. Only a selected installation
+# supplies its import root; the base Mapping package can run on its own.
+network_root = os.environ.get("DAEDALMAP_NETWORK_ROOT", "").strip()
+if RUNTIME_MODE == "local" and network_root:
+    network_source = Path(network_root).resolve()
+    network_manifest = network_source / "network" / "extension.json"
+    try:
+        network_meta = json.loads(network_manifest.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        network_meta = {}
+    if (network_meta.get("product") == "daedalmap-network" and
+            network_meta.get("mapping_interface") == 1 and
+            (network_source / "network" / "app" / "mapping_extension.py").is_file()):
+        sys.path.insert(0, str(network_source))
+        try:
+            from network.app.mapping_extension import router as network_mapping_router
+        except ModuleNotFoundError as exc:
+            if exc.name not in {"network", "network.app", "network.app.mapping_extension"}:
+                raise
+        else:
+            app.include_router(network_mapping_router)
 
 
 

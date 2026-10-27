@@ -40,6 +40,10 @@ package-lock.json
 # Data (all data lives in county-map-data, never inside this repo)
 # -----------------------------------------------------------------------------
 data/
+# Small public-domain map assets are application files, not runtime data.
+!static/data/
+!static/data/offline-basemap/
+!static/data/offline-basemap/**
 data_pipeline/
 .data_s3_cache/
 ../appdata/

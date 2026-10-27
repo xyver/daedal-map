@@ -5,6 +5,7 @@ from fastapi.responses import JSONResponse
 import pandas as pd
 
 from mapmover.disaster_filters import apply_location_filters
+from mapmover.data_loading import get_source_path
 from mapmover.duckdb_helpers import (
     duckdb_available, make_cache_key, parquet_available,
     is_default_preload_range, make_preload_cache_key,
@@ -30,6 +31,14 @@ from .helpers import (
 
 
 router = APIRouter()
+
+
+def _eruption_events_path():
+    """Resolve the installed volcano pack's event source, with legacy fallback."""
+    source_path = get_source_path("volcanoes_events") / "events.parquet"
+    if parquet_available(source_path):
+        return source_path
+    return GLOBAL_DIR / "disasters/volcanoes/events.parquet"
 
 
 @router.get("/api/volcanoes/live")
@@ -143,7 +152,7 @@ async def get_eruptions_geojson(
 ):
     """Get volcanic eruptions as GeoJSON points for map display."""
     try:
-        eruptions_path = GLOBAL_DIR / "disasters/volcanoes/events.parquet"
+        eruptions_path = _eruption_events_path()
         if not parquet_available(eruptions_path):
             return msgpack_error("Eruption data not available", 404)
 
@@ -228,7 +237,7 @@ async def get_nearby_volcanoes(
 ):
     """Find volcanic eruptions near a location within a time window."""
     try:
-        eruptions_path = GLOBAL_DIR / "disasters/volcanoes/events.parquet"
+        eruptions_path = _eruption_events_path()
         if not parquet_available(eruptions_path):
             return msgpack_error("Volcano data not available", 404)
 
@@ -294,7 +303,7 @@ async def get_nearby_volcanoes(
 async def get_related_earthquakes_for_volcano(event_id: str):
     """Return linked earthquake event IDs stored on a volcano eruption event."""
     try:
-        eruptions_path = GLOBAL_DIR / "disasters/volcanoes/events.parquet"
+        eruptions_path = _eruption_events_path()
         if not parquet_available(eruptions_path):
             return msgpack_error("Volcano data not available", 404)
 

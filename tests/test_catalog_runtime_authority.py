@@ -56,6 +56,7 @@ def test_api_catalog_build_does_not_fetch_explore_overlay_metadata() -> None:
         "source_id": "earthquakes_events", "pack_id": "earthquakes",
         "catalog_surfaces": ["api", "explore"],
         "overlay": {"path": "disasters/earthquakes"},
+        "last_updated": "2026-10-25",
     }], "packs": []}
     state = {"catalog_mode": "unmanaged_data_root", "installed_packs": []}
     with (
@@ -68,7 +69,8 @@ def test_api_catalog_build_does_not_fetch_explore_overlay_metadata() -> None:
         metadata.assert_not_called()
         explore_catalog = build_active_catalog(catalog, catalog_surface="explore")
         assert explore_catalog["overlay_tree"]
-        metadata.assert_called_once_with("earthquakes_events")
+        assert explore_catalog["overlay_tree"]["disasters"]["children"]["earthquakes"]["sources"][0]["data_version"] == "2026-10-25"
+        metadata.assert_not_called()
 
 
 def test_local_folder_remains_visible_with_managed_packs(tmp_path: Path) -> None:
@@ -215,7 +217,9 @@ def test_app_refresh_uses_force_reads_without_clearing_serving_caches() -> None:
     assert counts == {"published": 1, "wip": 1, "geometry": 1, "ops_feeds": 1, "agent_packs": 1}
     published.assert_called_once_with(force_refresh=True)
     wip.assert_called_once_with(force_refresh=True)
-    geometry.assert_called_once_with()
+    geometry.assert_called_once()
+    assert geometry.call_args.args == ()
+    assert callable(geometry.call_args.kwargs["validate"])
     feeds.assert_called_once_with(force_refresh=True)
     agent.assert_called_once_with(force_refresh=True)
     guide.assert_called_once_with(force_refresh=True)

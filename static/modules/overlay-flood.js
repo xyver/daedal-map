@@ -110,44 +110,57 @@ export function handleFloodImpact(controller, data, deps) {
   const { MapAdapter } = deps;
   const { eventName, latitude, longitude, areaKm2, radiusKm } = data;
   const returnViewState = controller.captureViewState?.();
-  console.log(`OverlayController: Starting flood impact animation for ${eventName} (${areaKm2} km2)`);
-  if (!latitude || !longitude) return console.warn('OverlayController: No coordinates for flood impact animation');
+  const hasArea = Number.isFinite(Number(radiusKm)) && Number(radiusKm) > 0;
+  console.log(`OverlayController: Starting flood ${hasArea ? 'area' : 'point'} view for ${eventName} (${areaKm2 ?? 'unknown'} km2)`);
+  if (latitude == null || longitude == null || !Number.isFinite(Number(latitude)) || !Number.isFinite(Number(longitude))) {
+    return console.warn('OverlayController: No coordinates for flood impact view');
+  }
   MapAdapter?.hidePopup?.();
   MapAdapter.popupLocked = false;
   hideFloodOverlay(deps);
   MapAdapter.focusOnFeatures([pointFeature(longitude, latitude)], { singlePointZoom: 8 });
+  const markerSourceId = 'flood-impact-point';
+  const markerLayerId = 'flood-impact-point-marker';
+  if (MapAdapter.map.getLayer(markerLayerId)) MapAdapter.map.removeLayer(markerLayerId);
+  if (MapAdapter.map.getSource(markerSourceId)) MapAdapter.map.removeSource(markerSourceId);
+  MapAdapter.map.addSource(markerSourceId, { type: 'geojson', data: pointFeature(longitude, latitude) });
+  MapAdapter.map.addLayer({ id: markerLayerId, type: 'circle', source: markerSourceId,
+    paint: { 'circle-radius': 8, 'circle-color': '#4baeff', 'circle-stroke-color': '#e8f7ff', 'circle-stroke-width': 2 } });
   const sourceId = 'flood-impact-radius';
   const fillId = 'flood-impact-fill';
   const strokeId = 'flood-impact-stroke';
   if (MapAdapter.map.getLayer(fillId)) MapAdapter.map.removeLayer(fillId);
   if (MapAdapter.map.getLayer(strokeId)) MapAdapter.map.removeLayer(strokeId);
   if (MapAdapter.map.getSource(sourceId)) MapAdapter.map.removeSource(sourceId);
-  MapAdapter.map.addSource(sourceId, { type: 'geojson', data: createCircleFeature(longitude, latitude, radiusKm) });
-  MapAdapter.map.addLayer({ id: fillId, type: 'fill', source: sourceId, paint: { 'fill-color': '#2196f3', 'fill-opacity': 0 } });
-  MapAdapter.map.addLayer({ id: strokeId, type: 'line', source: sourceId, paint: { 'line-color': '#1565c0', 'line-width': 3, 'line-opacity': 0 } });
-
-  const startTimeMs = performance.now();
-  const animate = () => {
-    const progress = Math.min(1, (performance.now() - startTimeMs) / 2000);
-    const ease = 1 - Math.pow(1 - progress, 3);
-    if (MapAdapter.map.getLayer(fillId)) {
-      MapAdapter.map.setPaintProperty(fillId, 'fill-opacity', ease * 0.4);
-      MapAdapter.map.setPaintProperty(strokeId, 'line-opacity', ease * 0.9);
-    }
-    if (progress < 1) requestAnimationFrame(animate);
-  };
-  setTimeout(animate, 1600);
-  controller._floodImpactState = { sourceId, fillId, strokeId, returnViewState };
+  if (hasArea) {
+    MapAdapter.map.addSource(sourceId, { type: 'geojson', data: createCircleFeature(longitude, latitude, radiusKm) });
+    MapAdapter.map.addLayer({ id: fillId, type: 'fill', source: sourceId, paint: { 'fill-color': '#2196f3', 'fill-opacity': 0 } });
+    MapAdapter.map.addLayer({ id: strokeId, type: 'line', source: sourceId, paint: { 'line-color': '#1565c0', 'line-width': 3, 'line-opacity': 0 } });
+    const startTimeMs = performance.now();
+    const animate = () => {
+      const progress = Math.min(1, (performance.now() - startTimeMs) / 2000);
+      const ease = 1 - Math.pow(1 - progress, 3);
+      if (MapAdapter.map.getLayer(fillId)) {
+        MapAdapter.map.setPaintProperty(fillId, 'fill-opacity', ease * 0.4);
+        MapAdapter.map.setPaintProperty(strokeId, 'line-opacity', ease * 0.9);
+      }
+      if (progress < 1) requestAnimationFrame(animate);
+    };
+    setTimeout(animate, 1600);
+  }
+  controller._floodImpactState = { sourceId, fillId, strokeId, markerSourceId, markerLayerId, returnViewState };
   addGenericExitButton('flood-impact-exit-btn', 'Exit Flood View', '#2196f3', () => exitFloodImpact(controller, deps));
 }
 
 export function exitFloodImpact(controller, deps, skipRestore = false) {
   const { MapAdapter } = deps;
   if (controller._floodImpactState) {
-    const { sourceId, fillId, strokeId, returnViewState } = controller._floodImpactState;
+    const { sourceId, fillId, strokeId, markerSourceId, markerLayerId, returnViewState } = controller._floodImpactState;
     if (MapAdapter.map.getLayer(fillId)) MapAdapter.map.removeLayer(fillId);
     if (MapAdapter.map.getLayer(strokeId)) MapAdapter.map.removeLayer(strokeId);
     if (MapAdapter.map.getSource(sourceId)) MapAdapter.map.removeSource(sourceId);
+    if (MapAdapter.map.getLayer(markerLayerId)) MapAdapter.map.removeLayer(markerLayerId);
+    if (MapAdapter.map.getSource(markerSourceId)) MapAdapter.map.removeSource(markerSourceId);
     controller._floodImpactState = null;
     if (!skipRestore) restoreFloodOverlay(controller, deps, returnViewState);
   }

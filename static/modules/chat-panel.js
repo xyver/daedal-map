@@ -1099,6 +1099,9 @@ export const ChatManager = {
 
     const sourceId = String(entry?.source_id || '').trim();
     const packId = String(entry?.pack_id || '').trim() || resolvePackIdFromSourceId(sourceId);
+    const metric = String(entry?.metric || '').trim();
+    const hasOrderScope = ['region', 'geo_level', 'year', 'year_start', 'year_end']
+      .some((key) => entry?.[key] != null && entry[key] !== '') || entry?.lock_geo_level === true;
     const filters = entry?.filters && typeof entry.filters === 'object' && !Array.isArray(entry.filters)
       ? { ...entry.filters }
       : {};
@@ -1119,7 +1122,7 @@ export const ChatManager = {
       );
     }
 
-    if (!Object.keys(filters).length) {
+    if (!metric && !hasOrderScope && !Object.keys(filters).length) {
       return this.runDefaultLoad(
         {
           packId,
@@ -1140,10 +1143,14 @@ export const ChatManager = {
       pack_id: packId || undefined,
       filters
     };
+    if (metric) item.metric = metric;
+    for (const key of ['region', 'geo_level', 'year', 'year_start', 'year_end', 'lock_geo_level']) {
+      if (entry?.[key] != null) item[key] = entry[key];
+    }
     if (modeHint === 'events' || modeHint === 'event' || modeHint === 'metrics' || modeHint === 'geometry') {
       item.mode = modeHint === 'event' ? 'events' : modeHint;
     }
-    await this.executeOrder(
+    const result = await this.executeOrder(
       {
         items: [item],
         summary: `Loading shared view for ${sourceId}`
@@ -1155,7 +1162,7 @@ export const ChatManager = {
         suppressResultMessage: true
       }
     );
-    return true;
+    return Boolean(result);
   },
 
   async applyShareStateLoads(shareState = {}, options = {}) {
@@ -1532,6 +1539,7 @@ export const ChatManager = {
       }, timeoutMs) : null;
       let successCount = 0;
       const loadedLabels = [];
+      const loadedOverlayIds = [];
       const failedLabels = [];
       const concurrency = Math.max(1, Math.min(Number(action.concurrency) || 3, 3, actions.length));
       let nextIndex = 0;
@@ -1552,6 +1560,7 @@ export const ChatManager = {
             if (childResult && (typeof childResult !== 'object' || childResult.ok !== false)) {
               successCount += 1;
               loadedLabels.push(formatDefaultLoadActionLabel(childAction));
+              if (childAction.overlayId) loadedOverlayIds.push(childAction.overlayId);
             } else {
               failedLabels.push(formatDefaultLoadActionLabel(childAction));
             }
@@ -1588,7 +1597,8 @@ export const ChatManager = {
         // after the batch so a catalog/list refresh during one child request
         // cannot leave data cached but no overlays active to render it.
         const timelineOverlayIds = Array.isArray(timeline.overlayIds)
-          ? timeline.overlayIds.map((value) => String(value || '').trim()).filter(Boolean)
+          ? timeline.overlayIds.map((value) => String(value || '').trim())
+              .filter((value) => value && loadedOverlayIds.includes(value))
           : [];
         for (const overlayId of timelineOverlayIds) {
           OverlaySelector?.showOverlay?.(overlayId, options.mode || this.mode);

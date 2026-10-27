@@ -71,7 +71,11 @@ _analytics_executor = ThreadPoolExecutor(
 
 
 def _runtime_analytics_disabled() -> bool:
-    return str(os.getenv("QA_DISABLE_RUNTIME_ANALYTICS", "")).strip().lower() in {"1", "true", "yes", "on"}
+    truthy = {"1", "true", "yes", "on"}
+    return any(
+        str(os.getenv(name, "")).strip().lower() in truthy
+        for name in ("DAEDALMAP_DISABLE_RUNTIME_ANALYTICS", "QA_DISABLE_RUNTIME_ANALYTICS")
+    )
 
 
 def _qa_suite_log_metadata() -> dict[str, Any]:

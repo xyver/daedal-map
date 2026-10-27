@@ -1,7 +1,7 @@
 # Runtime Unification
 
 DaedalMap is one geographic runtime with several interaction modes. Explore,
-Research, Ops, Tutorial, and machine-facing APIs may begin from different user
+Mapping, Research, Ops, Tutorial, and machine-facing APIs may begin from different user
 intent, but they must not create different meanings for the same source,
 metric, place, time range, or map state.
 
@@ -36,13 +36,23 @@ New datasets should conform to shared runtime contracts. Pack-specific branches
 inside shared execution are a warning that source shaping or metadata may be
 incomplete.
 
-## Current modes
+## Interaction modes and planned extensions
 
 ### Explore
 
 Explore is catalog-first. It discovers relevant packs and sources from a broad
 runtime catalog, resolves an executable request, and connects results to the
 map.
+
+### Mapping (planned local mode)
+
+Mapping is the downloadable, local counterpart to Explore. It uses the same
+catalog, query, geometry, overlay, animation, popup, and display contracts,
+while taking installed packs and user-provided local data as its working set.
+Its additional interaction work is authoring and retaining local map projects.
+The local deployment is not itself a new source schema or renderer. Mapping is
+planned; the existing local runtime still exposes the current app modes rather
+than a complete Mapping mode.
 
 ### Research
 
@@ -171,6 +181,9 @@ Modes share one map and display contract:
 
 A mode may choose a different default view or preserve a different workspace,
 but it should express that choice through shared display primitives.
+Explore and Mapping must produce the same display for the same source, release,
+view state, and time range. Mapping may additionally save local projects and
+render user-owned data, with its source and licence boundaries visible.
 
 The concrete focus primitive is `MapAdapter.focusOnFeatures(...)` backed by
 the pure bounds math in `static/modules/map-focus.mjs`. Discretionary

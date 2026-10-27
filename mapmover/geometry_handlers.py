@@ -1279,6 +1279,10 @@ def get_geometry_index(parent_loc_id: str | None = None, admin_level: int | None
                 "error": "parent_loc_id required for sub-country index queries",
             }
         if df is None or df.empty:
+            if target_level == 0:
+                from . import offline_admin0
+                if offline_admin0.enabled():
+                    return offline_admin0.index(bbox)
             return {"rows": [], "count": 0, "parent_loc_id": parent_loc_id, "admin_level": target_level}
 
     if bbox is not None and df is not None and not df.empty:
@@ -2477,7 +2481,12 @@ def get_countries_geometry(debug: bool = False):
     """
     df = load_global_country_display_frame()
 
-    if df is None:
+    if df is None or df.empty:
+        from . import offline_admin0
+        if offline_admin0.enabled():
+            result = offline_admin0.countries()
+            result["debug"] = debug
+            return result
         return {
             "geojson": {"type": "FeatureCollection", "features": []},
             "count": 0,
@@ -4193,6 +4202,12 @@ def get_display_geometries(loc_ids: list):
             rows = frame[frame["loc_id"].isin(country_ids)]
             features.extend(df_to_geojson(rows, polygon_only=True).get("features", []))
             found.update(rows["loc_id"].astype(str))
+        else:
+            from . import offline_admin0
+            if offline_admin0.enabled():
+                fallback = offline_admin0.display_features(country_ids)["features"]
+                features.extend(fallback)
+                found.update(feature["properties"]["loc_id"] for feature in fallback)
 
     by_country: dict[str, list[str]] = {}
     for loc_id in requested_ids:

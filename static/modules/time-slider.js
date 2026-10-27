@@ -574,6 +574,7 @@ export const TimeSlider = {
       return this.timestampToYear(timestamp);
     }
     if (this.sortedTimes.length) {
+      if (timestamp < this.sortedTimes[0]) return null;
       const idx = this.timeToIndex(timestamp);
       const snapped = this.sortedTimes[idx];
       // timeToIndex finds the NEAREST frame; shift back one when it rounded

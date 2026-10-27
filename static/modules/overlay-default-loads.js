@@ -323,6 +323,7 @@ function buildExploreDisasterRangeAction(relativeYears = 10) {
       `Showing seven global disaster event layers for ${startYear}-${endYear}: ` +
       'earthquakes (M5.5+), hurricanes (Cat1+), volcanoes (VEI 3+), ' +
       'wildfires (500 km2+), all recorded tsunami events, tornadoes (EF2+), and floods (severity 2+). ' +
+      'Flood records in this pack end in 2019, so they appear only in the earlier part of this timeline. ' +
       'Use the timeline to move through the available history, or ask to narrow by place, time, or event.',
     // This preset owns its bounded Explore timeline. The range must not be
     // inherited from an earlier overlay/chat load (for example 1970-2026).

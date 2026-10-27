@@ -190,6 +190,16 @@ function normalizeLoadEntry(entry = null) {
     const mode = String(entry.mode || entry.data_type || '').trim();
     if (packId) normalized.pack_id = packId;
     if (mode) normalized.mode = mode;
+    for (const key of ['metric', 'region', 'geo_level']) {
+      const value = String(entry[key] || '').trim();
+      if (value) normalized[key] = value;
+    }
+    for (const key of ['year', 'year_start', 'year_end']) {
+      if (entry[key] == null || entry[key] === '') continue;
+      const value = Number(entry[key]);
+      if (Number.isInteger(value)) normalized[key] = value;
+    }
+    if (entry.lock_geo_level === true) normalized.lock_geo_level = true;
     if (entry.filters && typeof entry.filters === 'object' && !Array.isArray(entry.filters)) {
       normalized.filters = entry.filters;
     }

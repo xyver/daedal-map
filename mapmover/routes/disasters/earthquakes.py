@@ -5,6 +5,7 @@ from fastapi.responses import JSONResponse
 import pandas as pd
 
 from mapmover.disaster_filters import apply_location_filters, get_affected_event_ids
+from mapmover.data_loading import get_source_path
 from mapmover.duckdb_helpers import (
     _normalize_ts_for_duckdb,
     cache_get,
@@ -57,6 +58,14 @@ EARTHQUAKE_MAP_COLUMNS = (
     "mainshock_id",
     "sequence_id",
 )
+
+
+def _earthquake_events_path():
+    """Use the active catalog's source layout, with legacy data as fallback."""
+    source_path = get_source_path("earthquakes_events") / "events.parquet"
+    if parquet_available(source_path):
+        return source_path
+    return GLOBAL_DIR / "disasters/earthquakes/events.parquet"
 
 
 @router.get("/api/earthquakes/live")
@@ -140,11 +149,12 @@ def _load_earthquakes_duckdb(
     affected_loc_id: str = None,
     sequence_id: str = None,
     event_id: str = None,
+    source_event_id: str = None,
     mainshock_id: str = None,
     columns=None,
 ) -> pd.DataFrame:
     """Load filtered earthquake rows via DuckDB."""
-    events_path = GLOBAL_DIR / "disasters/earthquakes/events.parquet"
+    events_path = _earthquake_events_path()
     if not duckdb_available() or not parquet_available(events_path):
         return pd.DataFrame()
     where = []
@@ -171,6 +181,9 @@ def _load_earthquakes_duckdb(
     if event_id is not None:
         where.append('"event_id" = ?')
         params.append(event_id)
+    if source_event_id is not None and "source_event_id" in parquet_columns(events_path):
+        where.append('"source_event_id" = ?')
+        params.append(source_event_id)
     if mainshock_id is not None:
         where.append('"mainshock_id" = ?')
         params.append(mainshock_id)
@@ -197,49 +210,68 @@ def _load_earthquakes_duckdb(
 
 
 def _load_earthquake_event_row(event_id: str) -> pd.DataFrame:
-    events_path = GLOBAL_DIR / "disasters/earthquakes/events.parquet"
+    events_path = _earthquake_events_path()
     if duckdb_available():
         return _load_earthquakes_duckdb(event_id=event_id)
     df = pd.read_parquet(events_path)
     return df[df["event_id"] == event_id].copy()
 
 
-def _resolve_aftershock_anchor_event_id(event_id: str) -> tuple[str | None, pd.DataFrame]:
+def _load_earthquake_source_event_row(source_event_id: str) -> pd.DataFrame:
+    events_path = _earthquake_events_path()
+    if "source_event_id" not in parquet_columns(events_path):
+        return pd.DataFrame()
+    if duckdb_available():
+        return _load_earthquakes_duckdb(source_event_id=source_event_id)
+    df = pd.read_parquet(events_path)
+    return df[df["source_event_id"] == source_event_id].copy()
+
+
+def _resolve_aftershock_anchor_event_id(event_id: str) -> tuple[str | None, str | None, pd.DataFrame]:
     main_df = _load_earthquake_event_row(event_id)
     if len(main_df) == 0:
-        return None, main_df
+        main_df = _load_earthquake_source_event_row(event_id)
+    if len(main_df) == 0:
+        return None, None, main_df
 
     seed_row = main_df.iloc[0]
     mainshock_id = seed_row.get("mainshock_id")
-    if mainshock_id:
+    if pd.notna(mainshock_id) and mainshock_id:
         anchor_df = _load_earthquake_event_row(str(mainshock_id))
+        if len(anchor_df) == 0:
+            anchor_df = _load_earthquake_source_event_row(str(mainshock_id))
         if len(anchor_df) > 0:
-            return str(mainshock_id), anchor_df
-    return event_id, main_df
+            return str(anchor_df.iloc[0]["event_id"]), str(mainshock_id), anchor_df
+    anchor = main_df.iloc[0]
+    source_id = anchor.get("source_event_id")
+    return str(anchor["event_id"]), str(source_id) if pd.notna(source_id) and source_id else str(anchor["event_id"]), main_df
 
 
 def _build_aftershock_feature_collection(event_id: str, min_magnitude: float = None) -> dict | None:
-    events_path = GLOBAL_DIR / "disasters/earthquakes/events.parquet"
+    events_path = _earthquake_events_path()
     if not parquet_available(events_path):
         return None
 
-    anchor_event_id, mainshock_df = _resolve_aftershock_anchor_event_id(event_id)
+    anchor_event_id, anchor_source_id, mainshock_df = _resolve_aftershock_anchor_event_id(event_id)
     if not anchor_event_id or len(mainshock_df) == 0:
         return None
 
     if duckdb_available():
-        aftershocks_df = _load_earthquakes_duckdb(mainshock_id=anchor_event_id, min_magnitude=min_magnitude)
+        aftershocks_df = _load_earthquakes_duckdb(mainshock_id=anchor_source_id, min_magnitude=min_magnitude)
+        if anchor_source_id != anchor_event_id:
+            legacy_df = _load_earthquakes_duckdb(mainshock_id=anchor_event_id, min_magnitude=min_magnitude)
+            aftershocks_df = pd.concat([aftershocks_df, legacy_df], ignore_index=True)
         result_df = pd.concat([mainshock_df, aftershocks_df], ignore_index=True)
         if min_magnitude is not None:
             result_df = result_df[(result_df["event_id"] == anchor_event_id) | (result_df["magnitude"] >= min_magnitude)]
     else:
         df = pd.read_parquet(events_path)
-        aftershocks_df = df[df["mainshock_id"] == anchor_event_id]
+        aftershocks_df = df[df["mainshock_id"].isin({anchor_event_id, anchor_source_id})]
         result_df = pd.concat([mainshock_df, aftershocks_df], ignore_index=True)
         if min_magnitude is not None:
             result_df = result_df[(result_df["event_id"] == anchor_event_id) | (result_df["magnitude"] >= min_magnitude)]
 
-    result_df = ensure_year_column(result_df)
+    result_df = ensure_year_column(result_df.drop_duplicates(subset=["event_id"]))
     features = build_geojson_features(result_df, get_earthquake_property_builders())
 
     return {
@@ -267,7 +299,7 @@ async def get_earthquakes_geojson(
 ):
     """Get earthquakes as GeoJSON points for map display."""
     try:
-        events_path = GLOBAL_DIR / "disasters/earthquakes/events.parquet"
+        events_path = _earthquake_events_path()
         if not parquet_available(events_path):
             return msgpack_error("Earthquake data not available", 404)
 
@@ -358,7 +390,7 @@ async def get_earthquakes_geojson(
 async def get_earthquake_sequence(sequence_id: str, min_magnitude: float = None):
     """Get all earthquakes in a specific aftershock sequence."""
     try:
-        events_path = GLOBAL_DIR / "disasters/earthquakes/events.parquet"
+        events_path = _earthquake_events_path()
         if not parquet_available(events_path):
             return msgpack_error("Earthquake data not available", 404)
 
@@ -430,7 +462,7 @@ async def get_earthquake_aftershocks_json(event_id: str, min_magnitude: float = 
 async def get_related_tsunamis_for_earthquake(event_id: str):
     """Return tsunami events linked to an earthquake through links.parquet."""
     try:
-        events_path = GLOBAL_DIR / "disasters/earthquakes/events.parquet"
+        events_path = _earthquake_events_path()
         tsunami_path = GLOBAL_DIR / "disasters/tsunamis/events.parquet"
         links_path = GLOBAL_DIR / "disasters/links.parquet"
         if not parquet_available(events_path) or not parquet_available(tsunami_path) or not parquet_available(links_path):
@@ -521,7 +553,7 @@ async def get_nearby_earthquakes(
 ):
     """Find earthquakes near a location within a time window."""
     try:
-        events_path = GLOBAL_DIR / "disasters/earthquakes/events.parquet"
+        events_path = _earthquake_events_path()
         if not parquet_available(events_path):
             return msgpack_error("Earthquake data not available", 404)
 
