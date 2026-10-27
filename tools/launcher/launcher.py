@@ -4559,7 +4559,7 @@ def main() -> int:
                   "launcher_root": str(APP_ROOT),
                   "catalog_created": (RUNTIME_DATA_ROOT / "catalog.json").is_file(),
                   "drag_drop_available": TkinterDnD is not None,
-                  "uv_available": bundled_uv_executable().is_file()}
+                  "uv_available": bundled_uv_executable(APP_ROOT).is_file()}
         if len(sys.argv) == 6:
             current = json.loads(Path(sys.argv[3]).read_bytes())
             version = json.loads(Path(sys.argv[4]).read_bytes())

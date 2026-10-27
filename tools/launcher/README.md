@@ -37,6 +37,9 @@ python tools/launcher/launcher.py --local-source
 the normal launcher setting uses the self-contained portable folder. The
 source launcher looks for `.venv/Scripts/python.exe` in this checkout or a
 parent directory. `--library-root PATH` selects an isolated launcher library.
+When the source launcher runs an installed release, it looks for `uv.exe` in
+that library. A source checkout can install the pinned helper with
+`python tools/launcher/bootstrap_source_uv.py --library-root "<launcher-data>"`.
 
 Run the launcher tests with `python -m pytest -q tools/launcher`. Build a
 Windows test ZIP with `build_launcher.ps1 -BuildPython <python.exe> -UvExe

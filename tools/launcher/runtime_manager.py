@@ -20,7 +20,7 @@ class RuntimeSetupError(RuntimeError):
     pass
 
 
-def bundled_uv_executable() -> Path:
+def bundled_uv_executable(app_root: Path | None = None) -> Path:
     override = os.environ.get("DAEDALMAP_UV_EXE", "").strip()
     if override:
         return Path(override).expanduser().resolve()
@@ -28,7 +28,7 @@ def bundled_uv_executable() -> Path:
     packaged = owner / "uv.exe"
     if packaged.is_file() or getattr(sys, "frozen", False):
         return packaged
-    return Path(__file__).resolve().parents[2] / ".scratch" / "uv-bootstrap" / "uv.exe"
+    return Path(app_root).resolve() / "uv.exe" if app_root is not None else owner / "launcher-data" / "uv.exe"
 
 
 def _run(command: list[str], *, env: dict[str, str], log: Callable[[str], None], cwd: Path) -> None:
@@ -91,11 +91,12 @@ def prepare_shared_environment(app_root: Path, programs: list[dict],
             raise RuntimeSetupError(f"Local test Python is missing: {python}")
         log(f"Using existing local test Python: {python}")
         return python
-    uv = bundled_uv_executable()
+    uv = bundled_uv_executable(app_root)
     if not uv.is_file():
         raise RuntimeSetupError(
             f"Launcher runtime helper is missing: {uv}. For a source checkout, run "
-            "python county-map-private/wrapper/bootstrap_source_uv.py"
+            "python tools/launcher/bootstrap_source_uv.py --library-root "
+            f'"{app_root}"'
         )
     app_root = Path(app_root).resolve()
     environments = app_root / "environments"

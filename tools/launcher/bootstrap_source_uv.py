@@ -13,21 +13,21 @@ from pathlib import Path
 
 UV_VERSION = "0.13.5"
 UV_WHEEL_SHA256 = "1fb29fc46ba12033e2ef95a95ac79d649e71bbb1358419bbbcbd19d86026ef2f"
-WORKSPACE = Path(__file__).resolve().parents[2]
-BOOTSTRAP_ROOT = WORKSPACE / ".scratch" / "uv-bootstrap"
-
-
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--wheel", type=Path, help="Use a previously downloaded uv wheel")
+    parser.add_argument("--library-root", type=Path,
+                        help="Launcher library folder; defaults to launcher-data beside this source launcher")
     args = parser.parse_args()
     if os.name != "nt":
         parser.error("This launcher bootstrap currently targets Windows")
 
-    BOOTSTRAP_ROOT.mkdir(parents=True, exist_ok=True)
+    library_root = (args.library_root or Path(__file__).resolve().parent / "launcher-data").expanduser().resolve()
+    bootstrap_root = library_root / "cache" / "uv-bootstrap"
+    bootstrap_root.mkdir(parents=True, exist_ok=True)
     wheel = args.wheel
     if wheel is None:
-        downloads = BOOTSTRAP_ROOT / "downloads"
+        downloads = bootstrap_root / "downloads"
         downloads.mkdir(exist_ok=True)
         subprocess.run([
             sys.executable, "-m", "pip", "download", "--only-binary=:all:",
@@ -43,8 +43,8 @@ def main() -> int:
     if hashlib.sha256(wheel.read_bytes()).hexdigest() != UV_WHEEL_SHA256:
         raise RuntimeError("uv wheel checksum does not match the pinned Windows build")
 
-    target = BOOTSTRAP_ROOT / "uv.exe"
-    pending = BOOTSTRAP_ROOT / f".uv-{uuid.uuid4().hex}.exe"
+    target = library_root / "uv.exe"
+    pending = library_root / f".uv-{uuid.uuid4().hex}.exe"
     try:
         with zipfile.ZipFile(wheel) as archive:
             members = [name for name in archive.namelist() if name.endswith(".data/scripts/uv.exe")]

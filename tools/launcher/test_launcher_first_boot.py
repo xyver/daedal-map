@@ -509,9 +509,15 @@ def test_local_trial_python_is_used_only_in_development(tmp_path, monkeypatch) -
     monkeypatch.setenv("DAEDALMAP_LAUNCHER_DEV", "1")
     assert runtime_manager.prepare_shared_environment(tmp_path, entries, lambda _: None) == python
     monkeypatch.delenv("DAEDALMAP_LAUNCHER_DEV")
-    monkeypatch.setattr(runtime_manager, "bundled_uv_executable", lambda: tmp_path / "missing-uv.exe")
+    monkeypatch.setattr(runtime_manager, "bundled_uv_executable", lambda _root: tmp_path / "missing-uv.exe")
     with pytest.raises(runtime_manager.RuntimeSetupError, match="runtime helper is missing"):
         runtime_manager.prepare_shared_environment(tmp_path, entries, lambda _: None)
+
+
+def test_source_launcher_looks_for_runtime_helper_in_its_library(tmp_path, monkeypatch) -> None:
+    monkeypatch.delenv("DAEDALMAP_UV_EXE", raising=False)
+    monkeypatch.setattr(runtime_manager.sys, "frozen", False, raising=False)
+    assert runtime_manager.bundled_uv_executable(tmp_path) == tmp_path / "uv.exe"
 
 
 def test_local_program_card_keeps_source_trial_selected_over_store_release() -> None:
