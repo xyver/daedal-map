@@ -48,7 +48,6 @@ from map_launch_page import MapLaunchPage
 from launcher_release import LAUNCHER_VERSION, PUBLIC_BASE_URL as LAUNCHER_RELEASE_BASE_URL, check_release, download_release, is_newer_version
 from geometry_store import (GEOMETRY_TIERS, GeometryStoreError, geometry_info_url, group_geometry_releases,
                             installed_geometry, install_geometry_zip, releases_from_storefront)
-from local_catalog import catalog_needs_refresh, refresh_catalog, save_snapshot, scan_data_folder
 from styled_dialog import messagebox
 
 
@@ -288,6 +287,7 @@ WRAPPER_ROOT = PUBLIC_REPO_ROOT.parent / "county-map-private"
 if str(PUBLIC_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(PUBLIC_REPO_ROOT))
 from local_data_store import ensure_empty_catalog, install_data_pack, install_verified_data_zip
+from local_catalog import catalog_needs_refresh, refresh_catalog, save_snapshot, scan_data_folder
 
 
 @dataclass

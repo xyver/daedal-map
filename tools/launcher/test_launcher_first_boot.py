@@ -22,6 +22,17 @@ import runtime_manager
 from map_launch_page import MapLaunchPage
 
 
+def test_launcher_imports_from_outside_checkout_without_pythonpath(tmp_path) -> None:
+    env = os.environ.copy()
+    env.pop("PYTHONPATH", None)
+    result = subprocess.run(
+        [sys.executable, "-c", "import sys; sys.path.insert(0, sys.argv[1]); import launcher",
+         str(WRAPPER_ROOT)],
+        cwd=tmp_path, env=env, capture_output=True, text=True,
+    )
+    assert result.returncode == 0, result.stderr
+
+
 def test_public_download_base_ignores_private_runtime_bucket(monkeypatch) -> None:
     monkeypatch.delenv("DAEDALMAP_PUBLIC_BASE_URL", raising=False)
     monkeypatch.delenv("DAEDALMAP_ENGINE_CURRENT_URL", raising=False)
