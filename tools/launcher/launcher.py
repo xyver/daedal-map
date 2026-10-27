@@ -3068,12 +3068,12 @@ class LauncherApp:
                          if isinstance(entry, dict)}
         installed_pack_count = len(installed_ids) + len(local_folder_packs(RUNTIME_DATA_ROOT, installed_ids))
         installed_programs = load_program_state()["installed_programs"]
-        installed_program_count = len(installed_programs)
         installed_products = {
             str(entry.get("product") or "") for entry in installed_programs
             if entry.get("install_dir") and Path(str(entry["install_dir"])).is_dir()
         }
         mapping_installed = has_usable_installed_engine(state)
+        installed_program_count = len(installed_programs) + int(mapping_installed)
         self.sync_navigation(mapping_installed, installed_products)
         self.refresh_network_settings()
         openai_ready = bool(os.environ.get("OPENAI_API_KEY", "").strip())
