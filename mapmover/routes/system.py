@@ -3241,7 +3241,8 @@ async def get_local_catalog_discovered(req: Request):
     state = load_pack_state()
     first_open = not catalog.get("sources") and not state.get("installed_packs")
     return JSONResponse({"ok": True, "sources": scan_unindexed_sources(), "archives": scan_local_archives(),
-                         "first_open": first_open})
+                         "first_open": first_open,
+                         "source_mode": os.getenv("DAEDALMAP_LOCAL_SOURCE_MODE", "") == "1"})
 
 
 @router.post("/api/local-wrapper/catalog/add")
@@ -3667,7 +3668,9 @@ def _render_app_shell() -> str:
         html = html.replace('  <link rel="preconnect" href="https://unpkg.com" crossorigin>\n', "", 1)
         html = html.replace('  <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>\n', "", 1)
         html = html.replace('  <script src="/static/js/dm-visitor.js"></script>\n', "", 1)
-        html = html.replace("<body>", '<body data-local-wrapper="true">', 1)
+        source_attribute = ' data-local-source="true"' if os.getenv("DAEDALMAP_LOCAL_SOURCE_MODE", "") == "1" else ""
+        custom_attribute = ' data-local-custom="true"' if os.getenv("DAEDALMAP_LOCAL_CUSTOM_MODE", "") == "1" else ""
+        html = html.replace("<body>", f'<body data-local-wrapper="true"{source_attribute}{custom_attribute}>', 1)
         html = html.replace('data-tutorial-title="Account and Session"',
                             'data-tutorial-title="Explore Map"', 1)
         html = html.replace(
@@ -3695,10 +3698,10 @@ async def get_local_map_tiles_config(request: Request):
     detail_root = Path(os.getenv("DAEDALMAP_MAP_TILES_ROOT") or "")
     detail_available = bool(str(detail_root) not in {"", "."} and all(
         (detail_root / filename).is_file() for filename in _LOCAL_MAP_DETAIL_FILES))
-    mode = payload.get("mode") if payload.get("mode") in {"offline_basic", "offline_detail"} else "offline_basic"
+    mode = payload.get("mode") if payload.get("mode") in {"online", "offline_basic", "offline_detail"} else "online"
     if mode == "offline_detail" and not detail_available:
         mode = "offline_basic"
-    return {"mode": mode, "remote_style_url": "",
+    return {"mode": mode, "remote_style_url": "https://tiles.openfreemap.org/styles/dark" if mode == "online" else "",
             "detail_available": detail_available}
 
 

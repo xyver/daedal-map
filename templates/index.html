@@ -431,7 +431,9 @@
     try {
       await window.DAEDALMAP_BOOT;
       await import('/static/modules/app.js');
-      await import('/static/modules/feedback-bubble.js');
+      if (document.body.dataset.localWrapper !== 'true') {
+        await import('/static/modules/feedback-bubble.js');
+      }
     } catch (error) {
       console.error('[DaedalMap Boot] Startup failed:', error);
       const statusEl = document.getElementById('authStatusText');

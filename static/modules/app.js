@@ -47,6 +47,7 @@ import { MetricDisplayRegistry } from './metric-display-registry.js';
 import { OpsTimeline } from './ops-timeline.js';
 
 const CHAT_MAP_LANES = ['explore', 'research', 'ops'];
+const FORCE_NETWORK_OPEN = new URLSearchParams(window.location.search).get('network') === '1';
 const DISPLAY_GEOMETRY_TYPES = new Set(['zcta', 'tribal', 'watershed', 'park']);
 const DISPLAY_SOURCE_EVENT_TYPE_HINTS = [
   ['earthquakes', 'earthquake'],
@@ -931,11 +932,43 @@ export const App = {
     await MapAdapter.init();
 
     if (document.body?.dataset.localWrapper === 'true') {
-      // The optional Network package supplies both the API and map controls.
-      fetch('/api/local/network/packs').then(async (response) => {
+      // The optional package registers its API at startup. Its UI starts only
+      // when requested or when the launcher preference asks for it.
+      fetch('/api/local/network/status').then(async (response) => {
         if (!response.ok) return;
-        const { initNetworkExpansion } = await import('/api/local/network/ui.js');
-        await initNetworkExpansion();
+        const { auto_start: autoStart } = await response.json();
+        const mapContainer = document.getElementById('mapContainer');
+        if (!mapContainer) return;
+        const button = document.createElement('button');
+        button.id = 'openNetworkExpansion';
+        button.type = 'button';
+        button.textContent = 'Open Network';
+        button.style.cssText = 'position:absolute;bottom:70px;right:14px;z-index:1101;padding:7px 10px;border:1px solid #57728b;border-radius:6px;background:#101d2b;color:#eaf4ff;cursor:pointer;';
+        mapContainer.append(button);
+        let networkUi;
+        let opened = false;
+        async function toggleNetwork() {
+          button.disabled = true;
+          try {
+            networkUi ||= await import('/api/local/network/ui.js');
+            if (opened) {
+              networkUi.closeNetworkExpansion();
+              opened = false;
+            } else {
+              await networkUi.initNetworkExpansion();
+              opened = true;
+            }
+            button.textContent = opened ? 'Close Network' : 'Open Network';
+          } catch (error) {
+            console.warn('Network expansion could not start:', error);
+            button.title = String(error?.message || error);
+            button.textContent = 'Retry Network';
+          } finally {
+            button.disabled = false;
+          }
+        }
+        button.addEventListener('click', toggleNetwork);
+        if (autoStart || FORCE_NETWORK_OPEN) await toggleNetwork();
       }).catch((error) => console.warn('Network expansion could not start:', error));
     }
 

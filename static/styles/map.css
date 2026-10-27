@@ -1757,6 +1757,30 @@ body.chat-mode-ops #timeSliderContainer { display: none !important; }
   padding: 4px 6px;
 }
 
+.network-feature-popup .maplibregl-popup-content {
+  background: #101d2b;
+  color: #eaf4ff;
+  border: 1px solid #57728b;
+  border-radius: 8px;
+  max-height: min(50vh, 360px);
+  overflow: auto;
+  min-width: 220px;
+}
+
+.network-feature-popup .maplibregl-popup-tip {
+  border-top-color: #101d2b;
+  border-bottom-color: #101d2b;
+}
+
+.network-feature-popup .maplibregl-popup-close-button { color: #eaf4ff; }
+.network-feature-content h3 { margin: 0 18px 9px 0; font-size: 15px; text-transform: capitalize; }
+.network-feature-row { display: grid; grid-template-columns: minmax(80px, 1fr) 1.6fr; gap: 10px; padding: 4px 0; border-top: 1px solid #30475b; }
+.network-feature-row span:first-child { color: #a8bfd1; text-transform: capitalize; }
+.network-feature-row span:last-child { overflow-wrap: anywhere; }
+.network-feature-content details { margin-top: 8px; padding-top: 7px; border-top: 1px solid #30475b; }
+.network-feature-content summary { cursor: pointer; font-weight: 700; }
+.network-feature-link { margin-top: 5px; overflow-wrap: anywhere; font-size: 11px; }
+
 /* ========== Selection Mode (Disambiguation) ========== */
 
 #map.selection-mode {

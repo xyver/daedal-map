@@ -24,6 +24,8 @@ async function checkLocalCatalog() {
   const sources = Array.isArray(payload.sources) ? payload.sources : [];
   const archives = Array.isArray(payload.archives) ? payload.archives : [];
   const hasData = sources.length || archives.length;
+  // The DaedalMap Store is disconnected in Local custom mode.
+  if (!hasData && payload.source_mode) return;
   if (!hasData && !payload.first_open) return;
   const signature = hasData
     ? [...sources.map(source => `${source.pack_id}:${source.source_id}`),

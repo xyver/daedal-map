@@ -40,6 +40,7 @@ export function setDependencies(deps) {
 export const MapAdapter = {
   map: null,
   popup: null,
+  priorityClickLayerIds: new Set(),
   routeFocusToken: 0,
   routeFocusHandlerRefs: [],
   hoveredFeatureId: null,
@@ -93,7 +94,9 @@ export const MapAdapter = {
         const response = await fetch('/api/local-map-tiles/config');
         if (response.ok) {
           const settings = await response.json();
-          if (settings.mode === 'offline_detail') {
+          if (settings.mode === 'online' && settings.remote_style_url) {
+            baseStyle = settings.remote_style_url;
+          } else if (settings.mode === 'offline_detail') {
             baseStyle = JSON.parse(JSON.stringify(this.STYLES.offline));
             baseStyle.sources.land.data = '/api/local-map-tiles/detail/ne_10m_land.geojson';
             baseStyle.sources.countries.data = '/api/local-map-tiles/detail/ne_10m_admin_0_countries.geojson';
@@ -1259,7 +1262,7 @@ export const MapAdapter = {
       this.baseLayerHandlerRefs.click = async (e) => {
         // Check if click was on an event/overlay layer - if so, skip base layer handling
         // Event layers should take priority over base geometry
-        const eventLayerIds = [CONFIG.layers.eventCircle].filter(
+        const eventLayerIds = [CONFIG.layers.eventCircle, ...this.priorityClickLayerIds].filter(
           layerId => layerId && this.map.getLayer(layerId)
         );
         const eventFeatures = eventLayerIds.length
