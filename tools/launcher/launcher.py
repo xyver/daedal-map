@@ -264,6 +264,7 @@ _configure_saved_launcher_mode()
 ENGINE_ROOT = APP_ROOT / "engine"
 PROGRAMS_ROOT = APP_ROOT / "programs"
 PROGRAMS_STATE_PATH = APP_ROOT / "programs.json"
+LOCAL_PROGRAMS_ROOT = APP_ROOT / "local-programs"
 CACHE_ROOT = APP_ROOT / "cache"
 STATE_PATH = APP_ROOT / "state.json"
 RUNTIME_CONFIG_PATH = APP_ROOT / "runtime_config.json"
@@ -549,6 +550,12 @@ def engine_install_path(state: EngineState) -> Path:
 
 def local_mapping_source_root() -> Path | None:
     """Opt-in source checkout for launcher-driven development without an export."""
+    if local_custom_mode():
+        linked = linked_program_source_root("daedalmap-mapping")
+        if linked is not None:
+            if not (linked / "app.py").is_file() or not (linked / "requirements.txt").is_file():
+                raise LauncherError(f"Local Mapping source needs app.py and requirements.txt: {linked}")
+            return linked
     if os.environ.get("DAEDALMAP_LAUNCHER_DEV", "").strip() != "1":
         return None
     configured = os.environ.get("DAEDALMAP_MAPPING_SOURCE_ROOT", "").strip()
@@ -562,21 +569,46 @@ def local_mapping_source_root() -> Path | None:
     return root
 
 
+def linked_program_source_root(product: str) -> Path | None:
+    manifest_path = LOCAL_PROGRAMS_ROOT / product / "program.json"
+    try:
+        program = json.loads(manifest_path.read_text(encoding="utf-8-sig"))
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError) as exc:
+        raise LauncherError(f"Local program manifest is invalid: {manifest_path}: {exc}") from exc
+    if not isinstance(program, dict) or program.get("product") != product:
+        raise LauncherError(f"Local program manifest needs product {product}: {manifest_path}")
+    source = str(program.get("source_root") or "").strip()
+    if not source:
+        raise LauncherError(f"Local program manifest needs source_root: {manifest_path}")
+    return (manifest_path.parent / source).expanduser().resolve()
+
+
 def local_network_source_root() -> Path | None:
     if not local_source_mode():
         return None
-    mapping_root = local_mapping_source_root()
+    def compatible(configured: str) -> Path | None:
+        root = Path(configured).expanduser().resolve()
+        try:
+            manifest = json.loads((root / "network" / "extension.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        if (manifest.get("product") != NETWORK_PRODUCT or manifest.get("mapping_interface") != 1
+                or not (root / "network" / "app" / "mapping_extension.py").is_file()):
+            return None
+        return root
+
     configured = os.environ.get("DAEDALMAP_NETWORK_SOURCE_ROOT", "").strip()
-    if mapping_root is None or not configured:
+    if configured and (root := compatible(configured)):
+        return root
+    root = linked_program_source_root(NETWORK_PRODUCT)
+    if root is None:
         return None
-    root = Path(configured).expanduser().resolve()
-    try:
-        manifest = json.loads((root / "network" / "extension.json").read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
-    if (manifest.get("product") != NETWORK_PRODUCT or manifest.get("mapping_interface") != 1
-            or not (root / "network" / "app" / "mapping_extension.py").is_file()):
-        return None
+    source = str(root)
+    root = compatible(source)
+    if root is None:
+        raise LauncherError(f"Local Network source is missing a compatible extension: {source}")
     return root
 
 
@@ -1277,6 +1309,11 @@ def _copy_local_custom_tree(source: Path, destination: Path) -> None:
 
 
 def prepare_local_custom_sources() -> Path:
+    linked_mapping = linked_program_source_root("daedalmap-mapping")
+    if linked_mapping is not None:
+        if not (linked_mapping / "app.py").is_file() or not (linked_mapping / "requirements.txt").is_file():
+            raise LauncherError(f"Local Mapping source needs app.py and requirements.txt: {linked_mapping}")
+        return linked_mapping
     mapping = LOCAL_CUSTOM_ROOT / "mapping"
     if not mapping.exists():
         state = load_state()
@@ -1300,7 +1337,11 @@ def installed_runtime_entries(mapping_state: EngineState | None = None) -> list[
     """Resolve every installed service and Mapping into one shared environment."""
     entries = list(load_program_state()["installed_programs"])
     state = mapping_state or load_state()
-    if has_usable_installed_engine(state):
+    source = local_mapping_source_root() if local_custom_mode() else None
+    if source is not None:
+        entries.append({"product": "daedalmap-mapping", "version": "local-source",
+                        "install_dir": str(source)})
+    elif has_usable_installed_engine(state):
         entries.append({"product": "daedalmap-mapping", "version": state.version,
                         "install_dir": state.install_dir, "source_commit": state.source_commit})
     return entries
@@ -1347,6 +1388,29 @@ def program_cards_for_view(programs: list[AvailableProgram], installed_entries: 
                                              and not str(installed[product].get("version") or "").startswith("local-dev-")
                                              and installed[product].get("version") != item.version))
             for product, item in displayed.items()]
+
+
+def program_cards_for_filter(programs: list[AvailableProgram], installed_entries: list[dict],
+                             view: str, local_network: Path | None = None) -> list[tuple[AvailableProgram, dict | None, bool]]:
+    if view == "cloud":
+        return [row for row in program_cards_for_view(programs, installed_entries)
+                if row[0].artifact_url and row[0].size_bytes > 0]
+    by_version = {(item.product, item.version): item for item in programs}
+    rows = []
+    for entry in installed_entries:
+        product = str(entry.get("product") or "")
+        version = str(entry.get("version") or "")
+        if not product or product == NETWORK_PRODUCT and local_network:
+            continue
+        item = by_version.get((product, version)) or AvailableProgram(
+            product, program_display_name(entry.get("title") or product), version,
+            str(entry.get("release_manifest_url") or ""), "", "", 0,
+            "Installed on this computer.")
+        rows.append((item, entry, False))
+    if local_network:
+        rows.append((AvailableProgram(NETWORK_PRODUCT, "Network", "local source", "", "", "", 0,
+                                      "Editable Network source. Restart Mapping to load changes."), None, False))
+    return rows
 
 
 def program_kind_label(product: str) -> str:
@@ -1566,8 +1630,12 @@ def build_runtime_env() -> dict[str, str]:
             env["DAEDALMAP_LOCAL_CUSTOM_MODE"] = "1"
         else:
             env.pop("DAEDALMAP_LOCAL_CUSTOM_MODE", None)
-        if network_root and not local_custom_mode():
-            env["NETWORK_PACKS_DIR"] = str(network_root / "network" / "data" / "packs")
+        source_packs = network_root / "network" / "data" / "packs" if network_root else None
+        library_packs = RUNTIME_DATA_ROOT / "networks" / "packs"
+        if source_packs and (not local_custom_mode() or
+                             not any(library_packs.glob("*/manifest.json")) and
+                             any(source_packs.glob("*/manifest.json"))):
+            env["NETWORK_PACKS_DIR"] = str(source_packs)
         else:
             env.pop("NETWORK_PACKS_DIR", None)
             if not network_root:
@@ -1576,7 +1644,7 @@ def build_runtime_env() -> dict[str, str]:
         env.pop("DAEDALMAP_LOCAL_SOURCE_MODE", None)
         env.pop("DAEDALMAP_LOCAL_CUSTOM_MODE", None)
         env.pop("NETWORK_PACKS_DIR", None)
-        network_root = installed_network_root()
+        network_root = local_network_source_root() or installed_network_root()
     if network_root:
         env["DAEDALMAP_NETWORK_ROOT"] = str(network_root)
         env["DAEDALMAP_NETWORK_AUTO_START"] = "1" if network_start_with_mapping() else "0"
@@ -1813,6 +1881,7 @@ class LauncherApp:
         self.runtime_var = StringVar(value="")
         self.pack_search_var = StringVar(value="")
         self.pack_filter = "cloud"
+        self.program_filter = "cloud"
         self.geometry_search_var = StringVar(value="")
         self.geometry_filter = "cloud"
         self.geometry_section = "all"
@@ -1821,6 +1890,8 @@ class LauncherApp:
         self.advanced_var = StringVar(value="")
         self.data_catalog_var = StringVar(value="Checking data folder...")
         self.launcher_mode_var = StringVar(value="")
+        self.launcher_mode_badge_var = StringVar(value="")
+        self.launcher_mode_action_var = StringVar(value="")
         self.install_button_var = StringVar(value="Checking...")
         self.install_button_idle_label = "Checking..."
         self.mapping_spinner_job = None
@@ -1910,6 +1981,9 @@ class LauncherApp:
 
         indicator_row = Frame(header_row, bg=THEME["colors"]["panel_bg"])
         indicator_row.pack(side=RIGHT)
+        self.launcher_mode_badge = Label(indicator_row, textvariable=self.launcher_mode_badge_var,
+                                         font=("Segoe UI", 10, "bold"), padx=10, pady=5)
+        self.launcher_mode_badge.pack(side=LEFT, padx=(0, 12))
         self.online_dot_label = Label(indicator_row, textvariable=self.online_dot_var, bg=THEME["colors"]["panel_bg"], fg=THEME["colors"]["muted_text"], font=("Segoe UI Symbol", 12))
         self.online_dot_label.pack(side=LEFT, padx=(0, 6))
         Label(indicator_row, textvariable=self.online_var, **label_kwargs("muted")).pack(side=LEFT)
@@ -1955,8 +2029,10 @@ class LauncherApp:
         if local_source_mode():
             self.set_pack_filter("installed")
             self.set_geometry_filter("installed")
+            self.set_program_filter("installed")
             self.pack_filter_buttons["cloud"].configure(state=DISABLED)
             self.geometry_filter_buttons["cloud"].configure(state=DISABLED)
+            self.program_filter_buttons["cloud"].configure(state=DISABLED)
             for button in (self.refresh_store_button, self.refresh_geometry_button,
                            self.import_data_button, self.import_geometry_button,
                            self.refresh_programs_button, self.import_program_button):
@@ -2056,6 +2132,15 @@ class LauncherApp:
         Label(programs_panel, text="Programs", **label_kwargs("section")).pack(anchor="w", padx=12, pady=(12, 0))
         self.programs_status = self._create_selectable_text(programs_panel, height=1, muted=False)
         self.programs_status.pack(fill="x", padx=12, pady=(4, 8))
+        filter_row = Frame(programs_panel, bg=THEME["colors"]["panel_bg"])
+        filter_row.pack(fill="x", padx=12, pady=(0, 8))
+        self.program_filter_buttons: dict[str, Button] = {}
+        for filter_id, caption in (("cloud", "Cloud"), ("installed", "Installed")):
+            button = Button(filter_row, text=caption,
+                            command=lambda value=filter_id: self.set_program_filter(value),
+                            **tab_button_kwargs(filter_id == "cloud"))
+            button.pack(side=LEFT, padx=(0, button_gap))
+            self.program_filter_buttons[filter_id] = button
         self.program_cards = Frame(programs_panel, bg=THEME["colors"]["panel_bg"])
         self.program_cards.pack(fill="x", padx=12, pady=(0, 8))
         self.program_cards.bind("<Configure>",
@@ -2084,7 +2169,9 @@ class LauncherApp:
         self.open_mapping_program_button = Button(mapping_actions, textvariable=self.open_map_button_var, command=self.launch_clicked,
                                                   **button_kwargs("primary"))
         self.open_mapping_program_button.pack(side=LEFT, padx=(0, 8))
-        Button(mapping_actions, text="About", command=lambda: webbrowser.open("https://www.daedalmap.com/explore"),
+        Button(mapping_actions, text="About", command=lambda: self.show_program_about(AvailableProgram(
+            "daedalmap-mapping", "Explore Map", "", "", "", "", 0,
+            "Explore installed data packs on a local map and use optional programs such as Network.")),
                **button_kwargs("primary")).pack(side=LEFT)
         program_buttons = Frame(programs_panel, bg=THEME["colors"]["panel_bg"])
         program_buttons.pack(fill="x", padx=12, pady=(0, 8))
@@ -2255,7 +2342,8 @@ class LauncherApp:
         for column in range(5):
             container.grid_columnconfigure(column, weight=0,
                                            minsize=400 if column < columns else 0)
-        for index, card in enumerate(container.winfo_children()):
+        for index, card in enumerate(child for child in container.winfo_children()
+                                     if child.winfo_manager() == "grid"):
             card.grid(row=index // columns, column=index % columns,
                       sticky="nsew", padx=(0, 16) if index % columns < columns - 1 else 0,
                       pady=8)
@@ -2448,28 +2536,60 @@ class LauncherApp:
         mode_panel = Frame(frame, **panel_kwargs())
         mode_panel.pack(fill="x", pady=(0, section_gap))
         Label(mode_panel, text="Launcher connection", **label_kwargs("section")).pack(anchor="w", padx=12, pady=(12, 2))
-        Label(mode_panel, text="Both modes use the same launcher library. Local custom makes editable copies of Mapping and Network and pauses DaedalMap release and store checks. Installed programs, data, and geometry stay visible.",
+        Label(mode_panel, text="Connected uses published downloads and updates. Local Custom uses editable source links or local copies and pauses DaedalMap release and Store checks. Both modes share the same data and geometry library.",
               **label_kwargs("muted")).pack(anchor="w", padx=12, pady=(0, 8))
+        self.mode_status_frame = Frame(mode_panel, bd=1, highlightthickness=1)
+        self.mode_status_frame.pack(fill="x", padx=12, pady=(0, 10))
+        self.mode_status_label = Label(self.mode_status_frame, textvariable=self.launcher_mode_var,
+                                       font=("Segoe UI", 12, "bold"), padx=14, pady=12,
+                                       wraplength=1000, justify=LEFT, anchor="w")
+        self.mode_status_label.pack(fill="x")
         mode_buttons = Frame(mode_panel, bg=THEME["colors"]["panel_bg"])
         mode_buttons.pack(fill="x", padx=12, pady=(0, 8))
-        Button(mode_buttons, text="Connect to DaedalMap", command=self.use_connected_mode_clicked,
-               **button_kwargs("primary")).pack(side=LEFT, padx=(0, 8))
-        Button(mode_buttons, text="Run Local Custom", command=self.use_local_custom_mode_clicked,
-               **button_kwargs("primary")).pack(side=LEFT)
-        Label(mode_panel, text=f"Editable programs: {LOCAL_CUSTOM_ROOT}  |  Python: managed inside launcher-data",
+        self.launcher_mode_button = Button(mode_buttons, textvariable=self.launcher_mode_action_var,
+                                           command=self.toggle_launcher_mode_clicked, **button_kwargs("accent"))
+        self.launcher_mode_button.pack(side=LEFT)
+        Label(mode_panel, text=f"Source links: {LOCAL_PROGRAMS_ROOT}  |  Local copies: {LOCAL_CUSTOM_ROOT}",
               **label_kwargs("muted"), wraplength=1100, justify=LEFT).pack(anchor="w", padx=12)
-        Label(mode_panel, textvariable=self.launcher_mode_var, **label_kwargs("muted"),
-              wraplength=1100, justify=LEFT).pack(anchor="w", padx=12, pady=(4, 12))
         self.refresh_launcher_mode_label()
 
     def refresh_launcher_mode_label(self) -> None:
-        active = ("Local custom" if local_custom_mode() else
-                  "Local source (developer)" if local_source_mode() else "Connected to DaedalMap")
-        settings = load_launcher_mode()
-        saved = settings["mode"]
+        if local_custom_mode():
+            active = "LOCAL CUSTOM"
+            detail = "Editable program sources are active. Store downloads and update checks are paused."
+            color = "local"
+        elif local_source_mode():
+            active = "LOCAL SOURCE"
+            detail = "Developer source files are active for this session."
+            color = "local"
+        else:
+            active = "CONNECTED"
+            detail = "Published programs, downloads, and updates are active."
+            color = "connected"
+        saved = load_launcher_mode()["mode"]
         pending_restart = ((saved == "local_custom") != local_custom_mode())
-        pending = " Restart pending; reopen the launcher to apply it." if pending_restart else ""
-        self.launcher_mode_var.set(f"Current session: {active}. Saved choice: {saved.replace('_', ' ')}.{pending}")
+        pending = (f" Restart to switch to {'Local Custom' if saved == 'local_custom' else 'Connected'}."
+                   if pending_restart else "")
+        self.launcher_mode_var.set(f"CURRENT MODE: {active}. {detail}{pending}")
+        self.launcher_mode_badge_var.set(active + ("  ·  RESTART PENDING" if pending_restart else ""))
+        self.launcher_mode_action_var.set(
+            "Cancel pending switch" if pending_restart else
+            "Switch to Connected" if saved == "local_custom" else "Switch to Local Custom")
+        colors = THEME["colors"]
+        badge_bg = colors[f"mode_{color}_bg"]
+        badge_fg = colors[f"mode_{color}_fg"]
+        status_color = "pending" if pending_restart else color
+        status_bg = colors[f"mode_{status_color}_bg"]
+        status_fg = colors[f"mode_{status_color}_fg"]
+        self.launcher_mode_badge.configure(bg=badge_bg, fg=badge_fg)
+        self.mode_status_frame.configure(bg=status_bg, highlightbackground=status_fg)
+        self.mode_status_label.configure(bg=status_bg, fg=status_fg)
+
+    def toggle_launcher_mode_clicked(self) -> None:
+        if load_launcher_mode()["mode"] == "local_custom":
+            self.use_connected_mode_clicked()
+        else:
+            self.use_local_custom_mode_clicked()
 
     def offer_restart_after_mode_change(self) -> None:
         if messagebox.askyesno("Settings changed", "Restart the launcher now to apply this setting? Running local tools will close.",
@@ -2488,7 +2608,8 @@ class LauncherApp:
         save_launcher_mode("local_custom")
         self.refresh_launcher_mode_label()
         self.append_log("Local custom mode saved")
-        self.offer_restart_after_mode_change()
+        if not local_custom_mode():
+            self.offer_restart_after_mode_change()
 
     def use_connected_mode_clicked(self) -> None:
         settings = load_launcher_mode()
@@ -2497,7 +2618,8 @@ class LauncherApp:
         save_launcher_mode("connected")
         self.refresh_launcher_mode_label()
         self.append_log("DaedalMap connection saved")
-        self.offer_restart_after_mode_change()
+        if local_custom_mode():
+            self.offer_restart_after_mode_change()
 
     def sync_navigation(self, mapping_installed: bool, installed_products: set[str]) -> None:
         visible = visible_launcher_tabs(mapping_installed, installed_products)
@@ -2996,7 +3118,7 @@ class LauncherApp:
             self.get_mapping_button.configure(state=DISABLED)
             self.launch_button.configure(state=DISABLED)
             self.open_mapping_program_button.configure(state=DISABLED)
-            text = "Local custom source is unavailable. Choose Mapping Source and Python in Settings."
+            text = "Local custom Mapping source is unavailable. Link a Mapping checkout in launcher-data/local-programs or install Mapping while connected."
             self.update_var.set(text)
             self._set_selectable_text(self.update_text, text)
             return
@@ -3084,6 +3206,8 @@ class LauncherApp:
         }
         mapping_installed = has_usable_installed_engine(state)
         installed_program_count = len(installed_programs) + int(mapping_installed)
+        local_program_count = int(local_network_source_root() is not None and
+                                  not any(entry.get("product") == NETWORK_PRODUCT for entry in installed_programs))
         self.sync_navigation(mapping_installed, installed_products)
         self.refresh_network_settings()
         openai_ready = bool(os.environ.get("OPENAI_API_KEY", "").strip())
@@ -3093,7 +3217,7 @@ class LauncherApp:
         mapping_version = ("local source" if source_root else
                            "local test build" if local_mapping_packages_root() and mapping_installed else
                            state.version if mapping_installed else "not installed")
-        installed_text = (f"Data packs: {installed_pack_count}  /  Programs: {installed_program_count}  /  "
+        installed_text = (f"Data packs: {installed_pack_count}  /  Programs: {installed_program_count + local_program_count}  /  "
                           f"Explore Map: {mapping_version}")
         self.installed_var.set(installed_text)
         self._set_selectable_text(self.installed_text, installed_text)
@@ -3102,7 +3226,8 @@ class LauncherApp:
             [
                 (f"Data packs: {installed_pack_count} installed" if installed_pack_count else
                  "Data packs: none yet. Browse Data Packs to add records."),
-                f"Programs: {installed_program_count} installed",
+                f"Programs: {installed_program_count} installed" +
+                (f", {local_program_count} local source" if local_program_count else ""),
                 f"Explore Map: {'running' if runtime_running else ('installed' if mapping_installed else 'not installed')}",
                 f"Data folder: {RUNTIME_DATA_ROOT}",
             ]
@@ -3258,6 +3383,15 @@ class LauncherApp:
             button.configure(**tab_button_kwargs(name == value))
         self.update_pack_list()
         self.root.after_idle(lambda: self.pack_canvas.yview_moveto(0))
+
+    def set_program_filter(self, value: str) -> None:
+        if value == "cloud" and local_source_mode():
+            return
+        self.program_filter = value
+        for name, button in self.program_filter_buttons.items():
+            button.configure(**tab_button_kwargs(name == value))
+        self.update_program_list()
+        self.root.after_idle(lambda: self.program_canvas.yview_moveto(0))
 
     def set_geometry_filter(self, value: str) -> None:
         self.geometry_filter = value
@@ -3823,11 +3957,19 @@ class LauncherApp:
         self.program_action_vars.clear()
         installed_entries = load_program_state()["installed_programs"]
         mapping_installed = has_usable_installed_engine()
-        cards = program_cards_for_view(self.available_programs, installed_entries)
-        if not cards:
-            Label(self.program_cards, text="Loading programs from Downloads...", **label_kwargs("muted")).grid(
-                row=0, column=1, sticky="w", pady=12)
+        local_network = local_network_source_root() if self.program_filter == "installed" else None
+        cards = program_cards_for_filter(self.available_programs, installed_entries,
+                                         self.program_filter, local_network)
+        show_mapping = self.program_filter == "cloud" or mapping_installed
+        if show_mapping:
+            self.mapping_card.grid()
+        else:
+            self.mapping_card.grid_remove()
+        if not cards and not show_mapping:
+            Label(self.program_cards, text="No installed programs yet.", **label_kwargs("muted")).grid(
+                row=0, column=0, sticky="w", pady=12)
         for index, (item, installed_entry, update_available) in enumerate(cards):
+            local_source = bool(local_network and item.product == NETWORK_PRODUCT)
             local_trial = bool(installed_entry and str(installed_entry.get("version") or "").startswith("local-dev-")
                                and os.environ.get("DAEDALMAP_LAUNCHER_DEV") == "1"
                                and item.product in {*MCP_PRODUCTS, NETWORK_PRODUCT, "daedalmap-historical-version-generator"})
@@ -3837,12 +3979,13 @@ class LauncherApp:
                              if candidate.product == item.product and candidate.version == installed_entry["version"]), item)
                 update_available = False
             running = self.program_processes.get(item.product)
-            status = ("running" if running is not None and running.poll() is None else
+            status = ("local source" if local_source else
+                      "running" if running is not None and running.poll() is None else
                       "local test" if local_trial else
                       "update available" if update_available else
                       "installed" if installed_entry else "available")
             card = self._catalog_card(self.program_cards)
-            slot = index + 1
+            slot = index + int(show_mapping)
             card.grid(row=slot // 2, column=slot % 2, sticky="nsew", padx=(0, 8) if slot % 2 == 0 else (8, 0), pady=8)
             Label(card, text=program_kind_label(item.product) + "  /  " + status.upper(), bg=THEME["colors"]["card_bg"],
                   fg=THEME["colors"]["program_accent"], font=THEME["fonts"]["mono"]).pack(anchor="w", padx=14, pady=(12, 3))
@@ -3854,7 +3997,8 @@ class LauncherApp:
                   fg=THEME["colors"]["muted_text"], font=THEME["fonts"]["body"],
                   justify=LEFT, anchor="nw", wraplength=370, height=2).pack(fill="x", padx=14, pady=(5, 5))
             size = f"  /  {_format_bytes(item.size_bytes)}" if item.size_bytes else ""
-            release_text = (f"Installed {installed_entry['version']}  /  Current {item.version}{size}"
+            release_text = (f"Source: {local_network}" if local_source else
+                            f"Installed {installed_entry['version']}  /  Current {item.version}{size}"
                             if update_available else f"Release {item.version}{size}")
             Label(card, text=release_text, bg=THEME["colors"]["card_bg"],
                   fg=THEME["colors"]["muted_text"], font=THEME["fonts"]["mono"]).pack(anchor="w", padx=14)
@@ -3862,7 +4006,11 @@ class LauncherApp:
             actions.pack(fill="x", padx=14, pady=(9, 12))
             action_state = InstallActionState.compare(
                 str(installed_entry.get("version") or "") if installed_entry else "", item.version)
-            if local_trial:
+            if local_source:
+                install_label = "Open Source"
+                install_command = lambda path=local_network: os.startfile(path)
+                install_enabled = True
+            elif local_trial:
                 install_label = "Rebuild Local"
                 install_command = lambda value=item: self.rebuild_local_program_clicked(value)
                 install_enabled = True
@@ -3882,7 +4030,7 @@ class LauncherApp:
                 install_label = action_state.action
                 install_command = lambda value=item: self.install_selected_program_clicked(value)
                 install_enabled = bool(item.artifact_url and item.size_bytes > 0)
-            if installed_entry and not update_available and not saved_catalog_mismatch and not local_trial:
+            if installed_entry and not update_available and not saved_catalog_mismatch and not local_trial and not local_source:
                 install_action = Label(actions, text=install_label, bg=THEME["colors"]["card_bg"],
                                        fg=THEME["colors"]["accent"], font=THEME["fonts"]["mono"])
                 install_action.pack(side=LEFT, padx=(0, 8))
@@ -3903,7 +4051,7 @@ class LauncherApp:
                                 command=(lambda value=item: self.stop_selected_program_clicked(value))
                                 if is_running else (lambda value=item: self.run_selected_program_clicked(value)),
                                 **button_kwargs("primary"))
-            if installed_entry:
+            if installed_entry or local_source and mapping_installed:
                 use_action.pack(side=LEFT, padx=(0, 8))
                 self.program_action_buttons.append(use_action)
             else:
@@ -3912,38 +4060,34 @@ class LauncherApp:
                 for action in (install_action, use_action):
                     if isinstance(action, Button):
                         action.configure(state=DISABLED)
-            page_path = program_page_path(item.product)
-            if page_path:
-                page_url = "https://www.daedalmap.com" + page_path
-                Button(actions, text="About", command=lambda url=page_url: webbrowser.open(url),
-                       **button_kwargs("primary")).pack(side=LEFT)
-            elif item.product == "daedalmap-historical-version-generator":
-                Button(actions, text="About", command=self.show_historical_generator_about,
-                       **button_kwargs("primary")).pack(side=LEFT)
-            else:
-                Button(actions, text="About",
-                       command=lambda value=item: messagebox.showinfo(value.title, value.description or "Local DaedalMap tool."),
-                       **button_kwargs("primary")).pack(side=LEFT)
+            Button(actions, text="About", command=lambda value=item: self.show_program_about(value),
+                   **button_kwargs("primary")).pack(side=LEFT)
         source = "  /  saved Downloads list" if self.catalog_source == "saved" else ""
         updates = sum(update for _, _, update in cards) if self.catalog_source == "online" else 0
         mapping_update = bool(local_mapping_packages_root() is None and mapping_installed and
                               self.mapping_install_needed and self.mapping_download_available)
-        summary = (f"{len(cards) + 1} programs  /  {len(installed_entries) + int(mapping_installed)} installed"
-                   f"  /  {updates + int(mapping_update)} updates{source}")
+        count = len(cards) + int(show_mapping)
+        summary = (f"{count} installed or linked programs" if self.program_filter == "installed" else
+                   f"{count} Cloud programs  /  {updates + int(mapping_update)} updates{source}")
         self._set_selectable_text(self.programs_status, summary)
         self._reflow_card_grid(self.program_cards, self.program_cards.winfo_width())
         self._bind_program_scroll(self.program_cards)
 
-    def show_historical_generator_about(self) -> None:
-        existing = getattr(self, "historical_about_dialog", None)
+    def show_program_about(self, program: AvailableProgram) -> None:
+        dialogs = getattr(self, "program_about_dialogs", None)
+        if dialogs is None:
+            dialogs = self.program_about_dialogs = {}
+        existing = dialogs.get(program.product)
         if existing is not None and existing.winfo_exists():
             existing.lift()
             existing.focus_set()
             return
 
         dialog = Toplevel(self.root)
-        self.historical_about_dialog = dialog
-        dialog.title("Historical Version Generator")
+        dialogs[program.product] = dialog
+        if program.product == "daedalmap-historical-version-generator":
+            self.historical_about_dialog = dialog
+        dialog.title(program.title)
         dialog.configure(**app_root_kwargs())
         dialog.resizable(False, False)
         dialog.transient(self.root)
@@ -3955,23 +4099,31 @@ class LauncherApp:
         Label(panel, text="ABOUT THIS TOOL", bg=THEME["colors"]["panel_bg"],
               fg=THEME["colors"]["program_accent"], font=THEME["fonts"]["mono"]).pack(
                   anchor="w", padx=18, pady=(18, 4))
-        Label(panel, text="Historical Version Generator", bg=THEME["colors"]["panel_bg"],
+        Label(panel, text=program.title, bg=THEME["colors"]["panel_bg"],
               fg=THEME["colors"]["text"], font=THEME["fonts"]["card"]).pack(
                   anchor="w", padx=18)
-        Label(panel,
-              text=("For version-specific research projects and to match someone else's work precisely, "
-                    "send a geometry data pack back in time to a previous version number."),
-              bg=THEME["colors"]["panel_bg"], fg=THEME["colors"]["text"],
-              font=THEME["fonts"]["body"], wraplength=420, justify=LEFT).pack(
-                  anchor="w", padx=18, pady=(12, 8))
-        Label(panel,
-              text=("The tool creates a new ZIP from that release's locked manifest and saved content objects. "
-                    "A current pack download alone is not enough; the changelog helps identify the version you need."),
-              bg=THEME["colors"]["panel_bg"], fg=THEME["colors"]["muted_text"],
-              font=THEME["fonts"]["body"], wraplength=420, justify=LEFT).pack(
-                  anchor="w", padx=18, pady=(0, 18))
-        Button(panel, text="Close", command=dialog.destroy, **button_kwargs("accent")).pack(
-            anchor="e", padx=18, pady=(0, 18))
+        if program.product == "daedalmap-historical-version-generator":
+            paragraphs = (
+                "For version-specific research projects and to match someone else's work precisely, "
+                "send a geometry data pack back in time to a previous version number.",
+                "The tool creates a new ZIP from that release's locked manifest and saved content objects. "
+                "A current pack download alone is not enough; the changelog helps identify the version you need.",
+            )
+        else:
+            paragraphs = (program.description.strip() or "A DaedalMap program in your launcher library.",)
+        for index, paragraph in enumerate(paragraphs):
+            Label(panel, text=paragraph, bg=THEME["colors"]["panel_bg"],
+                  fg=THEME["colors"]["text" if index == 0 else "muted_text"],
+                  font=THEME["fonts"]["body"], wraplength=420, justify=LEFT).pack(
+                      anchor="w", padx=18, pady=(12 if index == 0 else 0, 8 if index == 0 else 12))
+        buttons = Frame(panel, bg=THEME["colors"]["panel_bg"])
+        buttons.pack(anchor="e", padx=18, pady=(0, 18))
+        page_path = program_page_path(program.product)
+        if page_path:
+            Button(buttons, text="More info",
+                   command=lambda url="https://www.daedalmap.com" + page_path: webbrowser.open(url),
+                   **button_kwargs("primary")).pack(side=LEFT, padx=(0, 8))
+        Button(buttons, text="Close", command=dialog.destroy, **button_kwargs("accent")).pack(side=LEFT)
         dialog.bind("<Escape>", lambda _event: dialog.destroy())
         dialog.protocol("WM_DELETE_WINDOW", dialog.destroy)
         dialog.update_idletasks()
@@ -4059,7 +4211,7 @@ class LauncherApp:
 
     def run_selected_program_clicked(self, program: AvailableProgram) -> None:
         if program.product == NETWORK_PRODUCT:
-            if installed_network_root() is None:
+            if local_network_source_root() is None and installed_network_root() is None:
                 messagebox.showinfo("Network unavailable", "The installed Network expansion is missing or incompatible. Reinstall it before opening Mapping.")
                 return
             if has_usable_installed_engine():

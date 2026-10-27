@@ -18,8 +18,22 @@ if str(WRAPPER_ROOT) not in sys.path:
     sys.path.insert(0, str(WRAPPER_ROOT))
 
 import launcher
+import launch_gui
 import runtime_manager
 from map_launch_page import MapLaunchPage
+
+
+def test_windowed_source_starter_logs_startup_failure(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(sys, "argv", ["launch_gui.py", "--library-root", str(tmp_path)])
+    monkeypatch.setattr(launch_gui.runpy, "run_path", lambda *_args, **_kwargs:
+                        (_ for _ in ()).throw(ImportError("missing test dependency")))
+    dialogs = []
+    monkeypatch.setattr(launch_gui, "show_startup_error", dialogs.append)
+
+    assert launch_gui.main() == 1
+    log_path = tmp_path / "runtime" / "logs" / "launcher-startup.log"
+    assert dialogs == [log_path]
+    assert "ImportError: missing test dependency" in log_path.read_text(encoding="utf-8")
 
 
 def test_launcher_imports_from_outside_checkout_without_pythonpath(tmp_path) -> None:
@@ -624,6 +638,52 @@ def test_installed_network_is_available_with_auto_start_on_or_off(tmp_path, monk
     assert "DAEDALMAP_NETWORK_ROOT" not in launcher.build_runtime_env()
 
 
+def test_local_custom_launcher_uses_editable_network_program_manifest(tmp_path, monkeypatch) -> None:
+    source = tmp_path / "network-checkout"
+    (source / "network" / "app").mkdir(parents=True)
+    (source / "network" / "app" / "mapping_extension.py").write_text("", encoding="utf-8")
+    (source / "network" / "extension.json").write_text(
+        json.dumps({"product": "daedalmap-network", "mapping_interface": 1}), encoding="utf-8")
+    manifest_dir = tmp_path / "library" / "local-programs" / "daedalmap-network"
+    manifest_dir.mkdir(parents=True)
+    (manifest_dir / "program.json").write_text(
+        json.dumps({"product": "daedalmap-network", "source_root": str(source)}), encoding="utf-8")
+    monkeypatch.delenv("DAEDALMAP_LAUNCHER_LOCAL_SOURCE", raising=False)
+    monkeypatch.delenv("DAEDALMAP_NETWORK_SOURCE_ROOT", raising=False)
+    monkeypatch.setattr(launcher, "LOCAL_PROGRAMS_ROOT", manifest_dir.parent)
+    monkeypatch.setattr(launcher, "installed_network_root", lambda: None)
+
+    assert launcher.local_network_source_root() is None
+    monkeypatch.setenv("DAEDALMAP_LAUNCHER_LOCAL_SOURCE", "1")
+    monkeypatch.setenv("DAEDALMAP_LAUNCHER_LOCAL_CUSTOM", "1")
+    monkeypatch.setattr(launcher, "local_mapping_source_root", lambda: tmp_path)
+    assert launcher.local_network_source_root() == source
+    env = launcher.build_runtime_env()
+    assert env["DAEDALMAP_NETWORK_ROOT"] == str(source)
+    assert "NETWORK_PACKS_DIR" not in env
+    assert "network" in launcher.visible_launcher_tabs(True, set())
+
+
+def test_local_custom_prefers_linked_mapping_source_over_installed_release(tmp_path, monkeypatch) -> None:
+    source = tmp_path / "mapping-checkout"
+    source.mkdir()
+    (source / "app.py").write_text("", encoding="utf-8")
+    (source / "requirements.txt").write_text("", encoding="utf-8")
+    manifest_dir = tmp_path / "library" / "local-programs" / "daedalmap-mapping"
+    manifest_dir.mkdir(parents=True)
+    (manifest_dir / "program.json").write_text(
+        json.dumps({"product": "daedalmap-mapping", "source_root": str(source)}), encoding="utf-8")
+    monkeypatch.setattr(launcher, "LOCAL_PROGRAMS_ROOT", manifest_dir.parent)
+    monkeypatch.setenv("DAEDALMAP_LAUNCHER_LOCAL_SOURCE", "1")
+    monkeypatch.setenv("DAEDALMAP_LAUNCHER_LOCAL_CUSTOM", "1")
+    monkeypatch.setenv("DAEDALMAP_LAUNCHER_DEV", "1")
+    monkeypatch.setenv("DAEDALMAP_MAPPING_SOURCE_ROOT", str(tmp_path / "old-custom-copy"))
+    monkeypatch.setattr(launcher, "load_program_state", lambda: {"installed_programs": []})
+    assert launcher.local_mapping_source_root() == source
+    assert launcher.prepare_local_custom_sources() == source
+    assert launcher.installed_runtime_entries()[0]["install_dir"] == str(source)
+
+
 def test_packaged_launcher_always_uses_its_own_portable_library(tmp_path, monkeypatch) -> None:
     owner = tmp_path / "launcher"
     owner.mkdir()
@@ -894,6 +954,20 @@ def test_program_cards_offer_update_for_published_current_release() -> None:
     assert launcher.program_cards_for_view([current, old], installed) == [(current, installed[0], True)]
     installed[0]["version"] = "1.0.2"
     assert launcher.program_cards_for_view([current, old], installed) == [(current, installed[0], False)]
+
+
+def test_program_tabs_separate_cloud_releases_from_installed_and_local_source(tmp_path) -> None:
+    current = launcher.AvailableProgram("daedalmap-research-mcp", "Research MCP", "2.0",
+                                        "https://example.test/current.json",
+                                        "https://example.test/research.zip", "a" * 64, 100)
+    old = launcher.AvailableProgram(current.product, current.title, "1.0", "", "", "", 0)
+    installed = [{"product": current.product, "version": "1.0"}]
+    cloud = launcher.program_cards_for_filter([current, old], installed, "cloud", tmp_path)
+    local = launcher.program_cards_for_filter([current, old], installed, "installed", tmp_path)
+    assert cloud == [(current, installed[0], True)]
+    assert [(item.product, item.version) for item, _, _ in local] == [
+        (current.product, "1.0"), ("daedalmap-network", "local source")]
+    assert all(not update for _, _, update in local)
 
 
 def test_program_update_rechecks_manifest_and_restores_prior_version(tmp_path, monkeypatch) -> None:
@@ -1306,11 +1380,29 @@ def test_programs_page_is_reachable_from_navigation(monkeypatch, tmp_path) -> No
         assert [name for name, _ in launcher.NAV_TABS if name in app.visible_tab_ids] == [
             "home", "programs", "library", "geometry", "advanced"]
         assert app.tab_buttons["advanced"].cget("text") == "Settings"
+        assert app.launcher_mode_action_var.get() == "Switch to Local Custom"
+        assert app.launcher_mode_badge_var.get() == "CONNECTED"
+        assert app.launcher_mode_badge.cget("bg") == launcher.THEME["colors"]["mode_connected_bg"]
+        with monkeypatch.context() as mode_patch:
+            mode_patch.setenv("DAEDALMAP_LAUNCHER_LOCAL_SOURCE", "1")
+            mode_patch.setenv("DAEDALMAP_LAUNCHER_LOCAL_CUSTOM", "1")
+            mode_patch.setattr(launcher, "load_launcher_mode", lambda: {"mode": "local_custom"})
+            app.refresh_launcher_mode_label()
+            assert app.launcher_mode_action_var.get() == "Switch to Connected"
+            assert app.launcher_mode_badge_var.get() == "LOCAL CUSTOM"
+            assert app.mode_status_frame.cget("bg") == launcher.THEME["colors"]["mode_local_bg"]
+            mode_patch.setattr(launcher, "load_launcher_mode", lambda: {"mode": "connected"})
+            app.refresh_launcher_mode_label()
+            assert app.launcher_mode_action_var.get() == "Cancel pending switch"
+            assert "RESTART PENDING" in app.launcher_mode_badge_var.get()
+            assert app.mode_status_frame.cget("bg") == launcher.THEME["colors"]["mode_pending_bg"]
+        app.refresh_launcher_mode_label()
         assert app.storage_button.master.master.master is app.tab_frames["advanced"]
         assert app.download_map_detail_button.master.master.master is app.tab_frames["runtime"]
         assert not hasattr(app, "open_hosted_self_host_button")
         assert not hasattr(app, "open_advanced_hosted_account_button")
         assert set(app.pack_filter_buttons) == {"cloud", "installed"}
+        assert set(app.program_filter_buttons) == {"cloud", "installed"}
         app.show_tab("runtime")
         assert app.active_tab == "home"
         app.sync_navigation(True, {"daedalmap-research-mcp"})
@@ -1372,6 +1464,32 @@ def test_programs_page_is_reachable_from_navigation(monkeypatch, tmp_path) -> No
         assert [(button.getvar(button.cget("textvariable")) if button.cget("textvariable") else button.cget("text"))
                 for button in research_actions if button.winfo_manager()] == ["Install", "About"]
         assert research_actions[1].cget("state") == "disabled"
+        opened = []
+        monkeypatch.setattr(launcher.webbrowser, "open", opened.append)
+        research_actions[-1].invoke()
+        research_dialog = app.program_about_dialogs["daedalmap-research-mcp"]
+        assert research_dialog.winfo_exists() and opened == []
+        research_labels = [widget.cget("text") for widget in research_dialog.winfo_children()[0].winfo_children()
+                           if isinstance(widget, launcher.Label)]
+        assert "Query local data with Research MCP." in research_labels
+        research_buttons = research_dialog.winfo_children()[0].winfo_children()[-1].winfo_children()
+        assert [button.cget("text") for button in research_buttons] == ["More info", "Close"]
+        research_buttons[0].invoke()
+        assert opened == ["https://www.daedalmap.com/research"]
+        research_dialog.destroy()
+        mapping_actions[-1].invoke()
+        mapping_dialog = app.program_about_dialogs["daedalmap-mapping"]
+        assert mapping_dialog.winfo_exists() and len(opened) == 1
+        mapping_dialog.destroy()
+        app.set_program_filter("installed")
+        assert app.mapping_card.winfo_manager() == "grid"
+        assert len(app.program_cards.winfo_children()) == 1
+        with monkeypatch.context() as mode_patch:
+            mode_patch.setenv("DAEDALMAP_LAUNCHER_LOCAL_SOURCE", "1")
+            app.set_program_filter("cloud")
+            assert app.program_filter == "installed"
+        app.set_program_filter("cloud")
+        assert len(app.program_cards.winfo_children()) == 2
         historical = launcher.AvailableProgram(
             "daedalmap-historical-version-generator", "Historical Version Generator", "1.0.3",
             "https://example.test/historical-manifest.json", "https://example.test/historical.zip",
@@ -1396,6 +1514,8 @@ def test_programs_page_is_reachable_from_navigation(monkeypatch, tmp_path) -> No
         assert "Historical Version Generator" in labels
         assert any("back in time" in label and "geometry data pack" in label for label in labels)
         assert any("current pack download alone is not enough" in label and "changelog" in label for label in labels)
+        historical_buttons = dialog.winfo_children()[0].winfo_children()[-1].winfo_children()
+        assert [button.cget("text") for button in historical_buttons] == ["Close"]
         about_button.invoke()
         assert app.historical_about_dialog is dialog
         dialog.destroy()
@@ -1459,7 +1579,8 @@ def test_programs_page_is_reachable_from_navigation(monkeypatch, tmp_path) -> No
         installed_button = installed_card.winfo_children()[-1].winfo_children()[0].winfo_children()[0]
         assert installed_button.cget("text") == "Update Lite"
         app.available_programs = [launcher.AvailableProgram(
-            f"sample-{index}", f"Sample {index}", "1.0", "", "", "", 0)
+            f"sample-{index}", f"Sample {index}", "1.0", "https://example.test/current.json",
+            "https://example.test/program.zip", "a" * 64, 100)
             for index in range(15)]
         app.show_tab("programs")
         app.update_program_list()

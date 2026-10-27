@@ -9,8 +9,11 @@ the work is ready to share.
 
 1. Unzip the launcher. Its programs, managed Python environment, settings, and
    data start inside `launcher-data/` beside the launcher.
-2. In **Settings**, choose **Run Local Custom** to disconnect from DaedalMap
-   release and Store checks. The launcher offers **Restart now** or **Later**.
+2. In **Settings**, use the single connection button to switch between **Local
+   Custom** for editable source programs and **Connected** for published
+   downloads and updates. The colored badge shows the active mode; a pending
+   change is highlighted until restart. The launcher offers **Restart now** or
+   **Later**.
 3. Put an editable program in the local programs folder, or put a data folder
    in the data folder. The launcher detects changes and offers to update the
    appropriate local catalog.
@@ -23,6 +26,56 @@ the work is ready to share.
 
 The existing **Open Data Folder** and **Update Catalog** actions cover local
 data. The equivalent local **program** catalog and UI are still required.
+
+## Link a program without packaging
+
+A local program should have a stable ID and editable source folder. The
+launcher library keeps a small manifest that points to that folder; the source
+can live elsewhere on the computer. A source link is separate from an installed
+release record in `launcher-data/programs.json`. The program should appear in
+**Programs** as **Local source** in both connection modes. Editing source files
+should require a program restart, not a new ZIP or Store publication. The
+launcher should select local source cards in **Local Custom** and published
+release cards in **Connected**. A source link stays saved when switching modes,
+but Connected does not run it in place of a packaged release.
+
+**Network is the working example today.** Create
+`launcher-data/local-programs/daedalmap-network/program.json` beside the
+launcher with:
+
+```json
+{
+  "product": "daedalmap-network",
+  "source_root": "C:/path/to/checkout-containing-network"
+}
+```
+
+That folder must contain `network/extension.json` with product
+`daedalmap-network` and `mapping_interface` 1, plus
+`network/app/mapping_extension.py`. Choose **Switch to Local Custom** in Settings and
+restart the launcher to see **Network / Local source** in **Programs**.
+**Open Source** opens the editable checkout;
+**Open Mapping** starts installed Mapping with that Network source when Mapping
+is available. Restart Mapping after changing Network files. Data packs remain
+in the shared launcher library. The source link works without a Network ZIP.
+In Connected mode, Network appears only if a packaged release is installed or
+listed in the maintained Store catalog.
+
+Mapping also needs a compatible editable source for Network controls during
+local testing. Put a `program.json` at
+`launcher-data/local-programs/daedalmap-mapping/` with product
+`daedalmap-mapping` and `source_root` pointing to a Mapping checkout containing
+`app.py`, `requirements.txt`, and the Network UI hook. The installed Mapping
+0.1.0 package predates that hook, so merely linking Network to it cannot
+create the **Open Network** control. Local Custom runs the linked Mapping
+source; Connected returns to the installed release. Package both compatible
+versions before offering Network as a published expansion.
+
+The general contributor workflow still needs implementation: a documented
+manifest for any program type, validation, a folder picker or drop-in folder,
+catalog refresh in Settings, and run/stop actions based on program type. The
+Network manifest above is currently the only supported local source card;
+renaming its product ID does not make an arbitrary program runnable.
 
 ## Work to complete
 
@@ -40,14 +93,15 @@ data. The equivalent local **program** catalog and UI are still required.
   Catalog** in Settings, matching the data folder workflow.
 - [ ] Merge local catalog entries with installed and maintained Store entries
   by stable program ID. Label each card **Local source**, **Installed release**,
-  or **Store download**. A local program must appear in **Programs** before it
-  has been published.
+  or **Store download**. Local Custom should show editable source; Connected
+  should show packaged releases. A local program must appear in **Programs**
+  before it has been published.
 - [ ] Provide **Run**, **Stop**, and **Open Folder** actions appropriate to each
   program type. Changing source files should not require a ZIP or an update
   download. Document when restarting the program is necessary.
-- [ ] Keep local entries visible when reconnecting to DaedalMap. Disconnecting
-  controls release checks and update actions; it must not hide installed or
-  custom programs, data, or geometry.
+- [ ] Keep source links saved when reconnecting to DaedalMap, but show the
+  packaged program cards in Connected mode. Switching modes must not move or
+  erase installed programs, source files, data, or geometry.
 
 ### Connection and library settings
 
@@ -86,8 +140,8 @@ data. The equivalent local **program** catalog and UI are still required.
 
 ### Mapping and Network as the first integration case
 
-- [ ] Show an unpublished Network source in **Programs** through the local
-  program catalog. Its absence from the maintained Store catalog must not
+- [x] Show an unpublished Network source in **Programs** through a local
+  program manifest. Its absence from the maintained Store catalog does not
   prevent local launcher testing.
 - [ ] Keep Network a separate optional program/download. When Mapping and
   Network are both installed, offer **Start with Mapping** on Network settings;
@@ -121,9 +175,11 @@ data. The equivalent local **program** catalog and UI are still required.
 
 ## Current implementation boundary
 
-The public launcher source already supports a portable library, the connection
-setting, local Mapping copies, and local data folder catalog refresh. Program
-cards currently come from the maintained Store catalog or installed release
-records. There is no local program catalog yet, and Network has no maintained
-Store release. The launcher ZIP must be rebuilt after source changes before a
-distributed launcher includes them.
+The public launcher source supports a portable library, the connection
+setting, local Mapping copies, and local data folder catalog refresh. Network
+can appear from `launcher-data/local-programs/daedalmap-network/program.json`
+without a release. Programs has Cloud and Installed views; Local Custom opens
+Installed and disables Cloud, matching Data and Geometry. A general local
+program catalog for other tools is still
+required. Network has no maintained Store release. The launcher ZIP must be
+rebuilt after source changes before a distributed launcher includes them.
