@@ -198,7 +198,7 @@ def build_tool_definitions(*, include_paused: bool = False) -> list[dict]:
         {
             "name": "get_catalog",
             "title": "List Published Packs or Geographies",
-            "description": "Choose data or geometry. Data returns pack IDs and brief labels; geometry returns family IDs and scope IDs (countries, GLOBAL, MARINE). Use get_pack for a data pack or get_geography for one family or scope. The complete catalog URL is included in the response.",
+            "description": "Choose data or geometry. Data returns pack IDs and brief labels. Geometry returns family IDs and scope IDs from the supplied active coverage catalogs; missing catalogs return an error. Use get_pack for a data pack or get_geography with two of location, family, and year to discover the third.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -225,16 +225,19 @@ def build_tool_definitions(*, include_paused: bool = False) -> list[dict]:
         },
         {
             "name": "get_geography",
-            "title": "Inspect One Geography Family or Scope",
-            "description": "Supply exactly one published family_id to list its scopes, or one scope_id (ISO3, GLOBAL, MARINE) to list families and administrative coverage. Optional year selects the latest known published edition no later than that year; a previous-year substitution is flagged for checking. This reads catalog metadata only, not shapes.",
+            "title": "Discover or Read Geography Coverage",
+            "description": "Supply any two of family_id, scope_id, and year to list values of the third from the supplied active coverage catalog. Supply all three to read a bounded page from the explicitly configured active Geometry source. An absent catalog, catalog cell, or payload member returns an error. This tool does not search releases or substitute another year. page, page_size, and include_geometry are transport options.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "family_id": {"type": "string", "minLength": 1},
                     "scope_id": {"type": "string", "minLength": 3},
                     "year": {"type": "integer", "minimum": 1, "maximum": 9999},
+                    "page": {"type": "integer", "minimum": 0},
+                    "page_size": {"type": "integer", "minimum": 1, "maximum": 10},
+                    "include_geometry": {"type": "boolean"},
                 },
-                "oneOf": [{"required": ["family_id"]}, {"required": ["scope_id"]}],
+                "anyOf": [{"required": ["family_id"]}, {"required": ["scope_id"]}],
                 "additionalProperties": False,
             },
             "annotations": {"readOnlyHint": True},

@@ -1824,7 +1824,7 @@ def get_server_description(pack_id: str | None = None) -> str:
         return (
             f"{PACK_SERVER_PROFILES[normalized]['description']} Safety: {AGENT_SAFETY_NOTICE} {coverage_prefix}"
             "The calling LLM translates the user's natural-language request into strict tool JSON; geometry execution tools do not accept prose unless a schema explicitly says they do. Call get_tool_help before an unfamiliar tool. On error, inspect error, warnings, guidance, and clarification; ask the user only when clarification.required is true. "
-            "Start with free discovery: call get_catalog with catalog='geometry' to see each family and the countries where it exists. Then call get_geography with one family_id or scope_id to inspect coverage and admitted edition years. A listed family-country pair is the capability signal. Edition years alone do not prove effective-year coverage. "
+            "Start with get_catalog(catalog='geometry') to see the supplied active families and scopes. Call get_geography with any two of scope_id, family_id, and year for catalog availability of the third; provide all three for exact data. A missing catalog or exact member is an error; no previous year or other release is searched. "
             "When the only place input is coordinates, call resolve_point first to learn the country and the deepest available compact shallow chain (global baseline through Admin 2; adopted country banks may reach Admin 3) without opening deep partitions. Use that returned country and shallow loc_id stack to scope later place-specific calls. Call resolve_deep_point only when deeper containment is requested, with the original coordinate or scoped point array, a returned shallow_loc_id, and one family. family defaults to administrative; other shape-backed families use direct point lookup within the selected country. "
             "When the caller asks what other loc_ids connect directly to the returned chain, pass up to 10 stack loc_ids to get_loc_id_info; each result returns at most 50 selected-graph edges and a has_more flag. Use get_shape only for shapes and compare_geographies only for overlap, topology, validity, or successor questions. Mixed-vintage point context is not strict parentage. "
             "For a user dataset with unknown or informally declared geography keys, pass bounded scalar column samples to identify_dataset_geography; the caller may filter transport noise but must not choose the geography itself. Use identify_reference_system only when one identifier column is already selected. For a known outside geography code, name, or bounded identifier batch, call convert_reference and omit to_system to return loc_id. These identification tools prepare a binding; use convert_reference for scoped names or outside identifiers. Keep all relevant returned loc_ids when place identity overlaps. Pass canonical loc_ids to geography readers and place-filtered data calls. For bounded administrative shapes, use get_shape with exact loc_ids. "
@@ -5494,7 +5494,7 @@ async def mcp_endpoint_info(pack_id: str | None = None):
     elif normalized_pack_id in {"geography", "reverse-geocoding", "boundaries"}:
         how_to_start = [
             "Call get_tool_help with topic='geometry' for the family workflow.",
-            "Call get_catalog with catalog='geometry', then get_geography for one family or scope.",
+            "Call get_catalog with catalog='geometry', then get_geography with any two of scope_id, family_id, and year to discover the third.",
             "Call get_tool_help with an exact name from tools/list before an unfamiliar tool.",
             "Use resolve_point for coordinates or identify_reference_system and convert_reference for outside identifiers.",
             "Use get_shape with an exact loc_id to inspect the selected shape; include_polygon=false omits polygon coordinates from the response but may still read shape data. Verified metadata-only availability awaits the next data release.",
@@ -5918,8 +5918,8 @@ async def mcp_endpoint(request: Request, pack_id: str | None = None):
         if rate_limit_response:
             return rate_limit_response
         if catalog == "geometry":
-            from mapmover.runtime.reference_exchange import geography_directory
-            payload = geography_directory()
+            from mapmover.runtime.geometry_coverage_trial import directory_status
+            payload = directory_status()
         else:
             source = _filter_catalog_payload_for_facade(load_api_catalog() or {"packs": []}, normalized_pack_id)
             payload = {
@@ -5931,23 +5931,35 @@ async def mcp_endpoint(request: Request, pack_id: str | None = None):
             }
         payload["resolved_query"] = _resolved_query(tool_name, arguments)
         return _finish_data_helper(request, tool_name=tool_name, started_at=helper_started_at,
-                                   payload=payload, rpc_request_id=request_id, row_count=_payload_row_count(payload))
+                                   payload=payload, rpc_request_id=request_id, row_count=_payload_row_count(payload),
+                                   is_error=not payload.get("ok"),
+                                   error_code=(payload.get("error") or {}).get("code"))
 
     if tool_name == "get_geography":
         keys = set(arguments)
-        if keys - {"family_id", "scope_id", "year"} or ("family_id" in keys) == ("scope_id" in keys):
-            return _jsonrpc_error(request_id, -32602, "get_geography requires exactly one of family_id or scope_id; optional year")
+        transport_keys = {"page", "page_size", "include_geometry"}
+        if keys - ({"family_id", "scope_id", "year"} | transport_keys) or not ({"family_id", "scope_id"} & keys):
+            return _jsonrpc_error(request_id, -32602, "get_geography requires family_id or scope_id; year is optional")
+        if keys & transport_keys and not {"family_id", "scope_id", "year"} <= keys:
+            return _jsonrpc_error(request_id, -32602, "page, page_size, and include_geometry require all three geography dimensions")
+        if (type(arguments.get("page", 0)) is not int or arguments.get("page", 0) < 0 or
+                type(arguments.get("page_size", 10)) is not int or not 1 <= arguments.get("page_size", 10) <= 10 or
+                type(arguments.get("include_geometry", True)) is not bool):
+            return _jsonrpc_error(request_id, -32602, "invalid geography page or geometry mode")
         year = arguments.get("year")
         if year is not None and (type(year) is not int or not 1 <= year <= 9999):
             return _jsonrpc_error(request_id, -32602, "year must be an integer from 1 to 9999")
-        selector = arguments.get("family_id") if "family_id" in keys else arguments.get("scope_id")
-        if not isinstance(selector, str) or not selector.strip():
-            return _jsonrpc_error(request_id, -32602, "family_id or scope_id must be a nonempty string")
+        if any(not isinstance(arguments.get(key), str) or not arguments[key].strip()
+               for key in ("family_id", "scope_id") if key in keys):
+            return _jsonrpc_error(request_id, -32602, "family_id and scope_id must be nonempty strings")
         rate_limit_response = _live_tool_rate_limit_response(request, tool_name, request_id)
         if rate_limit_response:
             return rate_limit_response
-        from mapmover.runtime.reference_exchange import geography_detail
-        payload = geography_detail(family_id=arguments.get("family_id"), scope_id=arguments.get("scope_id"), year=year)
+        from mapmover.runtime.geometry_coverage_trial import discover
+        payload = discover(family_id=arguments.get("family_id"),
+                           scope_id=arguments.get("scope_id"), year=year,
+                           page=arguments.get("page", 0), page_size=arguments.get("page_size", 10),
+                           include_geometry=arguments.get("include_geometry", True))
         return _finish_data_helper(request, tool_name=tool_name, started_at=helper_started_at,
                                    payload=payload, rpc_request_id=request_id, is_error=not payload.get("ok"),
                                    error_code=(payload.get("error") or {}).get("code"))
@@ -5965,8 +5977,9 @@ async def mcp_endpoint(request: Request, pack_id: str | None = None):
             return rate_limit_response
         payload = load_api_pack_detail(pack_id, hydrate_source_metadata=True)
         if not payload:
-            from mapmover.runtime.reference_exchange import geography_directory
-            if pack_id.lower() in {item["family_id"] for item in geography_directory()["families"]}:
+            from mapmover.runtime.geometry_coverage_trial import directory_status
+            active_directory = directory_status()
+            if pack_id.lower() in {item["family_id"] for item in active_directory.get("families", [])}:
                 return _jsonrpc_error(request_id, -32602, "Geometry families use get_geography(family_id=...) instead of get_pack")
             return _finish_data_helper(request, tool_name=tool_name, started_at=helper_started_at,
                                        payload={"error": "Pack not found", "pack_id": pack_id},
