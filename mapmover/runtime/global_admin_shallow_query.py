@@ -13,6 +13,7 @@ from ..paths import GEOMETRY_DIR
 from .geometry_catalog import load_geometry_catalog
 from .geometry_predicate_query import read_bbox_candidates_for_points, read_rows_by_ids
 from .geometry_storage_layout import catalog_artifact_path
+from .global_admin_spine_policy import admitted_admin_match
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +53,11 @@ def resolve_global_admin_shallow_points(points: Iterable[dict[str, Any]]) -> lis
         bbox = read_bbox_candidates_for_points(
             layout["bbox_index"], point_items, columns=["loc_id", "admin_level"],
         )
+        if not bbox.empty:
+            bbox = bbox[bbox.apply(
+                lambda row: admitted_admin_match(str(row["loc_id"]), int(row["admin_level"])),
+                axis=1,
+            )]
         source_ids = set(bbox["loc_id"].astype(str)) if not bbox.empty else set()
         mark_mcp_stage("point_global_admin0_2_exact")
         exact_rows: dict[str, dict[str, Any]] = {}
@@ -95,12 +101,6 @@ def resolve_global_admin_shallow_points(points: Iterable[dict[str, Any]]) -> lis
         for loc_id in by_position.get(position, ()):
             row = exact_rows.get(loc_id)
             if row is None or row.get("geometry_wkb") is None:
-                continue
-            # Global CAN Admin2 source is 2021 economic regions, while the
-            # selected country Admin2 spine is census divisions. An unchanged
-            # geoBoundaries ID is not a canonical census-division translation.
-            if (loc_id.startswith("CAN-") and int(row["admin_level"]) == 2
-                    and preferred.get(loc_id) == loc_id):
                 continue
             if loc_id not in geometries:
                 geometries[loc_id] = load_wkb(bytes(row["geometry_wkb"]))

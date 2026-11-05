@@ -67,6 +67,40 @@ class GlobalAdminBBoxTests(unittest.TestCase):
             result = bbox_query.resolve_global_admin_bbox(corners)
         self.assertEqual(result["error"]["code"], "bbox_too_broad")
 
+    def test_translated_canada_economic_region_stays_out_of_admin_ranking(self):
+        corners = [{"lat": 0, "lon": 0}, {"lat": 0, "lon": 2},
+                   {"lat": 2, "lon": 0}, {"lat": 2, "lon": 2}]
+        layout = {"bbox_index": Path("bbox.parquet"), "preferred_lookup": Path("lookup.parquet"),
+                  **{f"admin_{level}": Path(f"admin_{level}.parquet") for level in range(3)},
+                  "release": "1.1.2"}
+        candidates = pd.DataFrame({"loc_id": ["CAN", "CAN-GNT", "CAN-GNT-GER"],
+                                   "admin_level": [0, 1, 2]})
+        exact = {
+            f"admin_{level}.parquet": pd.DataFrame([{
+                "loc_id": loc_id, "name": name, "parent_id": parent,
+                "geometry_wkb": box(-1, -1, 3, 3).wkb,
+            }]) for level, loc_id, parent, name in [
+                (0, "CAN", "", "Canada"), (1, "CAN-GNT", "CAN", "Northwest Territories"),
+                (2, "CAN-GNT-GER", "CAN-GNT", "NWT economic region")]
+        }
+        exact["lookup.parquet"] = pd.DataFrame({
+            "baseline_loc_id": ["CAN", "CAN-GNT", "CAN-GNT-GER"],
+            "preferred_loc_id": ["CAN", "CAN-NT", "CAN-NT-6101"],
+        })
+        def read(path, ids, **_kwargs):
+            frame = exact[path.name]
+            key = "baseline_loc_id" if path.name == "lookup.parquet" else "loc_id"
+            return frame[frame[key].isin(ids)]
+
+        with mock.patch.object(bbox_query, "_selected_layout", return_value=layout), \
+                mock.patch.object(bbox_query, "parquet_available", return_value=True), \
+                mock.patch.object(bbox_query, "path_to_uri", return_value="bbox.parquet"), \
+                mock.patch.object(bbox_query, "run_df", return_value=candidates), \
+                mock.patch.object(bbox_query, "read_rows_by_ids", side_effect=read):
+            result = bbox_query.resolve_global_admin_bbox(corners)
+        self.assertEqual(result["matches_by_admin_level"]["1"][0]["loc_id"], "CAN-NT")
+        self.assertEqual(result["matches_by_admin_level"]["2"], [])
+
     def test_deep_view_uses_one_admin1_partition(self):
         corners = [{"lat": 0, "lon": 0}, {"lat": 0, "lon": 1},
                    {"lat": 1, "lon": 0}, {"lat": 1, "lon": 1}]

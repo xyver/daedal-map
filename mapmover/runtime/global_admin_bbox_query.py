@@ -13,6 +13,7 @@ from ..duckdb_helpers import lease_query_connection, parquet_available, path_to_
 from ..mcp_execution import mark_mcp_stage, record_mcp_file
 from .geometry_predicate_query import read_rows_by_ids
 from .global_admin_shallow_query import _selected_layout
+from .global_admin_spine_policy import admitted_admin_match
 
 _AREA_TRANSFORM = Transformer.from_crs("EPSG:4326", "EPSG:6933", always_xy=True).transform
 _MAX_CANDIDATES = 500
@@ -69,7 +70,7 @@ def resolve_global_admin_bbox(corners: list[dict[str, Any]]) -> dict[str, Any]:
     levels: dict[int, set[str]] = {0: set(), 1: set(), 2: set()}
     for row in candidates.itertuples(index=False):
         level = int(row.admin_level)
-        if level in levels:
+        if level in levels and admitted_admin_match(str(row.loc_id), level):
             levels[level].add(str(row.loc_id))
     mark_mcp_stage("bbox_global_admin0_2_exact")
     matched = []
@@ -108,12 +109,6 @@ def resolve_global_admin_bbox(corners: list[dict[str, Any]]) -> dict[str, Any]:
                               "message": "Global preferred-ID lookup is incomplete"}}
         for row in matched:
             row["loc_id"] = preferred[row["baseline_loc_id"]]
-        # The Global CAN Admin2 source is economic regions. Keep unmatched
-        # economic regions out of the administrative ranking; a separate
-        # side-family crosswalk is needed to expose their official ER IDs.
-        matched = [row for row in matched if not (
-            row["baseline_loc_id"].startswith("CAN-") and row["admin_level"] == 2
-            and row["loc_id"] == row["baseline_loc_id"])]
         matched.sort(key=lambda row: (-row["intersection_over_union_pct"],
                                       -row["view_coverage_pct"], row["loc_id"]))
     by_level = {str(level): [row for row in matched if row["admin_level"] == level][:5]

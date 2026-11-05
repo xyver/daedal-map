@@ -73,7 +73,7 @@ class GlobalAdminShallowQueryTests(unittest.TestCase):
                              ).to_parquet(root / f"admin_{level}.parquet")
             pd.DataFrame([{"baseline_loc_id": "CAN", "preferred_loc_id": "CAN"},
                           {"baseline_loc_id": "CAN-GNT", "preferred_loc_id": "CAN-NT"},
-                          {"baseline_loc_id": "CAN-GNT-GER", "preferred_loc_id": "CAN-GNT-GER"}]
+                          {"baseline_loc_id": "CAN-GNT-GER", "preferred_loc_id": "CAN-NT-6101"}]
                          ).to_parquet(root / "lookup.parquet")
             layout = {"bbox_index": root / "bbox.parquet", "preferred_lookup": root / "lookup.parquet",
                       "release": "1.1.1", **{f"admin_{level}": root / f"admin_{level}.parquet"
