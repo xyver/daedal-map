@@ -3759,7 +3759,7 @@ export const OverlayController = {
         } else if (App && typeof App.loadCountries === 'function') {
           await App.loadCountries();
         }
-        MapAdapter?.setChoroplethVisible?.(true);
+        MapAdapter?.setChoroplethVisible?.(OverlaySelector?.isActive?.('admin_layers') === true);
       } else {
         const activeOverlays = OverlaySelector?.getActiveOverlays?.() || [];
         const anyMetricActive = activeOverlays.some((id) => isSharedMetricOverlay(id));

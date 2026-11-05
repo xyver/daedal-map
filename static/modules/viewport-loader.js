@@ -77,7 +77,7 @@ export const ViewportLoader = {
   },
 
   renderViewportFromCache(level = this.currentAdminLevel, bboxOverride = null) {
-    if (!MapAdapter?.map) return 0;
+    if (!MapAdapter?.map || !isAdminLayersActive()) return 0;
     const bounds = MapAdapter.map.getBounds();
     const bboxObject = bboxOverride || {
       west: Number(bounds.getWest().toFixed(3)),
@@ -325,7 +325,7 @@ export const ViewportLoader = {
    * Actually perform the load
    */
   async doLoad(adminLevel) {
-    if (!MapAdapter?.map || this.tabSuspended) return;
+    if (!MapAdapter?.map || this.tabSuspended || !isAdminLayersActive()) return;
     let missingLocIds = [];
     let requestKey = null;
 
@@ -430,6 +430,7 @@ export const ViewportLoader = {
       }
 
       // Check if this request was superseded by a newer one
+      if (!isAdminLayersActive()) return;
       if (thisRequestId !== this.requestId) {
         console.log(`[${thisRequestId}] Discarding stale response (current is ${this.requestId})`);
         if (adminLevel === this.currentAdminLevel) {

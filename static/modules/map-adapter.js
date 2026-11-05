@@ -1538,7 +1538,7 @@ export const MapAdapter = {
     if (!matched?.loc_id) {
       return `
         <div class="blank-map-popup-result blank-map-popup-result--empty">
-          No ${depth === 'shallow' ? 'land administrative ' : ''}loc_id contains ${lat.toFixed(6)}, ${lng.toFixed(6)}.
+          ${depth === 'shallow' ? 'Outside land mass.' : `No loc_id contains ${lat.toFixed(6)}, ${lng.toFixed(6)}.`}
         </div>
       `;
     }
@@ -1573,7 +1573,7 @@ export const MapAdapter = {
             >Copy</button>
           </div>
         </div>
-        <div class="blank-map-popup-result-meta">${depth === 'deep' ? 'Deep match' : 'Shallow match'}: ${formatLevelLabel(matched)}</div>
+        <div class="blank-map-popup-result-meta">${depth === 'deep' ? 'Deep match' : 'Match'}: ${formatLevelLabel(matched)}</div>
         ${stackHtml}
         ${overlapsHtml}
       </div>
@@ -1684,10 +1684,16 @@ export const MapAdapter = {
 
   buildPointInspectorPopupHtml(lng, lat, options = {}) {
     const statusHtml = options.statusHtml || '';
-    const buttonLabel = options.loading ? 'Resolving...' : 'Get shallow loc_id';
+    const buttonLabel = options.loading ? 'Resolving...' : 'Get loc_id';
     const buttonDisabled = options.loading ? ' disabled' : '';
     const showResolveButton = !options.resolved;
-    const actionsHtml = showResolveButton
+    const actionsHtml = options.marineAvailable ? `
+        <div class="blank-map-popup-actions">
+          <button type="button" class="popup-btn btn-details blank-map-popup-button"
+            data-action="resolve-marine-point-loc-id" data-lng="${lng}" data-lat="${lat}"${buttonDisabled}
+          >${options.loading ? 'Resolving...' : 'Get marine loc_id'}</button>
+        </div>
+      ` : showResolveButton
       ? `
         <div class="blank-map-popup-actions">
           <button
@@ -1711,7 +1717,7 @@ export const MapAdapter = {
           <button type="button" class="popup-btn btn-details blank-map-popup-button"
             data-action="resolve-deep-point-loc-id" data-lng="${lng}" data-lat="${lat}"
             data-shallow-loc-id="${this._escapePopupHtml(options.shallowLocId)}"${buttonDisabled}
-          >${options.loading ? 'Resolving...' : 'Find deeper loc_id'}</button>
+          >${options.loading ? 'Resolving...' : 'Check deep loc_id'}</button>
         </div>
       ` : '';
     const climateSamples = OceanRasterModel.getPointSamples(lng, lat);
@@ -1879,7 +1885,7 @@ export const MapAdapter = {
       this.buildPointInspectorPopupHtml(lng, lat, {
         loading: true,
         subtitle: 'Shared point inspection',
-        statusHtml: '<div class="blank-map-popup-pending">Resolving shallow administrative loc_id...</div>'
+        statusHtml: '<div class="blank-map-popup-pending">Resolving administrative loc_id...</div>'
       })
     );
     this.setupPopupTabHandlers?.();
@@ -1897,6 +1903,7 @@ export const MapAdapter = {
           subtitle: 'Shared point inspection',
           statusHtml,
           resolved: Boolean(resolution?.matched?.loc_id),
+          marineAvailable: resolution?.error?.code === 'no_point_overlap',
           shallowLocId: admin1?.baseline_loc_id && admin1.loc_id !== admin1.baseline_loc_id
             ? admin1.loc_id : ''
         })
@@ -1926,6 +1933,45 @@ export const MapAdapter = {
         })
       );
       this.setupPopupTabHandlers?.();
+    }
+  },
+
+  async resolveMarinePointPopupLookup(button) {
+    if (!button) return;
+    const lng = Number(button.dataset.lng);
+    const lat = Number(button.dataset.lat);
+    if (!Number.isFinite(lng) || !Number.isFinite(lat)) return;
+    const requestToken = ++this.pointResolveRequestToken;
+    const popupLngLat = [lng, lat];
+    const render = (statusHtml, options = {}) => {
+      this.showPopup(popupLngLat, this.buildPointInspectorPopupHtml(lng, lat, {
+        subtitle: 'Shared point inspection', statusHtml, ...options
+      }));
+      this.setupPopupTabHandlers?.();
+    };
+    render('<div class="blank-map-popup-pending">Checking named Marine waters...</div>', {
+      marineAvailable: true, loading: true
+    });
+    try {
+      const result = await this.callPointGeographyTool('resolve_point', {
+        lon: lng, lat, scope_id: 'MARINE', family: 'water_body', water_kind: 'named'
+      });
+      if (requestToken !== this.pointResolveRequestToken) return;
+      const matches = result?.family_result?.matches || [];
+      if (!matches.length) {
+        render('<div class="blank-map-popup-result blank-map-popup-result--empty">No named Marine water contains this point.</div>', {
+          marineAvailable: true
+        });
+        return;
+      }
+      render(this._formatPointResolveResult({ matched: matches[0], stack: matches }, lng, lat, 'marine'), {
+        resolved: true
+      });
+    } catch (error) {
+      if (requestToken !== this.pointResolveRequestToken) return;
+      render(`<div class="blank-map-popup-error">${this._escapePopupHtml(error?.message || 'Marine lookup failed.')}</div>`, {
+        marineAvailable: true
+      });
     }
   },
 
@@ -2088,6 +2134,13 @@ export const MapAdapter = {
       if (deepButton) {
         e.preventDefault();
         this.resolveDeepPointPopupLookup(deepButton);
+        return;
+      }
+
+      const marineButton = e.target.closest('[data-action="resolve-marine-point-loc-id"]');
+      if (marineButton) {
+        e.preventDefault();
+        this.resolveMarinePointPopupLookup(marineButton);
         return;
       }
 

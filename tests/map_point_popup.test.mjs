@@ -25,7 +25,8 @@ test('point popup calls shallow then deep MCP tools', async () => {
   assert.deepEqual(calls[0].params.arguments, {
     lon: -95.37, lat: 29.76, scope_id: 'GLOBAL', family: 'administrative'
   });
-  assert.match(html, /Shallow match: admin_2/);
+  assert.match(html, /Match: admin_2/);
+  assert.match(html, /Check deep loc_id/);
   assert.match(html, /data-shallow-loc-id="USA-TX"/);
   await MapAdapter.resolveDeepPointPopupLookup({ dataset: {
     lng: '-95.37', lat: '29.76', shallowLocId: 'USA-TX'
@@ -35,18 +36,34 @@ test('point popup calls shallow then deep MCP tools', async () => {
   assert.match(html, /Deep match: admin_4/);
 });
 
-test('ocean point gives an empty land result without asking for a Marine family', async () => {
+test('ocean point offers a named Marine lookup after the land miss', async () => {
   let html = '';
+  const calls = [];
   MapAdapter.showPopup = (_point, value) => { html = value; };
-  globalThis.fetch = async () => ({ ok: true, json: async () => ({
-    result: { structuredContent: { error: { code: 'no_point_overlap', message: 'No match' } } }
-  }) });
+  globalThis.fetch = async (_url, options) => {
+    const request = JSON.parse(options.body);
+    calls.push(request);
+    const payload = calls.length === 1
+      ? { error: { code: 'no_point_overlap', message: 'No match' } }
+      : { family_result: { status: 'matched', matches: [
+        { loc_id: 'MARINE-PACIFIC', name: 'Pacific Ocean', family: 'water_body' }
+      ] } };
+    return { ok: true, json: async () => ({ result: { structuredContent: payload } }) };
+  };
   await MapAdapter.resolvePointPopupLookup({ dataset: {
     lng: '-132.592879', lat: '9.739425'
   } });
-  assert.match(html, /No land administrative loc_id contains/);
-  assert.doesNotMatch(html, /Select one Marine family/);
+  assert.match(html, /Outside land mass/);
+  assert.match(html, /Get marine loc_id/);
   assert.doesNotMatch(html, /resolve-deep-point-loc-id/);
+  await MapAdapter.resolveMarinePointPopupLookup({ dataset: {
+    lng: '-132.592879', lat: '9.739425'
+  } });
+  assert.deepEqual(calls[1].params.arguments, {
+    lon: -132.592879, lat: 9.739425, scope_id: 'MARINE',
+    family: 'water_body', water_kind: 'named'
+  });
+  assert.match(html, /Pacific Ocean/);
 });
 
 test('world basemap repair fills the ocean only at low zoom', () => {
