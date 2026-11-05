@@ -204,8 +204,13 @@ def resolve_global_admin0_query_points(
 
 
 def resolve_global_scope_points(points: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Resolve only the selected Global Admin0 point layout."""
+    """Resolve the selected Global Admin0-2 layout, or the active Admin0 predecessor."""
     point_items = list(points)
+    from .global_admin_shallow_query import resolve_global_admin_shallow_points
+
+    shallow = resolve_global_admin_shallow_points(point_items)
+    if shallow is not None:
+        return shallow
     matches = resolve_global_admin0_query_points(point_items)
     if matches is None:
         return [{"point": {"lon": float(point["lon"]), "lat": float(point["lat"])},

@@ -9,7 +9,7 @@ import { DisasterPopup } from './disaster-popup.js';
 import { PointRadiusModel } from './models/model-point-radius.js';
 import { TrackModel } from './models/model-track.js';
 import { OceanRasterModel } from './models/model-ocean-raster.js';
-import { fetchMsgpack, postMsgpack } from './utils/fetch.js';
+import { fetchMsgpack } from './utils/fetch.js';
 import {
   buildFocusBounds,
   getAdaptiveMaxZoom,
@@ -165,6 +165,7 @@ export const MapAdapter = {
     // change on those toggles - everything on top stays. (Live overlays re-add
     // themselves via their own 'style.load' listeners.)
     this.map.on('style.load', () => {
+      this.repairLowZoomOcean();
       if (OverlayController?.rerenderFromCache) {
         OverlayController.rerenderFromCache();
       }
@@ -435,6 +436,29 @@ export const MapAdapter = {
           maxzoom: 19
         }
       ]
+    }
+  },
+
+  repairLowZoomOcean() {
+    // CARTO's current low-zoom vector water tiles omit parts of the northern
+    // ocean. Paint a continuous ocean below the same land geometry used by the
+    // offline map; hand control back to CARTO above the world zooms.
+    if (this.satelliteMode || this.activeBaseStyle !== this.STYLES.dark || !this.map?.getLayer('background')) return;
+    this.map.setPaintProperty('background', 'background-color', [
+      'step', ['zoom'], '#2C353C', 6, '#0e0e0e'
+    ]);
+    const sourceId = 'daedal-world-land';
+    if (!this.map.getSource(sourceId)) {
+      this.map.addSource(sourceId, {
+        type: 'geojson', data: '/static/data/offline-basemap/ne_50m_land.geojson'
+      });
+    }
+    if (!this.map.getLayer(sourceId)) {
+      const firstAfterBackground = this.map.getStyle().layers.find((layer) => layer.id !== 'background')?.id;
+      this.map.addLayer({
+        id: sourceId, type: 'fill', source: sourceId, maxzoom: 6,
+        paint: { 'fill-color': '#0e0e0e' }
+      }, firstAfterBackground);
     }
   },
 
@@ -1453,7 +1477,7 @@ export const MapAdapter = {
       .replace(/'/g, '&#39;');
   },
 
-  _formatPointResolveResult(resolution, lng, lat) {
+  _formatPointResolveResult(resolution, lng, lat, depth = 'shallow') {
     const matched = resolution?.matched || null;
     const stack = Array.isArray(resolution?.stack) ? resolution.stack : [];
     const overlapFamilies = Array.isArray(resolution?.overlap_families) ? resolution.overlap_families : [];
@@ -1509,7 +1533,7 @@ export const MapAdapter = {
     if (!matched?.loc_id) {
       return `
         <div class="blank-map-popup-result blank-map-popup-result--empty">
-          No containing loc_id was found for ${lat.toFixed(6)}, ${lng.toFixed(6)}.
+          No ${depth === 'shallow' ? 'land administrative ' : ''}loc_id contains ${lat.toFixed(6)}, ${lng.toFixed(6)}.
         </div>
       `;
     }
@@ -1544,7 +1568,7 @@ export const MapAdapter = {
             >Copy</button>
           </div>
         </div>
-        <div class="blank-map-popup-result-meta">Deepest match: ${formatLevelLabel(matched)}</div>
+        <div class="blank-map-popup-result-meta">${depth === 'deep' ? 'Deep match' : 'Shallow match'}: ${formatLevelLabel(matched)}</div>
         ${stackHtml}
         ${overlapsHtml}
       </div>
@@ -1655,7 +1679,7 @@ export const MapAdapter = {
 
   buildPointInspectorPopupHtml(lng, lat, options = {}) {
     const statusHtml = options.statusHtml || '';
-    const buttonLabel = options.loading ? 'Resolving...' : 'Get loc_id';
+    const buttonLabel = options.loading ? 'Resolving...' : 'Get shallow loc_id';
     const buttonDisabled = options.loading ? ' disabled' : '';
     const showResolveButton = !options.resolved;
     const actionsHtml = showResolveButton
@@ -1677,7 +1701,14 @@ export const MapAdapter = {
           >Enter address</button>
         </div>
       `
-      : '';
+      : options.shallowLocId ? `
+        <div class="blank-map-popup-actions">
+          <button type="button" class="popup-btn btn-details blank-map-popup-button"
+            data-action="resolve-deep-point-loc-id" data-lng="${lng}" data-lat="${lat}"
+            data-shallow-loc-id="${this._escapePopupHtml(options.shallowLocId)}"${buttonDisabled}
+          >${options.loading ? 'Resolving...' : 'Find deeper loc_id'}</button>
+        </div>
+      ` : '';
     const climateSamples = OceanRasterModel.getPointSamples(lng, lat);
     const labels = {
       sst_c: 'Sea surface temperature', sst_anom_c: 'Sea temperature anomaly',
@@ -1843,21 +1874,26 @@ export const MapAdapter = {
       this.buildPointInspectorPopupHtml(lng, lat, {
         loading: true,
         subtitle: 'Shared point inspection',
-        statusHtml: '<div class="blank-map-popup-pending">Resolving deepest containing loc_id...</div>'
+        statusHtml: '<div class="blank-map-popup-pending">Resolving shallow administrative loc_id...</div>'
       })
     );
     this.setupPopupTabHandlers?.();
 
     try {
-      const resolution = await postMsgpack('/geometry/resolve-point', { lon: lng, lat });
+      const resolution = await this.callPointGeographyTool('resolve_point', {
+        lon: lng, lat, scope_id: 'GLOBAL', family: 'administrative'
+      });
       if (requestToken !== this.pointResolveRequestToken) return;
       const statusHtml = this._formatPointResolveResult(resolution, lng, lat);
+      const admin1 = (resolution.stack || []).find((entry) => Number(entry.admin_level) === 1);
       this.showPopup(
         popupLngLat,
         this.buildPointInspectorPopupHtml(lng, lat, {
           subtitle: 'Shared point inspection',
           statusHtml,
-          resolved: true
+          resolved: Boolean(resolution?.matched?.loc_id),
+          shallowLocId: admin1?.baseline_loc_id && admin1.loc_id !== admin1.baseline_loc_id
+            ? admin1.loc_id : ''
         })
       );
       this.setupPopupTabHandlers?.();
@@ -1885,6 +1921,52 @@ export const MapAdapter = {
         })
       );
       this.setupPopupTabHandlers?.();
+    }
+  },
+
+  async callPointGeographyTool(name, args) {
+    const response = await fetch('/mcp/geography', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: `map-point-${Date.now()}`,
+        method: 'tools/call', params: { name, arguments: args } })
+    });
+    const envelope = await response.json();
+    const result = envelope?.result?.structuredContent;
+    if (!response.ok || envelope?.error || !result) {
+      throw new Error(envelope?.error?.message || `Point lookup returned HTTP ${response.status}`);
+    }
+    if (result.error && result.error.code !== 'no_point_overlap') {
+      throw new Error(result.error.message || String(result.error));
+    }
+    return result;
+  },
+
+  async resolveDeepPointPopupLookup(button) {
+    if (!button) return;
+    const lng = Number(button.dataset.lng);
+    const lat = Number(button.dataset.lat);
+    const shallowLocId = button.dataset.shallowLocId;
+    if (!Number.isFinite(lng) || !Number.isFinite(lat) || !shallowLocId) return;
+    const requestToken = ++this.pointResolveRequestToken;
+    const popupLngLat = [lng, lat];
+    const render = (statusHtml, loading = false) => {
+      this.showPopup(popupLngLat, this.buildPointInspectorPopupHtml(lng, lat, {
+        subtitle: 'Shared point inspection', resolved: true, shallowLocId,
+        loading, statusHtml
+      }));
+      this.setupPopupTabHandlers?.();
+    };
+    render('<div class="blank-map-popup-pending">Resolving deeper administrative loc_id...</div>', true);
+    try {
+      const resolution = await this.callPointGeographyTool('resolve_deep_point', {
+        lon: lng, lat, shallow_loc_id: shallowLocId, family: 'administrative'
+      });
+      if (requestToken !== this.pointResolveRequestToken) return;
+      render(this._formatPointResolveResult(resolution, lng, lat, 'deep'));
+    } catch (error) {
+      if (requestToken !== this.pointResolveRequestToken) return;
+      render(`<div class="blank-map-popup-error">${this._escapePopupHtml(error?.message || 'Deep point lookup failed.')}</div>`);
     }
   },
 
@@ -1994,6 +2076,13 @@ export const MapAdapter = {
       if (actionButton) {
         e.preventDefault();
         this.resolvePointPopupLookup(actionButton);
+        return;
+      }
+
+      const deepButton = e.target.closest('[data-action="resolve-deep-point-loc-id"]');
+      if (deepButton) {
+        e.preventDefault();
+        this.resolveDeepPointPopupLookup(deepButton);
         return;
       }
 
