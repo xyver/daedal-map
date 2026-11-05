@@ -92,16 +92,29 @@ def graph_info_items(loc_ids: list[str]) -> list[dict[str, Any]]:
         country = graph_info_items(country_ids)
         by_country = iter(country)
         return [marine[value] if value in marine else next(by_country) for value in requested]
-    try:
-        aliases = indexed_public_alias_candidates(unique)
-    except Exception as exc:
-        return [_route_error(value, f"preferred-public alias index could not be read: {type(exc).__name__}") for value in requested]
-    if aliases is None:
-        return [_route_error(value, "preferred-public alias index is absent or stale") for value in requested]
+    # Each country's index answers for its own IDs, so a country without a
+    # current index fails alone instead of failing the whole batch.
+    aliases: dict[str, list[dict[str, Any]]] = {}
+    errors: dict[str, dict[str, Any]] = {}
+    by_country: dict[str, list[str]] = {}
+    for value in unique:
+        by_country.setdefault(value.split("-", 1)[0], []).append(value)
+    for values in by_country.values():
+        try:
+            found = indexed_public_alias_candidates(values)
+        except Exception as exc:
+            message = f"preferred-public alias index could not be read: {type(exc).__name__}"
+            errors.update({value: _route_error(value, message) for value in values})
+            continue
+        if found is None:
+            errors.update({value: _route_error(value, "preferred-public alias index is absent or stale") for value in values})
+            continue
+        aliases.update(found)
 
     canonical_by_requested: dict[str, str] = {}
-    errors: dict[str, dict[str, Any]] = {}
     for value in unique:
+        if value in errors:
+            continue
         targets = sorted({str(row.get("loc_id") or "").strip().upper() for row in aliases.get(value) or [] if row.get("loc_id")})
         if len(targets) > 1:
             errors[value] = {
@@ -117,9 +130,10 @@ def graph_info_items(loc_ids: list[str]) -> list[dict[str, Any]]:
     try:
         rows = identities(canonical_ids, require_route=True) if canonical_ids else []
     except ReferenceRouteUnavailable as exc:
-        return [_route_error(value, str(exc)) for value in requested]
+        return [errors.get(value) or _route_error(value, str(exc)) for value in requested]
     except Exception as exc:
-        return [_route_error(value, f"selected identities could not be read: {type(exc).__name__}") for value in requested]
+        message = f"selected identities could not be read: {type(exc).__name__}"
+        return [errors.get(value) or _route_error(value, message) for value in requested]
     by_id = {str(row.get("loc_id") or "").upper(): row for row in rows}
     prepared: dict[str, dict[str, Any]] = {}
     for canonical in canonical_ids:
