@@ -214,6 +214,12 @@ def _layout_manifest_at_root(root_text: str, cloud_mode: bool) -> dict[str, Any]
         return {}
 
 
+def _has_deep_partitions(iso3: str) -> bool:
+    """Use the selected layout's declared owner count before opening deep files."""
+    count = _layout_manifest(iso3).get("deep_owner_count")
+    return count is None or int(count) > 0
+
+
 @lru_cache(maxsize=64)
 def _published_layout_manifest_available(iso3: str, relative_path: str) -> bool:
     try:
@@ -578,7 +584,7 @@ def resolve_point(
         deep: list[tuple[tuple, bytes, float]] = []
         deep_path = root / "deep" / f"{admin1}.parquet"
         needs_deep = target_admin_level is None or int(target_admin_level) > 3
-        if needs_deep and admin1 and (is_cloud_mode() or deep_path.is_file()):
+        if needs_deep and _has_deep_partitions(iso3) and admin1 and (is_cloud_mode() or deep_path.is_file()):
             deep_candidates = _metadata_with_geometry(
                 connection, deep_path, lon, lat, admin3 if admin3 else "",
             )
@@ -703,7 +709,7 @@ def resolve_points(
                 levels[0] = dict(country_rows[0])
 
         needs_deep = target is None or target > 3
-        if needs_deep:
+        if needs_deep and _has_deep_partitions(country):
             by_owner: dict[str, list[tuple[int, dict[str, Any]]]] = {}
             missing_owner = False
             for position, point in enumerate(point_items):

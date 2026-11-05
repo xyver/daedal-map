@@ -831,6 +831,42 @@ def test_deep_batch_opens_only_the_discovered_owner_bank_once() -> None:
     assert all(item["matched"]["admin_level"] == 5 for item in result or [])
 
 
+def test_country_without_deep_partitions_stops_at_its_admin2_bank() -> None:
+    polygon = Polygon([(0, 0), (0, 10), (10, 10), (10, 0), (0, 0)]).wkb
+    rows = []
+    for level, loc_id in [(0, "MEX"), (1, "MEX-14"), (2, "MEX-14-001")]:
+        row = {name: "" for name in admin_spine_query.META_COLUMN_NAMES}
+        row.update({"loc_id": loc_id, "admin_level": level, "name": loc_id,
+                    "admin_0_loc_id": "MEX", "admin_1_loc_id": "MEX-14",
+                    "bbox_min_lon": 0.0, "bbox_min_lat": 0.0,
+                    "bbox_max_lon": 10.0, "bbox_max_lat": 10.0,
+                    "geometry": polygon})
+        rows.append(row)
+    opened = []
+
+    def bank_read(_connection, path, _points, **_kwargs):
+        opened.append(path.as_posix())
+        return pd.DataFrame(rows)
+
+    class Connection:
+        def close(self):
+            pass
+
+    with (
+        patch.object(admin_spine_query, "layout_available", return_value=True),
+        patch.object(admin_spine_query, "layout_root", return_value=Path("layout")),
+        patch.object(admin_spine_query, "_layout_manifest", return_value={"deep_owner_count": 0}),
+        patch.object(admin_spine_query, "_connection", return_value=Connection()),
+        patch.object(admin_spine_query, "_metadata_with_geometry_bbox", side_effect=bank_read),
+    ):
+        result = admin_spine_query.resolve_points(
+            "MEX", [{"lon": 5.0, "lat": 5.0}], admin_1_scope="MEX-14",
+        )
+
+    assert opened == ["layout/admin_0_3.parquet"]
+    assert result[0]["matched"]["admin_level"] == 2
+
+
 def test_deep_batch_rejects_wrong_owner_before_opening_deep_bank() -> None:
     square_wkb = Polygon([(0, 0), (0, 10), (10, 10), (10, 0), (0, 0)]).wkb
     rows = []
