@@ -69,6 +69,24 @@ TOOL_GUIDANCE: dict[str, dict[str, Any]] = {
         ["deepest_resolved_loc_id", "stack", "resolution_mode", "available_deeper_admin_levels"],
         ["resolve_deep_point", "get_loc_id_info", "get_shape"]
     ),
+    "resolve_bbox": _g(
+        ["You have the four corners of one rectangular map view and want the closest Global Admin 0-2 loc_id with measured boundary overlap."],
+        ["Resolving one point", "Inferring a polygon from a screenshot without coordinates", "Crossing the antimeridian", "Deep country subdivisions"],
+        {"corners": [{"lat": 0, "lon": 0}, {"lat": 0, "lon": 1},
+                     {"lat": 1, "lon": 0}, {"lat": 1, "lon": 1}]},
+        ["best_match", "matches_by_admin_level", "view_coverage_pct", "loc_id_coverage_pct", "intersection_over_union_pct"],
+        ["resolve_deep_bbox", "get_loc_id_info", "get_shape"],
+        ["published Global Admin 0-2 geometry release", "equal-area intersection method"],
+    ),
+    "resolve_deep_bbox": _g(
+        ["A shallow rectangle lookup returned an Admin 1-3 loc_id and you want deeper overlap within that country."],
+        ["First-pass country discovery", "Multiple Admin 1 partitions", "Non-rectangular screenshots", "Returning full polygons"],
+        {"corners": [{"lat": 0, "lon": 0}, {"lat": 0, "lon": 1},
+                     {"lat": 1, "lon": 0}, {"lat": 1, "lon": 1}], "shallow_loc_id": "USA-TX"},
+        ["admin_1_scope", "best_match", "matches_by_admin_level", "view_coverage_pct", "loc_id_coverage_pct"],
+        ["get_loc_id_info", "get_shape"],
+        ["selected country Admin 1 partition", "equal-area intersection method"],
+    ),
     "resolve_deep_point": _g(
         ["A shallow lookup returned an Admin 1-3 loc_id and one coordinate or scoped point array needs deeper administrative detail or one shape-backed family."],
         ["First-pass country discovery", "A coordinate without shallow_loc_id", "Multiple families", "Returning polygons", "Cross-scope point arrays"],
@@ -151,6 +169,14 @@ TOOL_GUIDANCE: dict[str, dict[str, Any]] = {
 # to a different geography workflow. Keep these redirects beside the richer
 # help guidance so the published definition and get_tool_help cannot drift.
 GEOMETRY_WRONG_INPUT_FIRST_CALL: dict[str, list[dict[str, str]]] = {
+    "resolve_bbox": [
+        {"when": "one coordinate", "tool": "resolve_point"},
+        {"when": "known loc_id", "tool": "get_loc_id_info"},
+    ],
+    "resolve_deep_bbox": [
+        {"when": "rectangle without a shallow loc_id", "tool": "resolve_bbox"},
+        {"when": "one coordinate", "tool": "resolve_point"},
+    ],
     "resolve_point": [
         {"when": "outside identifier or place name", "tool": "convert_reference"},
         {"when": "unknown dataset columns", "tool": "identify_dataset_geography"},

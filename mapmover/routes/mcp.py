@@ -96,7 +96,7 @@ router = APIRouter()
 
 MCP_PACK_READ_TOOLS = {"get_tool_help", "get_catalog", "get_pack", "get_geography"}
 MCP_GEOMETRY_READ_TOOLS = {
-    "resolve_point", "resolve_deep_point",
+    "resolve_point", "resolve_bbox", "resolve_deep_bbox", "resolve_deep_point",
     "get_loc_id_info", "identify_dataset_geography", "identify_reference_system",
     "convert_reference", "compare_geographies", "get_shape",
     "resolve_loc_id_scope", "estimate_geometry_package", "estimate_conversion_job",
@@ -416,7 +416,7 @@ PRODUCT_FACADE_PROFILES = {
 }
 PRODUCT_FACADE_TOOL_NAMES = {
     "free": frozenset({
-        "get_tool_help", "get_catalog", "get_pack", "get_geography", "resolve_point",
+        "get_tool_help", "get_catalog", "get_pack", "get_geography", "resolve_point", "resolve_bbox", "resolve_deep_bbox",
         "get_loc_id_info", "identify_reference_system", "identify_dataset_geography",
         "convert_reference", "compare_geographies", "get_data",
     }),
@@ -2686,6 +2686,57 @@ def _point_tool_coordinate_error(payload: dict[str, Any]) -> tuple[str, str] | N
             if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or abs(value) > maximum:
                 return "invalid_point_coordinate", f"point {index} requires a finite {field} between {-maximum} and {maximum}"
     return None
+
+
+@_guard_mcp_execution("resolve_bbox")
+async def _execute_resolve_bbox_tool(request: Request, arguments: dict[str, Any], rpc_request_id: Any) -> Response:
+    """Resolve one rectangular Global viewport against the published Admin spine."""
+    from mapmover.runtime.global_admin_bbox_query import rectangle_bounds, resolve_global_admin_bbox
+
+    payload = dict(arguments or {})
+    request_id = str(payload.get("request_id") or rpc_request_id or "")
+    unexpected = sorted(set(payload) - {"corners", "request_id"})
+    if unexpected:
+        return _point_tool_contract_error(request_id, rpc_request_id,
+                                          code="bbox_contract_violation",
+                                          message=f"resolve_bbox does not accept: {', '.join(unexpected)}")
+    try:
+        rectangle_bounds(payload.get("corners"))
+    except (TypeError, ValueError) as exc:
+        return _point_tool_contract_error(request_id, rpc_request_id,
+                                          code="invalid_bbox", message=str(exc))
+    result = await run_mcp_blocking("resolve_bbox", resolve_global_admin_bbox,
+                                    payload["corners"], diagnostic_id=request_id)
+    result["request_id"] = request_id
+    return _jsonrpc_response(_tool_result(result, is_error=bool(result.get("error"))), rpc_request_id)
+
+
+@_guard_mcp_execution("resolve_deep_bbox")
+async def _execute_resolve_deep_bbox_tool(request: Request, arguments: dict[str, Any], rpc_request_id: Any) -> Response:
+    """Compare one viewport with one selected country's deep admin partition."""
+    from mapmover.runtime.global_admin_bbox_query import rectangle_bounds, resolve_country_admin_bbox
+
+    payload = dict(arguments or {})
+    request_id = str(payload.get("request_id") or rpc_request_id or "")
+    unexpected = sorted(set(payload) - {"corners", "shallow_loc_id", "request_id"})
+    if unexpected:
+        return _point_tool_contract_error(request_id, rpc_request_id,
+                                          code="bbox_contract_violation",
+                                          message=f"resolve_deep_bbox does not accept: {', '.join(unexpected)}")
+    try:
+        rectangle_bounds(payload.get("corners"))
+    except (TypeError, ValueError) as exc:
+        return _point_tool_contract_error(request_id, rpc_request_id,
+                                          code="invalid_bbox", message=str(exc))
+    shallow = payload.get("shallow_loc_id")
+    if not isinstance(shallow, str) or not shallow.strip():
+        return _point_tool_contract_error(request_id, rpc_request_id,
+                                          code="shallow_loc_id_required",
+                                          message="Supply one canonical shallow loc_id from resolve_bbox")
+    result = await run_mcp_blocking("resolve_deep_bbox", resolve_country_admin_bbox,
+                                    payload["corners"], shallow.strip().upper(), diagnostic_id=request_id)
+    result["request_id"] = request_id
+    return _jsonrpc_response(_tool_result(result, is_error=bool(result.get("error"))), rpc_request_id)
 
 
 @_guard_mcp_execution("resolve_point")
@@ -5698,7 +5749,7 @@ async def mcp_endpoint(request: Request, pack_id: str | None = None):
         return _jsonrpc_error(request_id, -32601, f"Tool '{tool_name}' not found")
     if not _tool_allowed_for_facade(tool_name, normalized_pack_id):
         return _jsonrpc_error(request_id, -32601, f"Tool '{tool_name}' is not available on this MCP facade")
-    if tool_name not in {"resolve_point", "resolve_deep_point"}:
+    if tool_name not in {"resolve_point", "resolve_deep_point", "resolve_bbox", "resolve_deep_bbox"}:
         coordinate_fields = {"lat", "lon", "lng", "latitude", "longitude", "point", "points", "coordinates"}
         supplied_coordinates = sorted(coordinate_fields.intersection(arguments))
         if supplied_coordinates:
@@ -5996,6 +6047,18 @@ async def mcp_endpoint(request: Request, pack_id: str | None = None):
             started_at=helper_started_at,
             response=await _execute_live_volcano_tool(arguments, request_id),
         )
+
+    if tool_name == "resolve_bbox":
+        rate_limit_response = _live_tool_rate_limit_response(request, tool_name, request_id)
+        if rate_limit_response:
+            return rate_limit_response
+        return await _execute_resolve_bbox_tool(request, arguments, request_id)
+
+    if tool_name == "resolve_deep_bbox":
+        rate_limit_response = _live_tool_rate_limit_response(request, tool_name, request_id)
+        if rate_limit_response:
+            return rate_limit_response
+        return await _execute_resolve_deep_bbox_tool(request, arguments, request_id)
 
     if tool_name == "resolve_point":
         rate_limit_response = _live_tool_rate_limit_response(request, tool_name, request_id)

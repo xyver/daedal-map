@@ -195,6 +195,22 @@ TOOL_ACCESS_REGISTRY: dict[str, dict] = {
         "paid_item_limit": 100,
         "notes": "Initial technical rollout is bounded to one Admin1 partition and 100 points; payment policy comes later.",
     },
+    "resolve_bbox": {
+        "family": FAMILY_GEOGRAPHY,
+        "capability_id": "bbox_lookup",
+        "pricing": PRICING_FREE,
+        "free_item_limit": 1,
+        "paid_item_limit": 1,
+        "notes": "One rectangular Global Admin 0-2 viewport per call; exact intersections are bounded.",
+    },
+    "resolve_deep_bbox": {
+        "family": FAMILY_GEOGRAPHY,
+        "capability_id": "deep_bbox_lookup",
+        "pricing": PRICING_FREE,
+        "free_item_limit": 1,
+        "paid_item_limit": 1,
+        "notes": "One rectangle in a single canonical Admin 1-owned country partition.",
+    },
     "get_shape": {
         "family": FAMILY_GEOGRAPHY,
         "capability_id": "geometry_lookup",

@@ -26,6 +26,8 @@ from tool_access_shared import (
 
 GEOMETRY_TOOL_IDS = frozenset({
     "resolve_point",
+    "resolve_bbox",
+    "resolve_deep_bbox",
     "resolve_deep_point",
     "get_loc_id_info",
     "identify_dataset_geography",
@@ -120,6 +122,20 @@ def _result_schema(
 def geometry_tool_output_schema(tool_name: str) -> dict[str, Any] | None:
     """Return the stable success/error envelope for one geometry tool."""
     name = str(tool_name or "").strip()
+    if name in {"resolve_bbox", "resolve_deep_bbox"}:
+        return _result_schema(
+            success_variants=[["bbox", "best_match", "matches_by_admin_level"]],
+            properties={
+                "bbox": {"type": "object"},
+                "best_match": {"type": ["object", "null"]},
+                "matches_by_admin_level": {"type": "object"},
+                "ranking": {"type": "string"},
+                "geometry_release": {"type": "string"},
+                "query_layout": {"type": "string"},
+                "shallow_loc_id": {"type": "string"},
+                "admin_1_scope": {"type": "string"},
+            },
+        )
     if name in {"resolve_point", "resolve_deep_point"}:
         return _result_schema(
             success_variants=[
@@ -231,6 +247,8 @@ def geometry_tool_publication_meta(tool_name: str) -> dict[str, Any] | None:
         return None
     result_families = {
         "resolve_point": "point_resolution",
+        "resolve_bbox": "viewport_resolution",
+        "resolve_deep_bbox": "viewport_resolution",
         "resolve_deep_point": "point_resolution",
         "get_loc_id_info": "place_context",
         "identify_dataset_geography": "geography_identification",
@@ -241,6 +259,8 @@ def geometry_tool_publication_meta(tool_name: str) -> dict[str, Any] | None:
     }
     input_families = {
         "resolve_point": "coordinate",
+        "resolve_bbox": "rectangle_corners",
+        "resolve_deep_bbox": "scoped_rectangle_corners",
         "resolve_deep_point": "scoped_coordinate",
         "get_loc_id_info": "loc_id",
         "identify_dataset_geography": "column_samples",

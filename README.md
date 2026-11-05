@@ -60,6 +60,8 @@ the access lane for the selected data pack.
 | Query maintained data | `get_data` with a `pack_id`, exact metrics, and structured filters |
 | Inspect one disaster event | `get_event` with an exact `event_id` returned by `get_data` |
 | Coordinates to places | `resolve_point`, then `resolve_deep_point` when Admin 4-6 or one deeper family is needed |
+| Rectangular map view to places | `resolve_bbox` with four WGS84 corners returns ranked Global Admin 0-2 overlaps and percentages |
+| Deeper map view lookup | `resolve_deep_bbox` with the same corners and a shallow loc_id compares one country's Admin 1-owned partition |
 | Identify a column of codes | `identify_dataset_geography`, `identify_reference_system` |
 | Translate codes between systems | `convert_reference` |
 | Inspect and relate places | `get_loc_id_info`, `compare_geographies` |

@@ -880,7 +880,7 @@ class BlindCallerHelpTests(unittest.TestCase):
                 self.assertEqual(access.get("help", {}).get("tool"), "get_tool_help")
                 self.assertEqual(geometry_contract.get("contract_version"), "1.0.0")
                 self.assertIn(geometry_contract.get("result_family"), {
-                    "point_resolution", "place_context", "geography_identification",
+                    "point_resolution", "viewport_resolution", "place_context", "geography_identification",
                     "reference_conversion", "geography_relationship", "geometry",
                 })
                 self.assertEqual(definitions[name]["annotations"].get("destructiveHint"), False)
@@ -986,7 +986,7 @@ class BlindCallerHelpTests(unittest.TestCase):
             tool["name"]: tool
             for tool in response.json()["result"]["tools"]
         }
-        self.assertEqual(len(tools), 12)
+        self.assertEqual(len(tools), 14)
         self.assertTrue(GEOMETRY_TOOL_IDS.issubset(tools))
         for name, definition in tools.items():
             with self.subTest(tool=name):

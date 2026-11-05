@@ -96,6 +96,12 @@ def resolve_global_admin_shallow_points(points: Iterable[dict[str, Any]]) -> lis
             row = exact_rows.get(loc_id)
             if row is None or row.get("geometry_wkb") is None:
                 continue
+            # Global CAN Admin2 source is 2021 economic regions, while the
+            # selected country Admin2 spine is census divisions. An unchanged
+            # geoBoundaries ID is not a canonical census-division translation.
+            if (loc_id.startswith("CAN-") and int(row["admin_level"]) == 2
+                    and preferred.get(loc_id) == loc_id):
+                continue
             if loc_id not in geometries:
                 geometries[loc_id] = load_wkb(bytes(row["geometry_wkb"]))
             shape = geometries[loc_id]

@@ -1984,6 +1984,13 @@ export const MapAdapter = {
     });
     const envelope = await response.json();
     const result = envelope?.result?.structuredContent;
+    if (response.status === 429) {
+      const retryAfter = Number(response.headers.get('Retry-After'));
+      const wait = Number.isFinite(retryAfter) && retryAfter > 0
+        ? ` Try again in ${Math.ceil(retryAfter)} seconds.`
+        : ' Try again in a few seconds.';
+      throw new Error(`Too many point lookups right now.${wait}`);
+    }
     if (!response.ok || envelope?.error || !result) {
       throw new Error(envelope?.error?.message || `Point lookup returned HTTP ${response.status}`);
     }

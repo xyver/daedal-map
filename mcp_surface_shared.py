@@ -305,6 +305,48 @@ def build_tool_definitions(*, include_paused: bool = False) -> list[dict]:
             "annotations": {"readOnlyHint": True},
         },
         {
+            "name": "resolve_bbox",
+            "title": "Resolve Map Viewport",
+            "description": "Compare one non-wrapping rectangular WGS84 viewport with the published Global administrative spine through Admin 2. Supply its four corners. Returns the best equal-area overlap plus nearby matches at each level and their shares of the viewport and loc_id. Large views may require zooming in. This tool reads no country deep bank.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "corners": {
+                        "type": "array", "minItems": 4, "maxItems": 4,
+                        "items": {"type": "object", "properties": {
+                            "lat": {"type": "number", "minimum": -85, "maximum": 85},
+                            "lon": {"type": "number", "minimum": -180, "maximum": 180}},
+                            "required": ["lat", "lon"], "additionalProperties": False},
+                        "description": "Four distinct corners of one axis-aligned rectangle; no antimeridian crossing."},
+                    "request_id": {"type": "string", "description": "Optional caller-supplied tracing ID."},
+                },
+                "required": ["corners"], "additionalProperties": False,
+            },
+            "annotations": {"readOnlyHint": True},
+        },
+        {
+            "name": "resolve_deep_bbox",
+            "title": "Resolve Map Viewport (Deep)",
+            "description": "Second-pass rectangle overlap within one returned shallow administrative loc_id. Routes to that country's one Admin 1-owned exact partition and compares its Admin 1-6 spine. Supply the original four WGS84 corners; broad views may require zooming in.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "corners": {
+                        "type": "array", "minItems": 4, "maxItems": 4,
+                        "items": {"type": "object", "properties": {
+                            "lat": {"type": "number", "minimum": -85, "maximum": 85},
+                            "lon": {"type": "number", "minimum": -180, "maximum": 180}},
+                            "required": ["lat", "lon"], "additionalProperties": False},
+                        "description": "Four distinct corners of one axis-aligned rectangle; no antimeridian crossing."},
+                    "shallow_loc_id": {"type": "string", "minLength": 5,
+                                       "description": "One canonical Admin 1-3 loc_id from the shallow result; its Admin 1 owner selects one deep partition."},
+                    "request_id": {"type": "string", "description": "Optional caller-supplied tracing ID."},
+                },
+                "required": ["corners", "shallow_loc_id"], "additionalProperties": False,
+            },
+            "annotations": {"readOnlyHint": True},
+        },
+        {
             "name": "resolve_deep_point",
             "title": "Resolve Point(s) (Deep)",
             "description": "Second-pass containment only after resolve_point. Supply the original WGS84 coordinate or a bounded point array, one shared shallow_loc_id returned by resolve_point, and one canonical family from get_catalog(catalog='geometry'). family defaults to administrative; shape-backed families use direct bbox-to-exact-shape lookup without crosswalks. Single and bulk requests share this scoped contract.",

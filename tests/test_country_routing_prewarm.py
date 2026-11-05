@@ -44,6 +44,8 @@ class CountryRoutingPrewarmTests(unittest.TestCase):
             "geometry/domains/MARINE/local_full/marine_v1/reference/identities.parquet": b"marine identities",
             "geometry/domains/MARINE/local_full/marine_v1/reference/relationships.parquet": b"marine relationships",
             "geometry/runtime/global_admin0_point/releases/1.1.1/component_bbox_index.parquet": b"global component index",
+            "geometry/global/local_full/global_baseline_1_1_1/bbox_index.parquet": b"shallow bbox",
+            "geometry/runtime/global_admin0_2_point/releases/1.1.2/preferred_lookup.parquet": b"shallow lookup",
         }
         digest = lambda value: hashlib.sha256(value).hexdigest()
         manifest = {
@@ -69,7 +71,15 @@ class CountryRoutingPrewarmTests(unittest.TestCase):
             "current": {"release_id": release_id, "version": "1.0.0",
                         "manifest": {"path": manifest_path, "sha256": digest(manifest_bytes)}},
         }
-        catalog = {"runtime_query_layouts": {"global_admin0_point": {
+        catalog = {"runtime_query_layouts": {"global_admin0_2_point": {
+            "layout_id": "global_admin0_2_point_query_v1",
+            "bbox_index": {"path": "geometry/global/local_full/global_baseline_1_1_1/bbox_index.parquet",
+                           "bytes": len(payloads["geometry/global/local_full/global_baseline_1_1_1/bbox_index.parquet"]),
+                           "sha256": digest(payloads["geometry/global/local_full/global_baseline_1_1_1/bbox_index.parquet"])},
+            "preferred_lookup": {"path": "geometry/runtime/global_admin0_2_point/releases/1.1.2/preferred_lookup.parquet",
+                                 "bytes": len(payloads["geometry/runtime/global_admin0_2_point/releases/1.1.2/preferred_lookup.parquet"]),
+                                 "sha256": digest(payloads["geometry/runtime/global_admin0_2_point/releases/1.1.2/preferred_lookup.parquet"])},
+        }, "global_admin0_point": {
             "layout_id": "global_admin0_point_query_v3",
             "full_release": {"version": "1.1.1"},
             "component_bbox_index": {
@@ -110,6 +120,7 @@ class CountryRoutingPrewarmTests(unittest.TestCase):
                 self.assertEqual(result["index_bytes"], sum(
                     len(value) for key, value in payloads.items()
                     if "MARINE" not in key and "global_admin0_point" not in key
+                    and "global_admin0_2_point" not in key and "global_baseline_1_1_1" not in key
                 ))
                 self.assertEqual(result["marine_reference_bytes"], sum(
                     len(value) for key, value in payloads.items() if "MARINE" in key
@@ -117,8 +128,9 @@ class CountryRoutingPrewarmTests(unittest.TestCase):
                 self.assertEqual(result["global_component_bbox_bytes"], len(
                     payloads["geometry/runtime/global_admin0_point/releases/1.1.1/component_bbox_index.parquet"]
                 ))
+                self.assertEqual(result["global_shallow_index_bytes"], len(b"shallow bbox") + len(b"shallow lookup"))
                 self.assertEqual(result["pinned_bytes"], 43)
-                self.assertEqual(len(pin.call_args.args[0]), 11)
+                self.assertEqual(len(pin.call_args.args[0]), 13)
                 self.assertTrue(reference_prewarm.country_routing_selection_is_warm(catalog))
                 changed = json.loads(json.dumps(catalog))
                 changed["runtime_query_layouts"]["global_admin0_point"]["component_bbox_index"]["sha256"] = "0" * 64

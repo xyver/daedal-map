@@ -123,14 +123,14 @@ class PublicDiscoveryCatalogTests(unittest.TestCase):
         expected_tools = {
             "geography": {
                 "get_tool_help", "get_catalog", "get_pack", "get_geography",
-                "resolve_point", "resolve_deep_point",
+                "resolve_point", "resolve_bbox", "resolve_deep_bbox", "resolve_deep_point",
                 "get_loc_id_info", "identify_dataset_geography", "identify_reference_system",
                 "convert_reference",
                 "compare_geographies", "get_shape",
             },
             "reverse-geocoding": {
                 "get_tool_help", "get_catalog", "get_geography",
-                "resolve_point", "resolve_deep_point",
+                "resolve_point", "resolve_bbox", "resolve_deep_bbox", "resolve_deep_point",
             },
             "boundaries": {
                 "get_tool_help", "get_catalog", "get_pack", "get_geography", "get_loc_id_info",

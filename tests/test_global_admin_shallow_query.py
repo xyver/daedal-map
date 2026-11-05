@@ -54,6 +54,35 @@ class GlobalAdminShallowQueryTests(unittest.TestCase):
         with patch("mapmover.runtime.global_admin_shallow_query._selected_layout", return_value=None):
             self.assertIsNone(resolve_global_admin_shallow_points([{"lon": 0, "lat": 0}]))
 
+    def test_canada_economic_region_is_not_reported_as_census_division(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            rows = [("CAN", 0, "", "Canada"),
+                    ("CAN-GNT", 1, "CAN", "Northwest Territories"),
+                    ("CAN-GNT-GER", 2, "CAN-GNT", "Northwest Territories")]
+            polygon = box(0, 0, 2, 2)
+            pd.DataFrame([{"loc_id": loc_id, "admin_level": level,
+                           "bbox_min_lon": 0, "bbox_min_lat": 0,
+                           "bbox_max_lon": 2, "bbox_max_lat": 2}
+                          for loc_id, level, _parent, _name in rows]).to_parquet(root / "bbox.parquet")
+            for level in range(3):
+                pd.DataFrame([{"loc_id": loc_id, "admin_level": level,
+                               "parent_id": parent, "name": name,
+                               "geometry_wkb": polygon.wkb}
+                              for loc_id, row_level, parent, name in rows if row_level == level]
+                             ).to_parquet(root / f"admin_{level}.parquet")
+            pd.DataFrame([{"baseline_loc_id": "CAN", "preferred_loc_id": "CAN"},
+                          {"baseline_loc_id": "CAN-GNT", "preferred_loc_id": "CAN-NT"},
+                          {"baseline_loc_id": "CAN-GNT-GER", "preferred_loc_id": "CAN-GNT-GER"}]
+                         ).to_parquet(root / "lookup.parquet")
+            layout = {"bbox_index": root / "bbox.parquet", "preferred_lookup": root / "lookup.parquet",
+                      "release": "1.1.1", **{f"admin_{level}": root / f"admin_{level}.parquet"
+                                          for level in range(3)}}
+            with patch("mapmover.runtime.global_admin_shallow_query._selected_layout", return_value=layout):
+                result = resolve_global_admin_shallow_points([{"lon": 1, "lat": 1}])[0]
+        self.assertEqual(result["deepest_resolved_loc_id"], "CAN-NT")
+        self.assertEqual(result["deepest_resolved_admin_level"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()

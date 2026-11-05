@@ -28,6 +28,11 @@ def country_routing_selection(catalog: dict[str, Any]) -> tuple[tuple[str, str, 
         component = global_layout.get("component_bbox_index") or {}
         selected.append(("GLOBAL_ADMIN0_POINT", "global_admin0_point_query_v3",
                          str(component.get("sha256") or "")))
+    shallow_layout = (catalog.get("runtime_query_layouts") or {}).get("global_admin0_2_point") or {}
+    if shallow_layout.get("layout_id") == "global_admin0_2_point_query_v1":
+        for key in ("bbox_index", "preferred_lookup"):
+            selected.append(("GLOBAL_ADMIN0_2_POINT", key,
+                             str((shallow_layout.get(key) or {}).get("sha256") or "")))
     return tuple(sorted(selected))
 
 
@@ -175,10 +180,37 @@ def prewarm_country_routing_indexes(catalog: dict[str, Any] | None = None) -> di
             raise ValueError("Global Admin0 component index hash mismatch")
         global_component_bbox_bytes = local.stat().st_size
         warm_paths.append(relative)
+    global_shallow_index_bytes = 0
+    shallow_layout = (selected_catalog.get("runtime_query_layouts") or {}).get("global_admin0_2_point") or {}
+    if shallow_layout.get("layout_id") == "global_admin0_2_point_query_v1":
+        for key, ceiling in (("bbox_index", 4 * 1024 * 1024),
+                             ("preferred_lookup", 2 * 1024 * 1024)):
+            record = shallow_layout.get(key) or {}
+            relative = str(record.get("path") or "")
+            expected_hash = str(record.get("sha256") or "")
+            expected_bytes = record.get("bytes")
+            if (not relative.startswith("geometry/") or ".." in PurePosixPath(relative).parts
+                    or not relative.endswith(".parquet")
+                    or not re.fullmatch(r"[0-9a-f]{64}", expected_hash)
+                    or not isinstance(expected_bytes, int) or expected_bytes < 1
+                    or expected_bytes > ceiling):
+                raise ValueError(f"Global shallow {key} lacks an admitted path, size, or hash pin")
+            local = resolve_artifact_path(relative, lane="active", max_bytes=ceiling)
+            if local is None or local.stat().st_size != expected_bytes:
+                raise RuntimeError(f"Global shallow {key} could not be cached at its pinned size")
+            digest = hashlib.sha256()
+            with local.open("rb") as stream:
+                for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                    digest.update(chunk)
+            if digest.hexdigest() != expected_hash:
+                raise ValueError(f"Global shallow {key} hash mismatch")
+            global_shallow_index_bytes += expected_bytes
+            warm_paths.append(relative)
     pinned_bytes = pin_artifact_paths(warm_paths)
     result = {"countries": countries, "index_bytes": total_bytes,
               "marine_reference_bytes": marine_reference_bytes,
               "global_component_bbox_bytes": global_component_bbox_bytes,
+              "global_shallow_index_bytes": global_shallow_index_bytes,
               "pinned_bytes": pinned_bytes}
     global _warmed_country_selection
     _warmed_country_selection = country_routing_selection(selected_catalog)
