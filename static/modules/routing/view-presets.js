@@ -8,6 +8,12 @@
 
 const VIEW_PRESETS = Object.freeze({
   explore: Object.freeze({
+    disasters_10_years: Object.freeze({
+      label: '10-year disasters',
+      // resolveDefaultLoadAction owns this rolling, bounded seven-layer preset.
+      // Do not expand it into pack defaults here.
+      pack_ids: Object.freeze([])
+    }),
     ring_of_fire: Object.freeze({
       label: 'Ring of Fire hazards',
       pack_ids: Object.freeze(['earthquakes', 'volcanoes', 'tsunamis']),

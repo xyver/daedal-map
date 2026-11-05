@@ -442,11 +442,16 @@ export const MapAdapter = {
   repairLowZoomOcean() {
     // CARTO's current low-zoom vector water tiles omit parts of the northern
     // ocean. Paint a continuous ocean below the same land geometry used by the
-    // offline map; hand control back to CARTO above the world zooms.
+    // offline map; hand control back to CARTO above the world zooms. Its
+    // park_nature_reserve layer also draws tile-shaped landuse blocks offshore
+    // at world zoom, so keep that layer for closer inspection only.
     if (this.satelliteMode || this.activeBaseStyle !== this.STYLES.dark || !this.map?.getLayer('background')) return;
     this.map.setPaintProperty('background', 'background-color', [
       'step', ['zoom'], '#2C353C', 6, '#0e0e0e'
     ]);
+    if (this.map.getLayer('park_nature_reserve')) {
+      this.map.setLayerZoomRange('park_nature_reserve', 6, 24);
+    }
     const sourceId = 'daedal-world-land';
     if (!this.map.getSource(sourceId)) {
       this.map.addSource(sourceId, {

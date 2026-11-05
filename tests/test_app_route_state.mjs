@@ -32,6 +32,15 @@ test('root parses Explore entry intent and Ops keeps its own lane', () => {
   assert.equal(ops.event_id, 'storm-1');
 });
 
+test('ten-year disaster URL resolves to the rolling Explore preset', () => {
+  const intent = parseRouteIntent({ pathname: '/', search: '?view=disasters_10_years' });
+  assert.equal(intent.lane, 'explore');
+  assert.equal(intent.view_id, 'disasters_10_years');
+  assert.equal(intent.view_label, '10-year disasters');
+  assert.deepEqual(intent.pack_ids, []);
+  assert.equal(intent.share_state, null);
+});
+
 test('new Explore entity and share links use root while Ops links keep /ops', () => {
   const calls = mockWindow('/');
   writeEntityParam('explore', { packId: 'earthquakes', eventId: 'EQ-1' });

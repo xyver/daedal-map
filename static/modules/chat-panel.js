@@ -712,6 +712,23 @@ function joinLabelsForMessage(labels = []) {
   return `${clean.slice(0, -1).join(', ')}, and ${clean[clean.length - 1]}`;
 }
 
+async function disasterPresetReadinessMessage() {
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), 5000);
+  try {
+    const response = await fetch('/health/ready', { cache: 'no-store', signal: controller.signal });
+    if (response.ok) return '';
+    const health = await response.json().catch(() => null);
+    return ['warming', 'not_started'].includes(health?.prewarm?.state)
+      ? 'The server is still preparing after deployment. Try the disaster layers again in a few minutes.'
+      : 'The server is not ready to load disaster layers. Please try again shortly.';
+  } catch (_) {
+    return 'The server is not ready to load disaster layers. Please try again shortly.';
+  } finally {
+    window.clearTimeout(timer);
+  }
+}
+
 function inferSingleEntityRouteParams(order = null, response = null) {
   const items = Array.isArray(order?.items) ? order.items.filter(Boolean) : [];
   if (!items.length) {
@@ -958,9 +975,17 @@ export const ChatManager = {
     );
 
     if (lane === 'explore' && routeIntent?.view_id && !sourceId && !eventId) {
+      const isTenYearDisasterView = routeIntent.view_id === 'disasters_10_years';
+      if (isTenYearDisasterView) {
+        const readinessMessage = await disasterPresetReadinessMessage();
+        if (readinessMessage) {
+          this.addMessage(readinessMessage, 'assistant', { mode: lane });
+          return false;
+        }
+      }
       return this.runDefaultLoad(
         { presetId: `explore:${routeIntent.view_id}` },
-        { ...options, mode: lane, suppressResultMessage: true, skipEntityReflection: true }
+        { ...options, mode: lane, suppressResultMessage: !isTenYearDisasterView, skipEntityReflection: true }
       );
     }
 
@@ -1956,24 +1981,9 @@ export const ChatManager = {
     btn.innerHTML = '<span class="btn-spinner"></span> Loading...';
     try {
       if (isDisasterPreset) {
-        const controller = new AbortController();
-        const timer = window.setTimeout(() => controller.abort(), 5000);
-        let response;
-        try {
-          response = await fetch('/health/ready', { cache: 'no-store', signal: controller.signal });
-        } finally {
-          window.clearTimeout(timer);
-        }
-        if (!response.ok) {
-          const health = await response.json().catch(() => null);
-          const warming = ['warming', 'not_started'].includes(health?.prewarm?.state);
-          this.addMessage(
-            warming
-              ? 'The server is still preparing after deployment. Try the disaster layers again in a few minutes.'
-              : 'The server is not ready to load disaster layers. Please try again shortly.',
-            'assistant',
-            { mode: 'explore' }
-          );
+        const readinessMessage = await disasterPresetReadinessMessage();
+        if (readinessMessage) {
+          this.addMessage(readinessMessage, 'assistant', { mode: 'explore' });
           btn.textContent = originalText;
           return;
         }

@@ -10,6 +10,7 @@ globalThis.document = { body: { classList: { contains: () => false } } };
 
 const { ChatManager } = await import('../static/modules/chat-panel.js');
 const { resolveDefaultLoadAction } = await import('../static/modules/overlay-default-loads.js');
+const { parseRouteIntent } = await import('../static/modules/routing/app-route-state.js');
 
 test('the 10-year disaster preset has a bounded seven-layer load', () => {
   const action = resolveDefaultLoadAction({ presetId: 'explore:disasters_2020_2025' });
@@ -17,6 +18,57 @@ test('the 10-year disaster preset has a bounded seven-layer load', () => {
   assert.equal(action.actions.length, 7);
   assert.equal(action.timeoutMs, 180_000);
   assert.equal(action.concurrency, 1);
+});
+
+test('the named URL runs the same rolling disaster action as the welcome button', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => ({ ok: true });
+  const intent = parseRouteIntent({ pathname: '/', search: '?view=disasters_10_years' });
+  let called;
+  const context = {
+    mode: 'explore',
+    runDefaultLoad(params, options) {
+      called = { params, options };
+      return resolveDefaultLoadAction({ lane: options.mode, ...params });
+    }
+  };
+  let result;
+  try {
+    result = await ChatManager.applyRouteIntent.call(context, intent, { mode: 'explore' });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+  const buttonAction = resolveDefaultLoadAction({ presetId: 'explore:disasters_2020_2025' });
+  assert.equal(called.params.presetId, 'explore:disasters_10_years');
+  assert.equal(called.options.suppressResultMessage, false);
+  assert.equal(called.options.skipEntityReflection, true);
+  assert.equal(result.type, 'multi_default_load');
+  assert.equal(result.timeoutMs, buttonAction.timeoutMs);
+  assert.deepEqual(result.actions, buttonAction.actions);
+  assert.deepEqual(result.timeline, buttonAction.timeline);
+});
+
+test('the named URL defers loading while the server warms', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => ({
+    ok: false,
+    json: async () => ({ prewarm: { state: 'warming' } })
+  });
+  const messages = [];
+  let loadCalls = 0;
+  const context = {
+    mode: 'explore',
+    addMessage(message) { messages.push(message); },
+    runDefaultLoad() { loadCalls += 1; return true; }
+  };
+  try {
+    const intent = parseRouteIntent({ pathname: '/', search: '?view=disasters_10_years' });
+    assert.equal(await ChatManager.applyRouteIntent.call(context, intent, { mode: 'explore' }), false);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+  assert.equal(loadCalls, 0);
+  assert.match(messages[0], /still preparing/i);
 });
 
 test('the disaster button defers a load while startup prewarm is running', async () => {

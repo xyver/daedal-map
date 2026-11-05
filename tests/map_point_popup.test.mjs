@@ -55,9 +55,10 @@ test('world basemap repair fills the ocean only at low zoom', () => {
   const previousBase = MapAdapter.activeBaseStyle;
   const previousSatellite = MapAdapter.satelliteMode;
   MapAdapter.map = {
-    getLayer: (id) => id === 'background',
+    getLayer: (id) => id === 'background' || id === 'park_nature_reserve',
     getSource: () => null,
     setPaintProperty: (...args) => calls.push(['paint', ...args]),
+    setLayerZoomRange: (...args) => calls.push(['zoom', ...args]),
     addSource: (...args) => calls.push(['source', ...args]),
     getStyle: () => ({ layers: [{ id: 'background' }, { id: 'water' }] }),
     addLayer: (...args) => calls.push(['layer', ...args])
@@ -68,9 +69,10 @@ test('world basemap repair fills the ocean only at low zoom', () => {
     MapAdapter.repairLowZoomOcean();
     assert.deepEqual(calls[0], ['paint', 'background', 'background-color',
       ['step', ['zoom'], '#2C353C', 6, '#0e0e0e']]);
-    assert.equal(calls[1][1], 'daedal-world-land');
-    assert.equal(calls[2][2], 'water');
-    assert.equal(calls[2][1].maxzoom, 6);
+    assert.deepEqual(calls[1], ['zoom', 'park_nature_reserve', 6, 24]);
+    assert.equal(calls[2][1], 'daedal-world-land');
+    assert.equal(calls[3][2], 'water');
+    assert.equal(calls[3][1].maxzoom, 6);
     calls.length = 0;
     MapAdapter.satelliteMode = true;
     MapAdapter.repairLowZoomOcean();

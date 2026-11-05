@@ -10,6 +10,10 @@ def test_explore_root_and_legacy_redirect_preserve_deep_link_query():
     assert root.status_code == 200
     assert "<title>DaedalMap</title>" in root.text
 
+    disaster_view = client.get("/?view=disasters_10_years")
+    assert disaster_view.status_code == 200
+    assert "<title>DaedalMap</title>" in disaster_view.text
+
     legacy = client.get(
         "/explore?pack=earthquakes&event_id=EQ%2B123",
         follow_redirects=False,
