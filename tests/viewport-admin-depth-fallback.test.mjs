@@ -295,7 +295,13 @@ test('a same-level zoom refreshes the new viewport bbox', () => {
     ViewportLoader.levelLocked = false;
     ViewportLoader.currentAdminLevel = 2;
     ViewportLoader.lastZoom = 5;
+    ViewportLoader.lastRequestedLevel = 2;
+    ViewportLoader.lastRequestedBbox = { ...bbox };
     ViewportLoader.load = (level) => requested.push({ level, ...bbox });
+    bbox.west = 6;
+    bbox.east = 16;
+    ViewportLoader.onMoveEnd();
+    assert.deepEqual(requested, [], 'a tenth-screen pan should reuse current coverage');
     // Both views are 80 square degrees, so the admin level stays at 2.
     bbox.west = 18;
     bbox.east = 28;
@@ -305,5 +311,6 @@ test('a same-level zoom refreshes the new viewport bbox', () => {
   } finally {
     ViewportLoader.load = originalLoad;
     ViewportLoader.lastZoom = null;
+    ViewportLoader.lastRequestedBbox = null;
   }
 });

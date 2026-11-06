@@ -44,6 +44,7 @@ export const ViewportLoader = {
   pendingSameLevel: false,  // Coalesce wheel zooms into one latest-viewport follow-up
   requestId: 0,  // Counter to track which request is current
   lastRequestedLevel: null,  // Track the level of the in-flight request
+  lastRequestedBbox: null,  // Anchor for same-level movement filtering
   lastZoom: null,  // Track zoom level to distinguish zoom from pan
   lastRenderedLevel: 0,
   orderModeLevelHoldUntil: 0,
@@ -188,15 +189,31 @@ export const ViewportLoader = {
     return width * height;
   },
 
+  hasSignificantViewportChange(level, bbox) {
+    if (this.lastRequestedLevel !== level || !this.lastRequestedBbox) return true;
+    const previous = this.lastRequestedBbox;
+    const width = Math.max(0.001, previous.east - previous.west);
+    const height = Math.max(0.001, previous.north - previous.south);
+    const currentWidth = bbox.east - bbox.west;
+    const currentHeight = bbox.north - bbox.south;
+    const centerShiftX = Math.abs((bbox.west + bbox.east - previous.west - previous.east) / 2);
+    const centerShiftY = Math.abs((bbox.south + bbox.north - previous.south - previous.north) / 2);
+    // A quarter-screen pan or a substantial zoom-out warrants a new index.
+    // Zooming further into already requested coverage does not.
+    return centerShiftX >= width * 0.25 || centerShiftY >= height * 0.25 ||
+      currentWidth > width * 1.5 || currentHeight > height * 1.5;
+  },
+
   expandBboxForIndex(bboxObject, adminLevel) {
     if (!bboxObject) return bboxObject;
-    if (adminLevel !== 1 && adminLevel !== 2) {
+    if (adminLevel === 0) {
       return bboxObject;
     }
 
     const width = Math.max(0.001, bboxObject.east - bboxObject.west);
     const height = Math.max(0.001, bboxObject.north - bboxObject.south);
-    const haloFactor = adminLevel === 1 ? 0.12 : 0.08;
+    // Match the movement threshold so small pans remain inside fetched coverage.
+    const haloFactor = 0.25;
     const haloLon = width * haloFactor;
     const haloLat = height * haloFactor;
 
@@ -404,6 +421,7 @@ export const ViewportLoader = {
 
     if (this.lastRequestedLevel !== adminLevel) this.pendingSameLevel = false;
     this.lastRequestedLevel = adminLevel;
+    this.lastRequestedBbox = bboxObject;
     const requestController = new AbortController();
     this.abortController = requestController;
     const thisRequestId = ++this.requestId;
@@ -628,7 +646,13 @@ export const ViewportLoader = {
     if (!this.enabled || !MapAdapter?.map || this.orderMode) return;
 
     // Reload current level for the new viewport position
-    this.load(this.currentAdminLevel);
+    this.loadIfViewportChanged();
+  },
+
+  loadIfViewportChanged() {
+    if (this.hasSignificantViewportChange(this.currentAdminLevel, this.getCurrentBbox())) {
+      this.load(this.currentAdminLevel);
+    }
   },
 
   /**
@@ -675,7 +699,7 @@ export const ViewportLoader = {
       const previousLevel = this.currentAdminLevel;
       this.onViewportChange();
       if (this.currentAdminLevel === previousLevel) {
-        this.load(this.currentAdminLevel);
+        this.loadIfViewportChanged();
       }
     } else {
       // Pure pan - reload same level for new viewport position

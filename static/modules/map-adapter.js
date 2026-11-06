@@ -498,9 +498,9 @@ export const MapAdapter = {
    * @param {boolean} debugMode - If true, use hierarchy-depth colors
    */
   loadGeoJSON(geojson, debugMode = false) {
-    // Add unique IDs to features for hover state
+    // Keep IDs stable across viewport redraws so feature-state tracks loc_id.
     geojson.features.forEach((feature, index) => {
-      feature.id = index;
+      feature.id = feature.properties?.loc_id || feature.id || index;
     });
 
     // Store current geojson for use as parent outline later
@@ -515,8 +515,7 @@ export const MapAdapter = {
     // Add source
     this.map.addSource(CONFIG.layers.source, {
       type: 'geojson',
-      data: geojson,
-      generateId: true
+      data: geojson
     });
 
     // Determine fill color based on debug mode or focal coloring
@@ -596,9 +595,9 @@ export const MapAdapter = {
    * @param {Object} geojson - GeoJSON FeatureCollection
    */
   updateSourceData(geojson) {
-    // Add unique IDs to features for hover state
+    // Keep IDs stable across updates to preserve feature-state.
     geojson.features.forEach((feature, index) => {
-      feature.id = index;
+      feature.id = feature.properties?.loc_id || feature.id || index;
     });
 
     // Keep popup lookups aligned with the currently visible time slice.
@@ -617,10 +616,14 @@ export const MapAdapter = {
    * @param {Object} geojson - GeoJSON FeatureCollection
    */
   loadGeoJSONWithFade(geojson) {
-    // Add unique IDs to features for hover state
+    // Keep IDs stable when the cached viewport subset changes.
     geojson.features.forEach((feature, index) => {
-      feature.id = index;
+      feature.id = feature.properties?.loc_id || feature.id || index;
     });
+
+    const previousFeatures = this.currentRegionGeojson?.features;
+    const sameFeatures = previousFeatures?.length === geojson.features.length &&
+      geojson.features.every((feature, index) => feature === previousFeatures[index]);
 
     // Store current geojson for use as ancestor boundary
     this.currentRegionGeojson = geojson;
@@ -632,8 +635,8 @@ export const MapAdapter = {
     const source = this.map.getSource(CONFIG.layers.source);
 
     if (fillLayer && source) {
-      // Instant swap - no fade animation
-      source.setData(geojson);
+      // A repeated cache render should not reset hover feature-state.
+      if (!sameFeatures) source.setData(geojson);
 
       // Update focal coloring based on new focused parent (skips if debug mode)
       this.updateFocalColors();
@@ -828,7 +831,7 @@ export const MapAdapter = {
       expr.push([
         'case',
         ['boolean', ['feature-state', 'hover'], false],
-        colors[hoverColorIdx],
+        hoverColorIdx === baseColorIdx ? CONFIG.colors.fillHover : colors[hoverColorIdx],
         colors[baseColorIdx]
       ]);
     }

@@ -4,6 +4,43 @@ import test from 'node:test';
 globalThis.window = { MessagePack: {}, location: { hostname: 'localhost' } };
 const { MapAdapter } = await import('../static/modules/map-adapter.js');
 
+test('cached administrative redraw keeps stable hover IDs and a visible hover color', () => {
+  const previous = {
+    map: MapAdapter.map,
+    currentRegionGeojson: MapAdapter.currentRegionGeojson,
+    focalPrefixes: MapAdapter.focalPrefixes,
+    updateFocusedParent: MapAdapter.updateFocusedParent,
+    updateFocalColors: MapAdapter.updateFocalColors,
+    hoveredFeatureId: MapAdapter.hoveredFeatureId
+  };
+  let swaps = 0;
+  const source = { setData: () => { swaps += 1; } };
+  const feature = { type: 'Feature', properties: { loc_id: 'USA-KS-045' }, geometry: null };
+  const collection = () => ({ type: 'FeatureCollection', features: [feature] });
+  MapAdapter.map = {
+    getLayer: () => ({}),
+    getSource: () => source
+  };
+  MapAdapter.updateFocusedParent = () => {};
+  MapAdapter.updateFocalColors = () => {};
+  MapAdapter.currentRegionGeojson = null;
+  MapAdapter.focalPrefixes = ['USA', 'USA-KS', 'USA-KS-045', 'USA-KS-045-001', 'USA-KS-045-001-1'];
+  const originalDocument = globalThis.document;
+  globalThis.document = { getElementById: () => ({ set textContent(_value) {} }) };
+  try {
+    MapAdapter.loadGeoJSONWithFade(collection());
+    MapAdapter.loadGeoJSONWithFade(collection());
+    assert.equal(feature.id, 'USA-KS-045');
+    assert.equal(swaps, 1, 'same cached shapes should not reset hover feature-state');
+    const fillExpression = MapAdapter.getFocalFillColorExpression();
+    const deepest = fillExpression[2];
+    assert.notEqual(deepest[2], deepest[3], 'deepest feature hover must differ from base color');
+  } finally {
+    Object.assign(MapAdapter, previous);
+    globalThis.document = originalDocument;
+  }
+});
+
 test('point popup calls shallow then deep MCP tools', async () => {
   const calls = [];
   let html = '';
