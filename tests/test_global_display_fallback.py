@@ -89,3 +89,67 @@ def test_viewport_routes_profiled_and_default_countries_to_separate_display_sour
     country_loader.assert_called_once()
     assert country_loader.call_args.args[0] == "USA"
     assert {row["loc_id"] for row in result["rows"]} == {"CAF-G1", "USA-KS"}
+
+
+def test_shape_batch_reads_global_display_once_per_level_across_countries():
+    with tempfile.TemporaryDirectory() as temp_dir:
+        geometry_dir = Path(temp_dir) / "geometry"
+        display_dir = geometry_dir / "global" / "display"
+        display_dir.mkdir(parents=True)
+        index_path = Path(temp_dir) / "bbox_index.parquet"
+        levels = {1: ["CAF-G1", "TCD-G1"], 2: ["CAF-G1-G2", "TCD-G1-G2"]}
+        index_rows = []
+        for level, ids in levels.items():
+            rows = []
+            for position, loc_id in enumerate(ids):
+                west = 18 + position * 3
+                rows.append({"country_iso3": loc_id[:3], "loc_id": loc_id,
+                             "parent_id": loc_id.rsplit("-", 1)[0],
+                             "admin_level": level, "name": loc_id,
+                             "geometry": _shape(west, 5, west + 1, 6)})
+                index_rows.append({"country_iso3": loc_id[:3], "loc_id": loc_id,
+                                   "admin_level": level, "bbox_min_lon": west,
+                                   "bbox_min_lat": 5, "bbox_max_lon": west + 1,
+                                   "bbox_max_lat": 6})
+            pd.DataFrame(rows).to_parquet(display_dir / f"admin_{level}.parquet", index=False)
+        pd.DataFrame(index_rows).to_parquet(index_path, index=False)
+
+        original_select = geometry_handlers.select_rows
+        reads = []
+
+        def count_reads(path, **kwargs):
+            reads.append(Path(path))
+            return original_select(path, **kwargs)
+
+        with patch.object(geometry_handlers, "GEOMETRY_DIR", geometry_dir), \
+             patch.object(geometry_handlers, "load_geometry_catalog",
+                          return_value={"country_profiles": []}), \
+             patch("mapmover.runtime.global_admin_shallow_query._selected_layout",
+                   return_value={"bbox_index": index_path}), \
+             patch.object(geometry_handlers, "select_rows", side_effect=count_reads):
+            features = geometry_handlers.get_display_geometries(
+                [loc_id for ids in levels.values() for loc_id in ids]
+            )["features"]
+
+    assert {feature["properties"]["loc_id"] for feature in features} == {
+        loc_id for ids in levels.values() for loc_id in ids
+    }
+    assert reads.count(index_path) == 2
+    assert reads.count(display_dir / "admin_1.parquet") == 1
+    assert reads.count(display_dir / "admin_2.parquet") == 1
+
+
+def test_shape_batch_keeps_profiled_country_display_route():
+    country_rows = pd.DataFrame([{"loc_id": "USA-KS", "admin_level": 1,
+                                  "name": "Kansas", "geometry": _shape(-103, 37, -94, 40)}])
+    with patch.object(geometry_handlers, "load_geometry_catalog", return_value={
+             "country_profiles": [{"country_code": "USA"}]
+         }), \
+         patch.object(geometry_handlers, "_load_global_display_id_rows") as global_loader, \
+         patch.object(geometry_handlers, "load_country_display_rows",
+                      return_value=country_rows) as country_loader:
+        features = geometry_handlers.get_display_geometries(["USA-KS"])["features"]
+
+    global_loader.assert_not_called()
+    country_loader.assert_called_once_with("USA", loc_ids=["USA-KS"])
+    assert features[0]["properties"]["loc_id"] == "USA-KS"
