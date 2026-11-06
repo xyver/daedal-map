@@ -107,17 +107,40 @@ export const ViewportLoader = {
     }
 
     for (const level of tryLevels) {
-      const count = this.renderViewportFromCache(level, bboxOverride);
-      if (count > 0 || GeometryCache.isCovered(level, bboxOverride || {
-        west: Number(MapAdapter.map.getBounds().getWest().toFixed(3)),
-        south: Number(MapAdapter.map.getBounds().getSouth().toFixed(3)),
-        east: Number(MapAdapter.map.getBounds().getEast().toFixed(3)),
-        north: Number(MapAdapter.map.getBounds().getNorth().toFixed(3))
-      })) {
+      // A covered level may have no shapes because this country does not
+      // publish that depth. Never clear the previous level while searching.
+      const bounds = bboxOverride || MapAdapter.map.getBounds();
+      const bbox = bboxOverride || {
+        west: Number(bounds.getWest().toFixed(3)),
+        south: Number(bounds.getSouth().toFixed(3)),
+        east: Number(bounds.getEast().toFixed(3)),
+        north: Number(bounds.getNorth().toFixed(3))
+      };
+      if (GeometryCache.getForViewport(level, bbox).length > 0) {
+        this.renderViewportFromCache(level, bbox);
+        NavigationManager?.updateLevelDisplay(level);
         return level;
       }
     }
     return null;
+  },
+
+  async holdPreviousAdminLevel(adminLevel, targetLevel, bboxObject) {
+    if (adminLevel <= this.lastRenderedLevel) return false;
+    const previousLevel = Math.min(adminLevel - 1, this.lastRenderedLevel);
+    if (previousLevel < 1) return false;
+    if (GeometryCache.getForViewport(previousLevel, bboxObject).length > 0) {
+      this.renderViewportFromCache(previousLevel, bboxObject);
+      NavigationManager?.updateLevelDisplay(previousLevel);
+      return true;
+    }
+    // The previous shapes may not cover a new pan at the same zoom. Request
+    // the next shallower level, stopping at the last level that was rendered.
+    if (!GeometryCache.isCovered(previousLevel, bboxObject)) {
+      await this.doLoad(adminLevel - 1, targetLevel);
+      return true;
+    }
+    return false;
   },
 
   // Viewport area thresholds (in square degrees) for admin level selection
@@ -324,7 +347,7 @@ export const ViewportLoader = {
   /**
    * Actually perform the load
    */
-  async doLoad(adminLevel) {
+  async doLoad(adminLevel, targetLevel = adminLevel) {
     if (!MapAdapter?.map || this.tabSuspended || !isAdminLayersActive()) return;
     let missingLocIds = [];
     let requestKey = null;
@@ -369,7 +392,12 @@ export const ViewportLoader = {
 
     if (GeometryCache.isCovered(adminLevel, bboxObject)) {
       console.log(`[${thisRequestId}] Level ${adminLevel} viewport already covered, rendering from cache`);
-      this.renderViewportFromCache(adminLevel, bboxObject);
+      if (GeometryCache.getForViewport(adminLevel, bboxObject).length > 0) {
+        this.renderViewportFromCache(adminLevel, bboxObject);
+        if (adminLevel !== targetLevel) NavigationManager?.updateLevelDisplay(adminLevel);
+      } else if (!await this.holdPreviousAdminLevel(adminLevel, targetLevel, bboxObject)) {
+        this.renderViewportFromCache(adminLevel, bboxObject);
+      }
       return;
     }
 
@@ -400,10 +428,12 @@ export const ViewportLoader = {
         if (fullyLoaded) {
           GeometryCache.markCoverage(adminLevel, bboxObject);
         }
-        if (visibleCached.length > 0 || fullyLoaded || requestedLocIds.length === 0) {
-          const renderedLevel = this.renderViewportFromCache(adminLevel, bboxObject);
-          if (renderedLevel === 0 && visibleCached.length === 0) {
-            this.renderBestAvailableViewport(Math.min(adminLevel - 1, this.lastRenderedLevel), bboxObject);
+        if (visibleCached.length > 0) {
+          this.renderViewportFromCache(adminLevel, bboxObject);
+          if (adminLevel !== targetLevel) NavigationManager?.updateLevelDisplay(adminLevel);
+        } else if (fullyLoaded || requestedLocIds.length === 0) {
+          if (!await this.holdPreviousAdminLevel(adminLevel, targetLevel, bboxObject)) {
+            this.renderViewportFromCache(adminLevel, bboxObject);
           }
         }
         return;
@@ -421,7 +451,7 @@ export const ViewportLoader = {
           { signal: requestController.signal }
         );
         if (batchData.features?.length) features.push(...batchData.features);
-        if (thisRequestId !== this.requestId || adminLevel !== this.currentAdminLevel) break;
+        if (thisRequestId !== this.requestId || targetLevel !== this.currentAdminLevel) break;
       }
       const data = { type: 'FeatureCollection', features };
 
@@ -433,15 +463,15 @@ export const ViewportLoader = {
       if (!isAdminLayersActive()) return;
       if (thisRequestId !== this.requestId) {
         console.log(`[${thisRequestId}] Discarding stale response (current is ${this.requestId})`);
-        if (adminLevel === this.currentAdminLevel) {
+        if (targetLevel === this.currentAdminLevel) {
           this.renderBestAvailableViewport(adminLevel);
         }
         return;
       }
 
       // Double-check we're still on the same level (user might have zoomed while parsing)
-      if (adminLevel !== this.currentAdminLevel) {
-        console.log(`[${thisRequestId}] Level changed during load (was ${adminLevel}, now ${this.currentAdminLevel}), discarding`);
+      if (targetLevel !== this.currentAdminLevel) {
+        console.log(`[${thisRequestId}] Level changed during load (was ${targetLevel}, now ${this.currentAdminLevel}), discarding`);
         this.renderBestAvailableViewport(this.currentAdminLevel);
         return;
       }
@@ -452,6 +482,7 @@ export const ViewportLoader = {
       if (featureCount > 0) {
         GeometryCache.markCoverage(adminLevel, bboxObject);
         this.renderViewportFromCache(adminLevel, bboxObject);
+        if (adminLevel !== targetLevel) NavigationManager?.updateLevelDisplay(adminLevel);
       } else {
         this.renderBestAvailableViewport(Math.min(adminLevel - 1, this.lastRenderedLevel), bboxObject);
       }
