@@ -399,6 +399,14 @@ export const ViewportLoader = {
       indexBboxObject.north.toFixed(3)
     ].join(',');
 
+    // Switch to shapes cached for the new viewport immediately. A previous
+    // region must not remain on screen while this region's index/shape read
+    // is pending, especially when a country Display read is slow.
+    if (this.renderBestAvailableViewport(adminLevel, bboxObject) === null && GeometryCache.features.size > 0) {
+      MapAdapter.loadGeoJSONWithFade({ type: 'FeatureCollection', features: [] });
+      document.getElementById('totalAreas').textContent = 0;
+    }
+
     if (GeometryCache.isCovered(adminLevel, bboxObject)) {
       console.log(`[${thisRequestId}] Level ${adminLevel} viewport already covered, rendering from cache`);
       if (GeometryCache.getForViewport(adminLevel, bboxObject).length > 0) {
@@ -438,7 +446,7 @@ export const ViewportLoader = {
         const fullyLoaded = inFlightLocIds.length === 0 && loadedLocIds.length === requestedLocIds.length;
         console.log(`[${thisRequestId}] Level ${adminLevel} has no newly missing ids (${loadedLocIds.length} loaded, ${inFlightLocIds.length} in flight)`);
         if (fullyLoaded) {
-          GeometryCache.markCoverage(adminLevel, bboxObject);
+          GeometryCache.markCoverage(adminLevel, indexBboxObject);
         }
         if (visibleCached.length > 0) {
           this.renderViewportFromCache(adminLevel, bboxObject);
@@ -495,7 +503,14 @@ export const ViewportLoader = {
       console.log(`[${thisRequestId}] Level ${adminLevel} response: ${featureCount} features`);
 
       if (featureCount > 0) {
-        GeometryCache.markCoverage(adminLevel, bboxObject);
+        // A country read can fail while other countries in the same batch
+        // succeed. Keep those shapes, but leave coverage open so the missing
+        // IDs can be fetched on the next viewport load.
+        if (requestedLocIds.every((locId) => GeometryCache.hasLocId(locId))) {
+          GeometryCache.markCoverage(adminLevel, indexBboxObject);
+        } else {
+          console.warn(`[${thisRequestId}] Level ${adminLevel} returned a partial shape batch; coverage remains open`);
+        }
         this.renderViewportFromCache(adminLevel, bboxObject);
         if (adminLevel !== targetLevel) NavigationManager?.updateLevelDisplay(adminLevel);
       } else {
@@ -628,8 +643,13 @@ export const ViewportLoader = {
     }
 
     if (wasZoom) {
-      // Zoom operation: check if admin level should change
+      // A zoom can move the map center without crossing an admin-level
+      // threshold. Refresh that level for the new bbox as well.
+      const previousLevel = this.currentAdminLevel;
       this.onViewportChange();
+      if (this.currentAdminLevel === previousLevel) {
+        this.load(this.currentAdminLevel);
+      }
     } else {
       // Pure pan - reload same level for new viewport position
       this.onPanEnd();

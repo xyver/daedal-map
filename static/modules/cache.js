@@ -105,25 +105,34 @@ export const GeometryCache = {
 
   _featureBbox(feature) {
     const props = feature?.properties || {};
-    if (
-      props.bbox_min_lon !== undefined &&
-      props.bbox_min_lat !== undefined &&
-      props.bbox_max_lon !== undefined &&
-      props.bbox_max_lat !== undefined
-    ) {
-      return {
-        west: Number(props.bbox_min_lon),
-        south: Number(props.bbox_min_lat),
-        east: Number(props.bbox_max_lon),
-        north: Number(props.bbox_max_lat)
-      };
+    const rawValues = [props.bbox_min_lon, props.bbox_min_lat,
+      props.bbox_max_lon, props.bbox_max_lat];
+    const values = rawValues.map(Number);
+    if (rawValues.every((value) => value !== null && value !== undefined && value !== '') &&
+        values.every(Number.isFinite) && values[0] <= values[2] && values[1] <= values[3]) {
+      return { west: values[0], south: values[1], east: values[2], north: values[3] };
     }
-    if (props.centroid_lon !== undefined && props.centroid_lat !== undefined) {
-      const lon = Number(props.centroid_lon);
-      const lat = Number(props.centroid_lat);
-      return { west: lon, south: lat, east: lon, north: lat };
-    }
-    return null;
+
+    // Older Display payloads omit bbox properties. Derive bounds once when
+    // caching instead of treating an unbounded feature as visible worldwide.
+    const bounds = { west: Infinity, south: Infinity, east: -Infinity, north: -Infinity };
+    const visit = (coordinates) => {
+      if (!Array.isArray(coordinates)) return;
+      if (coordinates.length >= 2 && typeof coordinates[0] === 'number') {
+        const lon = coordinates[0];
+        const lat = coordinates[1];
+        if (Number.isFinite(lon) && Number.isFinite(lat)) {
+          bounds.west = Math.min(bounds.west, lon);
+          bounds.south = Math.min(bounds.south, lat);
+          bounds.east = Math.max(bounds.east, lon);
+          bounds.north = Math.max(bounds.north, lat);
+        }
+        return;
+      }
+      for (const child of coordinates) visit(child);
+    };
+    visit(feature?.geometry?.coordinates);
+    return Number.isFinite(bounds.west) ? bounds : null;
   },
 
   /**
@@ -142,6 +151,7 @@ export const GeometryCache = {
         feature: f,
         lastSeen: now,
         level: f.properties?.admin_level || 0,
+        bbox: this._featureBbox(f),
         estimatedBytes
       });
       this.estimatedBytes += estimatedBytes;
@@ -207,8 +217,7 @@ export const GeometryCache = {
 
     for (const [id, entry] of this.features) {
       if (entry.level !== level) continue;
-      const featureBox = this._featureBbox(entry.feature);
-      if (featureBox && !this._intersects(featureBox, normalized)) continue;
+      if (!entry.bbox || !this._intersects(entry.bbox, normalized)) continue;
       result.push(entry.feature);
       entry.lastSeen = now;
     }

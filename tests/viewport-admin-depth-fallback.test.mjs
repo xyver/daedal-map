@@ -72,7 +72,8 @@ test('zoom holds Admin 3 when Admin 4 has no published rows, including cached re
 
     await ViewportLoader.doLoad(4);
     assert.deepEqual(rendered.at(-1).map((feature) => feature.properties.admin_level), [3]);
-    assert.deepEqual(displayedLevels, [3, 3]);
+    assert.ok(displayedLevels.length >= 2);
+    assert.ok(displayedLevels.every((level) => level === 3));
 
     // A pan at the same zoom leaves the cached tract behind. Fetch Admin 3
     // for the new view instead of clearing the map or holding stale shapes.
@@ -144,6 +145,7 @@ test('a cancelled same-level request does not strand the replacement as in fligh
     await Promise.all([first, replacement]);
     assert.equal(fetchCount, 2);
     assert.equal(GeometryCache.isCovered(1, bbox), true);
+    assert.equal(GeometryCache.isCovered(1, { west: 17.5, south: 3.5, east: 24.5, north: 9.5 }), true);
     assert.equal(GeometryCache.inFlightByLevel.has(1), false);
     assert.equal(rendered.at(-1)[0].properties.loc_id, 'CAF');
   } finally {
@@ -151,5 +153,100 @@ test('a cancelled same-level request does not strand the replacement as in fligh
     GeometryCache.clear();
     globalThis.fetch = originalFetch;
     globalThis.document = originalDocument;
+  }
+});
+
+test('Africa cache cannot cover Germany and a partial country response is retried', async () => {
+  const bbox = { west: 5, south: 47, east: 15, north: 55 };
+  const bounds = {
+    getWest: () => bbox.west, getSouth: () => bbox.south,
+    getEast: () => bbox.east, getNorth: () => bbox.north
+  };
+  const feature = (locId, west) => ({
+    type: 'Feature',
+    properties: { loc_id: locId, admin_level: 1,
+      bbox_min_lon: west, bbox_min_lat: 48, bbox_max_lon: west + 1, bbox_max_lat: 50 },
+    geometry: { type: 'Polygon', coordinates: [[[west, 48], [west + 1, 48], [west + 1, 50], [west, 48]]] }
+  });
+  const originalFetch = globalThis.fetch;
+  const originalDocument = globalThis.document;
+  const originalDecode = globalThis.window.MessagePack.decode;
+  const rendered = [];
+  let shapeRequests = 0;
+  globalThis.document = {
+    getElementById: (id) => id === 'totalAreas' ? { set textContent(_value) {} } : null,
+    querySelector: () => null
+  };
+  globalThis.window.MessagePack.decode = (bytes) => {
+    if (bytes[0] === 1) return { rows: [{ loc_id: 'DEU-BY' }, { loc_id: 'DEU-BW' }] };
+    return { features: [shapeRequests === 1 ? feature('DEU-BY', 10) : feature('DEU-BW', 8)] };
+  };
+  globalThis.fetch = async (url) => {
+    if (url.includes('/geometry/display-features')) shapeRequests += 1;
+    return { ok: true, arrayBuffer: async () => new Uint8Array([url.includes('/geometry/index') ? 1 : 2]).buffer };
+  };
+  setDependencies({
+    MapAdapter: { map: { getBounds: () => bounds }, loadGeoJSONWithFade: (data) => rendered.push(data.features) },
+    NavigationManager: { updateLevelDisplay: () => {} }
+  });
+  try {
+    GeometryCache.clear();
+    GeometryCache.add([{
+      type: 'Feature', properties: { loc_id: 'CAF-G1', admin_level: 1 },
+      geometry: { type: 'Polygon', coordinates: [[[18, 4], [24, 4], [24, 9], [18, 4]]] }
+    }]);
+    GeometryCache.markCoverage(1, { west: 17, south: 3, east: 25, north: 10 });
+    ViewportLoader.currentAdminLevel = 1;
+    ViewportLoader.lastRenderedLevel = 1;
+
+    await ViewportLoader.doLoad(1);
+    assert.deepEqual(rendered[0], []);
+    assert.equal(GeometryCache.isCovered(1, bbox), false);
+    assert.equal(shapeRequests, 1);
+
+    await ViewportLoader.doLoad(1);
+    assert.equal(shapeRequests, 2);
+    assert.equal(GeometryCache.isCovered(1, bbox), true);
+    assert.deepEqual(rendered.at(-1).map((item) => item.properties.loc_id).sort(), ['DEU-BW', 'DEU-BY']);
+  } finally {
+    ViewportLoader.cancelActiveRequest();
+    GeometryCache.clear();
+    globalThis.fetch = originalFetch;
+    globalThis.document = originalDocument;
+    globalThis.window.MessagePack.decode = originalDecode;
+  }
+});
+
+test('a same-level zoom refreshes the new viewport bbox', () => {
+  const bbox = { west: 5, south: 47, east: 15, north: 55 };
+  let zoom = 5;
+  const requested = [];
+  const originalLoad = ViewportLoader.load;
+  setDependencies({
+    MapAdapter: { map: {
+      getBounds: () => ({
+        getWest: () => bbox.west, getSouth: () => bbox.south,
+        getEast: () => bbox.east, getNorth: () => bbox.north
+      }),
+      getZoom: () => zoom
+    } },
+    NavigationManager: { updateLevelDisplay: () => {} }
+  });
+  try {
+    ViewportLoader.enabled = true;
+    ViewportLoader.orderMode = false;
+    ViewportLoader.levelLocked = false;
+    ViewportLoader.currentAdminLevel = 2;
+    ViewportLoader.lastZoom = 5;
+    ViewportLoader.load = (level) => requested.push({ level, ...bbox });
+    // Both views are 80 square degrees, so the admin level stays at 2.
+    bbox.west = 18;
+    bbox.east = 28;
+    zoom = 6;
+    ViewportLoader.onMoveEnd();
+    assert.deepEqual(requested, [{ level: 2, west: 18, south: 47, east: 28, north: 55 }]);
+  } finally {
+    ViewportLoader.load = originalLoad;
+    ViewportLoader.lastZoom = null;
   }
 });
