@@ -131,6 +131,30 @@ def test_shape_batch_reads_global_display_once_per_level_across_countries():
     assert reads.count(display_dir / "admin_2.parquet") == 1
 
 
+def test_shape_batch_can_reuse_bbox_from_prior_viewport_index():
+    with tempfile.TemporaryDirectory() as temp_dir:
+        geometry_dir = Path(temp_dir) / "geometry"
+        display_dir = geometry_dir / "global" / "display"
+        display_dir.mkdir(parents=True)
+        loc_id = "CAN-G1-G2"
+        pd.DataFrame([{"country_iso3": "CAN", "loc_id": loc_id,
+                       "parent_id": "CAN-G1", "admin_level": 2,
+                       "name": "Example", "geometry": _shape(-112, 60, -111, 61)}]
+                     ).to_parquet(display_dir / "admin_2.parquet", index=False)
+        with patch.object(geometry_handlers, "GEOMETRY_DIR", geometry_dir), \
+             patch("mapmover.runtime.global_admin_shallow_query._selected_layout",
+                   return_value={"bbox_index": Path(temp_dir) / "unused.parquet"}) as layout, \
+             patch.object(geometry_handlers, "select_rows",
+                          wraps=geometry_handlers.select_rows) as reader:
+            features = geometry_handlers.get_display_geometries(
+                [loc_id], include_bbox=False,
+            )["features"]
+    layout.assert_called_once()
+    assert reader.call_count == 1
+    assert features[0]["properties"]["loc_id"] == loc_id
+    assert "bbox_min_lon" not in features[0]["properties"]
+
+
 def test_shape_batch_uses_global_for_profiled_country_shallow_ids():
     global_rows = pd.DataFrame([{"loc_id": "USA-G1", "admin_level": 1,
                                  "name": "Kansas", "geometry": _shape(-103, 37, -94, 40)}])

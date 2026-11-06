@@ -371,7 +371,9 @@ async def get_selection_geometry_endpoint(req: Request):
         return msgpack_error(str(e), 500)
 
 
-async def _explicit_geometry_features(req: Request, handler, *, route_name: str):
+async def _explicit_geometry_features(
+    req: Request, handler, *, route_name: str, allow_index_bounds: bool = False,
+):
     """Validate and execute one bounded explicit-loc-id geometry request."""
     try:
         body = await decode_request_body(req)
@@ -383,7 +385,10 @@ async def _explicit_geometry_features(req: Request, handler, *, route_name: str)
                 f"loc_ids must be a list of at most {MAX_SELECTION_LOC_IDS} ids",
                 413,
             )
-        result = await asyncio.to_thread(handler, loc_ids)
+        if allow_index_bounds and body.get("bbox_from_index") is True:
+            result = await asyncio.to_thread(handler, loc_ids, include_bbox=False)
+        else:
+            result = await asyncio.to_thread(handler, loc_ids)
         return msgpack_response(result)
     except Exception as e:
         logger.error("Error in %s: %s", route_name, e)
@@ -405,6 +410,7 @@ async def get_display_geometry_features_endpoint(req: Request):
         req,
         get_display_geometries_handler,
         route_name="/geometry/display-features",
+        allow_index_bounds=True,
     )
 
 

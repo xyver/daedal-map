@@ -739,16 +739,24 @@ def _load_global_display_viewport_rows(
     return rows.merge(bbox_rows, on="loc_id", how="inner") if not rows.empty else rows
 
 
-def _load_global_display_id_rows(loc_ids: list[str], admin_level: int) -> pd.DataFrame | None:
-    """Fetch one batch of default-country Display shapes from the Global bank."""
+def _load_global_display_id_rows(
+    loc_ids: list[str], admin_level: int, *, include_bbox: bool = True,
+) -> pd.DataFrame | None:
+    """Fetch one batch of Display shapes, optionally reusing the caller's index bounds."""
     if not loc_ids:
         return pd.DataFrame()
+    display_path = GEOMETRY_DIR / "global" / "display" / f"admin_{admin_level}.parquet"
+    if not _parquet_accessible(display_path):
+        return None
     from .runtime.global_admin_shallow_query import _selected_layout
 
     layout = _selected_layout()
-    display_path = GEOMETRY_DIR / "global" / "display" / f"admin_{admin_level}.parquet"
-    if layout is None or not _parquet_accessible(display_path):
+    if layout is None:
         return None
+    if not include_bbox:
+        return select_rows(
+            display_path, in_filters={"loc_id": loc_ids}, raw_geoparquet=True,
+        )
     bbox_rows = select_rows(
         layout["bbox_index"],
         columns=["loc_id", "bbox_min_lon", "bbox_min_lat", "bbox_max_lon", "bbox_max_lat"],
@@ -4308,7 +4316,7 @@ def get_selection_geometries(loc_ids: list):
     return {"type": "FeatureCollection", "features": features}
 
 
-def get_display_geometries(loc_ids: list):
+def get_display_geometries(loc_ids: list, *, include_bbox: bool = True):
     """Return reusable browser shapes without opening Full/query geometry.
 
     Administrative country roots use the compact global Admin0 bank. All
@@ -4363,7 +4371,8 @@ def get_display_geometries(loc_ids: list):
     for level, global_ids in global_by_level.items():
         if not global_ids:
             continue
-        rows = _load_global_display_id_rows(global_ids, level)
+        rows = (_load_global_display_id_rows(global_ids, level) if include_bbox
+                else _load_global_display_id_rows(global_ids, level, include_bbox=False))
         if rows is not None and not rows.empty:
             features.extend(df_to_geojson(rows, polygon_only=True).get("features", []))
             found.update(rows["loc_id"].astype(str))
