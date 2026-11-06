@@ -1,9 +1,10 @@
 """Default countries use published Global Display rows for viewport shapes."""
 
 import json
+import asyncio
 import tempfile
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pandas as pd
 
@@ -153,6 +154,26 @@ def test_shape_batch_can_reuse_bbox_from_prior_viewport_index():
     assert reader.call_count == 1
     assert features[0]["properties"]["loc_id"] == loc_id
     assert "bbox_min_lon" not in features[0]["properties"]
+
+
+def test_display_route_reports_timing_for_opt_in_read():
+    from mapmover.routes import geometry as geometry_routes
+
+    def handler(loc_ids, *, include_bbox=True, timing_ms=None):
+        assert loc_ids == ["CAN-G1-G2"]
+        assert include_bbox is False
+        timing_ms["display"] = 3
+        return {"type": "FeatureCollection", "features": []}
+
+    with patch.object(geometry_routes, "decode_request_body", new_callable=AsyncMock,
+                      return_value={"loc_ids": ["CAN-G1-G2"], "bbox_from_index": True}):
+        response = asyncio.run(geometry_routes._explicit_geometry_features(
+            None, handler, route_name="/geometry/display-features",
+            allow_index_bounds=True,
+        ))
+    assert response.status_code == 200
+    assert "display;dur=3" in response.headers["Server-Timing"]
+    assert "handler;dur=" in response.headers["Server-Timing"]
 
 
 def test_shape_batch_uses_global_for_profiled_country_shallow_ids():

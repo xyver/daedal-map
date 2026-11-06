@@ -741,6 +741,7 @@ def _load_global_display_viewport_rows(
 
 def _load_global_display_id_rows(
     loc_ids: list[str], admin_level: int, *, include_bbox: bool = True,
+    timing_ms: dict[str, int] | None = None,
 ) -> pd.DataFrame | None:
     """Fetch one batch of Display shapes, optionally reusing the caller's index bounds."""
     if not loc_ids:
@@ -754,22 +755,29 @@ def _load_global_display_id_rows(
     if layout is None:
         return None
     if not include_bbox:
-        return select_rows(
+        started = time.perf_counter()
+        rows = select_rows(
             display_path, in_filters={"loc_id": loc_ids}, raw_geoparquet=True,
         )
+        _add_timing_ms(timing_ms, "display", started)
+        return rows
+    started = time.perf_counter()
     bbox_rows = select_rows(
         layout["bbox_index"],
         columns=["loc_id", "bbox_min_lon", "bbox_min_lat", "bbox_max_lon", "bbox_max_lat"],
         exact_filters={"admin_level": admin_level},
         in_filters={"loc_id": loc_ids},
     )
+    _add_timing_ms(timing_ms, "bbox_index", started)
     if bbox_rows.empty:
         return pd.DataFrame()
+    started = time.perf_counter()
     rows = select_rows(
         display_path,
         in_filters={"loc_id": bbox_rows["loc_id"].astype(str).tolist()},
         raw_geoparquet=True,
     )
+    _add_timing_ms(timing_ms, "display", started)
     return rows.merge(bbox_rows, on="loc_id", how="inner") if not rows.empty else rows
 
 
@@ -4316,7 +4324,10 @@ def get_selection_geometries(loc_ids: list):
     return {"type": "FeatureCollection", "features": features}
 
 
-def get_display_geometries(loc_ids: list, *, include_bbox: bool = True):
+def get_display_geometries(
+    loc_ids: list, *, include_bbox: bool = True,
+    timing_ms: dict[str, int] | None = None,
+):
     """Return reusable browser shapes without opening Full/query geometry.
 
     Administrative country roots use the compact global Admin0 bank. All
@@ -4371,10 +4382,16 @@ def get_display_geometries(loc_ids: list, *, include_bbox: bool = True):
     for level, global_ids in global_by_level.items():
         if not global_ids:
             continue
-        rows = (_load_global_display_id_rows(global_ids, level) if include_bbox
-                else _load_global_display_id_rows(global_ids, level, include_bbox=False))
+        if timing_ms is None and include_bbox:
+            rows = _load_global_display_id_rows(global_ids, level)
+        else:
+            rows = _load_global_display_id_rows(
+                global_ids, level, include_bbox=include_bbox, timing_ms=timing_ms,
+            )
         if rows is not None and not rows.empty:
+            started = time.perf_counter()
             features.extend(df_to_geojson(rows, polygon_only=True).get("features", []))
+            _add_timing_ms(timing_ms, "convert", started)
             found.update(rows["loc_id"].astype(str))
 
     for iso3, country_ids in by_country.items():

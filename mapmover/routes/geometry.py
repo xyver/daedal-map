@@ -385,11 +385,26 @@ async def _explicit_geometry_features(
                 f"loc_ids must be a list of at most {MAX_SELECTION_LOC_IDS} ids",
                 413,
             )
+        timing_ms = {} if allow_index_bounds else None
+        started = time.perf_counter()
         if allow_index_bounds and body.get("bbox_from_index") is True:
-            result = await asyncio.to_thread(handler, loc_ids, include_bbox=False)
+            result = await asyncio.to_thread(
+                handler, loc_ids, include_bbox=False, timing_ms=timing_ms,
+            )
+        elif allow_index_bounds:
+            result = await asyncio.to_thread(handler, loc_ids, timing_ms=timing_ms)
         else:
             result = await asyncio.to_thread(handler, loc_ids)
-        return msgpack_response(result)
+        if timing_ms is None:
+            return msgpack_response(result)
+        timing_ms["handler"] = int((time.perf_counter() - started) * 1000)
+        started = time.perf_counter()
+        response = msgpack_response(result)
+        timing_ms["encode"] = int((time.perf_counter() - started) * 1000)
+        response.headers["Server-Timing"] = ", ".join(
+            f"{name};dur={duration}" for name, duration in timing_ms.items()
+        )
+        return response
     except Exception as e:
         logger.error("Error in %s: %s", route_name, e)
         return msgpack_error(str(e), 500)
