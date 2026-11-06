@@ -511,7 +511,12 @@ def _country_display_sources(
     parent_ids: set[str] | None = None,
     loc_ids: list[str] | None = None,
 ) -> tuple[list[Path], dict | None, str]:
-    """Select country Display, then the published Global Admin1/2 Display."""
+    """Select Global Display through Admin2, then country Display."""
+    if admin_level in (1, 2):
+        global_path = GEOMETRY_DIR / "global" / "display" / f"admin_{admin_level}.parquet"
+        if _parquet_accessible(global_path):
+            return [global_path], None, "global_admin_display_fallback"
+        return [], None, "missing_global_admin_display"
     owners = {
         owner
         for owner in (
@@ -565,13 +570,12 @@ def load_country_display_rows(
 ):
     """Read simplified rows for a browser/display payload only.
 
-    Active country Display releases own enriched countries. The original
-    GeoBoundaries country shard remains the global default for countries that
-    do not yet publish a Display family. Full/query banks are never candidates.
+    Global Display owns Admin1/2 map rows for every country. Country Display
+    releases own deeper levels. Full/query banks are never candidates.
     """
     normalized = str(iso3 or "").strip().upper()
     requested_ids = [canonicalize_loc_id(value) for value in (loc_ids or []) if value]
-    if requested_ids:
+    if requested_ids and admin_level not in (1, 2):
         requested_set = set(requested_ids)
         cached_frames = []
         with _country_parquet_cache_lock:
@@ -1378,19 +1382,13 @@ def get_geometry_index(parent_loc_id: str | None = None, admin_level: int | None
             countries = get_countries_in_bbox(*bbox)
             frames = []
             if target_level in (1, 2):
-                enriched = {
-                    str(profile.get("country_code") or "").upper()
-                    for profile in load_geometry_catalog().get("country_profiles") or []
-                    if isinstance(profile, dict)
-                }
-                default_countries = [iso3 for iso3 in countries if iso3 not in enriched]
                 global_rows = _load_global_display_viewport_rows(
-                    default_countries, target_level, bbox, GEOMETRY_INDEX_COLUMNS
+                    countries, target_level, bbox, GEOMETRY_INDEX_COLUMNS
                 )
                 if global_rows is not None:
                     if not global_rows.empty:
                         frames.append(global_rows)
-                    countries = [iso3 for iso3 in countries if iso3 in enriched]
+                countries = []
             for iso3 in countries:
                 viewport_df = load_country_display_rows(
                     iso3,
@@ -4313,9 +4311,9 @@ def get_selection_geometries(loc_ids: list):
 def get_display_geometries(loc_ids: list):
     """Return reusable browser shapes without opening Full/query geometry.
 
-    Administrative country roots use the compact global Admin0 bank. Enriched
-    sub-country ids follow their admitted Display release; default-country
-    Admin1/2 ids are batched by level against Global Display. Explicit
+    Administrative country roots use the compact global Admin0 bank. All
+    Admin1/2 ids are batched by level against Global Display. Deeper ids use
+    admitted country Display releases. Explicit
     sidechain families keep their own already-display-oriented banks.
     """
     requested_ids = list(dict.fromkeys(
@@ -4348,15 +4346,8 @@ def get_display_geometries(loc_ids: list):
         if family in {"admin_geometry", "admin_local"}:
             by_country.setdefault(loc_id.split("-", 1)[0].upper(), []).append(loc_id)
 
-    enriched = {
-        str(profile.get("country_code") or "").upper()
-        for profile in load_geometry_catalog().get("country_profiles") or []
-        if isinstance(profile, dict)
-    }
     global_by_level: dict[int, list[str]] = {1: [], 2: []}
     for iso3, country_ids in list(by_country.items()):
-        if iso3 in enriched:
-            continue
         remaining = []
         for loc_id in country_ids:
             level = loc_id.count("-")
@@ -4373,10 +4364,7 @@ def get_display_geometries(loc_ids: list):
         if not global_ids:
             continue
         rows = _load_global_display_id_rows(global_ids, level)
-        if rows is None:
-            for loc_id in global_ids:
-                by_country.setdefault(loc_id.split("-", 1)[0].upper(), []).append(loc_id)
-        elif not rows.empty:
+        if rows is not None and not rows.empty:
             features.extend(df_to_geojson(rows, polygon_only=True).get("features", []))
             found.update(rows["loc_id"].astype(str))
 

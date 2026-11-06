@@ -61,34 +61,26 @@ def test_default_country_viewport_uses_global_display_and_bbox_index():
     assert props["bbox_min_lon"] == 19
 
 
-def test_viewport_routes_profiled_and_default_countries_to_separate_display_sources():
-    global_rows = pd.DataFrame([{
-        "loc_id": "CAF-G1", "admin_level": 1,
-        "bbox_min_lon": 18, "bbox_min_lat": 4,
-        "bbox_max_lon": 24, "bbox_max_lat": 9,
-    }])
-    country_rows = pd.DataFrame([{
-        "loc_id": "USA-KS", "admin_level": 1,
-        "bbox_min_lon": -103, "bbox_min_lat": 37,
-        "bbox_max_lon": -94, "bbox_max_lat": 40,
-    }])
+def test_viewport_routes_profiled_and_default_countries_to_global_through_admin2():
+    global_rows = pd.DataFrame([
+        {"loc_id": "CAF-G1", "admin_level": 1},
+        {"loc_id": "USA-G1", "admin_level": 1},
+    ])
     with patch.object(geometry_handlers, "get_countries_in_bbox", return_value=["CAF", "USA"]), \
          patch.object(geometry_handlers, "load_geometry_catalog", return_value={
              "country_profiles": [{"country_code": "USA"}]
          }), \
          patch.object(geometry_handlers, "_load_global_display_viewport_rows",
                       return_value=global_rows) as global_loader, \
-         patch.object(geometry_handlers, "load_country_display_rows",
-                      return_value=country_rows) as country_loader:
+         patch.object(geometry_handlers, "load_country_display_rows") as country_loader:
         result = geometry_handlers.get_geometry_index(
             admin_level=1, bbox=(-105, 3, 25, 41)
         )
 
     global_loader.assert_called_once()
-    assert global_loader.call_args.args[0] == ["CAF"]
-    country_loader.assert_called_once()
-    assert country_loader.call_args.args[0] == "USA"
-    assert {row["loc_id"] for row in result["rows"]} == {"CAF-G1", "USA-KS"}
+    assert global_loader.call_args.args[0] == ["CAF", "USA"]
+    country_loader.assert_not_called()
+    assert {row["loc_id"] for row in result["rows"]} == {"CAF-G1", "USA-G1"}
 
 
 def test_shape_batch_reads_global_display_once_per_level_across_countries():
@@ -139,17 +131,29 @@ def test_shape_batch_reads_global_display_once_per_level_across_countries():
     assert reads.count(display_dir / "admin_2.parquet") == 1
 
 
-def test_shape_batch_keeps_profiled_country_display_route():
-    country_rows = pd.DataFrame([{"loc_id": "USA-KS", "admin_level": 1,
-                                  "name": "Kansas", "geometry": _shape(-103, 37, -94, 40)}])
+def test_shape_batch_uses_global_for_profiled_country_shallow_ids():
+    global_rows = pd.DataFrame([{"loc_id": "USA-G1", "admin_level": 1,
+                                 "name": "Kansas", "geometry": _shape(-103, 37, -94, 40)}])
     with patch.object(geometry_handlers, "load_geometry_catalog", return_value={
              "country_profiles": [{"country_code": "USA"}]
          }), \
-         patch.object(geometry_handlers, "_load_global_display_id_rows") as global_loader, \
+         patch.object(geometry_handlers, "_load_global_display_id_rows",
+                      return_value=global_rows) as global_loader, \
+         patch.object(geometry_handlers, "load_country_display_rows") as country_loader:
+        features = geometry_handlers.get_display_geometries(["USA-G1"])["features"]
+
+    global_loader.assert_called_once_with(["USA-G1"], 1)
+    country_loader.assert_not_called()
+    assert features[0]["properties"]["loc_id"] == "USA-G1"
+
+
+def test_shape_batch_uses_country_display_at_admin3():
+    country_rows = pd.DataFrame([{"loc_id": "USA-KS-1-2", "admin_level": 3,
+                                  "name": "Deep", "geometry": _shape(-103, 37, -94, 40)}])
+    with patch.object(geometry_handlers, "_load_global_display_id_rows") as global_loader, \
          patch.object(geometry_handlers, "load_country_display_rows",
                       return_value=country_rows) as country_loader:
-        features = geometry_handlers.get_display_geometries(["USA-KS"])["features"]
-
+        features = geometry_handlers.get_display_geometries(["USA-KS-1-2"])["features"]
     global_loader.assert_not_called()
-    country_loader.assert_called_once_with("USA", loc_ids=["USA-KS"])
-    assert features[0]["properties"]["loc_id"] == "USA-KS"
+    country_loader.assert_called_once_with("USA", loc_ids=["USA-KS-1-2"])
+    assert features[0]["properties"]["loc_id"] == "USA-KS-1-2"
