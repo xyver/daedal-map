@@ -496,13 +496,13 @@ export const LocationInfoCache = {
   /**
    * Fetch location info from API
    */
-  async fetch(locId) {
+  async fetch(locId, { silent = false } = {}) {
     // Check cache first
     const cached = this.get(locId);
     if (cached) return cached;
 
     try {
-      const data = await fetchMsgpack(`/geometry/${locId}/info`);
+      const data = await fetchMsgpack(`/geometry/${locId}/info`, { silent });
       this.set(locId, data);
       return data;
     } catch (error) {

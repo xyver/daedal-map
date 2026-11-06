@@ -107,7 +107,7 @@ export const PopupBuilder = {
    * @param {Object} locationInfo - Optional enriched location info from API
    * @returns {string} HTML content
    */
-  build(properties, sourceData = null, locationInfo = null) {
+  build(properties, sourceData = null, locationInfo = null, options = {}) {
     const lines = [];
     const combinedMetricData = properties?._combined_metric_data || null;
 
@@ -129,6 +129,12 @@ export const PopupBuilder = {
         lines.push('<em style="font-size: 10px; color: rgba(230, 243, 255, 0.62);">Zoom in for more detail</em>');
       }
       return lines.join('<br>');
+    }
+
+    // Administrative geometry has a small, purpose-built card. The generic
+    // field formatter would expose release IDs, precision, and every ancestor.
+    if (properties?.loc_id && sourceData?.data_type !== 'metrics') {
+      return this.buildGeometryPopup(properties, locationInfo, options.mode === 'hover');
     }
 
     // Check if we have actual data fields (from a chat query)
@@ -247,6 +253,72 @@ export const PopupBuilder = {
     // Compact hint for zoom navigation (no leading break)
     lines.push('<em style="font-size: 10px; color: rgba(230, 243, 255, 0.62);">Zoom in for more</em>');
 
+    return lines.join('<br>');
+  },
+
+  escapeHtml(value) {
+    return String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  },
+
+  geometryYear(properties, info = {}) {
+    const value = properties.data_year || properties.geometry_vintage ||
+      properties.source_vintage || info.geometry_vintage || info.source_vintage ||
+      properties.valid_from || info.valid_from || properties.year;
+    const match = String(value ?? '').match(/\b(1[89]\d{2}|20\d{2}|21\d{2})\b/);
+    return match?.[1] || '';
+  },
+
+  geometrySource(properties, info = {}) {
+    const value = properties.geometry_source || info.geometry_source ||
+      properties.source_system || info.source_system || '';
+    const raw = String(value).trim();
+    if (!raw) return '';
+    if (/statcan|statistics canada/i.test(raw)) return 'Statistics Canada';
+    if (/geoboundaries/i.test(raw)) return 'geoBoundaries';
+    if (/natural.?earth/i.test(raw)) return 'Natural Earth';
+    if (/us.?census|tiger/i.test(raw)) return 'US Census Bureau';
+    // A path or release slug is provenance metadata, not a useful source name.
+    if (/[\\/]/.test(raw) || /_\d{4}_admin_\d/i.test(raw)) return '';
+    return raw.replace(/_/g, ' ');
+  },
+
+  buildGeometryPopup(properties, locationInfo = null, hover = false) {
+    const info = locationInfo && !locationInfo.error ? locationInfo : {};
+    const lines = [`<strong>${this.escapeHtml(this.buildDisplayName(properties))}</strong>`];
+    const membership = Array.isArray(info.memberships) ? info.memberships : [];
+    if (membership[0]?.startsWith('Part of:')) {
+      lines.push(this.escapeHtml(membership[0]));
+    } else if (membership.length) {
+      lines.push(this.escapeHtml(membership.slice(0, hover ? 2 : 3).join(', ')));
+    }
+
+    const year = this.geometryYear(properties, info);
+    if (year) lines.push(`Year: ${year}`);
+
+    const landArea = info.land_area ?? properties.land_area;
+    if (landArea != null && Number.isFinite(Number(landArea))) {
+      lines.push(`Land area: ${this.formatAreaM2(Number(landArea))}`);
+    } else if (info.area_total_sq_km != null && Number.isFinite(Number(info.area_total_sq_km))) {
+      lines.push(`Area: ${this.formatAreaKm2(Number(info.area_total_sq_km))}`);
+    }
+
+    if (properties.loc_id) lines.push(`loc_id: ${this.escapeHtml(properties.loc_id)}`);
+    const source = this.geometrySource(properties, info);
+    if (source) lines.push(`Source: ${this.escapeHtml(source)}`);
+
+    if (!hover) {
+      if (info.capital_name) lines.push(`Capital: ${this.escapeHtml(info.capital_name)}`);
+      if (Number.isFinite(Number(info.coastline_km)) && Number(info.coastline_km) > 0) {
+        lines.push(`Coastline: ${this.formatDistanceKm(Number(info.coastline_km))}`);
+      }
+      if (info.admin_level === 0 && Number(info.dataset_counts?.country) > 0) {
+        lines.push(`${Number(info.dataset_counts.country).toLocaleString()} datasets`);
+      }
+      if (Number(info.children_count) > 0 || Number(info.descendants_count) > 0) {
+        lines.push(...this.formatSubdivisions(info).map((line) => this.escapeHtml(line)));
+      }
+    }
     return lines.join('<br>');
   },
 

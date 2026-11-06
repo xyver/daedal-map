@@ -2672,8 +2672,36 @@ export const App = {
    */
   handleFeatureHover(feature, lngLat) {
     const properties = this.getPopupProperties(feature);
-    const popupHtml = PopupBuilder.build(properties, this.getPopupSourceData(feature));
+    const sourceData = this.getPopupSourceData(feature);
+    const locId = properties?.loc_id;
+    const geometryHover = locId && sourceData?.data_type !== 'metrics' &&
+      !properties?._combined_metric_data?.sections?.length;
+    if (!geometryHover) this.cancelFeatureHover();
+    const cachedInfo = geometryHover ? LocationInfoCache.get(locId) : null;
+    const popupHtml = PopupBuilder.build(properties, sourceData, cachedInfo, { mode: 'hover' });
     MapAdapter.showPopup([lngLat.lng, lngLat.lat], popupHtml);
+
+    if (!geometryHover || cachedInfo || MapAdapter.popupLocked) return;
+    if (this.hoverPopupLocId !== locId) {
+      this.cancelFeatureHover();
+      this.hoverPopupLocId = locId;
+      const token = this.hoverPopupToken;
+      // Wait for a settled hover before fetching location facts.
+      this.hoverPopupTimer = setTimeout(async () => {
+        const info = await LocationInfoCache.fetch(locId, { silent: true });
+        if (token !== this.hoverPopupToken || MapAdapter.popupLocked ||
+            this.hoverPopupLocId !== locId || !info || info.error) return;
+        MapAdapter.showPopup([lngLat.lng, lngLat.lat],
+          PopupBuilder.build(properties, sourceData, info, { mode: 'hover' }));
+      }, 300);
+    }
+  },
+
+  cancelFeatureHover() {
+    if (this.hoverPopupTimer) clearTimeout(this.hoverPopupTimer);
+    this.hoverPopupTimer = null;
+    this.hoverPopupLocId = null;
+    this.hoverPopupToken = (this.hoverPopupToken || 0) + 1;
   },
 
   getPopupSourceData(feature) {
@@ -3617,6 +3645,7 @@ export const App = {
 
     this._researchDisplayLeaveHandler = () => {
       if (!MapAdapter?.map) return;
+      this.cancelFeatureHover();
       MapAdapter.map.getCanvas().style.cursor = '';
       if (!MapAdapter.popupLocked) {
         MapAdapter.hidePopup?.();

@@ -1374,6 +1374,7 @@ export const MapAdapter = {
 
     if (!this.baseLayerHandlerRefs.mouseleave) {
       this.baseLayerHandlerRefs.mouseleave = () => {
+        App?.cancelFeatureHover?.();
         const regionSource = this.map.getSource(CONFIG.layers.source);
         if (!regionSource) {
           this.hoveredFeatureId = null;
