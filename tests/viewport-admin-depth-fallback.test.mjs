@@ -97,7 +97,7 @@ test('zoom holds Admin 3 when Admin 4 has no published rows, including cached re
   }
 });
 
-test('a cancelled same-level request does not strand the replacement as in flight', async () => {
+test('same-level zooms keep the active request and load only the latest viewport afterward', async () => {
   const bbox = { west: 18, south: 4, east: 24, north: 9 };
   const bounds = {
     getWest: () => bbox.west, getSouth: () => bbox.south,
@@ -105,7 +105,11 @@ test('a cancelled same-level request does not strand the replacement as in fligh
   };
   const originalFetch = globalThis.fetch;
   const originalDocument = globalThis.document;
+  const originalLoad = ViewportLoader.load;
   let fetchCount = 0;
+  let abortCount = 0;
+  let releaseFirst;
+  let followUp;
   const rendered = [];
   globalThis.document = {
     getElementById: (id) => id === 'totalAreas' ? { set textContent(value) {} } : null,
@@ -114,12 +118,9 @@ test('a cancelled same-level request does not strand the replacement as in fligh
   globalThis.fetch = (_url, { signal }) => {
     fetchCount += 1;
     if (fetchCount === 1) {
-      return new Promise((_resolve, reject) => {
-        signal.addEventListener('abort', () => {
-          const error = new Error('cancelled');
-          error.name = 'AbortError';
-          reject(error);
-        }, { once: true });
+      return new Promise((resolve) => {
+        releaseFirst = () => resolve({ ok: true, arrayBuffer: async () => new Uint8Array([0]).buffer });
+        signal.addEventListener('abort', () => { abortCount += 1; }, { once: true });
       });
     }
     return Promise.resolve({ ok: true, arrayBuffer: async () => new Uint8Array([0]).buffer });
@@ -133,21 +134,77 @@ test('a cancelled same-level request does not strand the replacement as in fligh
     GeometryCache.add([{
       type: 'Feature',
       properties: {
-        loc_id: 'CAF', admin_level: 0,
+        loc_id: 'CAF-G1', admin_level: 1,
         bbox_min_lon: 14, bbox_min_lat: 2, bbox_max_lon: 28, bbox_max_lat: 11
       },
       geometry: { type: 'Polygon', coordinates: [[[14, 2], [28, 2], [28, 11], [14, 2]]] }
     }]);
     ViewportLoader.currentAdminLevel = 1;
-    ViewportLoader.lastRenderedLevel = 0;
+    ViewportLoader.lastRenderedLevel = 1;
+    ViewportLoader.load = (level) => { followUp = ViewportLoader.doLoad(level); return followUp; };
     const first = ViewportLoader.doLoad(1);
-    const replacement = ViewportLoader.doLoad(1);
-    await Promise.all([first, replacement]);
+    bbox.west = 35;
+    bbox.east = 41;
+    await ViewportLoader.doLoad(1);
+    await ViewportLoader.doLoad(1);
+    assert.equal(fetchCount, 1);
+    assert.equal(abortCount, 0);
+    releaseFirst();
+    await first;
+    await followUp;
     assert.equal(fetchCount, 2);
     assert.equal(GeometryCache.isCovered(1, bbox), true);
-    assert.equal(GeometryCache.isCovered(1, { west: 17.5, south: 3.5, east: 24.5, north: 9.5 }), true);
     assert.equal(GeometryCache.inFlightByLevel.has(1), false);
-    assert.equal(rendered.at(-1)[0].properties.loc_id, 'CAF');
+    assert.equal(abortCount, 0);
+    assert.equal(rendered.at(-1).length, 0);
+  } finally {
+    ViewportLoader.cancelActiveRequest();
+    ViewportLoader.load = originalLoad;
+    GeometryCache.clear();
+    globalThis.fetch = originalFetch;
+    globalThis.document = originalDocument;
+  }
+});
+
+test('crossing an admin threshold still cancels the previous request', async () => {
+  const bbox = { west: 18, south: 4, east: 24, north: 9 };
+  const originalFetch = globalThis.fetch;
+  const originalDocument = globalThis.document;
+  let abortCount = 0;
+  globalThis.document = {
+    getElementById: (id) => id === 'totalAreas' ? { set textContent(_value) {} } : null,
+    querySelector: () => null
+  };
+  globalThis.fetch = (_url, { signal }) => {
+    if (!abortCount && !signal.aborted) {
+      return new Promise((_resolve, reject) => {
+        signal.addEventListener('abort', () => {
+          abortCount += 1;
+          const error = new Error('cancelled');
+          error.name = 'AbortError';
+          reject(error);
+        }, { once: true });
+      });
+    }
+    return Promise.resolve({ ok: true, arrayBuffer: async () => new Uint8Array([0]).buffer });
+  };
+  setDependencies({
+    MapAdapter: { map: { getBounds: () => ({
+      getWest: () => bbox.west, getSouth: () => bbox.south,
+      getEast: () => bbox.east, getNorth: () => bbox.north
+    }) }, loadGeoJSONWithFade: () => {} },
+    NavigationManager: { updateLevelDisplay: () => {} }
+  });
+  try {
+    GeometryCache.clear();
+    ViewportLoader.currentAdminLevel = 1;
+    ViewportLoader.lastRenderedLevel = 2;
+    const first = ViewportLoader.doLoad(1);
+    ViewportLoader.currentAdminLevel = 2;
+    const second = ViewportLoader.doLoad(2);
+    await Promise.all([first, second]);
+    assert.equal(abortCount, 1);
+    assert.equal(GeometryCache.inFlightByLevel.has(1), false);
   } finally {
     ViewportLoader.cancelActiveRequest();
     GeometryCache.clear();

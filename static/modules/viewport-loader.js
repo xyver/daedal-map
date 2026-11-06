@@ -41,6 +41,7 @@ export const ViewportLoader = {
   lockedLevel: null,   // The locked admin level (0-6)
   abortController: null,  // For cancelling stale requests
   activeRequest: null,  // Owns in-flight coverage and ids until completion/cancellation
+  pendingSameLevel: false,  // Coalesce wheel zooms into one latest-viewport follow-up
   requestId: 0,  // Counter to track which request is current
   lastRequestedLevel: null,  // Track the level of the in-flight request
   lastZoom: null,  // Track zoom level to distinguish zoom from pan
@@ -60,6 +61,7 @@ export const ViewportLoader = {
   },
 
   cancelActiveRequest() {
+    this.pendingSameLevel = false;
     this.abortController?.abort();
     this.abortController = null;
     const active = this.activeRequest;
@@ -361,22 +363,6 @@ export const ViewportLoader = {
     let missingLocIds = [];
     let requestKey = null;
 
-    // A newer viewport always supersedes the old one, including a same-level
-    // pan. Letting both continue can download and decode hundreds of polygons
-    // for a viewport the user has already left.
-    if (this.abortController) {
-      this.cancelActiveRequest();
-      console.log(`Viewport changed, cancelling previous level ${this.lastRequestedLevel} request`);
-    }
-
-    // Track which level we're requesting
-    this.lastRequestedLevel = adminLevel;
-
-    // Create new abort controller for this request
-    const requestController = new AbortController();
-    this.abortController = requestController;
-    const thisRequestId = ++this.requestId;
-
     const bounds = MapAdapter.map.getBounds();
     const bboxObject = {
       west: Number(bounds.getWest().toFixed(3)),
@@ -399,13 +385,28 @@ export const ViewportLoader = {
       indexBboxObject.north.toFixed(3)
     ].join(',');
 
-    // Switch to shapes cached for the new viewport immediately. A previous
-    // region must not remain on screen while this region's index/shape read
-    // is pending, especially when a country Display read is slow.
+    // Show cached shapes for the latest viewport, even while a previous
+    // same-level request is still completing.
     if (this.renderBestAvailableViewport(adminLevel, bboxObject) === null && GeometryCache.features.size > 0) {
       MapAdapter.loadGeoJSONWithFade({ type: 'FeatureCollection', features: [] });
       document.getElementById('totalAreas').textContent = 0;
     }
+
+    if (this.abortController) {
+      if (this.lastRequestedLevel === adminLevel) {
+        this.pendingSameLevel = true;
+        console.log(`Level ${adminLevel} request in flight; queued latest viewport`);
+        return;
+      }
+      this.cancelActiveRequest();
+      console.log(`Admin level changed, cancelling previous level ${this.lastRequestedLevel} request`);
+    }
+
+    if (this.lastRequestedLevel !== adminLevel) this.pendingSameLevel = false;
+    this.lastRequestedLevel = adminLevel;
+    const requestController = new AbortController();
+    this.abortController = requestController;
+    const thisRequestId = ++this.requestId;
 
     if (GeometryCache.isCovered(adminLevel, bboxObject)) {
       console.log(`[${thisRequestId}] Level ${adminLevel} viewport already covered, rendering from cache`);
@@ -442,18 +443,19 @@ export const ViewportLoader = {
       );
 
       if (missingLocIds.length === 0) {
-        const visibleCached = GeometryCache.getForViewport(adminLevel, bboxObject);
+        const currentBbox = this.getCurrentBbox();
+        const visibleCached = GeometryCache.getForViewport(adminLevel, currentBbox);
         const fullyLoaded = inFlightLocIds.length === 0 && loadedLocIds.length === requestedLocIds.length;
         console.log(`[${thisRequestId}] Level ${adminLevel} has no newly missing ids (${loadedLocIds.length} loaded, ${inFlightLocIds.length} in flight)`);
         if (fullyLoaded) {
           GeometryCache.markCoverage(adminLevel, indexBboxObject);
         }
         if (visibleCached.length > 0) {
-          this.renderViewportFromCache(adminLevel, bboxObject);
+          this.renderViewportFromCache(adminLevel, currentBbox);
           if (adminLevel !== targetLevel) NavigationManager?.updateLevelDisplay(adminLevel);
         } else if (fullyLoaded || requestedLocIds.length === 0) {
-          if (!await this.holdPreviousAdminLevel(adminLevel, targetLevel, bboxObject)) {
-            this.renderViewportFromCache(adminLevel, bboxObject);
+          if (!await this.holdPreviousAdminLevel(adminLevel, targetLevel, currentBbox)) {
+            this.renderViewportFromCache(adminLevel, currentBbox);
           }
         }
         return;
@@ -500,6 +502,7 @@ export const ViewportLoader = {
       }
 
       const featureCount = data.features?.length || 0;
+      const currentBbox = this.getCurrentBbox();
       console.log(`[${thisRequestId}] Level ${adminLevel} response: ${featureCount} features`);
 
       if (featureCount > 0) {
@@ -511,10 +514,10 @@ export const ViewportLoader = {
         } else {
           console.warn(`[${thisRequestId}] Level ${adminLevel} returned a partial shape batch; coverage remains open`);
         }
-        this.renderViewportFromCache(adminLevel, bboxObject);
+        this.renderViewportFromCache(adminLevel, currentBbox);
         if (adminLevel !== targetLevel) NavigationManager?.updateLevelDisplay(adminLevel);
       } else {
-        this.renderBestAvailableViewport(Math.min(adminLevel - 1, this.lastRenderedLevel), bboxObject);
+        this.renderBestAvailableViewport(Math.min(adminLevel - 1, this.lastRenderedLevel), currentBbox);
       }
     } catch (err) {
       // Ignore abort errors - they're expected when we cancel requests
@@ -524,10 +527,11 @@ export const ViewportLoader = {
       }
       console.error('Viewport load failed:', err);
       // Keep displaying cached data - user sees no change
-      const cached = GeometryCache.getForViewport(adminLevel, bboxObject);
+      const currentBbox = this.getCurrentBbox();
+      const cached = GeometryCache.getForViewport(adminLevel, currentBbox);
       if (cached.length === 0) {
         console.warn('No cached data available');
-        this.renderBestAvailableViewport(Math.min(adminLevel - 1, this.lastRenderedLevel), bboxObject);
+        this.renderBestAvailableViewport(Math.min(adminLevel - 1, this.lastRenderedLevel), currentBbox);
       }
     } finally {
       if (this.activeRequest?.id === thisRequestId) {
@@ -536,7 +540,29 @@ export const ViewportLoader = {
         this.activeRequest = null;
       }
       if (this.abortController === requestController) this.abortController = null;
+      if (this.pendingSameLevel && !this.abortController) {
+        this.pendingSameLevel = false;
+        if (this.currentAdminLevel === adminLevel && MapAdapter?.map &&
+            !this.tabSuspended && isAdminLayersActive()) {
+          const latestBbox = this.getCurrentBbox();
+          if (GeometryCache.isCovered(adminLevel, latestBbox)) {
+            this.renderBestAvailableViewport(adminLevel, latestBbox);
+          } else {
+            void this.load(adminLevel);
+          }
+        }
+      }
     }
+  },
+
+  getCurrentBbox() {
+    const bounds = MapAdapter.map.getBounds();
+    return {
+      west: Number(bounds.getWest().toFixed(3)),
+      south: Number(bounds.getSouth().toFixed(3)),
+      east: Number(bounds.getEast().toFixed(3)),
+      north: Number(bounds.getNorth().toFixed(3))
+    };
   },
 
   /**
@@ -585,6 +611,7 @@ export const ViewportLoader = {
       console.log(`Viewport area ${area.toFixed(0)} sq deg -> Admin level ${newLevel}${lockInfo}`);
 
       this.currentAdminLevel = newLevel;
+      this.pendingSameLevel = false;
       this.load(newLevel);
 
       // Update breadcrumb to show current level
