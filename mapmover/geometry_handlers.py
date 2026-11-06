@@ -1179,11 +1179,11 @@ def load_country_bounds():
     Load country bounding boxes for query filtering.
     Returns dict of iso3 -> (min_lon, min_lat, max_lon, max_lat).
 
-    Bounds come from the bounded Admin0 Display bank, which stores them as
-    columns. The exact global bank is a 400 MB+ CSV whose polygons had to be
-    parsed with shapely just to recover numbers the Display bank already
-    carries, and loading it here pulled exact geometry into ordinary viewport
-    and map requests. Point containment still uses the exact bank; see
+    Bounds come from the bounded Admin0 Display bank. Older Display releases
+    provide bbox columns; the cloud global Display bootstrap has only the
+    simplified geometry, so derive bounds from those shapes when needed.
+    The exact global bank must not be loaded for ordinary viewport requests.
+    Point containment still uses the exact bank; see
     resolve_point_to_location and resolve_points_to_locations.
     """
     global _country_bounds_cache
@@ -1198,23 +1198,32 @@ def load_country_bounds():
         return _country_bounds_cache
 
     bbox_columns = ("bbox_min_lon", "bbox_min_lat", "bbox_max_lon", "bbox_max_lat")
-    if not all(column in df.columns for column in bbox_columns):
-        logger.warning("Admin0 Display bank is missing bbox columns; country bounds empty")
+    has_bbox_columns = all(column in df.columns for column in bbox_columns)
+    if not has_bbox_columns and "geometry" not in df.columns:
+        logger.warning("Admin0 Display bank has neither bbox columns nor geometry")
         return _country_bounds_cache
 
+    from shapely.errors import GEOSException
+    from shapely.geometry import shape
+
     pad = COUNTRY_BOUNDS_DISPLAY_PAD_DEG
-    for row in df[["loc_id", *bbox_columns]].to_dict("records"):
+    columns = ["loc_id", *(bbox_columns if has_bbox_columns else ()),
+               *(["geometry"] if "geometry" in df.columns else [])]
+    for row in df[columns].to_dict("records"):
         loc_id = row.get("loc_id")
         if not loc_id:
             continue
         try:
-            min_lon = float(row["bbox_min_lon"])
-            min_lat = float(row["bbox_min_lat"])
-            max_lon = float(row["bbox_max_lon"])
-            max_lat = float(row["bbox_max_lat"])
-        except (TypeError, ValueError):
-            continue
-        if any(pd.isna(value) for value in (min_lon, min_lat, max_lon, max_lat)):
+            bounds = tuple(float(row[column]) for column in bbox_columns) if has_bbox_columns else ()
+            if not bounds or any(pd.isna(value) for value in bounds):
+                raw_geometry = row.get("geometry")
+                geometry = shape(json.loads(raw_geometry) if isinstance(raw_geometry, str) else raw_geometry)
+                bounds = geometry.bounds
+            if len(bounds) != 4 or any(pd.isna(value) for value in bounds):
+                continue
+            min_lon, min_lat, max_lon, max_lat = bounds
+        except (TypeError, ValueError, KeyError, AttributeError, GEOSException, json.JSONDecodeError):
+            logger.warning("Cannot derive Admin0 Display bounds for %s", loc_id)
             continue
         _country_bounds_cache[loc_id] = (
             max(min_lon - pad, -180.0),

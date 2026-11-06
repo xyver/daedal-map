@@ -93,6 +93,18 @@ class Admin0DisplayReadPathTests(unittest.TestCase):
         self.assertEqual((-180.0, -90.0, 180.0, -60.0 + geometry_handlers.COUNTRY_BOUNDS_DISPLAY_PAD_DEG),
                          bounds["ATA"])
 
+    def test_country_bounds_derive_from_cloud_display_geometry_without_bbox_columns(self) -> None:
+        # The published cloud bootstrap has loc_id and simplified GeoJSON but
+        # no bbox columns. The viewport shortlist must still reach the country
+        # Display release for Admin 1+ shapes.
+        display = _display_frame().drop(columns=[
+            "bbox_min_lon", "bbox_min_lat", "bbox_max_lon", "bbox_max_lat"
+        ])
+        with patch.object(geometry_handlers, "load_global_country_display_frame", return_value=display), \
+             patch.object(geometry_handlers, "load_global_countries_frame", side_effect=EXACT_MUST_NOT_LOAD):
+            self.assertEqual(["HKG"], geometry_handlers.get_countries_in_bbox(113.9, 22.2, 114.1, 22.4))
+            self.assertEqual({"FRA", "HKG"}, set(geometry_handlers.load_country_bounds()))
+
     def test_viewport_country_filter_reads_display_bank(self) -> None:
         with patch.object(
             preprocessor_geo, "load_global_country_display_frame", return_value=_display_frame()
