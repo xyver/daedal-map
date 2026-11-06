@@ -122,7 +122,7 @@ def resolve_global_admin_bbox(corners: list[dict[str, Any]]) -> dict[str, Any]:
 
 def resolve_country_admin_bbox(corners: list[dict[str, Any]], shallow_loc_id: str) -> dict[str, Any]:
     """Second pass inside one admitted country Admin 1 owner, through its deep bank."""
-    from .admin_spine_query import layout_available, layout_root
+    from .admin_spine_query import _has_deep_partitions, layout_available, layout_root
     from .family_point_resolution import shallow_scope
 
     west, south, east, north = rectangle_bounds(corners)
@@ -133,7 +133,9 @@ def resolve_country_admin_bbox(corners: list[dict[str, Any]], shallow_loc_id: st
         return {"error": {"code": "shallow_scope_unavailable",
                           "message": "Selected country Admin 1 layout is unavailable"}}
     root = layout_root(country)
-    banks = [root / "admin_0_3.parquet", root / "deep" / f"{owner}.parquet"]
+    banks = [(root / "admin_0_3.parquet", 1)]
+    if _has_deep_partitions(country):
+        banks.append((root / "deep" / f"{owner}.parquet", 4))
     viewport = transform(_AREA_TRANSFORM, box(west, south, east, north))
     area = viewport.area
     if area <= 0:
@@ -147,7 +149,7 @@ def resolve_country_admin_bbox(corners: list[dict[str, Any]], shallow_loc_id: st
         except Exception:
             connection.execute("INSTALL spatial")
             connection.execute("LOAD spatial")
-        for path, minimum_level in ((banks[0], 1), (banks[1], 4)):
+        for path, minimum_level in banks:
             record_mcp_file(path)
             rows = connection.execute(
                 "SELECT loc_id, name, parent_id, admin_level, "

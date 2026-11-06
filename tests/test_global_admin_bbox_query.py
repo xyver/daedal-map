@@ -129,14 +129,18 @@ class GlobalAdminBBoxTests(unittest.TestCase):
             def fetchdf(self):
                 return self.rows
 
-        connection = Connection()
-        with mock.patch.object(family_point_resolution, "shallow_scope", return_value=("CAN", "CAN-NT", None)), \
-                mock.patch.object(admin_spine_query, "layout_available", return_value=True), \
-                mock.patch.object(admin_spine_query, "layout_root", return_value=Path("/country")), \
-                mock.patch.object(bbox_query, "lease_query_connection", return_value=connection), \
-                mock.patch.object(bbox_query, "path_to_uri", side_effect=str):
-            result = bbox_query.resolve_country_admin_bbox(corners, "CAN-NT")
-        self.assertEqual(result["admin_1_scope"], "CAN-NT")
-        self.assertEqual(result["best_match"]["loc_id"], "CAN-NT-6101")
-        self.assertEqual(len(connection.paths), 2)
-        self.assertTrue(str(connection.paths[1]).replace("\\", "/").endswith("deep/CAN-NT.parquet"))
+        for has_deep, expected_count in ((True, 2), (False, 1)):
+            with self.subTest(has_deep=has_deep):
+                connection = Connection()
+                with mock.patch.object(family_point_resolution, "shallow_scope", return_value=("CAN", "CAN-NT", None)), \
+                        mock.patch.object(admin_spine_query, "layout_available", return_value=True), \
+                        mock.patch.object(admin_spine_query, "layout_root", return_value=Path("/country")), \
+                        mock.patch.object(admin_spine_query, "_has_deep_partitions", return_value=has_deep), \
+                        mock.patch.object(bbox_query, "lease_query_connection", return_value=connection), \
+                        mock.patch.object(bbox_query, "path_to_uri", side_effect=str):
+                    result = bbox_query.resolve_country_admin_bbox(corners, "CAN-NT")
+                self.assertEqual(result["admin_1_scope"], "CAN-NT")
+                self.assertEqual(result["best_match"]["loc_id"], "CAN-NT-6101")
+                self.assertEqual(len(connection.paths), expected_count)
+                if has_deep:
+                    self.assertTrue(str(connection.paths[1]).replace("\\", "/").endswith("deep/CAN-NT.parquet"))
