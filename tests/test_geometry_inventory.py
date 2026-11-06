@@ -4,6 +4,28 @@ from mapmover.runtime.geometry_inventory import (
 )
 
 
+def test_small_marker_gets_coordinates_when_published_display_omits_centroids(monkeypatch) -> None:
+    import json
+
+    import pandas as pd
+    from mapmover.runtime import geometry_inventory
+    from mapmover import foundation_helpers
+
+    polygon = {"type": "Polygon", "coordinates": [[
+        [12.0, 12.0], [12.1, 12.0], [12.1, 12.1], [12.0, 12.1], [12.0, 12.0]
+    ]]}
+    frame = pd.DataFrame([{
+        "loc_id": "TST", "name": "Test island", "geometry": json.dumps(polygon)
+    }])
+    monkeypatch.setattr(geometry_inventory, "load_geometry_catalog", lambda: {})
+    monkeypatch.setattr(foundation_helpers, "load_global_country_display_frame", lambda: frame)
+    payload = geometry_inventory._build_geometry_inventory_payload_cached(-987654321)
+    props = payload["features"][0]["properties"]
+    assert props["is_small"] is True
+    assert 12.0 <= props["centroid_lon"] <= 12.1
+    assert 12.0 <= props["centroid_lat"] <= 12.1
+
+
 def test_candidate_product_cannot_raise_active_depth() -> None:
     catalog = {
         "country_family_coverage": [],

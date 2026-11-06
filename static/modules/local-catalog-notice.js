@@ -4,6 +4,7 @@ let checking = false;
 let localUnavailable = false;
 
 async function checkLocalCatalog() {
+  if (document.body?.dataset.localWrapper !== 'true') return;
   // Show guidance only over the map, never over a settings handoff page.
   if (!document.getElementById('sidebarModeTitle')) return;
   if (checking || localUnavailable || document.querySelector('dialog[aria-label="Local data catalog"]')) return;

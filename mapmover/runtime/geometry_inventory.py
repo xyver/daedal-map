@@ -26,6 +26,7 @@ precise than the global program row, the fix belongs in
 from __future__ import annotations
 
 import json
+import math
 from functools import lru_cache
 from typing import Any
 
@@ -565,9 +566,19 @@ def _build_geometry_inventory_payload_cached(_epoch: int) -> dict[str, Any]:
             if area_km2 is not None:
                 properties["area_km2"] = round(area_km2, 2)
                 properties["is_small"] = area_km2 <= SMALL_COUNTRY_AREA_KM2
-            if "centroid_lon" in columns and "centroid_lat" in columns:
-                properties["centroid_lon"] = getattr(row, "centroid_lon", None)
-                properties["centroid_lat"] = getattr(row, "centroid_lat", None)
+            lon = getattr(row, "centroid_lon", None) if "centroid_lon" in columns else None
+            lat = getattr(row, "centroid_lat", None) if "centroid_lat" in columns else None
+            if properties.get("is_small") and not (
+                isinstance(lon, (int, float)) and isinstance(lat, (int, float))
+                and math.isfinite(lon) and math.isfinite(lat)
+            ):
+                from shapely.geometry import shape as to_shape
+
+                point = to_shape(shape).representative_point()
+                lon, lat = round(point.x, 6), round(point.y, 6)
+            if lon is not None and lat is not None:
+                properties["centroid_lon"] = lon
+                properties["centroid_lat"] = lat
             features.append({
                 "type": "Feature",
                 "geometry": shape,
