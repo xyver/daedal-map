@@ -95,3 +95,61 @@ test('zoom holds Admin 3 when Admin 4 has no published rows, including cached re
     globalThis.document = originalDocument;
   }
 });
+
+test('a cancelled same-level request does not strand the replacement as in flight', async () => {
+  const bbox = { west: 18, south: 4, east: 24, north: 9 };
+  const bounds = {
+    getWest: () => bbox.west, getSouth: () => bbox.south,
+    getEast: () => bbox.east, getNorth: () => bbox.north
+  };
+  const originalFetch = globalThis.fetch;
+  const originalDocument = globalThis.document;
+  let fetchCount = 0;
+  const rendered = [];
+  globalThis.document = {
+    getElementById: (id) => id === 'totalAreas' ? { set textContent(value) {} } : null,
+    querySelector: () => null
+  };
+  globalThis.fetch = (_url, { signal }) => {
+    fetchCount += 1;
+    if (fetchCount === 1) {
+      return new Promise((_resolve, reject) => {
+        signal.addEventListener('abort', () => {
+          const error = new Error('cancelled');
+          error.name = 'AbortError';
+          reject(error);
+        }, { once: true });
+      });
+    }
+    return Promise.resolve({ ok: true, arrayBuffer: async () => new Uint8Array([0]).buffer });
+  };
+  setDependencies({
+    MapAdapter: { map: { getBounds: () => bounds }, loadGeoJSONWithFade: (data) => rendered.push(data.features) },
+    NavigationManager: { updateLevelDisplay: () => {} }
+  });
+  try {
+    GeometryCache.clear();
+    GeometryCache.add([{
+      type: 'Feature',
+      properties: {
+        loc_id: 'CAF', admin_level: 0,
+        bbox_min_lon: 14, bbox_min_lat: 2, bbox_max_lon: 28, bbox_max_lat: 11
+      },
+      geometry: { type: 'Polygon', coordinates: [[[14, 2], [28, 2], [28, 11], [14, 2]]] }
+    }]);
+    ViewportLoader.currentAdminLevel = 1;
+    ViewportLoader.lastRenderedLevel = 0;
+    const first = ViewportLoader.doLoad(1);
+    const replacement = ViewportLoader.doLoad(1);
+    await Promise.all([first, replacement]);
+    assert.equal(fetchCount, 2);
+    assert.equal(GeometryCache.isCovered(1, bbox), true);
+    assert.equal(GeometryCache.inFlightByLevel.has(1), false);
+    assert.equal(rendered.at(-1)[0].properties.loc_id, 'CAF');
+  } finally {
+    ViewportLoader.cancelActiveRequest();
+    GeometryCache.clear();
+    globalThis.fetch = originalFetch;
+    globalThis.document = originalDocument;
+  }
+});

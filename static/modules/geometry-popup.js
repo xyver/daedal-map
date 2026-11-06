@@ -18,25 +18,7 @@ let MapAdapter = null;
 const PIN_SOURCE_ID = 'geometry-inventory-small-country-pins';
 const PIN_LAYER_ID = 'geometry-inventory-small-country-symbols';
 const PIN_HIT_LAYER_ID = 'geometry-inventory-small-country-hit';
-const PIN_IMAGE_PREFIX = 'geometry-inventory-pin';
 const PIN_FALLBACK_COLOR = '#6b7280';
-
-/**
- * MapLibre symbol image for a small-country marker. Keep the fill tied to the
- * catalog-owned admin-depth ramp while the white keyline remains legible over
- * both land and water. Values come from the inventory payload, but validate
- * them before interpolating into SVG markup so malformed metadata cannot turn
- * into executable image content.
- */
-function pinSvg(color) {
-  const fill = /^#[0-9a-f]{6}$/i.test(String(color || ''))
-    ? String(color)
-    : PIN_FALLBACK_COLOR;
-  return '<svg xmlns="http://www.w3.org/2000/svg" width="28" height="34" viewBox="0 0 28 34">'
-    + `<path fill="${fill}" stroke="#fff" stroke-width="2" d="M14 1C7.37 1 2 6.37 2 13c0 8.7 12 20 12 20s12-11.3 12-20C26 6.37 20.63 1 14 1Z"/>`
-    + '<circle cx="14" cy="13" r="4" fill="#fff" fill-opacity=".92"/>'
-    + '</svg>';
-}
 
 export function setDependencies(deps) {
   MapAdapter = deps.MapAdapter;
@@ -241,30 +223,10 @@ export const GeometryPopup = {
     return { type: 'FeatureCollection', features };
   },
 
-  async ensurePinImages(map, geojson) {
-    const colors = new Map();
-    for (const feature of geojson?.features || []) {
-      const level = feature?.properties?.max_admin_level;
-      const key = level == null ? 'unknown' : String(level);
-      if (!colors.has(key)) colors.set(key, feature.properties.depth_color || PIN_FALLBACK_COLOR);
-    }
-    await Promise.all(Array.from(colors.entries()).map(([key, color]) => new Promise((resolve) => {
-      const imageId = `${PIN_IMAGE_PREFIX}-${key}`;
-      if (map.hasImage(imageId)) { resolve(); return; }
-      const image = new Image(28, 34);
-      image.onload = () => {
-        if (!map.hasImage(imageId)) map.addImage(imageId, image, { pixelRatio: 2 });
-        resolve();
-      };
-      image.onerror = () => resolve();
-      image.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(pinSvg(color))}`;
-    })));
-  },
-
   /**
    * Show or hide the small-country pins. Safe to call before any data exists.
    */
-  async setPinsVisible(visible, geojson = null) {
+  setPinsVisible(visible, geojson = null) {
     const map = MapAdapter?.map;
     if (!map) return false;
 
@@ -277,7 +239,6 @@ export const GeometryPopup = {
 
     const pins = this.pinGeojson(geojson);
     if (!pins.features.length) return false;
-    await this.ensurePinImages(map, pins);
 
     if (map.getSource(PIN_SOURCE_ID)) {
       map.getSource(PIN_SOURCE_ID).setData(pins);
@@ -288,18 +249,13 @@ export const GeometryPopup = {
     if (!map.getLayer(PIN_LAYER_ID)) {
       map.addLayer({
         id: PIN_LAYER_ID,
-        type: 'symbol',
+        type: 'circle',
         source: PIN_SOURCE_ID,
-        layout: {
-          'icon-image': [
-            'concat',
-            `${PIN_IMAGE_PREFIX}-`,
-            ['case', ['has', 'max_admin_level'], ['to-string', ['get', 'max_admin_level']], 'unknown']
-          ],
-          'icon-anchor': 'bottom',
-          'icon-allow-overlap': true,
-          'icon-ignore-placement': true,
-          'icon-size': ['interpolate', ['linear'], ['zoom'], 0, 1, 3, 1.5, 6, 2]
+        paint: {
+          'circle-radius': ['interpolate', ['linear'], ['zoom'], 0, 5, 3, 7, 6, 9],
+          'circle-color': ['coalesce', ['get', 'depth_color'], PIN_FALLBACK_COLOR],
+          'circle-stroke-color': '#ffffff',
+          'circle-stroke-width': 1.5
         }
       });
     }

@@ -5,7 +5,9 @@ Handles loading geometry files and country hierarchy for drill-down navigation.
 Data sources (resolved via paths.py DATA_ROOT):
   geometry/global/display/admin_0.parquet - bounded Admin0 map/display geometry
   geometry/global/exact/admin_0.parquet - full-detail Admin0 product
-  geometry/{ISO3}.parquet          - global-fallback Admin0-2 country shards
+  geometry/global/display/admin_1.parquet - default Admin1 map geometry
+  geometry/global/display/admin_2.parquet - default Admin2 map geometry
+  geometry/{ISO3}.parquet          - local legacy country display shards
 
 Schema (13 columns):
   loc_id, parent_id, admin_level, name, name_local, code, iso_3166_2,
@@ -64,6 +66,7 @@ from .runtime.geometry_loader import (
     resolve_country_display_geometry_sources,
     resolve_country_geometry_source,
 )
+from .runtime.geometry_catalog import load_geometry_catalog
 from .runtime.geometry_compatibility import (
     load_current_alias_target_rows,
     load_legacy_geometry_rows,
@@ -508,11 +511,7 @@ def _country_display_sources(
     parent_ids: set[str] | None = None,
     loc_ids: list[str] | None = None,
 ) -> tuple[list[Path], dict | None, str]:
-    """Select admitted Display banks, then the GeoBoundaries display fallback.
-
-    The fallback is intentionally the legacy ``geometry/{ISO3}.parquet``
-    display shard. It never consults ``admin_spine`` or a Full release.
-    """
+    """Select country Display, then the published Global Admin1/2 Display."""
     owners = {
         owner
         for owner in (
@@ -535,6 +534,19 @@ def _country_display_sources(
         release_paths = resolve_country_display_geometry_sources(iso3, admin_level=admin_level)
     if release_paths:
         return release_paths, None, "country_display_release"
+
+    if admin_level in (1, 2):
+        global_levels = [admin_level]
+    elif loc_ids:
+        global_levels = sorted({str(value).count("-") for value in loc_ids} & {1, 2})
+    elif parent_ids:
+        global_levels = sorted({str(value).count("-") + 1 for value in parent_ids} & {1, 2})
+    else:
+        global_levels = [1, 2]
+    global_paths = [GEOMETRY_DIR / "global" / "display" / f"admin_{level}.parquet"
+                    for level in global_levels]
+    if global_paths and all(_parquet_accessible(path) for path in global_paths):
+        return global_paths, None, "global_admin_display_fallback"
 
     fallback = GEOMETRY_DIR / f"{str(iso3).upper()}.parquet"
     if _parquet_accessible(fallback):
@@ -595,6 +607,35 @@ def load_country_display_rows(
             available = parquet_columns(parquet_file, raw_geoparquet=True)
             read_columns = [column for column in (columns or []) if column in available] or None
             in_filters = {}
+            global_bbox_rows = None
+            if source_kind == "global_admin_display_fallback":
+                from .runtime.global_admin_shallow_query import _selected_layout
+
+                layout = _selected_layout()
+                if layout is None:
+                    logger.warning("Global Display bbox index unavailable for %s", normalized)
+                    continue
+                level = int(parquet_file.stem.rsplit("_", 1)[-1])
+                bbox_filters = None
+                if bbox:
+                    min_lon, min_lat, max_lon, max_lat = bbox
+                    pad = COUNTRY_BOUNDS_DISPLAY_PAD_DEG
+                    bbox_filters = [
+                        ("bbox_max_lon", ">=", min_lon - pad),
+                        ("bbox_min_lon", "<=", max_lon + pad),
+                        ("bbox_max_lat", ">=", min_lat - pad),
+                        ("bbox_min_lat", "<=", max_lat + pad),
+                    ]
+                global_bbox_rows = select_rows(
+                    layout["bbox_index"],
+                    columns=["loc_id", "bbox_min_lon", "bbox_min_lat", "bbox_max_lon", "bbox_max_lat"],
+                    exact_filters={"country_iso3": normalized, "admin_level": level},
+                    in_filters={"loc_id": requested_ids} if requested_ids else None,
+                    compare_filters=bbox_filters,
+                )
+                if global_bbox_rows.empty:
+                    continue
+                in_filters["loc_id"] = global_bbox_rows["loc_id"].astype(str).tolist()
             if parent_ids:
                 query_parents = sorted(parent_ids)
                 if crosswalk_data:
@@ -635,6 +676,8 @@ def load_country_display_rows(
                     raw_geoparquet=True,
                 )
             if frame is not None and not frame.empty:
+                if global_bbox_rows is not None:
+                    frame = frame.merge(global_bbox_rows, on="loc_id", how="inner")
                 frames.append(frame)
         except Exception:
             logger.warning("Display geometry read failed for %s from %s", normalized, parquet_file, exc_info=True)
@@ -651,6 +694,45 @@ def load_country_display_rows(
         result["loc_id"] = result["local_loc_id"].fillna(result["loc_id"])
     result.attrs["geometry_source_kind"] = source_kind
     return result
+
+
+def _load_global_display_viewport_rows(
+    countries: list[str], admin_level: int, bbox: tuple, columns: list[str]
+) -> pd.DataFrame | None:
+    """Read all default-country viewport rows with one Global index query."""
+    if not countries:
+        return pd.DataFrame()
+    from .runtime.global_admin_shallow_query import _selected_layout
+
+    layout = _selected_layout()
+    display_path = GEOMETRY_DIR / "global" / "display" / f"admin_{admin_level}.parquet"
+    if layout is None or not _parquet_accessible(display_path):
+        return None
+    min_lon, min_lat, max_lon, max_lat = bbox
+    pad = COUNTRY_BOUNDS_DISPLAY_PAD_DEG
+    bbox_rows = select_rows(
+        layout["bbox_index"],
+        columns=["loc_id", "bbox_min_lon", "bbox_min_lat", "bbox_max_lon", "bbox_max_lat"],
+        exact_filters={"admin_level": admin_level},
+        in_filters={"country_iso3": countries},
+        compare_filters=[
+            ("bbox_max_lon", ">=", min_lon - pad),
+            ("bbox_min_lon", "<=", max_lon + pad),
+            ("bbox_max_lat", ">=", min_lat - pad),
+            ("bbox_min_lat", "<=", max_lat + pad),
+        ],
+    )
+    if bbox_rows.empty:
+        return pd.DataFrame()
+    available = parquet_columns(display_path, raw_geoparquet=True)
+    read_columns = [column for column in columns if column in available]
+    rows = select_rows(
+        display_path,
+        columns=read_columns,
+        in_filters={"loc_id": bbox_rows["loc_id"].astype(str).tolist()},
+        raw_geoparquet=True,
+    )
+    return rows.merge(bbox_rows, on="loc_id", how="inner") if not rows.empty else rows
 
 
 def _resolve_geometry_source(iso3: str):
@@ -1269,6 +1351,20 @@ def get_geometry_index(parent_loc_id: str | None = None, admin_level: int | None
         elif bbox is not None:
             countries = get_countries_in_bbox(*bbox)
             frames = []
+            if target_level in (1, 2):
+                enriched = {
+                    str(profile.get("country_code") or "").upper()
+                    for profile in load_geometry_catalog().get("country_profiles") or []
+                    if isinstance(profile, dict)
+                }
+                default_countries = [iso3 for iso3 in countries if iso3 not in enriched]
+                global_rows = _load_global_display_viewport_rows(
+                    default_countries, target_level, bbox, GEOMETRY_INDEX_COLUMNS
+                )
+                if global_rows is not None:
+                    if not global_rows.empty:
+                        frames.append(global_rows)
+                    countries = [iso3 for iso3 in countries if iso3 in enriched]
             for iso3 in countries:
                 viewport_df = load_country_display_rows(
                     iso3,
