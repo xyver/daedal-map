@@ -4,6 +4,53 @@ import test from 'node:test';
 globalThis.window = { MessagePack: {}, location: { hostname: 'localhost' } };
 const { MapAdapter } = await import('../static/modules/map-adapter.js');
 
+test('focal colors refresh after rendered source changes and viewport moves', () => {
+  const previous = {
+    map: MapAdapter.map,
+    currentRegionGeojson: MapAdapter.currentRegionGeojson,
+    focalPrefixes: MapAdapter.focalPrefixes,
+    focalLocId: MapAdapter.focalLocId,
+    focusedParentId: MapAdapter.focusedParentId,
+    popupFocusOverride: MapAdapter.popupFocusOverride,
+    focalRefreshPending: MapAdapter.focalRefreshPending,
+    updateFocalColors: MapAdapter.updateFocalColors
+  };
+  const originalAnimationFrame = globalThis.requestAnimationFrame;
+  const frames = [];
+  const colors = [];
+  let atCenter = null;
+  globalThis.requestAnimationFrame = (callback) => { frames.push(callback); };
+  MapAdapter.map = {
+    getLayer: () => ({}),
+    getCenter: () => ({ lng: -95, lat: 39 }),
+    project: () => ({ x: 50, y: 50 }),
+    queryRenderedFeatures: () => atCenter ? [{ properties: { loc_id: atCenter, name: 'Test' } }] : []
+  };
+  MapAdapter.currentRegionGeojson = { type: 'FeatureCollection', features: [] };
+  MapAdapter.popupFocusOverride = null;
+  MapAdapter.focalRefreshPending = false;
+  MapAdapter.updateFocalColors = () => { colors.push(MapAdapter.focalLocId); };
+  try {
+    MapAdapter.scheduleFocalRefresh();
+    MapAdapter.scheduleFocalRefresh();
+    assert.equal(frames.length, 1, 'source events in one frame should coalesce');
+    atCenter = 'USA-KS-045';
+    frames.shift()();
+    assert.equal(MapAdapter.focalLocId, 'USA-KS-045');
+    assert.deepEqual(MapAdapter.focalPrefixes, ['USA', 'USA-KS', 'USA-KS-045']);
+    assert.deepEqual(colors, ['USA-KS-045']);
+
+    atCenter = 'USA-MO-037';
+    MapAdapter.scheduleFocalRefresh();
+    frames.shift()();
+    assert.equal(MapAdapter.focalLocId, 'USA-MO-037');
+    assert.deepEqual(colors, ['USA-KS-045', 'USA-MO-037']);
+  } finally {
+    Object.assign(MapAdapter, previous);
+    globalThis.requestAnimationFrame = originalAnimationFrame;
+  }
+});
+
 test('cached administrative redraw keeps stable hover IDs and a visible hover color', () => {
   const previous = {
     map: MapAdapter.map,

@@ -156,6 +156,15 @@ export const MapAdapter = {
     // Setup viewport-based loading events
     this.map.on('zoomend', () => ViewportLoader?.onZoomEnd());
     this.map.on('moveend', () => ViewportLoader?.onMoveEnd());
+    this.map.on('moveend', () => this.scheduleFocalRefresh());
+    // GeoJSON sources are installed asynchronously. The first focal lookup in
+    // loadGeoJSON runs before MapLibre has rendered those polygons, and setData
+    // can leave the old viewport's polygons visible until its source updates.
+    this.map.on('sourcedata', (event) => {
+      if (event.sourceId === CONFIG.layers.source && event.sourceDataType === 'content') {
+        this.scheduleFocalRefresh();
+      }
+    });
 
     this.bindCanvasPointInspector();
 
@@ -776,24 +785,35 @@ export const MapAdapter = {
     }
   },
 
+  scheduleFocalRefresh() {
+    if (this.focalRefreshPending || !this.map || this.popupFocusOverride) return;
+    this.focalRefreshPending = true;
+    requestAnimationFrame(() => {
+      this.focalRefreshPending = false;
+      if (!this.map?.getLayer(CONFIG.layers.fill) || this.popupFocusOverride) return;
+      this.updateFocusedParent(this.currentRegionGeojson);
+      this.updateFocalColors();
+    });
+  },
+
   /**
    * Get MapLibre expression for hierarchical fill color based on loc_id prefix matching.
    *
    * Color logic (generalizes globally via loc_id hierarchy):
    * - Blue = no match (different country entirely)
-   * - Orange 1 (lightest) = same country as focal
-   * - Orange 2 = same admin1 (state/province) as focal
-   * - Orange 3 = same admin2 (county/district) as focal
-   * - Orange 4 = same admin3 (tract) as focal
-   * - Orange 5 (darkest) = same admin4+ as focal
+   * - Purple 1 (lightest) = same country as focal
+   * - Purple 2 = same admin1 (state/province) as focal
+   * - Purple 3 = same admin2 (county/district) as focal
+   * - Purple 4 = same admin3 (tract) as focal
+   * - Purple 5 (darkest) = same admin4+ as focal
    *
-   * Hover adds +1 orange level to preview the next zoom depth.
+   * Hover adds +1 purple level to preview the next zoom depth.
    *
    * Example: focal = ITA-PIE-001 (Italian Piedmont commune)
    * - FRA-ARA-001 (French commune) -> no match -> BLUE
-   * - ITA-LOM-001 (Lombardy commune) -> matches ITA -> Orange 1
-   * - ITA-PIE-002 (other Piedmont commune) -> matches ITA-PIE -> Orange 2
-   * - ITA-PIE-001 (focal) -> matches ITA-PIE-001 -> Orange 3
+   * - ITA-LOM-001 (Lombardy commune) -> matches ITA -> Purple 1
+   * - ITA-PIE-002 (other Piedmont commune) -> matches ITA-PIE -> Purple 2
+   * - ITA-PIE-001 (focal) -> matches ITA-PIE-001 -> Purple 3
    */
   getFocalFillColorExpression() {
     if (!this.focalPrefixes || this.focalPrefixes.length === 0) {
@@ -806,7 +826,7 @@ export const MapAdapter = {
       ];
     }
 
-    const colors = CONFIG.ancestorColors.stroke;  // Orange gradient [0]=lightest to [4]=darkest
+    const colors = CONFIG.ancestorColors.stroke;  // Purple gradient [0]=lightest to [4]=darkest
     const prefixes = this.focalPrefixes;
     // prefixes[0] = country (e.g., 'ITA')
     // prefixes[1] = state/region (e.g., 'ITA-PIE')
@@ -1347,20 +1367,22 @@ export const MapAdapter = {
         if (e.features.length > 0) {
           const feature = e.features[0];
 
-          // Reset previous hover state
-          if (this.hoveredFeatureId !== null) {
+          // Preserve the active hover state while moving within one polygon.
+          // Clearing and setting it on every mousemove can make the highlight
+          // flicker when the map is also refreshing its GeoJSON source.
+          if (this.hoveredFeatureId !== feature.id) {
+            if (this.hoveredFeatureId !== null) {
+              this.map.setFeatureState(
+                { source: CONFIG.layers.source, id: this.hoveredFeatureId },
+                { hover: false }
+              );
+            }
+            this.hoveredFeatureId = feature.id;
             this.map.setFeatureState(
               { source: CONFIG.layers.source, id: this.hoveredFeatureId },
-              { hover: false }
+              { hover: true }
             );
           }
-
-          // Set new hover state
-          this.hoveredFeatureId = feature.id;
-          this.map.setFeatureState(
-            { source: CONFIG.layers.source, id: this.hoveredFeatureId },
-            { hover: true }
-          );
 
           this.map.getCanvas().style.cursor = 'pointer';
 

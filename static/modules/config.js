@@ -69,9 +69,9 @@ export const CONFIG = {
     stroke: '#1a5599',          // Dark blue stroke
     strokeWidth: 1,
     // Hover (applies to both)
-    fillHover: '#4488cc',       // Lighter blue on hover
+    fillHover: '#b87fd0',       // Purple preview on hover
     fillHoverOpacity: 0.6,
-    strokeHover: '#66aadd',
+    strokeHover: '#d4a5e8',
     strokeHoverWidth: 2
   },
 
