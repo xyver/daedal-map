@@ -1,7 +1,7 @@
 """Cross-family guarantees for the MCP tool universe.
 
 These lock in the unification described in
-county-map-private/docs/future/API/tool_universe_contract.md:
+county-map-private/docs/API/tool_universe_contract.md:
 
 - every tool dispatched inside routes/mcp.py writes an api_usage_events row
 - all lanes use one access_lane enum shared with the dataset/query lane

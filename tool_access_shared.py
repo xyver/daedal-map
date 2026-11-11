@@ -45,7 +45,7 @@ listed per tool, then the value authored here.
 
 Full free<->paid checklist (enforcement, advertised pricing, license, public
 docs, catalog surfaces):
-county-map-private/docs/future/API/mcp_publishing.md section 15.
+county-map-private/docs/API/mcp_publishing.md section 15.
 """
 
 from __future__ import annotations
@@ -115,7 +115,7 @@ FAMILY_DATASET = "dataset"
 # one of them, so changing a rate here reprices every tool in that lane.
 #
 # Documented rate card and decision history:
-# county-map-private/docs/future/API/agent_api_monetization_plan.md, "Tool
+# county-map-private/docs/API/agent_api_monetization_plan.md, "Tool
 # rates". Keep that table in step with these values. Runtime overrides
 # (MCP_TOOL_PRICE_*_<TOOL>, legacy_price_env names, and the Access & Payment
 # dashboard) win over these values without a code change.

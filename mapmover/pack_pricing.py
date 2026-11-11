@@ -5,5 +5,5 @@ from __future__ import annotations
 # pack_registry_shared.py are gated by pack_requires_commercial_access().
 # Full free<->paid switch checklist (enforcement, advertised pricing, license,
 # public docs, and catalog surfaces):
-# county-map-private/docs/future/API/mcp_publishing.md section 15.
+# county-map-private/docs/API/mcp_publishing.md section 15.
 from pack_pricing_shared import FREE_PACK_IDS, PAID_PACK_IDS
