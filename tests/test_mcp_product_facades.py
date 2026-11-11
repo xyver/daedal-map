@@ -72,6 +72,23 @@ class ProductFacadeTests(unittest.TestCase):
         self.assertEqual(execute.await_count, 1)
         self.assertEqual(execute.await_args.args[2]["limit"], 100)
 
+    def test_free_catalog_labels_pack_policy_without_promising_execution(self):
+        catalog = {"packs": [
+            {"pack_id": "world_bank_wdi", "pack_name": "World Bank WDI"},
+            {"pack_id": "un_sdg", "pack_name": "UN SDG"},
+            {"pack_id": "world_factbook", "pack_name": "World Factbook"},
+        ]}
+        with mock.patch("mapmover.routes.mcp.load_api_catalog", return_value=catalog):
+            result = self.call("free", "get_catalog", {"catalog": "data"})["result"]["structuredContent"]
+
+        policies = {row["pack_id"]: row["free_get_data_policy"] for row in result["packs"]}
+        self.assertEqual(policies, {
+            "world_bank_wdi": "eligible",
+            "un_sdg": "eligible",
+            "world_factbook": "blocked_paid_pack",
+        })
+        self.assertIn("API-ready execution source", result["free_get_data_policy_note"])
+
     def test_free_help_and_tool_schema_match_execution_ceiling(self):
         tools = self.client.post("/mcp/free", json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"}).json()["result"]["tools"]
         by_name = {tool["name"]: tool for tool in tools}

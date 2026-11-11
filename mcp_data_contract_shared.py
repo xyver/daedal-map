@@ -124,7 +124,14 @@ def data_tool_output_schema(tool_name: str) -> dict[str, Any] | None:
                 "catalog_version": {"type": "string"},
                 "generated_at": {"type": ["string", "null"]},
                 "pack_count": {"type": "integer", "minimum": 0},
-                "packs": {"type": "array", "items": {"type": "object"}},
+                "packs": {"type": "array", "items": {
+                    "type": "object",
+                    "properties": {"free_get_data_policy": {
+                        "type": "string", "enum": ["eligible", "blocked_paid_pack"]
+                    }},
+                    "additionalProperties": True,
+                }},
+                "free_get_data_policy_note": {"type": "string"},
                 "families": {"type": "array", "items": {"type": "object"}},
                 "scopes": {"type": "array", "items": {"type": "object"}},
                 "uncertain_packs": {"type": "array", "items": {"type": "object"}},

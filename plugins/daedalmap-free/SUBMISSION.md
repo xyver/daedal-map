@@ -23,6 +23,8 @@ Check the text against the live tool list and website before copying it to eithe
 
 The OpenAI package has five positive and three negative cases with observable expected behavior. Use those same prompts in fresh ChatGPT and Claude conversations. Also try an indirect geography request and a follow-up that reuses a returned `loc_id`. Record tool selection, arguments, response, elapsed time, and any failure for each case. Check that an unrelated request does not invoke DaedalMap and that paid-pack and above-ceiling requests receive a clear denial or narrowing path without a charge.
 
+The November 11 ChatGPT custom-connector checks passed the Canada WDI query in a fresh chat, Fairfax conversion and parent follow-up, unrelated-email nonactivation, paid-earthquake denial, and the 100-row single-call ceiling. The Brazil municipality-code probe correctly returned ambiguity across matching reference systems; its review expectation now permits that result. Catalog discovery exposed paid packs and a free UN SDG pack whose row query returned `unknown_source`. The MCP `get_catalog(data)` response now labels each pack's free `get_data` pricing eligibility and explicitly says eligibility does not prove an API-ready source or material clearance. Recheck the catalog prompt against the deployed server before counting it as a review-case pass; the UN SDG execution failure remains a separate finding.
+
 Claude's suggested working prompts:
 
 1. Get Canada's 2020 GDP in current US dollars from World Bank WDI on DaedalMap.

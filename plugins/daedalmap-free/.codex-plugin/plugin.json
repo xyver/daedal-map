@@ -35,11 +35,11 @@
         "commerce": false,
         "test_cases": {
           "positive": [
-            {"description": "Discover free data packs", "prompt": "Which free country-level data packs can I query on DaedalMap?", "tools_triggered": "get_catalog", "expected_behavior": "List available free packs and their coverage without requesting payment."},
+            {"description": "Discover free data packs", "prompt": "Which free country-level data packs can I query on DaedalMap?", "tools_triggered": "get_catalog", "expected_behavior": "Distinguish packs eligible for free get_data calls from discoverable paid packs, and explain that execution still depends on material clearance and an API-ready source."},
             {"description": "Retrieve a bounded free data result", "prompt": "Get Canada's 2020 GDP in current US dollars from World Bank WDI on DaedalMap.", "tools_triggered": "get_catalog, get_pack, get_data", "expected_behavior": "Return the published Canada 2020 GDP row, with its pack and metric identified."},
             {"description": "Convert a county name to loc_id", "prompt": "What is the DaedalMap loc_id for Fairfax County, Virginia?", "tools_triggered": "convert_reference", "expected_behavior": "Return USA-VA-059 as the resolved loc_id and identify the input reference."},
             {"description": "Resolve a coordinate", "prompt": "In the USA administrative family, which area contains latitude 38.8977, longitude -77.0365?", "tools_triggered": "resolve_point", "expected_behavior": "Return an available administrative chain and the deepest resolved loc_id with coverage status."},
-            {"description": "Identify a scoped dataset geography", "prompt": "These Brazilian municipality_code values are 1200013 and 1200054. Identify their geography, using Brazil as the country scope.", "tools_triggered": "identify_dataset_geography", "expected_behavior": "Identify the municipality_code column with a supported Brazil reference binding and explain the evidence."}
+            {"description": "Identify a scoped dataset geography", "prompt": "These Brazilian municipality_code values are 1200013 and 1200054. Identify their geography, using Brazil as the country scope.", "tools_triggered": "identify_dataset_geography", "expected_behavior": "Recognize municipality_code as a Brazil geographic reference and report ambiguity across matching systems or vintages without silently choosing one."}
           ],
           "negative": [
             {"description": "Unrelated task", "prompt": "Write an email to my colleague about tomorrow's meeting."},

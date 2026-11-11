@@ -5973,11 +5973,21 @@ async def mcp_endpoint(request: Request, pack_id: str | None = None):
             payload = geography_directory()
         else:
             source = _filter_catalog_payload_for_facade(load_api_catalog() or {"packs": []}, normalized_pack_id)
+            free_pack_ids = _free_pack_ids()
             payload = {
                 "ok": True, "catalog": "data",
                 "packs": [{"pack_id": row.get("pack_id"), "name": row.get("pack_name") or row.get("pack_id"),
-                           "description": str(row.get("description") or "")[:200]}
+                           "description": str(row.get("description") or "")[:200],
+                           "free_get_data_policy": (
+                               "eligible" if str(row.get("pack_id") or "").strip().lower() in free_pack_ids
+                               else "blocked_paid_pack"
+                           )}
                           for row in source.get("packs") or [] if isinstance(row, dict) and row.get("pack_id")],
+                "free_get_data_policy_note": (
+                    "Eligible means the pack passes the free endpoint's pack-pricing gate, not that a row query "
+                    "is guaranteed. get_data also checks material clearance and an API-ready execution source. "
+                    "Blocked paid packs can be discovered but cannot return rows on /mcp/free."
+                ),
                 "download_url": CATALOG_DOWNLOADS["data"]["download_url"],
             }
         payload["resolved_query"] = _resolved_query(tool_name, arguments)
