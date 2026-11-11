@@ -16,6 +16,7 @@ from mapmover.api_query_runtime import (
     resolve_pack_sources_for_metrics,
 )
 from mapmover.api_query_scope import format_year_end, format_year_start, parse_time_filter
+from mapmover.catalog_surface import get_catalog_surface_override
 from mapmover.execution.event_execution import _build_single_event_message
 from mapmover.runtime.filter_primitives import partition_region_filter_codes
 from mapmover.runtime.postprocess_pipeline import (
@@ -27,6 +28,41 @@ from mapmover.runtime.query_constraint_primitives import extract_query_constrain
 
 
 class EventQueryRuntimeTests(unittest.TestCase):
+    def test_mcp_pack_source_discovery_uses_api_catalog_for_non_explore_pack(self):
+        source = {
+            "pack_id": "un_sdg", "source_id": "01",
+            "catalog_surfaces": ["api", "research", "mcp"],
+        }
+        api_only_source = {
+            "pack_id": "un_sdg", "source_id": "02",
+            "catalog_surfaces": ["api"],
+        }
+        spec = ApiSourceSpec(
+            source_id="01", pack_id="un_sdg", parquet_name="all_countries.parquet",
+            query_mode="single_source", location_field="loc_id",
+            time_field="timestamp", time_granularity="yearly",
+            metrics={"ind_1_1_1": ApiMetricSpec("ind_1_1_1", "ind_1_1_1", "Poverty rate")},
+            filterable_fields={"loc_id", "timestamp"},
+            sortable_fields={"loc_id", "timestamp"},
+        )
+        seen_surfaces = []
+
+        def scoped_catalog():
+            surface = get_catalog_surface_override()
+            seen_surfaces.append(surface)
+            return {"sources": [source, api_only_source] if surface == "api" else []}
+
+        with patch("mapmover.api_query_runtime.load_catalog", side_effect=scoped_catalog), patch(
+            "mapmover.api_query_runtime.get_api_source_spec", return_value=spec
+        ), patch("mapmover.api_query_runtime.load_source_metadata", return_value={}):
+            source_ids = _get_mcp_pack_source_ids("un_sdg")
+            resolved = resolve_pack_sources_for_metrics("un_sdg", ["ind_1_1_1"])
+
+        self.assertEqual(source_ids, ["01"])
+        self.assertEqual(resolved["resolution"], "single_source")
+        self.assertEqual(resolved["selected_source_id"], "01")
+        self.assertEqual(seen_surfaces, ["api", "api"])
+
     def test_pack_source_discovery_skips_unreadable_optional_companion(self):
         catalog = {
             "sources": [
