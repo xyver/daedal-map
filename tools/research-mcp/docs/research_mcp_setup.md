@@ -9,11 +9,15 @@ For development from this public repository, install the requirements in
 `tools/research-mcp/requirements.txt`, then run from the repository root:
 
 ```powershell
-python tools/mcp-runtime/server.py --services research --data-root "C:\path\to\DaedalMapData"
+python tools/mcp-runtime/server.py --services research --source "C:\path\to\DaedalMapData"
 ```
 
 Connect a Streamable HTTP MCP client to
 `http://127.0.0.1:7011/mcp/research`. Keep the server bound to loopback. The
 local service uses the selected files on your machine and does not require a
-hosted account token. The Research MCP never downloads packs by itself; use
-the launcher to add or update content in the shared folder.
+hosted account token. For an S3-compatible cloud folder, use
+`--source s3://bucket/folder` with that provider's endpoint and signing region;
+the selected folder must contain `catalog.json`, metadata, and data together.
+The Research MCP caches a selected cloud Parquet for execution but does not
+install packs into the source folder. Use the launcher to add or update local
+content.

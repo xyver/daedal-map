@@ -90,29 +90,13 @@ def _research_tool_definitions() -> list[dict[str, Any]]:
         {
             "name": "where_is_research_data",
             "title": "Where Is Research Data",
-            "description": "Scan the active installed catalog and report available Research packs and sources. A local server can also change its data folder.",
+            "description": "Report the source folder selected when the downloadable server started and its Research packs and sources.",
             "inputSchema": {
                 "type": "object",
-                "properties": {
-                    "data_root": {
-                        "type": "string",
-                        "description": (
-                            "Local data folder to read."
-                        ),
-                    },
-                    "catalog_file": {
-                        "type": "string",
-                        "enum": ["catalog.json", "wip_catalog.json", "internal_catalog.json"],
-                        "description": "Which catalog inside data_root to read. Default catalog.json.",
-                    },
-                    "reset": {
-                        "type": "boolean",
-                        "description": "Clear the local folder override and return to the default data source.",
-                    },
-                },
+                "properties": {},
                 "additionalProperties": False,
             },
-            "annotations": {"readOnlyHint": False},
+            "annotations": {"readOnlyHint": True},
         },
         {
             "name": "get_catalog",

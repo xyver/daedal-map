@@ -62,6 +62,7 @@ _CATALOG_CACHE: dict[str, Any] | None = None
 _PACK_DETAIL_CACHE: dict[str, dict[str, Any] | None] = {}
 _LOCAL_CATALOG_STAMP: tuple[int, int] | None = None
 _LOCAL_DATA_SOURCE: dict[str, Any] | None = None
+_DOWNLOADED_SOURCE_LOCKED = False
 LOCAL_CATALOG_CHOICES = ("catalog.json", "wip_catalog.json", "internal_catalog.json")
 LOCAL_DEFAULT_PACK_ID = "local_data"
 
@@ -129,6 +130,8 @@ def _refresh_local_catalog_cache() -> None:
     global _CATALOG_CACHE, _LOCAL_CATALOG_STAMP
     if not _local_override_active():
         return
+    if _LOCAL_DATA_SOURCE.get("source").kind == "cloud":
+        return  # The selected cloud snapshot is fixed until server restart.
     catalog_path = _LOCAL_DATA_SOURCE["data_root"] / _LOCAL_DATA_SOURCE["catalog_name"]
     try:
         stat = catalog_path.stat()
@@ -169,7 +172,8 @@ def set_local_data_source(
     The local server selects a root at startup; this function also supports
     source-run development with an explicit folder.
     """
-    global _LOCAL_DATA_SOURCE
+    global _LOCAL_DATA_SOURCE, _DOWNLOADED_SOURCE_LOCKED
+    _DOWNLOADED_SOURCE_LOCKED = False  # Direct operator setup; MCP clients cannot call this.
     if data_root is None:
         _LOCAL_DATA_SOURCE = None
         reset_caches()
@@ -188,7 +192,20 @@ def set_local_data_source(
         raise ValueError(f"data_root folder does not exist: {root}")
     if not (root / catalog_name).is_file():
         raise ValueError(f"{catalog_name} not found in {root}")
-    _LOCAL_DATA_SOURCE = {"data_root": root, "catalog_name": catalog_name}
+    from mcp_source_root_shared import MCPSourceRoot
+    source = MCPSourceRoot.local(root)
+    _LOCAL_DATA_SOURCE = {"data_root": root, "catalog_name": catalog_name,
+                          "source": source, "catalog_payload": source.read_json(catalog_name)}
+    reset_caches()
+
+
+def set_downloaded_data_source(source) -> None:
+    """Bind one local or cloud folder for the life of a downloaded server."""
+    global _LOCAL_DATA_SOURCE, _DOWNLOADED_SOURCE_LOCKED
+    catalog = source.read_json("catalog.json")
+    _LOCAL_DATA_SOURCE = {"data_root": source.root, "catalog_name": "catalog.json",
+                          "source": source, "catalog_payload": catalog}
+    _DOWNLOADED_SOURCE_LOCKED = True
     reset_caches()
 
 
@@ -340,9 +357,8 @@ def how_research_mcp_works(question: str | None = None) -> dict[str, Any]:
             {
                 "name": "where_is_research_data",
                 "use_for": (
-                    "See which data source is active. On a locally run "
-                    "server it can also point the tools at a local data "
-                    "folder."
+                    "See the local or cloud folder selected by the server and "
+                    "which Research packs it contains."
                 ),
             },
             {
@@ -390,14 +406,16 @@ def where_is_research_data(
     catalog_file: str | None = None,
     reset: bool = False,
 ) -> dict[str, Any]:
-    """Report the active data source; optionally point a local server at a folder.
+    """Report the source chosen at downloaded-server startup.
 
-    With no arguments this only reports. On a server running in local runtime
-    mode, data_root (plus optional catalog_file) switches the research tools to
-    read that folder, and reset clears the selection.
+    Direct source-run development retains the older local override arguments;
+    downloaded MCP clients cannot switch source folders through a tool call.
     """
     tool_name = "where_is_research_data"
     requested_root = str(data_root or "").strip()
+    if _DOWNLOADED_SOURCE_LOCKED and (requested_root or reset or catalog_file):
+        return _error_result(tool_name, "source_fixed_at_startup",
+                             "Restart the downloadable MCP with a different source folder.")
     if requested_root and reset:
         return _error_result(
             tool_name,
@@ -450,7 +468,7 @@ def get_research_catalog(catalog: str) -> dict[str, Any]:
         })
     return {
         "tool_name": "get_catalog", "outcome": OUTCOME_OK, "catalog": "data",
-        "catalog_kind": "local_installed" if _local_override_active() else "unconfigured",
+        "catalog_kind": f"{_LOCAL_DATA_SOURCE['source'].kind}_installed" if _local_override_active() else "unconfigured",
         "catalog_version": active.get("catalog_version"),
         "pack_count": len(packs), "packs": packs,
         "next_recommended_tool": "search_research_sources",
@@ -473,16 +491,16 @@ def _active_data_source_report() -> dict[str, Any]:
         return {
             "tool_name": "where_is_research_data",
             "outcome": OUTCOME_OK,
-            "active_data_source": "local_folder",
+            "active_data_source": f"{_LOCAL_DATA_SOURCE['source'].kind}_folder",
             "mode": "local",
-            "data_root": str(_LOCAL_DATA_SOURCE["data_root"]),
+            "data_root": _LOCAL_DATA_SOURCE["source"].location(),
             "catalog_file": str(_LOCAL_DATA_SOURCE["catalog_name"]),
-            "catalog_kind": "local_installed",
+            "catalog_kind": f"{_LOCAL_DATA_SOURCE['source'].kind}_installed",
             "source_count": len(source_ids),
             "source_ids": source_ids,
             "pack_count": len(pack_ids),
             "pack_ids": pack_ids,
-            "rule": fixed_rule,
+            "rule": "The selected folder is fixed at server startup." if _DOWNLOADED_SOURCE_LOCKED else fixed_rule,
             "next_recommended_tool": "get_catalog",
         }
     return {
@@ -1196,17 +1214,25 @@ def _local_primary_parquet(source_dir: Path, metadata: dict[str, Any], entry: di
         if value and value.lower().endswith(".parquet"):
             declared.append(value)
     for relative in declared:
-        candidate = source_dir / relative
-        if candidate.is_file():
-            return candidate
+        if not relative:
+            continue
+        try:
+            source = (_LOCAL_DATA_SOURCE or {}).get("source")
+            if source is not None and source.kind == "cloud":
+                candidate = source.local_file((source_dir / relative).as_posix())
+            else:
+                candidate = source_dir / relative
+            if candidate.is_file():
+                return candidate
+        except (OSError, ValueError):
+            continue
     return None
 
 
 def _local_source_spec(source_id: str):
     """Build an execution spec for a source in the operator-chosen local folder.
 
-    Only reachable while the local override is active (local runtime mode plus
-    an explicit where_is_research_data set call). The spec is built and
+    Only reachable while the local source is active. The spec is built and
     returned directly: it is never written into
     api_query_runtime.API_SOURCE_SPECS and the source is never added to
     SUPPORTED_DYNAMIC_SOURCES, because both are process-wide and shared with
@@ -1402,6 +1428,14 @@ def _local_source_spec(source_id: str):
 
 
 def _execute_source_data_query(*, payload: dict[str, Any], boundary_source_ids: list[str]) -> dict[str, Any]:
+    if _local_override_active() and _LOCAL_DATA_SOURCE["source"].kind == "cloud":
+        from mapmover.duckdb_helpers import local_cached_query_mode
+        with local_cached_query_mode():
+            return _execute_source_data_query_impl(payload=payload, boundary_source_ids=boundary_source_ids)
+    return _execute_source_data_query_impl(payload=payload, boundary_source_ids=boundary_source_ids)
+
+
+def _execute_source_data_query_impl(*, payload: dict[str, Any], boundary_source_ids: list[str]) -> dict[str, Any]:
     try:
         from mapmover.api_query_runtime import get_api_source_spec
     except ImportError:
@@ -1858,6 +1892,8 @@ def _json_safe_value(value: Any) -> Any:
 def _local_catalog_raw() -> dict[str, Any]:
     if _LOCAL_DATA_SOURCE is None:
         return {}
+    if _DOWNLOADED_SOURCE_LOCKED and _LOCAL_DATA_SOURCE["source"].kind == "cloud":
+        return _LOCAL_DATA_SOURCE["catalog_payload"]
     catalog_path = _LOCAL_DATA_SOURCE["data_root"] / _LOCAL_DATA_SOURCE["catalog_name"]
     try:
         raw = json.loads(catalog_path.read_text(encoding="utf-8-sig"))
@@ -1887,13 +1923,18 @@ def _local_entry_by_source_id(source_id: str) -> dict[str, Any] | None:
 def _local_source_dir(entry: dict[str, Any]) -> Path:
     source_id = str(entry.get("source_id") or "").strip()
     relative = str(entry.get("path") or "").strip() or f"global/{source_id}"
-    return _LOCAL_DATA_SOURCE["data_root"] / relative
+    source = _LOCAL_DATA_SOURCE["source"]
+    from mcp_source_root_shared import relative_member
+    member = relative_member(relative)
+    return Path(member) if source.kind == "cloud" else source.root / member
 
 
 def _local_source_metadata(entry: dict[str, Any]) -> dict[str, Any]:
-    metadata_path = _local_source_dir(entry) / "metadata.json"
     try:
-        metadata = json.loads(metadata_path.read_text(encoding="utf-8-sig"))
+        source = _LOCAL_DATA_SOURCE["source"]
+        metadata = source.read_json((_local_source_dir(entry) / "metadata.json").as_posix()
+                                    if source.kind == "cloud" else
+                                    str((_local_source_dir(entry) / "metadata.json").relative_to(source.root)))
     except Exception:
         return {}
     return metadata if isinstance(metadata, dict) else {}
@@ -1945,7 +1986,7 @@ def _local_research_catalog() -> dict[str, Any]:
                 ],
             }
         )
-    return {"packs": packs, "catalog_kind": "local_data_folder"}
+    return {"packs": packs, "catalog_kind": f"{_LOCAL_DATA_SOURCE['source'].kind}_data_folder"}
 
 
 def _local_pack_detail(pack_id: str) -> dict[str, Any] | None:
@@ -2021,8 +2062,7 @@ def _local_pack_detail(pack_id: str) -> dict[str, Any] | None:
         "pack_id": pack_id,
         "title": pack_id.replace("_", " ").title(),
         "description": (
-            "Local data pack read from the folder chosen through "
-            "where_is_research_data."
+            "Data pack read from the folder selected at server startup."
         ),
         "source_ids": source_ids,
         "sources": sources,

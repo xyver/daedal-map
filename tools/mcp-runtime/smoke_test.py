@@ -92,6 +92,11 @@ def main() -> int:
         "get_catalog": {},
         "get_pack": {"pack_id": "geography"},
         "resolve_point": {"lat": 0.0, "lon": 0.0},
+        "resolve_bbox": {"corners": [{"lat": 0, "lon": 0}, {"lat": 0, "lon": 1},
+                                      {"lat": 1, "lon": 0}, {"lat": 1, "lon": 1}]},
+        "resolve_deep_bbox": {"corners": [{"lat": 0, "lon": 0}, {"lat": 0, "lon": 1},
+                                           {"lat": 1, "lon": 0}, {"lat": 1, "lon": 1}],
+                              "shallow_loc_id": "USA-CA"},
         "resolve_deep_point": {"lat": 0.0, "lon": 0.0, "admin_1_loc_id": "USA-CA"},
         "get_loc_id_info": {"loc_id": "USA"},
         "identify_dataset_geography": {
