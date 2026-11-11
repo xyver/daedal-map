@@ -1,0 +1,39 @@
+# DaedalMap Free Geography store submission
+
+Status: draft preparation, 2026-11-11. No directory submission or approval is claimed here.
+
+The production MCP endpoint is `https://app.daedalmap.com/mcp/free`. It is intended to provide bounded, anonymous geographic reference and published free-data workflows. The OpenAI package source is `.codex-plugin/plugin.json`, `.mcp.json`, and `assets/icon.svg` in this directory. The Claude connector uses the same endpoint directly.
+
+## Listing text
+
+- Name: DaedalMap Free Geography
+- One-line description: Resolve places, convert geographic IDs, and query published free data.
+- Description: Use DaedalMap's free geographic reference and published data tools. Identify geographic references in a small dataset, convert supported identifiers to `loc_id`, resolve coordinates to available administrative areas, compare places, discover free data packs, and retrieve bounded rows. Coverage depends on the selected place, source, and published release. No account is required for this endpoint, and calls to it cannot charge an account balance.
+- Documentation: https://www.daedalmap.com/agents
+- Support: https://www.daedalmap.com/support
+- Privacy: https://www.daedalmap.com/privacy
+- Terms: https://www.daedalmap.com/terms
+- Publisher website: https://www.daedalmap.com
+- Authentication: none for this free endpoint
+- Data handling: first-party DaedalMap MCP service; verify portal answers against the current privacy policy and live telemetry before submission.
+
+Check the text against the live tool list and website before copying it to either portal. Select the closest truthful portal category; do not claim an MCP App UI or paid-account access for this candidate.
+
+## Reviewer flows
+
+The OpenAI package has five positive and three negative cases with observable expected behavior. Use those same prompts in fresh ChatGPT and Claude conversations. Also try an indirect geography request and a follow-up that reuses a returned `loc_id`. Record tool selection, arguments, response, elapsed time, and any failure for each case. Check that an unrelated request does not invoke DaedalMap and that paid-pack and above-ceiling requests receive a clear denial or narrowing path without a charge.
+
+Claude's suggested working prompts:
+
+1. Get Canada's 2020 GDP in current US dollars from World Bank WDI on DaedalMap.
+2. What is the DaedalMap loc_id for Fairfax County, Virginia?
+3. In the USA administrative family, which area contains latitude 38.8977, longitude -77.0365?
+
+The point tool requires an explicit scope and family. The November 11 hosted contract passed with `scope_id=USA` and `family=administrative`; the prompt names both. Treat these as test candidates until the live client results and selected release are recorded. Do not supply a fabricated expected numeric GDP value or a deeper administrative level than the service returns.
+
+## Portal steps
+
+- OpenAI: upload the ZIP as a draft with MCP, verify the publisher and endpoint domain, inspect the automated package and live tool scans, attach the final demo recording, submit for review, then publish only after approval. Review cases are in `plugin.json`; reviewer credentials, if ever required, belong in the secure portal rather than this repository.
+- Claude: create an MCP connector draft with this HTTPS endpoint and no authentication, check every scanned tool title and applicable annotations, enter listing and company details, test every tool in Claude, and review all policy declarations before Submit. Claude may list a passing submission automatically as a Community connector, so Submit is a public launch step.
+
+Official procedures: https://developers.openai.com/plugins/deploy/submission and https://claude.com/docs/connectors/building/submission .
