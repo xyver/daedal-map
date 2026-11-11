@@ -17,6 +17,7 @@ class GlobalAdminShallowQueryTests(unittest.TestCase):
                 ("USA", 0, None, "United States", box(0, 0, 10, 10)),
                 ("USA-GTX", 1, "USA", "Texas", box(0, 0, 10, 10)),
                 ("USA-GTX-GHARRIS", 2, "USA-GTX", "Harris", box(1, 1, 3, 3)),
+                ("USA-GTX-GOTHER", 2, "USA-GTX", "Global-only area", box(4, 4, 6, 6)),
             ]
             pd.DataFrame([
                 {"loc_id": loc_id, "admin_level": level,
@@ -33,11 +34,13 @@ class GlobalAdminShallowQueryTests(unittest.TestCase):
             pd.DataFrame([
                 {"baseline_loc_id": source, "preferred_loc_id": preferred}
                 for source, preferred in (("USA", "USA"), ("USA-GTX", "USA-TX"),
-                                          ("USA-GTX-GHARRIS", "USA-TX-201"))
+                                          ("USA-GTX-GHARRIS", "USA-TX-201"),
+                                          ("USA-GTX-GOTHER", "USA-GTX-GOTHER"))
             ]).to_parquet(root / "lookup.parquet", index=False)
             layout = {"bbox_index": root / "bbox.parquet",
                       "preferred_lookup": root / "lookup.parquet",
                       "release": "1.1.1",
+                      "country_packs": {"USA"},
                       **{f"admin_{level}": root / f"admin_{level}.parquet" for level in range(3)}}
             with patch("mapmover.runtime.global_admin_shallow_query._selected_layout", return_value=layout):
                 results = resolve_global_admin_shallow_points([
@@ -48,8 +51,12 @@ class GlobalAdminShallowQueryTests(unittest.TestCase):
         self.assertEqual([row["loc_id"] for row in results[0]["stack"]],
                          ["USA", "USA-TX", "USA-TX-201"])
         self.assertEqual(results[0]["matched"]["baseline_loc_id"], "USA-GTX-GHARRIS")
-        self.assertEqual(results[1]["deepest_resolved_loc_id"], "USA-TX")
+        self.assertEqual(results[0]["matched"]["admin2_id_status"], "country_id_selected")
+        self.assertEqual(results[1]["deepest_resolved_loc_id"], "USA-GTX-GOTHER")
         self.assertEqual(results[1]["deep_scope_loc_id"], "USA-TX")
+        self.assertEqual(results[1]["matched"]["admin2_id_status"], "global_id_untranslated")
+        self.assertTrue(results[1]["matched"]["country_pack_available"])
+        self.assertIn("may define Admin 2 differently", results[1]["matched"]["admin2_id_explanation"])
         self.assertEqual(results[2]["error"]["code"], "no_point_overlap")
 
     def test_unselected_layout_keeps_existing_admin0_path_available(self):

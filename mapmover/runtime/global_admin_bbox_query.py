@@ -12,7 +12,8 @@ from shapely.wkb import loads as load_wkb
 from ..duckdb_helpers import lease_query_connection, parquet_available, path_to_uri, run_df
 from ..mcp_execution import mark_mcp_stage, record_mcp_file
 from .geometry_predicate_query import read_rows_by_ids
-from .global_admin_shallow_query import _selected_layout, global_admin2_parent_scope
+from .global_admin_shallow_query import (_selected_layout, global_admin2_id_context,
+                                         global_admin2_parent_scope)
 from .global_admin_spine_policy import admitted_admin_match
 
 _AREA_TRANSFORM = Transformer.from_crs("EPSG:4326", "EPSG:6933", always_xy=True).transform
@@ -109,6 +110,10 @@ def resolve_global_admin_bbox(corners: list[dict[str, Any]]) -> dict[str, Any]:
                               "message": "Global preferred-ID lookup is incomplete"}}
         for row in matched:
             row["loc_id"] = preferred[row["baseline_loc_id"]]
+            if row["admin_level"] == 2:
+                row.update(global_admin2_id_context(
+                    row["baseline_loc_id"], row["loc_id"],
+                    layout.get("country_packs", set())))
             owner_id = (
                 row["loc_id"] if row["admin_level"] == 1 else
                 preferred.get(row["parent_baseline_loc_id"])

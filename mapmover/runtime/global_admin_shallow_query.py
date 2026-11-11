@@ -19,7 +19,8 @@ logger = logging.getLogger(__name__)
 
 
 def _selected_layout() -> dict[str, Any] | None:
-    layout = (load_geometry_catalog().get("runtime_query_layouts") or {}).get("global_admin0_2_point")
+    catalog = load_geometry_catalog()
+    layout = (catalog.get("runtime_query_layouts") or {}).get("global_admin0_2_point")
     if not isinstance(layout, dict) or layout.get("layout_id") != "global_admin0_2_point_query_v1":
         return None
     if layout.get("representation") != "full" or layout.get("authoritative_for_containment") is not True:
@@ -38,7 +39,28 @@ def _selected_layout() -> dict[str, Any] | None:
         paths[key] = path
     if any(path is None or not parquet_available(path) for path in paths.values()):
         return None
-    return {**paths, "release": str(layout.get("source_release") or "")}
+    countries = {str(profile.get("country_code") or "") for profile in
+                 catalog.get("country_profiles") or [] if isinstance(profile, dict)}
+    return {**paths, "release": str(layout.get("source_release") or ""),
+            "country_packs": countries}
+
+
+def global_admin2_id_context(baseline_loc_id: str, preferred_loc_id: str,
+                             country_packs: set[str]) -> dict[str, Any]:
+    """Explain the selected ID without equating distinct Admin 2 definitions."""
+    if baseline_loc_id == preferred_loc_id:
+        available = baseline_loc_id.split("-", 1)[0] in country_packs
+        result: dict[str, Any] = {"admin2_id_status": "global_id_untranslated",
+                                  "country_pack_available": available}
+        if available:
+            result["admin2_id_explanation"] = (
+                "This Global Admin 2 area has no selected equivalent country Admin 2 ID. "
+                "The country pack may define Admin 2 differently; its detail remains available "
+                "through the country scope."
+            )
+        return result
+    return {"admin2_id_status": "country_id_selected",
+            "country_pack_available": True}
 
 
 def global_admin2_parent_scope(shallow_loc_id: str) -> str | None:
@@ -141,7 +163,10 @@ def resolve_global_admin_shallow_points(points: Iterable[dict[str, Any]]) -> lis
             stack.append({"loc_id": preferred[loc_id], "baseline_loc_id": loc_id,
                           "preferred_loc_id": preferred[loc_id],
                           "name": str(row.get("name") or loc_id),
-                          "admin_level": level, "family": "administrative"})
+                          "admin_level": level, "family": "administrative",
+                          **(global_admin2_id_context(
+                              loc_id, preferred[loc_id], layout.get("country_packs", set()))
+                             if level == 2 else {})})
         if not stack:
             output.append({"point": coordinate, "error": {"code": "no_point_overlap",
                            "message": "No Global administrative polygon covers this point"}})
