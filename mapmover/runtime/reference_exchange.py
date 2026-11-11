@@ -1574,6 +1574,10 @@ def geometry_catalog_discovery(
 def geography_directory() -> dict[str, Any]:
     """Small published family/scope directory; no geometry or graph reads."""
     catalog = load_geometry_catalog()
+    if not isinstance(catalog, dict) or not catalog.get("schema_version"):
+        return {"ok": False, "catalog": "geometry",
+                "error": {"code": "geometry_catalog_unavailable",
+                          "message": "The selected geometry catalog is unavailable."}}
     index = _published_geometry_family_index(catalog)
     scopes: dict[str, dict[str, Any]] = {}
     descriptions = {str(item.get("country_code") or "").upper(): item.get("description")
@@ -1604,6 +1608,10 @@ def geography_detail(*, family_id: str | None = None, scope_id: str | None = Non
     import re
 
     catalog = load_geometry_catalog()
+    if not isinstance(catalog, dict) or not catalog.get("schema_version"):
+        return {"ok": False, "catalog": "geometry",
+                "error": {"code": "geometry_catalog_unavailable",
+                          "message": "The selected geometry catalog is unavailable."}}
     selection_year = year if year is not None else datetime.now(timezone.utc).year
     index = _published_geometry_family_index(catalog)
     scope = str(scope_id or "").strip().upper()

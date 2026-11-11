@@ -5982,7 +5982,9 @@ async def mcp_endpoint(request: Request, pack_id: str | None = None):
             }
         payload["resolved_query"] = _resolved_query(tool_name, arguments)
         return _finish_data_helper(request, tool_name=tool_name, started_at=helper_started_at,
-                                   payload=payload, rpc_request_id=request_id, row_count=_payload_row_count(payload))
+                                   payload=payload, rpc_request_id=request_id, row_count=_payload_row_count(payload),
+                                   is_error=not payload.get("ok"),
+                                   error_code=(payload.get("error") or {}).get("code"))
 
     if tool_name == "get_geography":
         keys = set(arguments)
@@ -6017,7 +6019,7 @@ async def mcp_endpoint(request: Request, pack_id: str | None = None):
         payload = load_api_pack_detail(pack_id, hydrate_source_metadata=True)
         if not payload:
             from mapmover.runtime.reference_exchange import geography_directory
-            if pack_id.lower() in {item["family_id"] for item in geography_directory()["families"]}:
+            if pack_id.lower() in {item["family_id"] for item in geography_directory().get("families", [])}:
                 return _jsonrpc_error(request_id, -32602, "Geometry families use get_geography(family_id=...) instead of get_pack")
             return _finish_data_helper(request, tool_name=tool_name, started_at=helper_started_at,
                                        payload={"error": "Pack not found", "pack_id": pack_id},
