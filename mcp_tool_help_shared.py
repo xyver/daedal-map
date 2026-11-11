@@ -63,10 +63,10 @@ TOOL_GUIDANCE: dict[str, dict[str, Any]] = {
         ["get_loc_id_info", "resolve_point", "get_shape"]
     ),
     "resolve_point": _g(
-        ["You have one WGS84 coordinate or a bounded point array and need the deepest available first-pass administrative loc_id chain (global baseline through Admin 2; adopted country banks may reach Admin 3)."],
+        ["You have one WGS84 coordinate or a bounded point array. The default GLOBAL administrative route reads only Global Admin 0-2; an explicit country scope reads only that country's shallow layout, which may reach Admin 3."],
         ["Resolving names or outside codes", "Returning polygons", "Resolving Admin 4-6", "Selecting a family, country, Admin level, or Marine context"],
         {"lat": 49.2827, "lon": -123.1207},
-        ["deepest_resolved_loc_id", "stack", "resolution_mode", "available_deeper_admin_levels"],
+        ["deepest_resolved_loc_id", "deep_scope_loc_id", "stack", "resolution_mode", "available_deeper_admin_levels"],
         ["resolve_deep_point", "get_loc_id_info", "get_shape"]
     ),
     "resolve_bbox": _g(
@@ -74,7 +74,7 @@ TOOL_GUIDANCE: dict[str, dict[str, Any]] = {
         ["Resolving one point", "Inferring a polygon from a screenshot without coordinates", "Crossing the antimeridian", "Deep country subdivisions"],
         {"corners": [{"lat": 0, "lon": 0}, {"lat": 0, "lon": 1},
                      {"lat": 1, "lon": 0}, {"lat": 1, "lon": 1}]},
-        ["best_match", "matches_by_admin_level", "view_coverage_pct", "loc_id_coverage_pct", "intersection_over_union_pct"],
+        ["best_match", "best_match.deep_scope_loc_id", "matches_by_admin_level", "view_coverage_pct", "loc_id_coverage_pct", "intersection_over_union_pct"],
         ["resolve_deep_bbox", "get_loc_id_info", "get_shape"],
         ["published Global Admin 0-2 geometry release", "equal-area intersection method"],
     ),
@@ -277,15 +277,15 @@ def geometry_topic_help_payload(
         "request_rules": [
             {
                 "request": "one exploratory point",
-                "rule": "Call resolve_point. It infers the country and returns the deepest available result through Admin 3 without opening deep partitions.",
+                "rule": "Call resolve_point with coordinates alone. The default GLOBAL administrative route returns Admin 0-2 without opening country or Marine banks.",
             },
             {
                 "request": "multiple administrative points",
-                "rule": "Use resolve_point with points=[...] for a cross-country batch; it performs global Admin 0 discovery and then opens only each discovered country's adopted Admin 0-3 bank or bounded global Admin 0-2 baseline shard.",
+                "rule": "Use resolve_point with points=[...] for a cross-country batch; the default GLOBAL route reads the Global Admin 0-2 pack only. Select one ISO3 scope explicitly to read its country layout.",
             },
             {
                 "request": "points at a partitioned deep level",
-                "rule": "First call resolve_point with points=[...], group by the shallow loc_id used as scope, then call resolve_deep_point once per scope and family.",
+                "rule": "First call resolve_point with points=[...], group by returned deep_scope_loc_id, then pass that value as shallow_loc_id to resolve_deep_point once per scope and family.",
             },
             {
                 "request": "geometry for known loc_ids",
@@ -329,7 +329,7 @@ def geometry_topic_help_payload(
                     "read the selected country's catalog entry and query_guidance",
                     "resolve to the declared partition-owner level",
                     "group points by the returned owner loc_id",
-                    "call resolve_deep_point separately for each scope and family with shallow_loc_id",
+                    "call resolve_deep_point separately for each scope and family with deep_scope_loc_id as shallow_loc_id",
                 ],
                 "important": "resolve_point with a points array is the shallow bulk pass. resolve_deep_point accepts one shallow scope and one family per call; administrative requests derive the Admin 1 partition internally.",
             },
@@ -521,7 +521,7 @@ def tool_help_payload(
         }
         access["bulk_shape"] = {
             "threshold": limits.get("free_item_limit"),
-            "shallow_tool": "resolve_point: one point or a cross-country point array; Admin0 discovery is followed by an adopted Admin0-3 country bank or the bounded global Admin0-2 baseline shard",
+            "shallow_tool": "resolve_point: omitted scope selects the Global Admin0-2 pack; an explicit ISO3 scope selects only that country layout",
             "deep_tool": "resolve_deep_point: one point or point array plus one shallow_loc_id and one family; family defaults to administrative",
         }
     elif name == "resolve_deep_point" and not local_installed:

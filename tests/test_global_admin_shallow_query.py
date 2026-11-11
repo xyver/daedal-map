@@ -44,10 +44,12 @@ class GlobalAdminShallowQueryTests(unittest.TestCase):
                     {"lon": 2, "lat": 2}, {"lon": 5, "lat": 5}, {"lon": 20, "lat": 20},
                 ])
         self.assertEqual(results[0]["deepest_resolved_loc_id"], "USA-TX-201")
+        self.assertEqual(results[0]["deep_scope_loc_id"], "USA-TX")
         self.assertEqual([row["loc_id"] for row in results[0]["stack"]],
                          ["USA", "USA-TX", "USA-TX-201"])
         self.assertEqual(results[0]["matched"]["baseline_loc_id"], "USA-GTX-GHARRIS")
         self.assertEqual(results[1]["deepest_resolved_loc_id"], "USA-TX")
+        self.assertEqual(results[1]["deep_scope_loc_id"], "USA-TX")
         self.assertEqual(results[2]["error"]["code"], "no_point_overlap")
 
     def test_unselected_layout_keeps_existing_admin0_path_available(self):

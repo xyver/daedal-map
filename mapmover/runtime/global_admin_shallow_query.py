@@ -150,6 +150,7 @@ def resolve_global_admin_shallow_points(points: Iterable[dict[str, Any]]) -> lis
         output.append({"point": coordinate,
                        "country": {"loc_id": stack[0]["loc_id"], "name": stack[0]["name"]},
                        "matched": deepest, "stack": stack,
+                       **({"deep_scope_loc_id": stack[1]["loc_id"]} if len(stack) > 1 else {}),
                        "deepest_resolved_loc_id": deepest["loc_id"],
                        "deepest_resolved_admin_level": deepest["admin_level"],
                        "deepest_resolved_family": "administrative",

@@ -109,6 +109,13 @@ def resolve_global_admin_bbox(corners: list[dict[str, Any]]) -> dict[str, Any]:
                               "message": "Global preferred-ID lookup is incomplete"}}
         for row in matched:
             row["loc_id"] = preferred[row["baseline_loc_id"]]
+            owner_id = (
+                row["loc_id"] if row["admin_level"] == 1 else
+                preferred.get(row["parent_baseline_loc_id"])
+                if row["admin_level"] == 2 else None
+            )
+            if owner_id:
+                row["deep_scope_loc_id"] = owner_id
         matched.sort(key=lambda row: (-row["intersection_over_union_pct"],
                                       -row["view_coverage_pct"], row["loc_id"]))
     by_level = {str(level): [row for row in matched if row["admin_level"] == level][:5]

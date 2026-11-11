@@ -138,13 +138,13 @@ def build_mcp_instructions(*, safety_notice: str | None = None) -> str:
         "JSON; execution tools do not parse prose. Start with get_catalog, then "
         "get_pack before querying a new pack. Call get_tool_help before an "
         "unfamiliar tool. When the only place input is coordinates, call "
-        "resolve_point with one explicit scope_id and family. Use GLOBAL "
-        "administrative to identify the country, then call the chosen ISO3 "
-        "administrative scope for a shallow loc_id. Use MARINE with one "
+        "resolve_point; omitted scope_id and family select GLOBAL administrative "
+        "and return its Admin 0-2 chain. Use an explicit ISO3 administrative scope "
+        "to read only that country's shallow layout. Use MARINE with one "
         "selected Marine family for Marine-only containment. Never infer a "
         "Marine fallback from a Global miss. Only resolve_point "
         "and resolve_deep_point accept coordinates; use the latter only with "
-        "a returned shallow_loc_id and the original point. Use "
+        "the returned deep_scope_loc_id as shallow_loc_id and the original point. Use "
         "convert_reference for scoped names or outside "
         "identifiers. identify_dataset_geography and identify_reference_system "
         "prepare an uncertain dataset binding before conversion. Keep all "
@@ -268,12 +268,12 @@ def build_tool_definitions(*, include_paused: bool = False) -> list[dict]:
         {
             "name": "resolve_point",
             "title": "Resolve Point(s) in One Scope",
-            "description": "Resolve WGS84 coordinates in exactly one selected scope and family. GLOBAL administrative finds Admin0; an ISO3 administrative scope finds its shallow country bank. MARINE requires one specific jurisdiction family (for example exclusive_economic_zone or high_seas), or water_body with water_kind=named or zone. The broad marine_jurisdiction category has no point route. No call crosses scopes or opens another family's bank. Discover families with get_catalog(catalog='geometry').",
+            "description": "Resolve WGS84 coordinates in one scope and family. Omitted scope_id and family select GLOBAL administrative, returning its Admin 0-2 chain. An explicit ISO3 administrative scope reads only that country's shallow bank. MARINE requires one specific jurisdiction family (for example exclusive_economic_zone or high_seas), or water_body with water_kind=named or zone. The broad marine_jurisdiction category has no point route. No call crosses scopes or opens another family's bank. Discover families with get_catalog(catalog='geometry').",
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "scope_id": {"type": "string", "minLength": 3, "description": "GLOBAL, MARINE, or one published ISO3 country. No automatic fallback into another scope."},
-                    "family": {"type": "string", "enum": ["administrative", *MARINE_POINT_FAMILIES], "description": "One exact family within the selected scope."},
+                    "scope_id": {"type": "string", "minLength": 3, "default": "GLOBAL", "description": "GLOBAL (default), MARINE, or one published ISO3 country. No automatic fallback into another scope."},
+                    "family": {"type": "string", "enum": ["administrative", *MARINE_POINT_FAMILIES], "default": "administrative", "description": "One exact family within the selected scope; defaults to administrative."},
                     "water_kind": {"type": "string", "enum": ["named", "zone"], "description": "Required only for MARINE water_body: named seas or water zones."},
                     "lat": {"type": "number", "minimum": -90, "maximum": 90, "description": "Latitude in WGS84 decimal degrees."},
                     "lon": {"type": "number", "minimum": -180, "maximum": 180, "description": "Longitude in WGS84 decimal degrees."},
@@ -297,8 +297,8 @@ def build_tool_definitions(*, include_paused: bool = False) -> list[dict]:
                     "request_id": {"type": "string", "description": "Optional caller-supplied request id for tracing."},
                 },
                 "oneOf": [
-                    {"required": ["scope_id", "family", "lat", "lon"], "not": {"required": ["points"]}},
-                    {"required": ["scope_id", "family", "points"], "not": {"anyOf": [{"required": ["lat"]}, {"required": ["lon"]}]}},
+                    {"required": ["lat", "lon"], "not": {"required": ["points"]}},
+                    {"required": ["points"], "not": {"anyOf": [{"required": ["lat"]}, {"required": ["lon"]}]}},
                 ],
                 "additionalProperties": False,
             },
@@ -327,7 +327,7 @@ def build_tool_definitions(*, include_paused: bool = False) -> list[dict]:
         {
             "name": "resolve_deep_bbox",
             "title": "Resolve Map Viewport (Deep)",
-            "description": "Second-pass rectangle overlap within one returned shallow administrative loc_id. Routes to that country's one Admin 1-owned exact partition and compares its Admin 1-6 spine. Supply the original four WGS84 corners; broad views may require zooming in.",
+            "description": "Second-pass rectangle overlap within one returned shallow administrative loc_id. Supply deep_scope_loc_id from resolve_bbox as shallow_loc_id for a direct country-only read. Routes to that country's one Admin 1-owned exact partition and compares its Admin 1-6 spine. Supply the original four WGS84 corners; broad views may require zooming in.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -339,7 +339,7 @@ def build_tool_definitions(*, include_paused: bool = False) -> list[dict]:
                             "required": ["lat", "lon"], "additionalProperties": False},
                         "description": "Four distinct corners of one axis-aligned rectangle; no antimeridian crossing."},
                     "shallow_loc_id": {"type": "string", "minLength": 5,
-                                       "description": "One canonical Admin 1-3 loc_id from the shallow result; its Admin 1 owner selects one deep partition."},
+                                       "description": "Use deep_scope_loc_id from the shallow result for a direct country-only read; its Admin 1 owner selects one deep partition."},
                     "request_id": {"type": "string", "description": "Optional caller-supplied tracing ID."},
                 },
                 "required": ["corners", "shallow_loc_id"], "additionalProperties": False,
@@ -349,7 +349,7 @@ def build_tool_definitions(*, include_paused: bool = False) -> list[dict]:
         {
             "name": "resolve_deep_point",
             "title": "Resolve Point(s) (Deep)",
-            "description": "Second-pass containment only after resolve_point. Supply the original WGS84 coordinate or a bounded point array, one shared shallow_loc_id returned by resolve_point, and one canonical family from get_catalog(catalog='geometry'). family defaults to administrative; shape-backed families use direct bbox-to-exact-shape lookup without crosswalks. Single and bulk requests share this scoped contract.",
+            "description": "Second-pass containment only after resolve_point. Supply the original WGS84 coordinate or a bounded point array, its returned deep_scope_loc_id as shallow_loc_id, and one canonical family from get_catalog(catalog='geometry'). family defaults to administrative; shape-backed families use direct bbox-to-exact-shape lookup without crosswalks. Single and bulk requests share this scoped contract.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -371,7 +371,7 @@ def build_tool_definitions(*, include_paused: bool = False) -> list[dict]:
                         },
                         "description": "Points already known to fall within the supplied shallow_loc_id scope.",
                     },
-                    "shallow_loc_id": {"type": "string", "minLength": 5, "description": "The deepest canonical Admin 1-3 loc_id returned by resolve_point, such as USA-NY-061-009903."},
+                    "shallow_loc_id": {"type": "string", "minLength": 5, "description": "Pass deep_scope_loc_id from resolve_point for a direct country-only read, such as USA-NY."},
                     "target_admin_level": {"anyOf": [{"type": "string"}, {"type": "integer"}], "description": "Optional exact Admin 4-6 level. Omit for the deepest available match."},
                     "family": {"type": "string", "pattern": "^[a-z0-9_]+$", "default": "administrative", "description": "One family selector. Defaults to administrative; use marine for the direct Marine resolver, or a canonical country family such as postal_area, watershed, or land_management_region."},
                     "batch_id": {"type": "string", "description": "Optional caller-supplied batch id echoed for point arrays."},

@@ -12,6 +12,19 @@ from mapmover.runtime import global_admin_bbox_query as bbox_query
 
 
 class GlobalAdminBBoxTests(unittest.TestCase):
+    def test_deep_scope_id_uses_country_route_without_global_lookup(self):
+        from mapmover.runtime import family_point_resolution, global_admin_shallow_query
+
+        owner_id = "GBR-E92000001"
+        route_row = pd.DataFrame([{"admin_level": 1, "admin_1_loc_id": owner_id}])
+        with mock.patch.object(family_point_resolution, "layout_available", return_value=True), \
+                mock.patch.object(family_point_resolution, "load_route_rows_by_loc_ids",
+                                  return_value=route_row), \
+                mock.patch.object(global_admin_shallow_query, "global_admin2_parent_scope") as global_lookup:
+            country, owner, error = family_point_resolution.shallow_scope(owner_id)
+        self.assertEqual((country, owner, error), ("GBR", owner_id, None))
+        global_lookup.assert_not_called()
+
     def test_global_admin2_point_id_hands_off_to_country_owner(self):
         from mapmover.runtime import family_point_resolution, global_admin_shallow_query
 
@@ -68,6 +81,7 @@ class GlobalAdminBBoxTests(unittest.TestCase):
                 mock.patch.object(bbox_query, "read_rows_by_ids", side_effect=read):
             result = bbox_query.resolve_global_admin_bbox(corners)
         self.assertEqual(result["best_match"]["loc_id"], "C-W-1")
+        self.assertEqual(result["best_match"]["deep_scope_loc_id"], "C-W")
         self.assertEqual(result["best_match"]["view_coverage_pct"], 50.0)
         self.assertEqual({row["loc_id"] for row in result["matches_by_admin_level"]["1"]}, {"C-W", "C-E"})
         self.assertEqual(result["query_layout"], "global_admin0_2_point")

@@ -85,10 +85,18 @@ def _tool_call(client: TestClient, name: str, arguments: dict | None = None, *, 
 
 
 class McpReferenceExchangeToolsTests(unittest.TestCase):
-    def test_point_requires_one_explicit_scope_and_family(self) -> None:
+    def test_point_defaults_to_global_and_requires_marine_family(self) -> None:
         with mock.patch("mapmover.runtime.global_admin0_query.resolve_global_scope_points") as global_route, \
              mock.patch("mapmover.runtime.marine_geometry.resolve_marine_family_points") as marine_route:
-            missing_scope = _tool_call(self.client, "resolve_point", {
+            global_route.return_value = [{"point": {"lat": 35, "lon": -130},
+                                          "matched": {"loc_id": "USA", "admin_level": 0},
+                                          "stack": [{"loc_id": "USA", "admin_level": 0},
+                                                    {"loc_id": "USA-CA", "admin_level": 1}],
+                                          "deep_scope_loc_id": "USA-CA"}]
+            default_scope = _tool_call(self.client, "resolve_point", {
+                "lat": 35, "lon": -130,
+            })
+            wrong_default_family = _tool_call(self.client, "resolve_point", {
                 "lat": 35, "lon": -130, "family": "high_seas",
             })
             missing_family = _tool_call(self.client, "resolve_point", {
@@ -103,12 +111,14 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
             broad_family = _tool_call(self.client, "resolve_point", {
                 "lat": 35, "lon": -130, "scope_id": "MARINE", "family": "marine_jurisdiction",
             })
-        self.assertEqual(missing_scope["error"]["code"], "point_scope_required")
+        self.assertEqual(default_scope["matched"]["loc_id"], "USA")
+        self.assertEqual(default_scope["deep_scope_loc_id"], "USA-CA")
+        self.assertEqual(wrong_default_family["error"]["code"], "invalid_point_family")
         self.assertEqual(missing_family["error"]["code"], "point_family_required")
         self.assertEqual(wrong_family["error"]["code"], "invalid_point_family")
         self.assertEqual(missing_water_kind["error"]["code"], "water_kind_required")
         self.assertEqual(broad_family["error"]["code"], "invalid_point_family")
-        global_route.assert_not_called()
+        global_route.assert_called_once()
         marine_route.assert_not_called()
 
     def test_global_point_does_not_search_marine(self) -> None:
@@ -118,6 +128,25 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
             })
         self.assertEqual(result["error"]["code"], "no_point_overlap")
         marine_route.assert_not_called()
+
+    def test_default_point_batch_uses_global_route_only(self) -> None:
+        raw = {"matched": {"loc_id": "USA-TX", "admin_level": 1},
+               "stack": [{"loc_id": "USA", "admin_level": 0},
+                         {"loc_id": "USA-TX", "admin_level": 1}],
+               "deep_scope_loc_id": "USA-TX"}
+        with (
+            mock.patch("mapmover.runtime.global_admin0_query.resolve_global_scope_points",
+                       return_value=[raw, raw]) as global_route,
+            mock.patch("mapmover.geometry_handlers.resolve_points_to_locations") as country_route,
+            mock.patch("mapmover.routes.mcp.log_api_query_event"),
+        ):
+            payload = _tool_call(self.client, "resolve_point", {
+                "points": [{"lat": 30.0, "lon": -97.0}, {"lat": 31.0, "lon": -98.0}],
+            })
+        self.assertEqual(len(payload["results"]), 2)
+        self.assertEqual(payload["results"][0]["deep_scope_loc_id"], "USA-TX")
+        global_route.assert_called_once()
+        country_route.assert_not_called()
 
     def test_marine_point_selects_one_family(self) -> None:
         result = _tool_call(self.client, "resolve_point", {
@@ -359,7 +388,7 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         self.assertEqual(envelope["result"]["serverInfo"]["version"], "1.6.2")
         instructions = envelope["result"]["instructions"]
         self.assertIn("When the only place input is coordinates, call resolve_point first", instructions)
-        self.assertIn("Use that returned country and shallow loc_id stack", instructions)
+        self.assertIn("Use the returned deep_scope_loc_id as shallow_loc_id", instructions)
         self.assertIn("use convert_reference for scoped names or outside identifiers", instructions)
         self.assertIn("identify_dataset_geography", instructions)
         self.assertIn("identify_reference_system", instructions)
@@ -1371,7 +1400,9 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         self.assertNotIn("include_info", tools["get_shape"]["inputSchema"]["properties"])
         self.assertNotIn("detail", tools["get_shape"]["inputSchema"]["properties"])
         self.assertNotIn("scope", tools["get_shape"]["inputSchema"]["properties"])
-        self.assertIn("exactly one selected scope and family", tools["resolve_point"]["description"])
+        self.assertIn("Omitted scope_id and family select GLOBAL", tools["resolve_point"]["description"])
+        self.assertEqual(tools["resolve_point"]["inputSchema"]["properties"]["scope_id"]["default"], "GLOBAL")
+        self.assertEqual(tools["resolve_point"]["inputSchema"]["properties"]["family"]["default"], "administrative")
 
     def test_point_help_matches_discovery_and_rejects_unsupported_selectors(self) -> None:
         tools = {

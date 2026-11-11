@@ -1825,7 +1825,7 @@ def get_server_description(pack_id: str | None = None) -> str:
             f"{PACK_SERVER_PROFILES[normalized]['description']} Safety: {AGENT_SAFETY_NOTICE} {coverage_prefix}"
             "The calling LLM translates the user's natural-language request into strict tool JSON; geometry execution tools do not accept prose unless a schema explicitly says they do. Call get_tool_help before an unfamiliar tool. On error, inspect error, warnings, guidance, and clarification; ask the user only when clarification.required is true. "
             "Start with free discovery: call get_catalog with catalog='geometry' to see each family and the countries where it exists. Then call get_geography with one family_id or scope_id to inspect coverage and admitted edition years. A listed family-country pair is the capability signal. Edition years alone do not prove effective-year coverage. "
-            "When the only place input is coordinates, call resolve_point first to learn the country and the deepest available compact shallow chain (global baseline through Admin 2; adopted country banks may reach Admin 3) without opening deep partitions. Use that returned country and shallow loc_id stack to scope later place-specific calls. Call resolve_deep_point only when deeper containment is requested, with the original coordinate or scoped point array, a returned shallow_loc_id, and one family. family defaults to administrative; other shape-backed families use direct point lookup within the selected country. "
+            "When the only place input is coordinates, call resolve_point first. Omitted scope_id and family select GLOBAL administrative and return its Admin 0-2 chain; an explicit country scope reads only that country's shallow layout. Use the returned deep_scope_loc_id as shallow_loc_id with resolve_deep_point and the original coordinate when deeper containment is requested. family defaults to administrative; other shape-backed families use direct point lookup within the selected country. "
             "When the caller asks what other loc_ids connect directly to the returned chain, pass up to 10 stack loc_ids to get_loc_id_info; each result returns at most 50 selected-graph edges and a has_more flag. Use get_shape only for shapes and compare_geographies only for overlap, topology, validity, or successor questions. Mixed-vintage point context is not strict parentage. "
             "For a user dataset with unknown or informally declared geography keys, pass bounded scalar column samples to identify_dataset_geography; the caller may filter transport noise but must not choose the geography itself. Use identify_reference_system only when one identifier column is already selected. For a known outside geography code, name, or bounded identifier batch, call convert_reference and omit to_system to return loc_id. These identification tools prepare a binding; use convert_reference for scoped names or outside identifiers. Keep all relevant returned loc_ids when place identity overlaps. Pass canonical loc_ids to geography readers and place-filtered data calls. For bounded administrative shapes, use get_shape with exact loc_ids. "
             "Future estimate/create/status builder contracts remain implemented internally but are not public MCP tools until durable job and artifact delivery is ready."
@@ -2768,8 +2768,8 @@ async def _execute_resolve_point_tool(request: Request, arguments: dict[str, Any
     coordinate_error = _point_tool_coordinate_error(payload)
     if coordinate_error:
         return _point_tool_contract_error(request_id, rpc_request_id, code=coordinate_error[0], message=coordinate_error[1])
-    scope = str(payload.pop("scope_id", "") or "").strip().upper()
-    family = str(payload.pop("family", "") or "").strip()
+    scope = str(payload.pop("scope_id", "GLOBAL") or "").strip().upper()
+    family = str(payload.pop("family", "" if scope == "MARINE" else "administrative") or "").strip()
     water_kind = str(payload.pop("water_kind", "") or "").strip()
     if not scope:
         return _point_tool_contract_error(
@@ -2916,6 +2916,12 @@ def _shape_resolve_point_payload(raw: Any, request_id: str) -> dict[str, Any]:
             "available_deeper_admin_levels": raw.get("available_deeper_admin_levels") or [],
             "error": error,
         }
+    deep_scope_loc_id = str(raw.get("deep_scope_loc_id") or "")
+    if not deep_scope_loc_id:
+        for row in raw.get("stack") or []:
+            if isinstance(row, dict) and str(row.get("admin_level")) in {"1", "admin_1"}:
+                deep_scope_loc_id = str(row.get("loc_id") or "")
+                break
     return {
         "request_id": request_id,
         "resolution_schema_version": raw.get("resolution_schema_version") or "1.0.0",
@@ -2926,6 +2932,7 @@ def _shape_resolve_point_payload(raw: Any, request_id: str) -> dict[str, Any]:
         "deepest_resolved_admin_level": raw.get("deepest_resolved_admin_level") or (raw.get("matched") or {}).get("admin_level"),
         "deepest_resolved_family": raw.get("deepest_resolved_family") or (raw.get("matched") or {}).get("family"),
         "stack": raw.get("stack") or [],
+        **({"deep_scope_loc_id": deep_scope_loc_id} if deep_scope_loc_id else {}),
         "overlap_families": raw.get("overlap_families") or [],
         **({"geometry_review": raw["geometry_review"]} if raw.get("geometry_review") else {}),
         "join_keys": raw.get("join_keys") or {},
