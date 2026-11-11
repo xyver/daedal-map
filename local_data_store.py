@@ -323,7 +323,9 @@ def _materialize(data_root: Path, entries: list[dict], active_ids: list[str], st
 
 
 def install_data_pack(current_url: str, storage_root: Path, *, fetch_json, download,
-                      archive_path: Path | None = None, log=lambda _: None) -> dict:
+                      archive_path: Path | None = None, log=lambda _: None,
+                      on_download_complete=None, expected_version: str = "",
+                      expected_size: int = 0, selected_sha: str = "") -> dict:
     """Install a published data ZIP without requiring Mapping or an MCP runtime."""
     storage_root = Path(storage_root)
     data_root = storage_root / "data"
@@ -356,6 +358,12 @@ def install_data_pack(current_url: str, storage_root: Path, *, fetch_json, downl
         raise ValueError("Pack pointer identity differs from release")
     if current.get("current_version") not in (None, pack_version):
         raise ValueError("Pack pointer version differs from release")
+    if (expected_version and pack_version != expected_version):
+        raise ValueError("Pack release changed since Downloads was loaded; refresh Data")
+    if (expected_size and artifact.get("size_bytes") != expected_size):
+        raise ValueError("Pack size changed since Downloads was loaded; refresh Data")
+    if (selected_sha and expected_sha != selected_sha.lower()):
+        raise ValueError("Pack checksum changed since Downloads was loaded; refresh Data")
     origin = urlparse(current_url)
     if origin.scheme in {"http", "https"}:
         for candidate in (version_url, str(artifact["download_url"])):
@@ -363,22 +371,47 @@ def install_data_pack(current_url: str, storage_root: Path, *, fetch_json, downl
             if origin.scheme != "https" or target.scheme != "https" or target.netloc != origin.netloc:
                 raise ValueError("Pack release URL is outside its HTTPS download origin")
     expected_size = artifact.get("size_bytes")
+    download_cache = cache_root / "pack-downloads"
+    download_cache.mkdir(parents=True, exist_ok=True)
+    cached_archive = download_cache / f"{expected_sha}.zip"
+    partial_archive = download_cache / f"{expected_sha}.part"
     with tempfile.TemporaryDirectory(prefix="pack-download-", dir=cache_root) as temporary:
         work = Path(temporary)
-        archive = work / "pack.zip"
+        archive_verified = False
         if archive_path is None:
-            log(f"Downloading {pack_id} {pack_version}")
-            download(str(artifact["download_url"]), archive)
+            if (not cached_archive.is_file()
+                    or (expected_size is not None and cached_archive.stat().st_size != int(expected_size))
+                    or _hash(cached_archive) != expected_sha):
+                complete_partial = (partial_archive.is_file()
+                                    and (expected_size is None or partial_archive.stat().st_size == int(expected_size))
+                                    and _hash(partial_archive) == expected_sha)
+                if not complete_partial:
+                    if (partial_archive.exists() and expected_size is not None
+                            and partial_archive.stat().st_size >= int(expected_size)):
+                        partial_archive.unlink()
+                    log(f"Downloading {pack_id} {pack_version}; an interrupted transfer resumes on retry")
+                    download(str(artifact["download_url"]), partial_archive)
+                if (not complete_partial and
+                        ((expected_size is not None and partial_archive.stat().st_size != int(expected_size))
+                         or _hash(partial_archive) != expected_sha)):
+                    partial_archive.unlink(missing_ok=True)
+                    raise ValueError("Pack artifact size or SHA-256 mismatch")
+                partial_archive.replace(cached_archive)
+            archive = cached_archive
+            archive_verified = True
         else:
             source = Path(archive_path)
             if not source.is_file():
                 raise ValueError(f"Data pack ZIP is missing: {source}")
             log(f"Using downloaded ZIP for {pack_id} {pack_version}")
+            archive = work / "pack.zip"
             shutil.copy2(source, archive)
         if expected_size is not None and archive.stat().st_size != int(expected_size):
             raise ValueError("Pack artifact size mismatch")
-        if _hash(archive) != expected_sha:
+        if not archive_verified and _hash(archive) != expected_sha:
             raise ValueError("Pack artifact SHA-256 mismatch")
+        if on_download_complete is not None:
+            on_download_complete()
         extract_root = work / "extract"
         package = _extract_verified(archive, extract_root, version)
         prepared = work / "prepared"
