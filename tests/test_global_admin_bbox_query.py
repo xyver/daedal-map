@@ -144,3 +144,69 @@ class GlobalAdminBBoxTests(unittest.TestCase):
                 self.assertEqual(len(connection.paths), expected_count)
                 if has_deep:
                     self.assertTrue(str(connection.paths[1]).replace("\\", "/").endswith("deep/CAN-NT.parquet"))
+
+    def test_global_admin2_best_match_hands_off_to_country_admin1(self):
+        """A returned Global Admin 2 ID must be usable for the deep call."""
+        from mapmover.runtime import admin_spine_query, family_point_resolution
+
+        baseline_id = "GBR-G114339913B95766344400054-G29080712B97999030763342"
+        parent_baseline = "GBR-G114339913B95766344400054"
+        selected_parent = "GBR-E92000001"
+        corners = [{"lat": 51.50, "lon": -0.13}, {"lat": 51.50, "lon": -0.10},
+                   {"lat": 51.52, "lon": -0.13}, {"lat": 51.52, "lon": -0.10}]
+
+        class Connection:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                pass
+
+            def execute(self, _sql, params=None):
+                self.rows = pd.DataFrame([{
+                    "loc_id": selected_parent, "name": "England",
+                    "parent_id": "GBR", "admin_level": 1,
+                    "geometry_wkb": box(-1, 50, 1, 53).wkb,
+                }]) if params else pd.DataFrame()
+                return self
+
+            def fetchdf(self):
+                return self.rows
+
+        def read(path, ids, **_kwargs):
+            if path == Path("global-admin2.parquet"):
+                self.assertEqual(ids, [baseline_id])
+                return pd.DataFrame([{"loc_id": baseline_id, "parent_id": parent_baseline}])
+            self.assertEqual(path, Path("preferred.parquet"))
+            self.assertEqual(ids, [parent_baseline])
+            return pd.DataFrame([{"baseline_loc_id": parent_baseline,
+                                  "preferred_loc_id": selected_parent}])
+
+        invalid = {"code": "invalid_shallow_loc_id", "message": "Unknown country route"}
+        with mock.patch.object(family_point_resolution, "shallow_scope",
+                               side_effect=[("", None, invalid), ("GBR", selected_parent, None)]) as scope, \
+                mock.patch.object(bbox_query, "_selected_layout", return_value={
+                    "admin_2": Path("global-admin2.parquet"),
+                    "preferred_lookup": Path("preferred.parquet")}), \
+                mock.patch.object(bbox_query, "read_rows_by_ids", side_effect=read), \
+                mock.patch.object(admin_spine_query, "layout_available", return_value=True), \
+                mock.patch.object(admin_spine_query, "layout_root", return_value=Path("country")), \
+                mock.patch.object(admin_spine_query, "_has_deep_partitions", return_value=False), \
+                mock.patch.object(bbox_query, "lease_query_connection", return_value=Connection()), \
+                mock.patch.object(bbox_query, "path_to_uri", side_effect=str):
+            result = bbox_query.resolve_country_admin_bbox(corners, baseline_id)
+        self.assertEqual(result["admin_1_scope"], selected_parent)
+        self.assertEqual(result["best_match"]["loc_id"], selected_parent)
+        self.assertEqual(scope.call_args_list[1].args[0], selected_parent)
+
+    def test_unknown_global_admin2_id_stays_invalid(self):
+        from mapmover.runtime import family_point_resolution
+
+        corners = [{"lat": 0, "lon": 0}, {"lat": 0, "lon": 1},
+                   {"lat": 1, "lon": 0}, {"lat": 1, "lon": 1}]
+        invalid = {"code": "invalid_shallow_loc_id", "message": "Unknown ID"}
+        with mock.patch.object(family_point_resolution, "shallow_scope",
+                               return_value=("", None, invalid)), \
+                mock.patch.object(bbox_query, "_selected_layout", return_value=None):
+            result = bbox_query.resolve_country_admin_bbox(corners, "GBR-G-NOTREAL")
+        self.assertEqual(result["error"]["code"], "invalid_shallow_loc_id")

@@ -120,6 +120,28 @@ def resolve_global_admin_bbox(corners: list[dict[str, Any]]) -> dict[str, Any]:
             "geometry_release": layout["release"], "query_layout": "global_admin0_2_point"}
 
 
+def _global_admin2_parent_scope(shallow_loc_id: str) -> str | None:
+    """Translate a returned Global Admin 2 ID to its country Admin 1 owner."""
+    if not admitted_admin_match(shallow_loc_id, 2):
+        return None
+    layout = _selected_layout()
+    if layout is None:
+        return None
+    rows = read_rows_by_ids(layout["admin_2"], [shallow_loc_id],
+                            id_column="loc_id", columns=["parent_id"])
+    if len(rows) != 1:
+        return None
+    parent = str(rows.iloc[0].get("parent_id") or "")
+    if not parent or not parent.startswith(shallow_loc_id.split("-", 1)[0] + "-"):
+        return None
+    lookup = read_rows_by_ids(layout["preferred_lookup"], [parent],
+                              id_column="baseline_loc_id", columns=["preferred_loc_id"])
+    if len(lookup) != 1:
+        return None
+    selected = str(lookup.iloc[0].get("preferred_loc_id") or "").strip()
+    return selected if selected.startswith(shallow_loc_id.split("-", 1)[0] + "-") else None
+
+
 def resolve_country_admin_bbox(corners: list[dict[str, Any]], shallow_loc_id: str) -> dict[str, Any]:
     """Second pass inside one admitted country Admin 1 owner, through its deep bank."""
     from .admin_spine_query import _has_deep_partitions, layout_available, layout_root
@@ -127,6 +149,16 @@ def resolve_country_admin_bbox(corners: list[dict[str, Any]], shallow_loc_id: st
 
     west, south, east, north = rectangle_bounds(corners)
     country, owner, scope_error = shallow_scope(shallow_loc_id)
+    if scope_error and scope_error.get("code") == "invalid_shallow_loc_id":
+        # The Global bbox index can return an Admin 2 baseline ID that has no
+        # country route. Its published Admin 1 parent is the deep-bank scope.
+        try:
+            parent_scope = _global_admin2_parent_scope(shallow_loc_id)
+        except Exception:
+            return {"error": {"code": "selected_scope_unavailable",
+                              "message": "Selected Global Admin 2 parent lookup failed"}}
+        if parent_scope:
+            country, owner, scope_error = shallow_scope(parent_scope)
     if scope_error:
         return {"error": scope_error}
     if not owner or not layout_available(country):
