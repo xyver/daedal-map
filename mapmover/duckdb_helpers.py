@@ -14,6 +14,8 @@ import os
 import threading
 import queue
 import time
+from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Iterable, Optional
@@ -91,8 +93,20 @@ def hurricane_track_join_columns(available_columns: Iterable[str]) -> tuple[str,
 # Cloud / httpfs helpers
 # ---------------------------------------------------------------------------
 
+_LOCAL_CACHED_QUERY: ContextVar[bool] = ContextVar("local_cached_query", default=False)
+
+
+@contextmanager
+def local_cached_query_mode():
+    """Read a downloaded MCP's verified local Parquet without cloud httpfs."""
+    token = _LOCAL_CACHED_QUERY.set(True)
+    try:
+        yield
+    finally:
+        _LOCAL_CACHED_QUERY.reset(token)
+
 def is_cloud_mode() -> bool:
-    return get_data_plane_mode() == "cloud"
+    return get_data_plane_mode() == "cloud" and not _LOCAL_CACHED_QUERY.get()
 
 
 def _allow_local_source_fallback() -> bool:
@@ -194,11 +208,23 @@ def _configure_httpfs(con) -> None:
         con.execute(f"SET s3_endpoint='{endpoint}'")
     key = os.environ.get("AWS_ACCESS_KEY_ID", "").strip()
     secret = os.environ.get("AWS_SECRET_ACCESS_KEY", "").strip()
+    token = os.environ.get("AWS_SESSION_TOKEN", "").strip()
+    if not (key and secret):
+        try:
+            import boto3
+            credentials = boto3.Session().get_credentials()
+            if credentials is not None:
+                frozen = credentials.get_frozen_credentials()
+                key, secret, token = frozen.access_key or "", frozen.secret_key or "", frozen.token or ""
+        except Exception:
+            pass
     region = os.environ.get("AWS_DEFAULT_REGION", "auto").strip() or "auto"
     if key:
-        con.execute(f"SET s3_access_key_id='{key}'")
+        con.execute(f"SET s3_access_key_id='{key.replace(chr(39), chr(39) * 2)}'")
     if secret:
-        con.execute(f"SET s3_secret_access_key='{secret}'")
+        con.execute(f"SET s3_secret_access_key='{secret.replace(chr(39), chr(39) * 2)}'")
+    if token:
+        con.execute(f"SET s3_session_token='{token.replace(chr(39), chr(39) * 2)}'")
     con.execute(f"SET s3_region='{region}'")
     con.execute("SET s3_url_style='path'")
     # Cache parquet footer/metadata globally across connections - eliminates

@@ -6,8 +6,10 @@ import argparse
 import json
 import os
 import sys
+import tempfile
 from pathlib import Path
 from typing import Iterable
+from urllib.parse import urlsplit
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
@@ -71,7 +73,9 @@ def _resolve_existing_dir(value: str | Path, label: str) -> Path:
     return path
 
 
-def _configure_environment(data_root: Path, runtime_root: Path) -> None:
+def _configure_environment(data_root: Path, runtime_root: Path, *,
+                           cloud_source: dict[str, str] | None = None,
+                           cache_dir: Path | None = None) -> None:
     os.environ["INSTALL_MODE"] = "local"
     os.environ["RUNTIME_MODE"] = "local"
     os.environ["DEPLOYMENT"] = "local"
@@ -80,24 +84,51 @@ def _configure_environment(data_root: Path, runtime_root: Path) -> None:
     os.environ["DAEDALMAP_DISABLE_RUNTIME_ANALYTICS"] = "1"
     os.environ["DATA_ROOT"] = str(data_root)
     os.environ["DAEDALMAP_PUBLIC_RUNTIME_ROOT"] = str(runtime_root)
+    if cloud_source is not None:
+        os.environ["S3_BUCKET"] = cloud_source["bucket"]
+        os.environ["S3_PREFIX"] = cloud_source["prefix"]
+        os.environ["AWS_DEFAULT_REGION"] = cloud_source.get("region") or "auto"
+        os.environ["PUBLISHED_ARTIFACT_CACHE_DIR"] = str(cache_dir / "geometry")
+        if cloud_source.get("endpoint_url"):
+            os.environ["S3_ENDPOINT_URL"] = cloud_source["endpoint_url"]
     if str(runtime_root) not in sys.path:
         sys.path.insert(0, str(runtime_root))
+    from mapmover.runtime_config import set_local_data_plane_mode
+    set_local_data_plane_mode("cloud" if cloud_source is not None else "local")
+    from mapmover.runtime.geometry_catalog import clear_geometry_catalog_cache
+    clear_geometry_catalog_cache()
 
 
 def create_app(
-    data_root: str | Path,
+    data_root: str | Path | None = None,
     *,
     services: str | Iterable[str] | None = None,
     runtime_root: str | Path = DEFAULT_RUNTIME_ROOT,
     research_root: str | Path = DEFAULT_RESEARCH_ROOT,
+    cloud_source: dict[str, str] | None = None,
+    cache_dir: str | Path | None = None,
 ) -> FastAPI:
-    """Create a loopback-oriented MCP app over one local DaedalMap data root."""
+    """Create a loopback MCP app over one selected local or cloud folder."""
 
     selected = _select_services(services)
-    data_path = _resolve_existing_dir(data_root, "Data root")
     runtime_path = _resolve_existing_dir(runtime_root, "Public runtime")
+    if str(runtime_path) not in sys.path:
+        sys.path.insert(0, str(runtime_path))
+    from mcp_source_root_shared import MCPSourceRoot
+    if cloud_source is None:
+        source = MCPSourceRoot.local(data_root or DEFAULT_DATA_ROOT)
+        data_path = source.root
+    else:
+        cloud_source = dict(cloud_source)
+        cloud_source["region"] = _cloud_region(cloud_source.get("region"), cloud_source.get("endpoint_url", ""))
+        cache_path = Path(cache_dir or Path(tempfile.gettempdir()) / "daedalmap-mcp-cache").expanduser().resolve()
+        source = MCPSourceRoot.cloud(bucket=cloud_source.get("bucket", ""),
+            prefix=cloud_source.get("prefix", ""), endpoint_url=cloud_source.get("endpoint_url", ""),
+            region=cloud_source["region"], cache_dir=cache_path / "research")
+        cache_path.mkdir(parents=True, exist_ok=True)
+        data_path = cache_path
     downloaded_backend = None
-    if "geometry" in selected and not (data_path / "geometry" / "geometry_catalog.json").is_file():
+    if "geometry" in selected and cloud_source is None and not (data_path / "geometry" / "geometry_catalog.json").is_file():
         geometry_root = SOURCE_TOOLS_ROOT / "geometry-mcp"
         if not (geometry_root / "downloaded_geometry_backend.py").is_file():
             geometry_root = BUNDLE_ROOT / "tools" / "geometry-mcp"
@@ -107,14 +138,18 @@ def create_app(
         downloaded_backend = DownloadedGeometryBackend(data_path)
     if "geometry" in selected and downloaded_backend is None and not (runtime_path / "mapmover" / "routes" / "mcp.py").is_file():
         raise ValueError(f"Public runtime is incomplete: {runtime_path}")
-    if "research" in selected and not (data_path / "catalog.json").is_file():
-        raise ValueError(f"Research catalog not found: {data_path / 'catalog.json'}")
-    if "geometry" in selected and downloaded_backend is None and not (data_path / "geometry" / "geometry_catalog.json").is_file():
+    if "research" in selected:
+        try:
+            source.read_json("catalog.json")
+        except Exception as exc:
+            raise ValueError(f"Research catalog unavailable in selected source: {source.location()}") from exc
+    if "geometry" in selected and cloud_source is None and downloaded_backend is None and not (data_path / "geometry" / "geometry_catalog.json").is_file():
         raise ValueError(
             f"Geometry catalog not found: {data_path / 'geometry' / 'geometry_catalog.json'}"
         )
 
-    _configure_environment(data_path, runtime_path)
+    _configure_environment(data_path, runtime_path, cloud_source=cloud_source,
+                           cache_dir=data_path if cloud_source is not None else None)
     app = FastAPI(
         title="DaedalMap Local MCP Runtime",
         version="0.1.0",
@@ -123,6 +158,7 @@ def create_app(
         openapi_url=None,
     )
     app.state.data_root = data_path
+    app.state.source = source
     app.state.services = sorted(selected)
 
     if "geometry" in selected:
@@ -177,9 +213,8 @@ def create_app(
             sys.path.insert(0, str(research_path))
         import research_bundle
 
-        # Bind the Research tools immediately so clients do not need an extra
-        # where_is_research_data call before using the selected local root.
-        research_bundle.research_mcp_module.set_local_data_source(data_path)
+        # Bind Research to the same source folder as Geometry at startup.
+        research_bundle.research_mcp_module.set_downloaded_data_source(source)
 
         @app.get("/mcp/research")
         async def research_info(request: Request):
@@ -213,8 +248,12 @@ def create_app(
                 "server": "daedalmap-local-mcp-runtime",
                 "version": "0.1.0",
                 "runtime_mode": "local",
+                "data_source": source.kind,
+                "source_folder": source.location(),
+                **({"cloud_bucket": cloud_source["bucket"], "cloud_prefix": cloud_source["prefix"]}
+                   if cloud_source is not None else {}),
                 "bind_recommendation": "127.0.0.1",
-                "data_root": str(data_path),
+                "cache_dir": str(data_path) if source.kind == "cloud" else None,
                 "services": sorted(selected),
                 "endpoints": {name: f"/mcp/{name}" for name in sorted(selected)},
             }
@@ -225,12 +264,33 @@ def create_app(
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run DaedalMap MCP tools over local data.")
-    parser.add_argument("--data-root", default=os.getenv("DATA_ROOT", str(DEFAULT_DATA_ROOT)))
+    parser.add_argument("--source", default=None,
+                        help="One local folder or s3://bucket/prefix containing catalogs and data.")
+    parser.add_argument("--data-root", default=None,
+                        help="Legacy local folder option; prefer --source.")
     parser.add_argument("--services", default=None)
+    parser.add_argument("--cache-dir", default=None,
+                        help="Disposable local cache for cloud reads; never a data source.")
+    parser.add_argument("--cloud-bucket", default=None,
+                        help="Legacy S3-compatible bucket selector; requires an explicit prefix and local credentials.")
+    parser.add_argument("--cloud-prefix", default=None,
+                        help="Selected cloud folder, for example staging or published. Never a tool-call argument.")
+    parser.add_argument("--cloud-endpoint", default=None,
+                        help="S3-compatible endpoint URL for a user-owned cloud source.")
+    parser.add_argument("--cloud-region", default=None,
+                        help="Signing region for cloud storage; R2 uses auto, AWS S3 uses its bucket region.")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int)
     parser.add_argument("--log-level", default="info")
     return parser.parse_args(argv)
+
+
+def _cloud_region(explicit: str | None, endpoint: str) -> str:
+    if explicit:
+        return explicit
+    if os.getenv("AWS_DEFAULT_REGION"):
+        return os.environ["AWS_DEFAULT_REGION"]
+    return "auto" if ".r2.cloudflarestorage.com" in endpoint else "us-east-1"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -238,7 +298,34 @@ def main(argv: list[str] | None = None) -> int:
     if args.host not in {"127.0.0.1", "localhost", "::1"}:
         print("WARNING: non-loopback binding exposes an unauthenticated local MCP server.")
     selected = _select_services(args.services)
-    app = create_app(args.data_root, services=selected)
+    source_arg = str(args.source or "").strip()
+    cloud_requested = any((args.cloud_bucket, args.cloud_prefix, args.cloud_endpoint, args.cloud_region))
+    if source_arg and (args.data_root or args.cloud_bucket or args.cloud_prefix):
+        raise ValueError("Choose one source folder with --source; do not combine source selectors")
+    if source_arg.lower().startswith("s3://"):
+        parsed = urlsplit(source_arg)
+        if parsed.username or parsed.password or parsed.query or parsed.fragment or not parsed.hostname or not parsed.path.strip("/"):
+            raise ValueError("Cloud source must be s3://bucket/folder without credentials or query")
+        cloud_source = {"bucket": parsed.hostname, "prefix": parsed.path.strip("/"),
+                        "endpoint_url": args.cloud_endpoint or os.getenv("S3_ENDPOINT_URL", ""),
+                        "region": _cloud_region(args.cloud_region,
+                            args.cloud_endpoint or os.getenv("S3_ENDPOINT_URL", ""))}
+        local_source = None
+    elif source_arg:
+        if cloud_requested:
+            raise ValueError("Cloud connection options require an s3:// source folder")
+        cloud_source = None
+        local_source = source_arg
+    else:
+        cloud_source = ({"bucket": args.cloud_bucket or os.getenv("S3_BUCKET", ""),
+                         "prefix": args.cloud_prefix or "",
+                         "endpoint_url": args.cloud_endpoint or os.getenv("S3_ENDPOINT_URL", ""),
+                         "region": _cloud_region(args.cloud_region,
+                             args.cloud_endpoint or os.getenv("S3_ENDPOINT_URL", ""))}
+                        if cloud_requested else None)
+        local_source = args.data_root or os.getenv("DATA_ROOT", str(DEFAULT_DATA_ROOT))
+    app = create_app(local_source, services=selected, cloud_source=cloud_source,
+                     cache_dir=args.cache_dir)
     import uvicorn
 
     uvicorn.run(app, host=args.host, port=args.port or default_port(selected), log_level=args.log_level)
