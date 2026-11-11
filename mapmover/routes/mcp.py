@@ -2869,6 +2869,15 @@ async def _execute_resolve_deep_point_tool(request: Request, arguments: dict[str
             code="target_admin_level_not_applicable",
             message="target_admin_level applies only when family is administrative.",
         )
+    if requested_family == "administrative":
+        from mapmover.runtime.admin_spine_query import _has_deep_partitions
+
+        if not _has_deep_partitions(country_scope):
+            return _point_tool_contract_error(
+                request_id, rpc_request_id,
+                code="deep_admin_unavailable",
+                message=f"{country_scope} has no admitted Admin 4-6 partitions. Use resolve_point for its available shallow levels.",
+            )
 
     payload["lookup_mode"] = "deep"
     payload["family"] = requested_family

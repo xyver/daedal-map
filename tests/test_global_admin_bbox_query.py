@@ -12,6 +12,21 @@ from mapmover.runtime import global_admin_bbox_query as bbox_query
 
 
 class GlobalAdminBBoxTests(unittest.TestCase):
+    def test_global_admin2_point_id_hands_off_to_country_owner(self):
+        from mapmover.runtime import family_point_resolution, global_admin_shallow_query
+
+        baseline_id = "GBR-G114339913B95766344400054-G29080712B97999030763342"
+        parent_id = "GBR-E92000001"
+        parent_row = pd.DataFrame([{"admin_level": 1, "admin_1_loc_id": parent_id}])
+        with mock.patch.object(family_point_resolution, "layout_available", return_value=True), \
+                mock.patch.object(family_point_resolution, "load_route_rows_by_loc_ids",
+                                  side_effect=[pd.DataFrame(), parent_row]) as route, \
+                mock.patch.object(global_admin_shallow_query, "global_admin2_parent_scope",
+                                  return_value=parent_id):
+            country, owner, error = family_point_resolution.shallow_scope(baseline_id)
+        self.assertEqual((country, owner, error), ("GBR", parent_id, None))
+        self.assertEqual(route.call_args_list[1].args[1], [parent_id])
+
     def test_rectangle_rejects_diagonal_and_wrapped_inputs(self):
         with self.assertRaisesRegex(ValueError, "four"):
             bbox_query.rectangle_bounds([{"lat": 0, "lon": 0}])
@@ -104,7 +119,7 @@ class GlobalAdminBBoxTests(unittest.TestCase):
     def test_deep_view_uses_one_admin1_partition(self):
         corners = [{"lat": 0, "lon": 0}, {"lat": 0, "lon": 1},
                    {"lat": 1, "lon": 0}, {"lat": 1, "lon": 1}]
-        from mapmover.runtime import admin_spine_query, family_point_resolution
+        from mapmover.runtime import admin_spine_query, family_point_resolution, global_admin_shallow_query
 
         class Connection:
             def __init__(self):
@@ -147,7 +162,7 @@ class GlobalAdminBBoxTests(unittest.TestCase):
 
     def test_global_admin2_best_match_hands_off_to_country_admin1(self):
         """A returned Global Admin 2 ID must be usable for the deep call."""
-        from mapmover.runtime import admin_spine_query, family_point_resolution
+        from mapmover.runtime import admin_spine_query, family_point_resolution, global_admin_shallow_query
 
         baseline_id = "GBR-G114339913B95766344400054-G29080712B97999030763342"
         parent_baseline = "GBR-G114339913B95766344400054"
@@ -185,10 +200,10 @@ class GlobalAdminBBoxTests(unittest.TestCase):
         invalid = {"code": "invalid_shallow_loc_id", "message": "Unknown country route"}
         with mock.patch.object(family_point_resolution, "shallow_scope",
                                side_effect=[("", None, invalid), ("GBR", selected_parent, None)]) as scope, \
-                mock.patch.object(bbox_query, "_selected_layout", return_value={
+                mock.patch.object(global_admin_shallow_query, "_selected_layout", return_value={
                     "admin_2": Path("global-admin2.parquet"),
                     "preferred_lookup": Path("preferred.parquet")}), \
-                mock.patch.object(bbox_query, "read_rows_by_ids", side_effect=read), \
+                mock.patch.object(global_admin_shallow_query, "read_rows_by_ids", side_effect=read), \
                 mock.patch.object(admin_spine_query, "layout_available", return_value=True), \
                 mock.patch.object(admin_spine_query, "layout_root", return_value=Path("country")), \
                 mock.patch.object(admin_spine_query, "_has_deep_partitions", return_value=False), \
@@ -200,13 +215,13 @@ class GlobalAdminBBoxTests(unittest.TestCase):
         self.assertEqual(scope.call_args_list[1].args[0], selected_parent)
 
     def test_unknown_global_admin2_id_stays_invalid(self):
-        from mapmover.runtime import family_point_resolution
+        from mapmover.runtime import family_point_resolution, global_admin_shallow_query
 
         corners = [{"lat": 0, "lon": 0}, {"lat": 0, "lon": 1},
                    {"lat": 1, "lon": 0}, {"lat": 1, "lon": 1}]
         invalid = {"code": "invalid_shallow_loc_id", "message": "Unknown ID"}
         with mock.patch.object(family_point_resolution, "shallow_scope",
                                return_value=("", None, invalid)), \
-                mock.patch.object(bbox_query, "_selected_layout", return_value=None):
+                mock.patch.object(global_admin_shallow_query, "_selected_layout", return_value=None):
             result = bbox_query.resolve_country_admin_bbox(corners, "GBR-G-NOTREAL")
         self.assertEqual(result["error"]["code"], "invalid_shallow_loc_id")

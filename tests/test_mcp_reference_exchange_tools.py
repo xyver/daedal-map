@@ -770,6 +770,19 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         )
         self.assertEqual(payload["error"]["code"], "invalid_shallow_loc_id")
 
+    def test_deep_point_skips_admin_geometry_when_country_has_no_deep_partitions(self) -> None:
+        with (
+            mock.patch("mapmover.runtime.family_point_resolution.shallow_scope", return_value=("GBR", "GBR-E92000001", None)),
+            mock.patch("mapmover.runtime.admin_spine_query._has_deep_partitions", return_value=False),
+            mock.patch("mapmover.geometry_handlers.resolve_points_to_locations") as resolver,
+        ):
+            payload = _tool_call(self.client, "resolve_deep_point", {
+                "lat": 51.5, "lon": -0.12, "shallow_loc_id": "GBR-E92000001",
+                "target_admin_level": "admin_4",
+            })
+        self.assertEqual(payload["error"]["code"], "deep_admin_unavailable")
+        resolver.assert_not_called()
+
     def test_deep_point_rejects_extra_scope_and_missing_coordinate(self) -> None:
         with mock.patch("mapmover.runtime.family_point_resolution.shallow_scope") as scope:
             extra = _tool_call(

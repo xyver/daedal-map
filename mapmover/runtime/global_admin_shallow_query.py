@@ -41,6 +41,28 @@ def _selected_layout() -> dict[str, Any] | None:
     return {**paths, "release": str(layout.get("source_release") or "")}
 
 
+def global_admin2_parent_scope(shallow_loc_id: str) -> str | None:
+    """Find the preferred Admin 1 parent of a Global-only Admin 2 result."""
+    if not admitted_admin_match(shallow_loc_id, 2):
+        return None
+    layout = _selected_layout()
+    if layout is None:
+        return None
+    rows = read_rows_by_ids(layout["admin_2"], [shallow_loc_id],
+                            id_column="loc_id", columns=["parent_id"])
+    if len(rows) != 1:
+        return None
+    parent = str(rows.iloc[0].get("parent_id") or "")
+    if not parent or not parent.startswith(shallow_loc_id.split("-", 1)[0] + "-"):
+        return None
+    lookup = read_rows_by_ids(layout["preferred_lookup"], [parent],
+                              id_column="baseline_loc_id", columns=["preferred_loc_id"])
+    if len(lookup) != 1:
+        return None
+    selected = str(lookup.iloc[0].get("preferred_loc_id") or "").strip()
+    return selected if selected.startswith(shallow_loc_id.split("-", 1)[0] + "-") else None
+
+
 def resolve_global_admin_shallow_points(points: Iterable[dict[str, Any]]) -> list[dict[str, Any]] | None:
     """Return one result per point, or None when no admitted layout is selected."""
     point_items = list(points)
