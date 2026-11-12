@@ -18,6 +18,12 @@ class PublicDiscoveryCatalogTests(unittest.TestCase):
     def setUp(self) -> None:
         self.client = TestClient(app)
 
+    def test_openai_domain_challenge_returns_exact_plain_text_token(self) -> None:
+        response = self.client.get("/.well-known/openai-apps-challenge")
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.headers["content-type"].startswith("text/plain"))
+        self.assertEqual(response.text, "FMvQw9-RlJXRgsc7_ZerKV9BkBzXyyCdrd-9BOwd6")
+
     def test_four_public_catalog_routes_are_json_discovery(self) -> None:
         with mock.patch(
             "mapmover.routes.system._build_public_pack_list",

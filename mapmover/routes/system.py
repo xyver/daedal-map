@@ -2639,6 +2639,16 @@ async def get_mcp_server_card():
     return response
 
 
+@router.get("/.well-known/openai-apps-challenge", include_in_schema=False)
+async def get_openai_apps_challenge():
+    """Prove control of the MCP hostname for the OpenAI plugin draft."""
+    return Response(
+        content="FMvQw9-RlJXRgsc7_ZerKV9BkBzXyyCdrd-9BOwd6",
+        media_type="text/plain",
+        headers={"Cache-Control": "no-store"},
+    )
+
+
 @router.get("/.well-known/mcp/{pack_id}/server-card.json")
 async def get_pack_mcp_server_card(pack_id: str):
     normalized = _normalize_mcp_facade_pack_id(pack_id)
