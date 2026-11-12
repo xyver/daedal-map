@@ -36,6 +36,11 @@ class ProductFacadeTests(unittest.TestCase):
     def test_product_facades_expose_distinct_tool_lists_and_cards(self):
         free = self.client.post("/mcp/free", json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"}).json()
         data = self.client.post("/mcp/data", json={"jsonrpc": "2.0", "id": 2, "method": "tools/list"}).json()
+        for tool in free["result"]["tools"]:
+            with self.subTest(tool=tool["name"]):
+                self.assertTrue(tool["title"])
+                self.assertEqual(tool["annotations"]["title"], tool["title"])
+                self.assertTrue(tool["annotations"]["readOnlyHint"])
         free_names = {tool["name"] for tool in free["result"]["tools"]}
         data_names = {tool["name"] for tool in data["result"]["tools"]}
         self.assertIn("convert_reference", free_names)

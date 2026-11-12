@@ -37,6 +37,8 @@ First add the endpoint as a custom connector in **Customize → Connectors**. In
 
 The existing hosted 24-case USA 1.3.5 suite covers all 13 tool names. It is backend evidence, not proof of Claude client behavior. Claude's checklist asks the submitter to exercise every tool. The direct prompts below can be run in one or a few chats; they do not each need a fresh chat. Record tool name, arguments, success/error, and whether Claude's answer matches the result. Do not mark a tool tested because Claude answered without calling it.
 
+The first Claude portal Tools scan found all 13 tools and marked them read-only and idempotent, but showed 13 suggestions: each tool lacked `annotations.title` despite having a top-level `title`. A public runtime change now copies each existing title into `annotations.title`. After that runtime is live, reconnect the connector and confirm the suggestions disappear before continuing.
+
 | Tool | Claude prompt | Expected check |
 | --- | --- | --- |
 | `get_tool_help` | “Call DaedalMap `get_tool_help` for `get_data`. Summarize its example and row limit.” | Help returns without error; limit is 100 per free call. |
