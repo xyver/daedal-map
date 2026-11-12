@@ -132,6 +132,76 @@ def resolve_global_admin_bbox(corners: list[dict[str, Any]]) -> dict[str, Any]:
             "admin2_systems": GLOBAL_ADMIN2_SYSTEMS}
 
 
+def _country_bbox_match_rows(rows: Any, viewport: Any, area: float) -> list[dict[str, Any]]:
+    matches = []
+    for row in rows.to_dict("records"):
+        if row.get("geometry_wkb") is None:
+            continue
+        shape = transform(_AREA_TRANSFORM, load_wkb(bytes(row["geometry_wkb"])))
+        if shape.is_empty or shape.area <= 0:
+            continue
+        overlap = viewport.intersection(shape).area
+        if overlap <= 0:
+            continue
+        match = {"loc_id": str(row["loc_id"]), "name": str(row.get("name") or row["loc_id"]),
+                        "admin_level": int(row["admin_level"]),
+                        "parent_loc_id": str(row.get("parent_id") or ""),
+                        "view_coverage_pct": round(100 * overlap / area, 4),
+                        "loc_id_coverage_pct": round(100 * overlap / shape.area, 4),
+                        "intersection_over_union_pct": round(
+                            100 * overlap / (area + shape.area - overlap), 4)}
+        owner = str(row.get("admin_1_loc_id") or "")
+        if owner:
+            match["deep_scope_loc_id"] = owner
+        matches.append(match)
+    return matches
+
+
+def resolve_country_shallow_bbox(corners: list[dict[str, Any]], country: str) -> dict[str, Any]:
+    """Compare one viewport with one country's selected Admin 0-3 bank."""
+    from .admin_spine_query import layout_available, layout_root
+
+    west, south, east, north = rectangle_bounds(corners)
+    country = str(country or "").strip().upper()
+    if not layout_available(country):
+        return {"error": {"code": "selected_scope_unavailable",
+                          "message": f"Selected {country} Admin 0-3 layout is unavailable"}}
+    path = layout_root(country) / "admin_0_3.parquet"
+    viewport = transform(_AREA_TRANSFORM, box(west, south, east, north))
+    area = viewport.area
+    if area <= 0:
+        raise ValueError("viewport has zero projected area")
+    mark_mcp_stage("bbox_country_admin_shallow")
+    record_mcp_file(path)
+    with lease_query_connection() as connection:
+        try:
+            connection.execute("LOAD spatial")
+        except Exception:
+            connection.execute("INSTALL spatial")
+            connection.execute("LOAD spatial")
+        rows = connection.execute(
+            "SELECT loc_id, name, parent_id, admin_level, admin_1_loc_id, "
+            "ST_AsWKB(geometry) AS geometry_wkb FROM read_parquet(?) "
+            "WHERE admin_level <= 3 AND bbox_min_lon < ? AND bbox_max_lon > ? "
+            "AND bbox_min_lat < ? AND bbox_max_lat > ? LIMIT ?",
+            [path_to_uri(path), east, west, north, south, _MAX_CANDIDATES + 1],
+        ).fetchdf()
+    if len(rows) > _MAX_CANDIDATES:
+        return {"error": {"code": "bbox_too_broad",
+                          "message": "Viewport intersects too many country admin candidates; zoom in"},
+                "candidate_limit": _MAX_CANDIDATES}
+    matches = _country_bbox_match_rows(rows, viewport, area)
+    matches.sort(key=lambda row: (-row["intersection_over_union_pct"],
+                                  -row["view_coverage_pct"], row["loc_id"]))
+    return {"bbox": {"west": west, "south": south, "east": east, "north": north},
+            "scope_id": country, "best_match": matches[0] if matches else None,
+            "matches_by_admin_level": {str(level): [row for row in matches
+                                                  if row["admin_level"] == level][:5]
+                                       for level in range(4)},
+            "ranking": "highest equal-area intersection-over-union",
+            "query_layout": "country_admin_spine_shallow"}
+
+
 def resolve_country_admin_bbox(corners: list[dict[str, Any]], shallow_loc_id: str) -> dict[str, Any]:
     """Second pass inside one admitted country Admin 1 owner, through its deep bank."""
     from .admin_spine_query import _has_deep_partitions, layout_available, layout_root
@@ -187,22 +257,7 @@ def resolve_country_admin_bbox(corners: list[dict[str, Any]], shallow_loc_id: st
                 return {"error": {"code": "bbox_too_broad",
                                   "message": "Viewport intersects too many country admin candidates; zoom in"},
                         "candidate_limit": _MAX_CANDIDATES}
-            for row in rows.to_dict("records"):
-                if row.get("geometry_wkb") is None:
-                    continue
-                shape = transform(_AREA_TRANSFORM, load_wkb(bytes(row["geometry_wkb"])))
-                if shape.is_empty or shape.area <= 0:
-                    continue
-                overlap = viewport.intersection(shape).area
-                if overlap <= 0:
-                    continue
-                matches.append({"loc_id": str(row["loc_id"]), "name": str(row.get("name") or row["loc_id"]),
-                                "admin_level": int(row["admin_level"]),
-                                "parent_loc_id": str(row.get("parent_id") or ""),
-                                "view_coverage_pct": round(100 * overlap / area, 4),
-                                "loc_id_coverage_pct": round(100 * overlap / shape.area, 4),
-                                "intersection_over_union_pct": round(
-                                    100 * overlap / (area + shape.area - overlap), 4)})
+            matches.extend(_country_bbox_match_rows(rows, viewport, area))
     matches.sort(key=lambda row: (-row["intersection_over_union_pct"],
                                   -row["view_coverage_pct"], row["loc_id"]))
     return {"bbox": {"west": west, "south": south, "east": east, "north": north},

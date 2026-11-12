@@ -40,3 +40,27 @@ def test_bbox_mcp_validates_then_dispatches_one_rectangle():
                                                      "arguments": {"corners": corners, "shallow_loc_id": "CAN-NT"}}}).json()
         assert deep["result"]["structuredContent"]["bbox"]["east"] == 1
         assert run.await_count == 2
+
+
+def test_bbox_country_scope_routes_directly_to_country_bank_and_help_lists_scopes():
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
+    corners = [{"lat": 0, "lon": 0}, {"lat": 0, "lon": 1},
+               {"lat": 1, "lon": 0}, {"lat": 1, "lon": 1}]
+    with mock.patch("mapmover.routes.mcp._live_tool_rate_limit_response", return_value=None), \
+            mock.patch("mapmover.routes.mcp._published_country_scopes", return_value=["CAN", "USA"]), \
+            mock.patch("mapmover.routes.mcp.run_mcp_blocking", new_callable=mock.AsyncMock) as run:
+        run.return_value = {"scope_id": "CAN", "best_match": {"loc_id": "CAN-NT-6101"}}
+        result = _call(client, {"corners": corners, "scope_id": "CAN"})
+        assert result["result"]["structuredContent"]["best_match"]["loc_id"] == "CAN-NT-6101"
+        assert run.await_args.args[1].__name__ == "resolve_country_shallow_bbox"
+        assert run.await_args.args[3] == "CAN"
+        rejected = _call(client, {"corners": corners, "scope_id": "MEX"})
+        assert rejected["result"]["structuredContent"]["error"]["code"] == "invalid_bbox_scope"
+        for tool_name in ("resolve_point", "resolve_bbox"):
+            help_result = client.post("/mcp/geography", json={
+                "jsonrpc": "2.0", "id": tool_name, "method": "tools/call",
+                "params": {"name": "get_tool_help", "arguments": {"tool_name": tool_name}},
+            }).json()
+            assert help_result["result"]["structuredContent"]["country_scopes"] == ["CAN", "USA"]

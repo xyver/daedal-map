@@ -12,6 +12,43 @@ from mapmover.runtime import global_admin_bbox_query as bbox_query
 
 
 class GlobalAdminBBoxTests(unittest.TestCase):
+    def test_country_shallow_bbox_reads_one_admin_0_3_bank_and_returns_country_ids(self):
+        from mapmover.runtime import admin_spine_query
+
+        corners = [{"lat": 0, "lon": 0}, {"lat": 0, "lon": 1},
+                   {"lat": 1, "lon": 0}, {"lat": 1, "lon": 1}]
+        class Connection:
+            def __init__(self):
+                self.query = ""
+                self.params = []
+            def __enter__(self):
+                return self
+            def __exit__(self, *_args):
+                return False
+            def execute(self, query, params=None):
+                if params is not None:
+                    self.query, self.params = query, params
+                return self
+            def fetchdf(self):
+                return pd.DataFrame([{
+                    "loc_id": "CAN-NT-6101", "name": "Country division",
+                    "parent_id": "CAN-NT", "admin_level": 2,
+                    "admin_1_loc_id": "CAN-NT", "geometry_wkb": box(0, 0, 1, 1).wkb,
+                }])
+        connection = Connection()
+        with mock.patch.object(admin_spine_query, "layout_available", return_value=True), \
+                mock.patch.object(admin_spine_query, "layout_root", return_value=Path("country")), \
+                mock.patch.object(bbox_query, "lease_query_connection", return_value=connection), \
+                mock.patch.object(bbox_query, "path_to_uri", return_value="country/admin_0_3.parquet"):
+            result = bbox_query.resolve_country_shallow_bbox(corners, "CAN")
+        self.assertEqual(result["best_match"]["loc_id"], "CAN-NT-6101")
+        self.assertEqual(result["best_match"]["deep_scope_loc_id"], "CAN-NT")
+        self.assertEqual(result["scope_id"], "CAN")
+        self.assertEqual(result["query_layout"], "country_admin_spine_shallow")
+        self.assertEqual(connection.params[0], "country/admin_0_3.parquet")
+        self.assertIn("admin_level <= 3", connection.query)
+        self.assertNotIn("admin_1_loc_id =", connection.query)
+
     def test_deep_scope_id_uses_country_route_without_global_lookup(self):
         from mapmover.runtime import family_point_resolution, global_admin_shallow_query
 

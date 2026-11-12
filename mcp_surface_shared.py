@@ -139,11 +139,12 @@ def build_mcp_instructions(*, safety_notice: str | None = None) -> str:
         "get_pack before querying a new pack. Call get_tool_help before an "
         "unfamiliar tool. When the only place input is coordinates, call "
         "resolve_point; omitted scope_id and family select GLOBAL administrative "
-        "and return its Admin 0-2 chain. Use an explicit ISO3 administrative scope "
-        "to read only that country's shallow layout. Use MARINE with one "
+        "and return its Admin 0-2 chain. Use an explicit published ISO3 scope "
+        "for that country's Admin 0-3 identities; get_tool_help lists the scopes "
+        "for both resolve_point and resolve_bbox. Use MARINE with one "
         "selected Marine family for Marine-only containment. Never infer a "
-        "Marine fallback from a Global miss. Only resolve_point "
-        "and resolve_deep_point accept coordinates; use the latter only with "
+        "Marine fallback from a Global miss. Point tools accept lat/lon pairs; "
+        "bbox tools accept rectangle corners. Use resolve_deep_point only with "
         "the returned deep_scope_loc_id as shallow_loc_id and the original point. Use "
         "convert_reference for scoped names or outside "
         "identifiers. identify_dataset_geography and identify_reference_system "
@@ -268,7 +269,7 @@ def build_tool_definitions(*, include_paused: bool = False) -> list[dict]:
         {
             "name": "resolve_point",
             "title": "Resolve Point(s) in One Scope",
-            "description": "Resolve WGS84 coordinates in one scope and family. Omitted scope_id and family select GLOBAL administrative, returning its Admin 0-2 chain. An explicit ISO3 administrative scope reads only that country's shallow bank. MARINE requires one specific jurisdiction family (for example exclusive_economic_zone or high_seas), or water_body with water_kind=named or zone. The broad marine_jurisdiction category has no point route. No call crosses scopes or opens another family's bank. Discover families with get_catalog(catalog='geometry').",
+            "description": "Resolve WGS84 coordinates in one scope and family. Omitted scope_id and family select GLOBAL GeoBoundaries administrative, returning its Admin 0-2 chain. Supply a published ISO3 country to read that country's own Admin 0-3 geometry and loc_ids. MARINE requires one specific jurisdiction family (for example exclusive_economic_zone or high_seas), or water_body with water_kind=named or zone. The broad marine_jurisdiction category has no point route. No call crosses scopes or opens another family's bank. get_tool_help lists country scopes.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -307,10 +308,11 @@ def build_tool_definitions(*, include_paused: bool = False) -> list[dict]:
         {
             "name": "resolve_bbox",
             "title": "Resolve Map Viewport",
-            "description": "Compare one non-wrapping rectangular WGS84 viewport with the published Global administrative spine through Admin 2. Supply its four corners. Returns the best equal-area overlap plus nearby matches at each level and their shares of the viewport and loc_id. Large views may require zooming in. This tool reads no country deep bank.",
+            "description": "Compare one non-wrapping rectangular WGS84 viewport in one scope. Omit scope_id for Global GeoBoundaries Admin 0-2, or supply one published ISO3 country for its own Admin 0-3 geometry and loc_ids. Returns the best equal-area overlap plus nearby matches at each level and their shares of the viewport and loc_id. Large views may require zooming in. get_tool_help lists country scopes.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
+                    "scope_id": {"type": "string", "minLength": 3, "default": "GLOBAL", "description": "GLOBAL (default) or one published ISO3 country. No automatic cross-scope routing."},
                     "corners": {
                         "type": "array", "minItems": 4, "maxItems": 4,
                         "items": {"type": "object", "properties": {
