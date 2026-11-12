@@ -17,6 +17,13 @@ from .global_admin_spine_policy import admitted_admin_match
 
 logger = logging.getLogger(__name__)
 
+# A translated ID does not change which polygons answered a Global query.
+GLOBAL_ADMIN2_SYSTEMS = {
+    "geometry_source": "GeoBoundaries Admin 2",
+    "country_source": "country-pack Admin 2",
+    "relationship": "The two Admin 2 systems can define different areas. A shared Admin 2 label or translated ID does not make their boundaries interchangeable.",
+}
+
 
 def _selected_layout() -> dict[str, Any] | None:
     catalog = load_geometry_catalog()
@@ -39,28 +46,7 @@ def _selected_layout() -> dict[str, Any] | None:
         paths[key] = path
     if any(path is None or not parquet_available(path) for path in paths.values()):
         return None
-    countries = {str(profile.get("country_code") or "") for profile in
-                 catalog.get("country_profiles") or [] if isinstance(profile, dict)}
-    return {**paths, "release": str(layout.get("source_release") or ""),
-            "country_packs": countries}
-
-
-def global_admin2_id_context(baseline_loc_id: str, preferred_loc_id: str,
-                             country_packs: set[str]) -> dict[str, Any]:
-    """Explain the selected ID without equating distinct Admin 2 definitions."""
-    if baseline_loc_id == preferred_loc_id:
-        available = baseline_loc_id.split("-", 1)[0] in country_packs
-        result: dict[str, Any] = {"admin2_id_status": "global_id_untranslated",
-                                  "country_pack_available": available}
-        if available:
-            result["admin2_id_explanation"] = (
-                "This Global Admin 2 area has no selected equivalent country Admin 2 ID. "
-                "The country pack may define Admin 2 differently; its detail remains available "
-                "through the country scope."
-            )
-        return result
-    return {"admin2_id_status": "country_id_selected",
-            "country_pack_available": True}
+    return {**paths, "release": str(layout.get("source_release") or "")}
 
 
 def global_admin2_parent_scope(shallow_loc_id: str) -> str | None:
@@ -164,9 +150,8 @@ def resolve_global_admin_shallow_points(points: Iterable[dict[str, Any]]) -> lis
                           "preferred_loc_id": preferred[loc_id],
                           "name": str(row.get("name") or loc_id),
                           "admin_level": level, "family": "administrative",
-                          **(global_admin2_id_context(
-                              loc_id, preferred[loc_id], layout.get("country_packs", set()))
-                             if level == 2 else {})})
+                          **({"id_translation": "country_id_selected" if preferred[loc_id] != loc_id
+                              else "global_id_retained"} if level == 2 else {})})
         if not stack:
             output.append({"point": coordinate, "error": {"code": "no_point_overlap",
                            "message": "No Global administrative polygon covers this point"}})
@@ -181,5 +166,6 @@ def resolve_global_admin_shallow_points(points: Iterable[dict[str, Any]]) -> lis
                        "deepest_resolved_family": "administrative",
                        "resolution_family": "administrative",
                        "query_layout": "global_admin0_2_point",
+                       "admin2_systems": GLOBAL_ADMIN2_SYSTEMS,
                        "geometry_release": layout["release"]})
     return output

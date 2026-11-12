@@ -81,6 +81,8 @@ class GlobalAdminBBoxTests(unittest.TestCase):
                 mock.patch.object(bbox_query, "read_rows_by_ids", side_effect=read):
             result = bbox_query.resolve_global_admin_bbox(corners)
         self.assertEqual(result["best_match"]["loc_id"], "C-W-1")
+        self.assertEqual(result["best_match"]["id_translation"], "country_id_selected")
+        self.assertIn("different areas", result["admin2_systems"]["relationship"])
         self.assertEqual(result["best_match"]["deep_scope_loc_id"], "C-W")
         self.assertEqual(result["best_match"]["view_coverage_pct"], 50.0)
         self.assertEqual({row["loc_id"] for row in result["matches_by_admin_level"]["1"]}, {"C-W", "C-E"})

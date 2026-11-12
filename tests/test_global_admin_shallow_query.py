@@ -51,12 +51,13 @@ class GlobalAdminShallowQueryTests(unittest.TestCase):
         self.assertEqual([row["loc_id"] for row in results[0]["stack"]],
                          ["USA", "USA-TX", "USA-TX-201"])
         self.assertEqual(results[0]["matched"]["baseline_loc_id"], "USA-GTX-GHARRIS")
-        self.assertEqual(results[0]["matched"]["admin2_id_status"], "country_id_selected")
+        self.assertEqual(results[0]["matched"]["id_translation"], "country_id_selected")
+        self.assertEqual(results[0]["admin2_systems"]["geometry_source"], "GeoBoundaries Admin 2")
+        self.assertIn("different areas", results[0]["admin2_systems"]["relationship"])
         self.assertEqual(results[1]["deepest_resolved_loc_id"], "USA-GTX-GOTHER")
         self.assertEqual(results[1]["deep_scope_loc_id"], "USA-TX")
-        self.assertEqual(results[1]["matched"]["admin2_id_status"], "global_id_untranslated")
-        self.assertTrue(results[1]["matched"]["country_pack_available"])
-        self.assertIn("may define Admin 2 differently", results[1]["matched"]["admin2_id_explanation"])
+        self.assertEqual(results[1]["matched"]["id_translation"], "global_id_retained")
+        self.assertEqual(results[1]["admin2_systems"], results[0]["admin2_systems"])
         self.assertEqual(results[2]["error"]["code"], "no_point_overlap")
 
     def test_unselected_layout_keeps_existing_admin0_path_available(self):

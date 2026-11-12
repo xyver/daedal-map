@@ -12,7 +12,7 @@ from shapely.wkb import loads as load_wkb
 from ..duckdb_helpers import lease_query_connection, parquet_available, path_to_uri, run_df
 from ..mcp_execution import mark_mcp_stage, record_mcp_file
 from .geometry_predicate_query import read_rows_by_ids
-from .global_admin_shallow_query import (_selected_layout, global_admin2_id_context,
+from .global_admin_shallow_query import (GLOBAL_ADMIN2_SYSTEMS, _selected_layout,
                                          global_admin2_parent_scope)
 from .global_admin_spine_policy import admitted_admin_match
 
@@ -111,9 +111,8 @@ def resolve_global_admin_bbox(corners: list[dict[str, Any]]) -> dict[str, Any]:
         for row in matched:
             row["loc_id"] = preferred[row["baseline_loc_id"]]
             if row["admin_level"] == 2:
-                row.update(global_admin2_id_context(
-                    row["baseline_loc_id"], row["loc_id"],
-                    layout.get("country_packs", set())))
+                row["id_translation"] = ("country_id_selected" if row["loc_id"] != row["baseline_loc_id"]
+                                         else "global_id_retained")
             owner_id = (
                 row["loc_id"] if row["admin_level"] == 1 else
                 preferred.get(row["parent_baseline_loc_id"])
@@ -129,7 +128,8 @@ def resolve_global_admin_bbox(corners: list[dict[str, Any]]) -> dict[str, Any]:
     return {"bbox": {"west": west, "south": south, "east": east, "north": north},
             "best_match": best, "matches_by_admin_level": by_level,
             "ranking": "highest equal-area intersection-over-union",
-            "geometry_release": layout["release"], "query_layout": "global_admin0_2_point"}
+            "geometry_release": layout["release"], "query_layout": "global_admin0_2_point",
+            "admin2_systems": GLOBAL_ADMIN2_SYSTEMS}
 
 
 def resolve_country_admin_bbox(corners: list[dict[str, Any]], shallow_loc_id: str) -> dict[str, Any]:
