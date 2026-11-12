@@ -1,8 +1,10 @@
 # DaedalMap Free Geography store submission
 
-Status: OpenAI portal draft uploaded on 2026-11-11. Domain challenge endpoint is live; portal Connect and Scan Tools still need to be completed. No review submission or approval is claimed here.
+Status: OpenAI portal draft uploaded on 2026-11-11. The user reports tool scanning and domain verification completed. Review submission and approval are not recorded here. Claude connector submission is being prepared separately.
 
 The production MCP endpoint is `https://app.daedalmap.com/mcp/free`. It is intended to provide bounded, anonymous geographic reference and published free-data workflows. The OpenAI package source is `.codex-plugin/plugin.json`, `.mcp.json`, and `assets/icon.svg` in this directory. The Claude connector uses the same endpoint directly.
+
+Claude's portal fields, all-13-tool test checklist, and fresh-chat prompts are in [CLAUDE_SUBMISSION.md](CLAUDE_SUBMISSION.md).
 
 ## Listing text
 
