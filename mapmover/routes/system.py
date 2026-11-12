@@ -2643,7 +2643,7 @@ async def get_mcp_server_card():
 async def get_openai_apps_challenge():
     """Prove control of the MCP hostname for the OpenAI plugin draft."""
     return Response(
-        content="FMvQw9-RlJXRgsc7_ZerKV9BkBzXyyCdrd-9BOwd6",
+        content="FMvQw9-RlJXRgsc7_ZerKV9BkBzXyyCdrd-9BOwd68E",
         media_type="text/plain",
         headers={"Cache-Control": "no-store"},
     )
