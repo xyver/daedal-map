@@ -379,7 +379,7 @@ MCP_PROTOCOL_VERSION = "2025-06-18"
 SUPPORTED_PROTOCOL_VERSIONS = {MCP_PROTOCOL_VERSION, "2024-11-05"}
 SERVER_INFO = {
     "name": "com.daedalmap/county-map",
-    "title": "DaedalMap Disaster and Geospatial Data",
+    "title": "DaedalMap Geographic Data and Tools",
     "version": "0.4.0",
 }
 AGENT_SAFETY_NOTICE = (

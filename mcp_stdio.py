@@ -26,7 +26,7 @@ from pack_registry_shared import pack_tool_allowlists
 PROTOCOL_VERSION = "2025-06-18"
 SERVER_INFO = {
     "name": "com.daedalmap/county-map",
-    "title": "DaedalMap Disaster and Geospatial Data",
+    "title": "DaedalMap Geographic Data and Tools",
     "version": "0.4.0",
 }
 INSTRUCTIONS = build_mcp_instructions(

@@ -379,7 +379,7 @@ PACK_REGISTRY: dict[str, dict] = {
             "get_loc_id_info",
         ),
         "mcp_name": "com.daedalmap/geography",
-        "mcp_version": "1.6.2",
+        "mcp_version": "1.6.3",
         "mcp_title": "DaedalMap Geography Tools (loc_id)",
         "mcp_description": "Geography utilities built on the DaedalMap loc_id spine. Identify dataset geography, recognize and convert external references, resolve shallow or deep coordinate batches, inspect loc_ids, compare places, and retrieve bounded shapes. Future estimate/create/status workflows remain private until durable job delivery is ready.",
         "registry_meta": {
@@ -418,9 +418,9 @@ PACK_REGISTRY: dict[str, dict] = {
         "pricing": "mixed",
         "mcp_tool_allowlist": ("get_catalog", "get_geography", "resolve_point", "resolve_bbox", "resolve_deep_bbox", "resolve_deep_point"),
         "mcp_name": "com.daedalmap/reverse-geocoding",
-        "mcp_version": "1.4.2",
+        "mcp_version": "1.4.3",
         "mcp_title": "DaedalMap Reverse Geocoding (coordinates to loc_id)",
-        "mcp_description": "Two reverse-geocoding tools accept one point or a bounded point array. resolve_point returns available Admin 0-3 levels; resolve_deep_point uses a returned Admin 1 loc_id for available Admin 4-6 levels.",
+        "mcp_description": "Resolve WGS84 points and map viewports to available administrative loc_id chains. Use resolve_point or resolve_bbox for shallow matches, then resolve_deep_point or resolve_deep_bbox for scoped deeper geography.",
         "registry_meta": {
             "categories": ["geospatial", "geocoding", "data"],
             "highlights": [
@@ -451,7 +451,7 @@ PACK_REGISTRY: dict[str, dict] = {
             "get_loc_id_info",
         ),
         "mcp_name": "com.daedalmap/boundaries",
-        "mcp_version": "1.3.2",
+        "mcp_version": "1.3.3",
         "mcp_title": "DaedalMap Administrative Boundaries (loc_id to polygon)",
         "mcp_description": "Inspect loc_id identity and relationships, then retrieve bounded boundary metadata, bounding boxes, centroids, or polygons for exact loc_ids.",
         "registry_meta": {
