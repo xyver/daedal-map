@@ -385,7 +385,7 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         )
 
         self.assertEqual(envelope["result"]["serverInfo"]["name"], "com.daedalmap/geography")
-        self.assertEqual(envelope["result"]["serverInfo"]["version"], "1.6.2")
+        self.assertEqual(envelope["result"]["serverInfo"]["version"], "1.6.3")
         instructions = envelope["result"]["instructions"]
         self.assertIn("When the only place input is coordinates, call resolve_point first", instructions)
         self.assertIn("Use the returned deep_scope_loc_id as shallow_loc_id", instructions)
