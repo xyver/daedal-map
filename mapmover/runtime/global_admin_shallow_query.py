@@ -1,4 +1,4 @@
-"""Single-pack Global Admin0-2 point containment and preferred-ID translation."""
+"""Single-pack Global Admin0-2 point containment with Global identities."""
 from __future__ import annotations
 
 import logging
@@ -17,11 +17,11 @@ from .global_admin_spine_policy import admitted_admin_match
 
 logger = logging.getLogger(__name__)
 
-# A translated ID does not change which polygons answered a Global query.
+# Global results retain their source IDs; country scopes use country IDs.
 GLOBAL_ADMIN2_SYSTEMS = {
     "geometry_source": "GeoBoundaries Admin 2",
     "country_source": "country-pack Admin 2",
-    "relationship": "The two Admin 2 systems can define different areas. A shared Admin 2 label or translated ID does not make their boundaries interchangeable.",
+    "relationship": "The two Admin 2 systems can define different areas. A shared Admin 2 label does not make their boundaries interchangeable.",
 }
 
 
@@ -32,8 +32,7 @@ def _selected_layout() -> dict[str, Any] | None:
         return None
     if layout.get("representation") != "full" or layout.get("authoritative_for_containment") is not True:
         return None
-    records = {"bbox_index": layout.get("bbox_index"),
-               "preferred_lookup": layout.get("preferred_lookup")}
+    records = {"bbox_index": layout.get("bbox_index")}
     records.update({f"admin_{level}": (layout.get("exact_members") or {}).get(str(level))
                     for level in range(3)})
     paths = {}
@@ -47,28 +46,6 @@ def _selected_layout() -> dict[str, Any] | None:
     if any(path is None or not parquet_available(path) for path in paths.values()):
         return None
     return {**paths, "release": str(layout.get("source_release") or "")}
-
-
-def global_admin2_parent_scope(shallow_loc_id: str) -> str | None:
-    """Find the preferred Admin 1 parent of a Global-only Admin 2 result."""
-    if not admitted_admin_match(shallow_loc_id, 2):
-        return None
-    layout = _selected_layout()
-    if layout is None:
-        return None
-    rows = read_rows_by_ids(layout["admin_2"], [shallow_loc_id],
-                            id_column="loc_id", columns=["parent_id"])
-    if len(rows) != 1:
-        return None
-    parent = str(rows.iloc[0].get("parent_id") or "")
-    if not parent or not parent.startswith(shallow_loc_id.split("-", 1)[0] + "-"):
-        return None
-    lookup = read_rows_by_ids(layout["preferred_lookup"], [parent],
-                              id_column="baseline_loc_id", columns=["preferred_loc_id"])
-    if len(lookup) != 1:
-        return None
-    selected = str(lookup.iloc[0].get("preferred_loc_id") or "").strip()
-    return selected if selected.startswith(shallow_loc_id.split("-", 1)[0] + "-") else None
 
 
 def resolve_global_admin_shallow_points(points: Iterable[dict[str, Any]]) -> list[dict[str, Any]] | None:
@@ -103,15 +80,6 @@ def resolve_global_admin_shallow_points(points: Iterable[dict[str, Any]]) -> lis
                 raw_geoparquet=True,
             )
             exact_rows.update({str(row["loc_id"]): row for row in frame.to_dict("records")})
-        record_mcp_file(layout["preferred_lookup"])
-        translations = read_rows_by_ids(
-            layout["preferred_lookup"], exact_rows,
-            id_column="baseline_loc_id", columns=["preferred_loc_id"],
-        )
-        preferred = dict(zip(translations["baseline_loc_id"].astype(str),
-                             translations["preferred_loc_id"].astype(str)))
-        if len(preferred) != len(exact_rows):
-            raise ValueError("Selected Global lookup does not cover every exact candidate")
     except Exception:
         logger.exception("Selected Global Admin0-2 point layout failed")
         return [{"point": {"lon": float(item["lon"]), "lat": float(item["lat"])},
@@ -146,12 +114,9 @@ def resolve_global_admin_shallow_points(points: Iterable[dict[str, Any]]) -> lis
             if not options or (level and not stack):
                 break
             _area, loc_id, row = min(options, key=lambda value: (value[0], value[1]))
-            stack.append({"loc_id": preferred[loc_id], "baseline_loc_id": loc_id,
-                          "preferred_loc_id": preferred[loc_id],
+            stack.append({"loc_id": loc_id, "baseline_loc_id": loc_id,
                           "name": str(row.get("name") or loc_id),
-                          "admin_level": level, "family": "administrative",
-                          **({"id_translation": "country_id_selected" if preferred[loc_id] != loc_id
-                              else "global_id_retained"} if level == 2 else {})})
+                          "admin_level": level, "family": "administrative"})
         if not stack:
             output.append({"point": coordinate, "error": {"code": "no_point_overlap",
                            "message": "No Global administrative polygon covers this point"}})
@@ -160,7 +125,6 @@ def resolve_global_admin_shallow_points(points: Iterable[dict[str, Any]]) -> lis
         output.append({"point": coordinate,
                        "country": {"loc_id": stack[0]["loc_id"], "name": stack[0]["name"]},
                        "matched": deepest, "stack": stack,
-                       **({"deep_scope_loc_id": stack[1]["loc_id"]} if len(stack) > 1 else {}),
                        "deepest_resolved_loc_id": deepest["loc_id"],
                        "deepest_resolved_admin_level": deepest["admin_level"],
                        "deepest_resolved_family": "administrative",

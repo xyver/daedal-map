@@ -12,8 +12,7 @@ from shapely.wkb import loads as load_wkb
 from ..duckdb_helpers import lease_query_connection, parquet_available, path_to_uri, run_df
 from ..mcp_execution import mark_mcp_stage, record_mcp_file
 from .geometry_predicate_query import read_rows_by_ids
-from .global_admin_shallow_query import (GLOBAL_ADMIN2_SYSTEMS, _selected_layout,
-                                         global_admin2_parent_scope)
+from .global_admin_shallow_query import GLOBAL_ADMIN2_SYSTEMS, _selected_layout
 from .global_admin_spine_policy import admitted_admin_match
 
 _AREA_TRANSFORM = Transformer.from_crs("EPSG:4326", "EPSG:6933", always_xy=True).transform
@@ -98,30 +97,10 @@ def resolve_global_admin_bbox(corners: list[dict[str, Any]]) -> dict[str, Any]:
                             "loc_id_coverage_pct": round(100 * overlap / shape.area, 4),
                             "intersection_over_union_pct": round(
                                 100 * overlap / (viewport_area + shape.area - overlap), 4)})
-    if matched:
-        record_mcp_file(layout["preferred_lookup"])
-        lookup = read_rows_by_ids(layout["preferred_lookup"],
-                                  {row["baseline_loc_id"] for row in matched},
-                                  id_column="baseline_loc_id", columns=["preferred_loc_id"])
-        preferred = dict(zip(lookup["baseline_loc_id"].astype(str),
-                             lookup["preferred_loc_id"].astype(str)))
-        if len(preferred) != len({row["baseline_loc_id"] for row in matched}):
-            return {"error": {"code": "selected_scope_unavailable",
-                              "message": "Global preferred-ID lookup is incomplete"}}
-        for row in matched:
-            row["loc_id"] = preferred[row["baseline_loc_id"]]
-            if row["admin_level"] == 2:
-                row["id_translation"] = ("country_id_selected" if row["loc_id"] != row["baseline_loc_id"]
-                                         else "global_id_retained")
-            owner_id = (
-                row["loc_id"] if row["admin_level"] == 1 else
-                preferred.get(row["parent_baseline_loc_id"])
-                if row["admin_level"] == 2 else None
-            )
-            if owner_id:
-                row["deep_scope_loc_id"] = owner_id
-        matched.sort(key=lambda row: (-row["intersection_over_union_pct"],
-                                      -row["view_coverage_pct"], row["loc_id"]))
+    for row in matched:
+        row["loc_id"] = row["baseline_loc_id"]
+    matched.sort(key=lambda row: (-row["intersection_over_union_pct"],
+                                  -row["view_coverage_pct"], row["loc_id"]))
     by_level = {str(level): [row for row in matched if row["admin_level"] == level][:5]
                 for level in range(3)}
     best = matched[0] if matched else None
@@ -209,16 +188,6 @@ def resolve_country_admin_bbox(corners: list[dict[str, Any]], shallow_loc_id: st
 
     west, south, east, north = rectangle_bounds(corners)
     country, owner, scope_error = shallow_scope(shallow_loc_id)
-    if scope_error and scope_error.get("code") == "invalid_shallow_loc_id":
-        # The Global bbox index can return an Admin 2 baseline ID that has no
-        # country route. Its published Admin 1 parent is the deep-bank scope.
-        try:
-            parent_scope = global_admin2_parent_scope(shallow_loc_id)
-        except Exception:
-            return {"error": {"code": "selected_scope_unavailable",
-                              "message": "Selected Global Admin 2 parent lookup failed"}}
-        if parent_scope:
-            country, owner, scope_error = shallow_scope(parent_scope)
     if scope_error:
         return {"error": scope_error}
     if not owner or not layout_available(country):

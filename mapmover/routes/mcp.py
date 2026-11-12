@@ -1825,7 +1825,7 @@ def get_server_description(pack_id: str | None = None) -> str:
             f"{PACK_SERVER_PROFILES[normalized]['description']} Safety: {AGENT_SAFETY_NOTICE} {coverage_prefix}"
             "The calling LLM translates the user's natural-language request into strict tool JSON; geometry execution tools do not accept prose unless a schema explicitly says they do. Call get_tool_help before an unfamiliar tool. On error, inspect error, warnings, guidance, and clarification; ask the user only when clarification.required is true. "
             "Start with free discovery: call get_catalog with catalog='geometry' to see each family and the countries where it exists. Then call get_geography with one family_id or scope_id to inspect coverage and admitted edition years. A listed family-country pair is the capability signal. Edition years alone do not prove effective-year coverage. "
-            "For administrative point and bbox lookups, choose one scope before querying: omit scope_id for Global GeoBoundaries Admin 0-2, or supply one published ISO3 country for its own Admin 0-3 geometry and loc_ids. get_tool_help for resolve_point or resolve_bbox lists the current country scopes. Split multi-country work into separate calls. Global GeoBoundaries and country Admin 2 may define different areas, so choose the country scope when its identities are wanted. Use deep_scope_loc_id for a country follow-up with the original coordinate or rectangle. family defaults to administrative; other shape-backed families use direct point lookup within the selected country. "
+            "When the only place input is coordinates, call resolve_point first. For administrative point and bbox lookups, choose one scope before querying: omit scope_id for Global GeoBoundaries Admin 0-2 and Global loc_ids, or supply one published ISO3 country for its own Admin 0-3 geometry and loc_ids. get_tool_help for resolve_point or resolve_bbox lists the current country scopes. Split multi-country work into separate calls. Global GeoBoundaries and country Admin 2 may define different areas, so choose the country scope when its identities are wanted. Use the returned deep_scope_loc_id as shallow_loc_id from a country-scoped shallow result for deeper work with the original coordinate or rectangle. family defaults to administrative; other shape-backed families use direct point lookup within the selected country. "
             "When the caller asks what other loc_ids connect directly to the returned chain, pass up to 10 stack loc_ids to get_loc_id_info; each result returns at most 50 selected-graph edges and a has_more flag. Use get_shape only for shapes and compare_geographies only for overlap, topology, validity, or successor questions. Mixed-vintage point context is not strict parentage. "
             "For a user dataset with unknown or informally declared geography keys, pass bounded scalar column samples to identify_dataset_geography; the caller may filter transport noise but must not choose the geography itself. Use identify_reference_system only when one identifier column is already selected. For a known outside geography code, name, or bounded identifier batch, call convert_reference and omit to_system to return loc_id. These identification tools prepare a binding; use convert_reference for scoped names or outside identifiers. Keep all relevant returned loc_ids when place identity overlaps. Pass canonical loc_ids to geography readers and place-filtered data calls. For bounded administrative shapes, use get_shape with exact loc_ids. "
             "Future estimate/create/status builder contracts remain implemented internally but are not public MCP tools until durable job and artifact delivery is ready."
@@ -2752,7 +2752,7 @@ async def _execute_resolve_deep_bbox_tool(request: Request, arguments: dict[str,
     if not isinstance(shallow, str) or not shallow.strip():
         return _point_tool_contract_error(request_id, rpc_request_id,
                                           code="shallow_loc_id_required",
-                                          message="Supply one canonical shallow loc_id from resolve_bbox")
+                                          message="Supply deep_scope_loc_id from a country-scoped resolve_bbox result")
     result = await run_mcp_blocking("resolve_deep_bbox", resolve_country_admin_bbox,
                                     payload["corners"], shallow.strip().upper(), diagnostic_id=request_id)
     result["request_id"] = request_id
@@ -5967,7 +5967,7 @@ async def mcp_endpoint(request: Request, pack_id: str | None = None):
         if target_name in {"resolve_point", "resolve_bbox"}:
             payload["country_scopes"] = _published_country_scopes()
             payload["scope_guidance"] = (
-                "Omit scope_id for Global GeoBoundaries Admin 0-2. Supply one listed ISO3 "
+                "Omit scope_id for Global GeoBoundaries Admin 0-2 and Global loc_ids. Supply one listed ISO3 "
                 "country to read its own Admin 0-3 geometry and loc_ids. "
                 "One call uses one scope; split multi-country work."
             )

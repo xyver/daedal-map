@@ -67,16 +67,6 @@ def shallow_scope(shallow_loc_id: str) -> tuple[str, str | None, dict[str, str] 
         }
     rows = load_route_rows_by_loc_ids(country, [requested])
     if len(rows) != 1:
-        from .global_admin_shallow_query import global_admin2_parent_scope
-
-        try:
-            parent_scope = global_admin2_parent_scope(requested)
-        except Exception:
-            parent_scope = None
-        if parent_scope and parent_scope != requested:
-            parent_country, owner, parent_error = shallow_scope(parent_scope)
-            if parent_error is None:
-                return parent_country, owner, None
         return "", None, {
             "code": "invalid_shallow_loc_id",
             "message": "shallow_loc_id must be a canonical administrative loc_id returned by resolve_point.",

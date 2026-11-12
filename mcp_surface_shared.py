@@ -145,7 +145,7 @@ def build_mcp_instructions(*, safety_notice: str | None = None) -> str:
         "selected Marine family for Marine-only containment. Never infer a "
         "Marine fallback from a Global miss. Point tools accept lat/lon pairs; "
         "bbox tools accept rectangle corners. Use resolve_deep_point only with "
-        "the returned deep_scope_loc_id as shallow_loc_id and the original point. Use "
+        "deep_scope_loc_id from a country-scoped result as shallow_loc_id and the original point. Use "
         "convert_reference for scoped names or outside "
         "identifiers. identify_dataset_geography and identify_reference_system "
         "prepare an uncertain dataset binding before conversion. Keep all "
@@ -329,7 +329,7 @@ def build_tool_definitions(*, include_paused: bool = False) -> list[dict]:
         {
             "name": "resolve_deep_bbox",
             "title": "Resolve Map Viewport (Deep)",
-            "description": "Second-pass rectangle overlap within one returned shallow administrative loc_id. Supply deep_scope_loc_id from resolve_bbox as shallow_loc_id for a direct country-only read. Routes to that country's one Admin 1-owned exact partition and compares its Admin 1-6 spine. Supply the original four WGS84 corners; broad views may require zooming in.",
+            "description": "Second-pass rectangle overlap after a country-scoped resolve_bbox call. Supply its deep_scope_loc_id as shallow_loc_id for a direct country-only read. Routes to that country's one Admin 1-owned exact partition and compares its Admin 1-6 spine. Supply the original four WGS84 corners; broad views may require zooming in.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -351,7 +351,7 @@ def build_tool_definitions(*, include_paused: bool = False) -> list[dict]:
         {
             "name": "resolve_deep_point",
             "title": "Resolve Point(s) (Deep)",
-            "description": "Second-pass containment only after resolve_point. Supply the original WGS84 coordinate or a bounded point array, its returned deep_scope_loc_id as shallow_loc_id, and one canonical family from get_catalog(catalog='geometry'). family defaults to administrative; shape-backed families use direct bbox-to-exact-shape lookup without crosswalks. Single and bulk requests share this scoped contract.",
+            "description": "Second-pass containment after a country-scoped resolve_point call. Supply the original WGS84 coordinate or a bounded point array, its returned deep_scope_loc_id as shallow_loc_id, and one canonical family from get_catalog(catalog='geometry'). family defaults to administrative; shape-backed families use direct bbox-to-exact-shape lookup without crosswalks. Single and bulk requests share this scoped contract.",
             "inputSchema": {
                 "type": "object",
                 "properties": {

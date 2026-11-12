@@ -10,7 +10,7 @@ from mapmover.runtime.global_admin_shallow_query import resolve_global_admin_sha
 
 
 class GlobalAdminShallowQueryTests(unittest.TestCase):
-    def test_one_global_pack_resolves_and_translates_bulk_points(self):
+    def test_one_global_pack_resolves_bulk_points_without_country_translation(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             boxes = [
@@ -31,32 +31,23 @@ class GlobalAdminShallowQueryTests(unittest.TestCase):
                      "name": name, "geometry_wkb": shape.wkb}
                     for loc_id, row_level, parent, name, shape in boxes if row_level == level
                 ]).to_parquet(root / f"admin_{level}.parquet", index=False)
-            pd.DataFrame([
-                {"baseline_loc_id": source, "preferred_loc_id": preferred}
-                for source, preferred in (("USA", "USA"), ("USA-GTX", "USA-TX"),
-                                          ("USA-GTX-GHARRIS", "USA-TX-201"),
-                                          ("USA-GTX-GOTHER", "USA-GTX-GOTHER"))
-            ]).to_parquet(root / "lookup.parquet", index=False)
             layout = {"bbox_index": root / "bbox.parquet",
-                      "preferred_lookup": root / "lookup.parquet",
                       "release": "1.1.1",
-                      "country_packs": {"USA"},
                       **{f"admin_{level}": root / f"admin_{level}.parquet" for level in range(3)}}
             with patch("mapmover.runtime.global_admin_shallow_query._selected_layout", return_value=layout):
                 results = resolve_global_admin_shallow_points([
                     {"lon": 2, "lat": 2}, {"lon": 5, "lat": 5}, {"lon": 20, "lat": 20},
                 ])
-        self.assertEqual(results[0]["deepest_resolved_loc_id"], "USA-TX-201")
-        self.assertEqual(results[0]["deep_scope_loc_id"], "USA-TX")
+        self.assertEqual(results[0]["deepest_resolved_loc_id"], "USA-GTX-GHARRIS")
+        self.assertNotIn("deep_scope_loc_id", results[0])
         self.assertEqual([row["loc_id"] for row in results[0]["stack"]],
-                         ["USA", "USA-TX", "USA-TX-201"])
+                         ["USA", "USA-GTX", "USA-GTX-GHARRIS"])
         self.assertEqual(results[0]["matched"]["baseline_loc_id"], "USA-GTX-GHARRIS")
-        self.assertEqual(results[0]["matched"]["id_translation"], "country_id_selected")
+        self.assertNotIn("id_translation", results[0]["matched"])
         self.assertEqual(results[0]["admin2_systems"]["geometry_source"], "GeoBoundaries Admin 2")
         self.assertIn("different areas", results[0]["admin2_systems"]["relationship"])
         self.assertEqual(results[1]["deepest_resolved_loc_id"], "USA-GTX-GOTHER")
-        self.assertEqual(results[1]["deep_scope_loc_id"], "USA-TX")
-        self.assertEqual(results[1]["matched"]["id_translation"], "global_id_retained")
+        self.assertNotIn("deep_scope_loc_id", results[1])
         self.assertEqual(results[1]["admin2_systems"], results[0]["admin2_systems"])
         self.assertEqual(results[2]["error"]["code"], "no_point_overlap")
 
@@ -81,16 +72,12 @@ class GlobalAdminShallowQueryTests(unittest.TestCase):
                                "geometry_wkb": polygon.wkb}
                               for loc_id, row_level, parent, name in rows if row_level == level]
                              ).to_parquet(root / f"admin_{level}.parquet")
-            pd.DataFrame([{"baseline_loc_id": "CAN", "preferred_loc_id": "CAN"},
-                          {"baseline_loc_id": "CAN-GNT", "preferred_loc_id": "CAN-NT"},
-                          {"baseline_loc_id": "CAN-GNT-GER", "preferred_loc_id": "CAN-NT-6101"}]
-                         ).to_parquet(root / "lookup.parquet")
-            layout = {"bbox_index": root / "bbox.parquet", "preferred_lookup": root / "lookup.parquet",
+            layout = {"bbox_index": root / "bbox.parquet",
                       "release": "1.1.1", **{f"admin_{level}": root / f"admin_{level}.parquet"
                                           for level in range(3)}}
             with patch("mapmover.runtime.global_admin_shallow_query._selected_layout", return_value=layout):
                 result = resolve_global_admin_shallow_points([{"lon": 1, "lat": 1}])[0]
-        self.assertEqual(result["deepest_resolved_loc_id"], "CAN-NT")
+        self.assertEqual(result["deepest_resolved_loc_id"], "CAN-GNT")
         self.assertEqual(result["deepest_resolved_admin_level"], 1)
 
 
