@@ -199,7 +199,7 @@ def build_tool_definitions(*, include_paused: bool = False) -> list[dict]:
         {
             "name": "get_catalog",
             "title": "List Published Packs or Geographies",
-            "description": "Choose data or geometry. Data returns pack IDs and brief labels; geometry returns family IDs and scope IDs (countries, GLOBAL, MARINE). Use get_pack for a data pack or get_geography for one family or scope. The complete catalog URL is included in the response.",
+            "description": "Choose data or geometry. Data returns pack IDs, brief labels, and each pack's free get_data pricing eligibility; eligibility does not guarantee an API-ready source. Geometry returns family IDs and scope IDs (countries, GLOBAL, MARINE). Use get_pack for a data pack or get_geography for one family or scope. The complete catalog URL is included in the response.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -909,10 +909,15 @@ def build_tool_definitions(*, include_paused: bool = False) -> list[dict]:
             "annotations": {"readOnlyHint": True},
         },
     ]
-    return [
-        decorate_shared_help_definition(
+    published = []
+    for definition in definitions:
+        if not include_paused and str(definition.get("name") or "") in PAUSED_PUBLIC_TOOL_NAMES:
+            continue
+        decorated = decorate_shared_help_definition(
             decorate_geometry_tool_definition(decorate_data_tool_definition(definition))
         )
-        for definition in definitions
-        if include_paused or str(definition.get("name") or "") not in PAUSED_PUBLIC_TOOL_NAMES
-    ]
+        # Claude's directory reads the human-readable title from the MCP
+        # annotations object, while other clients can use the top-level title.
+        decorated.setdefault("annotations", {})["title"] = decorated["title"]
+        published.append(decorated)
+    return published

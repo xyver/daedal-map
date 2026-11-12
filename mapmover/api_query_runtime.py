@@ -1233,7 +1233,10 @@ def get_pack_source_ids(pack_id: str) -> list[str]:
 
 def _get_mcp_pack_source_ids(pack_id: str) -> list[str]:
     source_ids: list[str] = []
-    catalog = load_catalog()
+    # The default catalog view is Explore. MCP packs can be published for
+    # API/MCP without an Explore surface, so read the API admission view here.
+    with catalog_surface_scope("api"):
+        catalog = load_catalog()
     normalized_pack_id = str(pack_id or "").strip()
     for source in catalog.get("sources", []):
         if str(source.get("pack_id") or "").strip() != normalized_pack_id:
