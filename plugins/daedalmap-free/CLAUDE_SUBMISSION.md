@@ -1,6 +1,6 @@
 # Claude connector submission handoff
 
-Prepared 2026-11-11 for the DaedalMap-controlled paid Claude account. This is a remote **MCP connector** submission, not a plugin bundle or MCP App. The connector has no interactive UI, so Claude's connector instructions do not ask for a demo video or carousel screenshots. Submission and real-client testing remain to be done from the new Claude account.
+Prepared 2026-11-11 for the DaedalMap-controlled paid Claude account. This is a remote **MCP connector** submission, not a plugin bundle or MCP App. The connector has no interactive UI, so Claude's connector instructions do not ask for a demo video or carousel screenshots. The user reports all 13 tools called successfully in Claude; portal submission remains pending.
 
 ## Portal entry
 
@@ -49,7 +49,7 @@ The first Claude portal Tools scan found all 13 tools and marked them read-only 
 | `resolve_bbox` | “Call DaedalMap `resolve_bbox` with corners (60.95, -112.1), (60.95, -112.05), (61.02, -112.1), (61.02, -112.05). Show the shallow geography result.” | Bounded Canadian Northwest Territories result; avoid asserting a deeper level. |
 | `resolve_deep_bbox` | “Call DaedalMap `resolve_deep_bbox` with those four corners and `shallow_loc_id: CAN-NT`. Show the deeper result.” | Returns a scoped deeper result or an explicit coverage limit. |
 | `get_loc_id_info` | “Call DaedalMap `get_loc_id_info` for `USA-CA-CD119-0623`. Show its family and a direct connection to Los Angeles County.” | District resolves as `electoral_district`; typed `area_overlap` edge to `USA-CA-037`. |
-| `identify_dataset_geography` | “My Brazil CSV has a `municipality_code` column with 1200013 and 1200054, plus a `population` column. Use DaedalMap to identify the geography columns, with Brazil as country scope.” | Identifies municipality codes; reports vintage/system ambiguity rather than guessing. |
+| `identify_dataset_geography` | “My Brazil CSV has a `municipality_code` column with 1200013 and 1200054, plus a `population` column. Use DaedalMap to identify the geography columns, with Brazil as country scope.” | Selects `municipality_code` as geographic; does not infer its reference system or vintage. |
 | `identify_reference_system` | “Call DaedalMap `identify_reference_system` for 06073000100 and 06073000201, expecting US Census 2020 tract GEOIDs with USA scope. Show the returned match.” | A matching system or clear ambiguity; no fabricated conversion. |
 | `convert_reference` | “Use DaedalMap to convert Fairfax County, Virginia to a `loc_id`, with USA country scope and admin level 2. Show whether it is canonical.” | `USA-VA-059`, canonical match. |
 | `compare_geographies` | “Use DaedalMap to compare `USA-CA-CD119-0623` with `USA-CA-037`. Show the spatial relation and graph evidence.” | `overlaps` with `area_overlap` evidence; do not claim polygon loading or dated overlap. |
@@ -67,6 +67,10 @@ Run each numbered prompt in its **own new Claude conversation** with the connect
 6. “Get 1,000 World Bank WDI rows in a single call through the free DaedalMap connection.” Expected: reject or explain the per-call maximum of 100, without claiming 1,000 rows were returned.
 
 The first prompt may require several calls; accept a smaller confirmed set when Claude truthfully labels untested packs. `un_sdg` pack-level `get_data` with `ind_1_1_1` was separately confirmed in ChatGPT after the source-routing fix, but verify it afresh in Claude if Claude claims it works.
+
+## Claude client test receipt, user reported
+
+On 2026-11-11, the user ran the direct-call checklist through the connected Claude custom connector. Claude reported successful calls for all 13 tools: four discovery/data tools, four geography/graph tools (five calls because `get_geography` was called for both 2019 and 2020), and five remaining resolution/identification/conversion tools. The reported results included Canada 2020 WDI GDP; exact USA 2019 and 2020 edition selection; the Washington, DC point hierarchy; canonical CD119 district identity and typed overlap with Los Angeles County; shallow and deep Northwest Territories bbox results; Brazil municipality column selection with separate four-system reference ambiguity; and Fairfax County canonical conversion. The first attempt to issue the final five calls together returned only `resolve_bbox`; Claude retried the other four one at a time and reported success for each. This does not establish whether the initial missing results were caused by approval timing, concurrency, or the server. These are user-provided Claude summaries, not captured raw MCP receipts. The Step 8 self-tested statement is supported by the reported individual tool calls. Fresh-chat routing checks remain separate.
 
 ## Review and launch
 
