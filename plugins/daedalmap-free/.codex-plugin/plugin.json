@@ -1,7 +1,7 @@
 {
   "name": "daedalmap-free",
-  "version": "0.1.0",
-  "description": "Use DaedalMap's free geographic reference and published data tools through its remote MCP server.",
+  "version": "0.1.1",
+  "description": "Use DaedalMap's geographic reference and published data tools through its remote MCP server.",
   "author": {
     "name": "DaedalMap",
     "url": "https://www.daedalmap.com"
@@ -10,18 +10,18 @@
   "repository": "https://github.com/xyver/daedal-map",
   "keywords": ["geography", "geospatial data", "MCP", "reference conversion"],
   "interface": {
-    "displayName": "DaedalMap Free Geography",
-    "shortDescription": "Geographic IDs and free data",
-    "longDescription": "Find published free data packs, retrieve bounded rows, identify geographic references, convert them to DaedalMap loc_id, compare places, and resolve coordinates. Calls on this connector need no account and cannot charge a balance. Coverage varies by location and published data pack.",
+    "displayName": "DaedalMap Geography",
+    "shortDescription": "Geographic IDs and data",
+    "longDescription": "Identify geographic references in tabular data, convert place names and external identifiers to DaedalMap loc_id, resolve coordinates, compare places, and query published country-level data. Coverage varies by location and published source.",
     "developerName": "DaedalMap",
     "category": "Developer Tools",
-    "capabilities": ["Find free geographic data", "Identify and convert geographic IDs", "Resolve coordinates"],
+    "capabilities": ["Find published geographic data", "Identify and convert geographic IDs", "Resolve coordinates"],
     "websiteURL": "https://www.daedalmap.com/agents",
     "supportURL": "https://www.daedalmap.com/support",
     "privacyPolicyURL": "https://www.daedalmap.com/privacy",
     "termsOfServiceURL": "https://www.daedalmap.com/terms",
     "defaultPrompt": [
-      "Find free country data for Canada in 2020.",
+      "Find country data for Canada in 2020.",
       "Convert Fairfax County, Virginia to a loc_id.",
       "Which administrative area contains the White House?"
     ],
@@ -49,7 +49,7 @@
         }
       },
       "publication": {
-        "release_notes": "Initial free DaedalMap MCP connector for bounded geographic reference and published data workflows."
+        "release_notes": "DaedalMap geographic reference and published data workflows. Listing copy updated for review."
       }
     }
   }

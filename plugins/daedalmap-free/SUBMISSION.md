@@ -1,14 +1,14 @@
 # DaedalMap Free Geography store submission
 
-Status: draft preparation, 2026-11-11. No directory submission or approval is claimed here.
+Status: OpenAI portal draft uploaded on 2026-11-11; metadata findings are being corrected. No review submission or approval is claimed here.
 
 The production MCP endpoint is `https://app.daedalmap.com/mcp/free`. It is intended to provide bounded, anonymous geographic reference and published free-data workflows. The OpenAI package source is `.codex-plugin/plugin.json`, `.mcp.json`, and `assets/icon.svg` in this directory. The Claude connector uses the same endpoint directly.
 
 ## Listing text
 
-- Name: DaedalMap Free Geography
-- One-line description: Resolve places, convert geographic IDs, and query published free data.
-- Description: Use DaedalMap's free geographic reference and published data tools. Identify geographic references in a small dataset, convert supported identifiers to `loc_id`, resolve coordinates to available administrative areas, compare places, discover free data packs, and retrieve bounded rows. Coverage depends on the selected place, source, and published release. No account is required for this endpoint, and calls to it cannot charge an account balance.
+- Name: DaedalMap Geography
+- One-line description: Geographic IDs and data
+- Description: Identify geographic references in tabular data, convert place names and external identifiers to DaedalMap `loc_id`, resolve coordinates, compare places, and query published country-level data. Coverage varies by location and published source.
 - Documentation: https://www.daedalmap.com/agents
 - Support: https://www.daedalmap.com/support
 - Privacy: https://www.daedalmap.com/privacy
@@ -23,7 +23,9 @@ Check the text against the live tool list and website before copying it to eithe
 
 The OpenAI package has five positive and three negative cases with observable expected behavior. Use those same prompts in fresh ChatGPT and Claude conversations. Also try an indirect geography request and a follow-up that reuses a returned `loc_id`. Record tool selection, arguments, response, elapsed time, and any failure for each case. Check that an unrelated request does not invoke DaedalMap and that paid-pack and above-ceiling requests receive a clear denial or narrowing path without a charge.
 
-The November 11 ChatGPT custom-connector checks passed the Canada WDI query in a fresh chat, Fairfax conversion and parent follow-up, unrelated-email nonactivation, paid-earthquake denial, and the 100-row single-call ceiling. The Brazil municipality-code probe correctly returned ambiguity across matching reference systems; its review expectation now permits that result. After the catalog update deployed, two separate fresh ChatGPT chats confirmed that `get_catalog(data)` returns `eligible` for `world_bank_wdi`, `un_wpp`, and `un_sdg`, and `blocked_paid_pack` for `world_factbook`. The first chat quoted the catalog's caveat that eligibility does not guarantee material clearance or an API-ready source. The second distinguished successful Canada 2020 row queries for WDI and WPP from an `unknown_source` failure for the UN SDG pack-level query; it did not count UN SDG as confirmed retrievable. This passes the catalog review behavior. The UN SDG resolver was subsequently fixed in public commit `2613de1`: the pre-fix hosted source query passed while the MCP pack query failed, and the settled post-fix hosted suite passed 3/3, including source groups `01` and `17`. A subsequent ChatGPT query using `pack_id: "un_sdg"` without `source_id` returned source `01`, three `ind_1_1_1` rows, and no error or warnings. This closes the tested UN SDG browser regression; the complete plugin draft has not yet been tested through the submission portal.
+The November 11 ChatGPT custom-connector checks passed the Canada WDI query in a fresh chat, Fairfax conversion and parent follow-up, unrelated-email nonactivation, paid-earthquake denial, and the 100-row single-call ceiling. The Brazil municipality-code probe correctly returned ambiguity across matching reference systems; its review expectation now permits that result. After the catalog update deployed, two separate fresh ChatGPT chats confirmed that `get_catalog(data)` returns `eligible` for `world_bank_wdi`, `un_wpp`, and `un_sdg`, and `blocked_paid_pack` for `world_factbook`. The first chat quoted the catalog's caveat that eligibility does not guarantee material clearance or an API-ready source. The second distinguished successful Canada 2020 row queries for WDI and WPP from an `unknown_source` failure for the UN SDG pack-level query; it did not count UN SDG as confirmed retrievable. This passes the catalog review behavior. The UN SDG resolver was subsequently fixed in public commit `2613de1`: the pre-fix hosted source query passed while the MCP pack query failed, and the settled post-fix hosted suite passed 3/3, including source groups `01` and `17`. A subsequent ChatGPT query using `pack_id: "un_sdg"` without `source_id` returned source `01`, three `ind_1_1_1` rows, and no error or warnings. This closes the tested UN SDG browser regression; the corrected 0.1.1 package has not yet been scanned in the portal.
+
+The first OpenAI portal draft upload flagged pricing language in the listing description, an inconclusive automated privacy-policy assessment, and incomplete review information. Package version 0.1.1 removes access and pricing claims from the listing copy. The five positive and three negative test cases are present in the ZIP; `review.demo_recording_url` remains unset until a reviewer-accessible walkthrough is recorded. Check Review information → Review details after reupload for any other missing fields. The privacy finding requires checking the published policy against OpenAI's stated requirements; an inconclusive automated assessment is not evidence of a policy failure.
 
 Claude's suggested working prompts:
 
