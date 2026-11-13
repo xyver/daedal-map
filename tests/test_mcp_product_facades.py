@@ -142,6 +142,31 @@ class ProductFacadeTests(unittest.TestCase):
         self.assertEqual(event["metadata"]["mcp_facade_pack_id"], "free")
         self.assertTrue(event["metadata"]["free_facade_guard"])
 
+    def test_free_facade_lists_and_renders_only_free_prompts(self):
+        def rpc(facade, method, params=None):
+            return self.client.post(f"/mcp/{facade}", json={
+                "jsonrpc": "2.0", "id": 1, "method": method, "params": params or {},
+            }).json()
+
+        listed = {prompt["name"] for prompt in rpc("free", "prompts/list")["result"]["prompts"]}
+        self.assertEqual(listed, {
+            "convert_census_code", "place_from_coordinates", "find_geography_columns", "country_indicator_history",
+        })
+        self.assertEqual(rpc("data", "prompts/list")["result"]["prompts"], [])
+        cases = {
+            "convert_census_code": ({"code": "22030", "code_type": "zcta"}, '"from_system": "zcta"'),
+            "place_from_coordinates": ({"lat": "38.8977", "lon": "-77.0365"}, '"scope_id": "GLOBAL"'),
+            "find_geography_columns": ({"country": "bra"}, '"BRA"'),
+            "country_indicator_history": ({"countries": "can,mex", "indicator": "population"}, '"CAN", "MEX"'),
+        }
+        for name, (arguments, expected) in cases.items():
+            with self.subTest(prompt=name):
+                text = rpc("free", "prompts/get", {"name": name, "arguments": arguments})["result"]["messages"][0]["content"]["text"]
+                self.assertIn(expected, text)
+                self.assertIn("edition or vintage", text)
+        blocked = rpc("free", "prompts/get", {"name": "largest_earthquake_in_range", "arguments": {}})
+        self.assertEqual(blocked["error"]["code"], -32602)
+
     def test_data_facade_rejects_geometry_tool_and_geometry_catalog(self):
         result = self.call("data", "convert_reference", {"from_system": "zip", "value": "00601"})
         self.assertEqual(result["error"]["code"], -32601)

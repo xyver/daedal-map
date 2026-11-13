@@ -422,6 +422,10 @@ PRODUCT_FACADE_TOOL_NAMES = {
     }),
     "data": frozenset({"get_tool_help", "get_catalog", "get_pack", "get_data", "get_event"}),
 }
+FREE_FACADE_PROMPT_NAMES = frozenset({
+    "convert_census_code", "place_from_coordinates", "find_geography_columns", "country_indicator_history",
+})
+PRODUCT_FACADE_PROMPT_NAMES = {"free": FREE_FACADE_PROMPT_NAMES, "data": frozenset()}
 
 PACK_TOOL_ALLOWLIST: dict[str, set[str]] = pack_tool_allowlists()
 
@@ -672,15 +676,21 @@ def _facade_prompts(pack_id: str | None) -> list[dict[str, Any]]:
     prompts = _prompt_definitions()
     if not normalized:
         return prompts
-    allowed = PACK_PROMPT_ALLOWLIST.get(normalized, set())
+    allowed = _facade_prompt_allowlist(normalized)
     return [prompt for prompt in prompts if str(prompt.get("name") or "") in allowed]
+
+
+def _facade_prompt_allowlist(normalized: str) -> frozenset[str] | set[str]:
+    if normalized in PRODUCT_FACADE_PROMPT_NAMES:
+        return PRODUCT_FACADE_PROMPT_NAMES[normalized]
+    return PACK_PROMPT_ALLOWLIST.get(normalized, set())
 
 
 def _prompt_allowed_for_facade(prompt_name: str, pack_id: str | None) -> bool:
     normalized = _normalize_pack_id(pack_id)
     if not normalized:
         return True
-    return prompt_name in PACK_PROMPT_ALLOWLIST.get(normalized, set())
+    return prompt_name in _facade_prompt_allowlist(normalized)
 
 
 def _resource_allowed_for_facade(uri: str, pack_id: str | None) -> bool:
@@ -2191,7 +2201,155 @@ def _prompt_definitions() -> list[dict[str, Any]]:
                 {"name": "end", "description": "Inclusive end date in YYYY-MM-DD format.", "required": True},
             ],
         },
+        {
+            "name": "convert_census_code",
+            "title": "Convert a Census Code to a Place",
+            "description": "Convert a US FIPS code, Census GEOID, or ZIP Code Tabulation Area (ZCTA) to its DaedalMap loc_id, name, and parent places.",
+            "arguments": [
+                {"name": "code", "description": "The code to convert, such as 51059 (FIPS county) or 22030 (ZCTA).", "required": True},
+                {"name": "code_type", "description": "fips for FIPS codes and Census GEOIDs, or zcta for ZIP Code Tabulation Areas. Defaults to fips.", "required": False},
+            ],
+        },
+        {
+            "name": "place_from_coordinates",
+            "title": "Find the Place at Coordinates",
+            "description": "Reverse geocode a latitude and longitude to its country and administrative areas, such as state and county.",
+            "arguments": [
+                {"name": "lat", "description": "Latitude in WGS84 decimal degrees, such as 38.8977.", "required": True},
+                {"name": "lon", "description": "Longitude in WGS84 decimal degrees, such as -77.0365.", "required": True},
+            ],
+        },
+        {
+            "name": "find_geography_columns",
+            "title": "Find Geography Columns in a Dataset",
+            "description": "Identify which columns in a pasted table hold place names, codes, or coordinates, then convert them to DaedalMap loc_ids for joining.",
+            "arguments": [
+                {"name": "country", "description": "Optional ISO3 country the dataset covers, such as USA or BRA.", "required": False},
+            ],
+        },
+        {
+            "name": "country_indicator_history",
+            "title": "Country Indicator History",
+            "description": "Retrieve a published development indicator, such as GDP or population, for one or more countries over a year range.",
+            "arguments": [
+                {"name": "countries", "description": "Comma-separated ISO3 country codes, such as CAN,MEX.", "required": True},
+                {"name": "indicator", "description": "What to measure, such as GDP per capita or population.", "required": True},
+                {"name": "start_year", "description": "Optional first year, such as 2010.", "required": False},
+                {"name": "end_year", "description": "Optional last year, such as 2020.", "required": False},
+            ],
+        },
     ]
+
+
+_PROMPT_CITATION_RULE = (
+    "When you report results, name the source and edition or vintage the tool returned, "
+    "and say plainly when a match is ambiguous, missing, or from a different year than requested."
+)
+
+
+def _prompt_message(description: str, text: str) -> dict[str, Any]:
+    return {"description": description, "messages": [{"role": "user", "content": {"type": "text", "text": text}}]}
+
+
+def _render_free_prompt(name: str, arguments: dict[str, Any]) -> dict[str, Any] | None:
+    if name == "convert_census_code":
+        code = str(arguments.get("code") or "51059").strip() or "51059"
+        code_type = str(arguments.get("code_type") or "fips").strip().lower()
+        from_system = "zcta" if code_type in {"zcta", "zip", "zip_code"} else "fips"
+        text = (
+            f"Safety: {AGENT_SAFETY_NOTICE}\n\n"
+            f"Convert the US code {code} to its DaedalMap loc_id with `convert_reference`, then report the place name, "
+            "its family and admin level, and its parent state. If the code is ambiguous or not found, say so instead of guessing.\n\n"
+            "Suggested tool call:\n"
+            "```json\n"
+            "{\n"
+            '  "name": "convert_reference",\n'
+            '  "arguments": {\n'
+            '    "iso3": "USA",\n'
+            f'    "from_system": {_json_prompt_string(from_system)},\n'
+            f'    "value": {_json_prompt_string(code)}\n'
+            "  }\n"
+            "}\n"
+            "```\n\n"
+            "Use `get_loc_id_info` on the returned loc_id for parent and related places.\n\n"
+            f"{_PROMPT_CITATION_RULE}"
+        )
+        return _prompt_message("Convert a US census code to a place.", text)
+
+    if name == "place_from_coordinates":
+        lat = _json_prompt_number_or_string(arguments.get("lat") or "38.8977")
+        lon = _json_prompt_number_or_string(arguments.get("lon") or "-77.0365")
+        text = (
+            f"Safety: {AGENT_SAFETY_NOTICE}\n\n"
+            f"Find the country and administrative areas containing latitude {lat}, longitude {lon}. "
+            "First resolve the point in GLOBAL administrative to identify the country. Then, if the catalog publishes that "
+            "country as its own scope, resolve the same point again with scope_id set to the returned ISO3 for deeper levels "
+            "such as state and county. Do not substitute a MARINE answer for a land miss; report a miss as a miss.\n\n"
+            "Suggested first tool call:\n"
+            "```json\n"
+            "{\n"
+            '  "name": "resolve_point",\n'
+            '  "arguments": {\n'
+            '    "scope_id": "GLOBAL",\n'
+            '    "family": "administrative",\n'
+            f'    "lat": {lat},\n'
+            f'    "lon": {lon}\n'
+            "  }\n"
+            "}\n"
+            "```\n\n"
+            f"{_PROMPT_CITATION_RULE}"
+        )
+        return _prompt_message("Reverse geocode coordinates to administrative areas.", text)
+
+    if name == "find_geography_columns":
+        country = str(arguments.get("country") or "").strip().upper()
+        scope_line = f"The dataset covers {country}; pass country_scope {_json_prompt_string(country)}.\n\n" if country else ""
+        text = (
+            f"Safety: {AGENT_SAFETY_NOTICE}\n\n"
+            "I will paste a table. Find the columns that hold geography (place names, codes, or latitude and longitude) "
+            "and prepare them for joining by DaedalMap loc_id.\n\n"
+            f"{scope_line}"
+            "1. Call `identify_dataset_geography` with the column names and a few representative values from each column.\n"
+            "2. For each identifier column it selects, call `identify_reference_system` within one country scope to confirm the code system.\n"
+            "3. Convert a sample of values with `convert_reference` and report the match rate, unmatched values, and any ambiguity.\n\n"
+            "Ask me only when a tool result says clarification is required.\n\n"
+            f"{_PROMPT_CITATION_RULE}"
+        )
+        return _prompt_message("Find and convert geography columns in a dataset.", text)
+
+    if name == "country_indicator_history":
+        countries = [item.strip().upper() for item in str(arguments.get("countries") or "CAN").split(",") if item.strip()]
+        ids_json = ", ".join(_json_prompt_string(item) for item in countries) or '"CAN"'
+        indicator = str(arguments.get("indicator") or "GDP per capita").strip() or "GDP per capita"
+        start_year = str(arguments.get("start_year") or "").strip()
+        end_year = str(arguments.get("end_year") or "").strip()
+        time_line = ""
+        if start_year or end_year:
+            time_line = f',\n      "time": {{"start": {_json_prompt_string(start_year or end_year)}, "end": {_json_prompt_string(end_year or start_year)}}}'
+        text = (
+            f"Safety: {AGENT_SAFETY_NOTICE}\n\n"
+            f"Retrieve {indicator} for {', '.join(countries) or 'CAN'}. Call `get_catalog` with catalog data to find a pack that "
+            "returns rows on this endpoint (world_bank_wdi is a common choice), then call `get_pack` to choose the exact metric id. "
+            "Do not guess metric ids.\n\n"
+            "Suggested data call after choosing the metric:\n"
+            "```json\n"
+            "{\n"
+            '  "name": "get_data",\n'
+            '  "arguments": {\n'
+            '    "pack_id": "world_bank_wdi",\n'
+            '    "metrics": ["<metric id from get_pack>"],\n'
+            '    "filters": {\n'
+            f'      "region_ids": [{ids_json}]{time_line}\n'
+            "    }\n"
+            "  }\n"
+            "}\n"
+            "```\n\n"
+            "Report missing years as missing; do not fill them.\n\n"
+            f"{_PROMPT_CITATION_RULE}"
+        )
+        return _prompt_message("Retrieve a country indicator over time.", text)
+
+    return None
 
 
 def _render_prompt(name: str, arguments: dict[str, Any]) -> dict[str, Any] | None:
@@ -2287,7 +2445,7 @@ def _render_prompt(name: str, arguments: dict[str, Any]) -> dict[str, Any] | Non
         )
         return {"description": "Fetch FX history for one or more countries.", "messages": [{"role": "user", "content": {"type": "text", "text": text}}]}
 
-    return None
+    return _render_free_prompt(name, arguments)
 
 
 def _resource_definitions() -> list[dict[str, Any]]:
