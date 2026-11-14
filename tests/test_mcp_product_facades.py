@@ -167,6 +167,34 @@ class ProductFacadeTests(unittest.TestCase):
         blocked = rpc("free", "prompts/get", {"name": "largest_earthquake_in_range", "arguments": {}})
         self.assertEqual(blocked["error"]["code"], -32602)
 
+    def test_get_pack_accepts_one_narrowing_selector(self):
+        def get_pack(arguments):
+            return self.client.post("/mcp/free", json={
+                "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                "params": {"name": "get_pack", "arguments": arguments},
+            }).json()
+
+        schema = next(
+            tool for tool in self.client.post("/mcp/free", json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"}).json()["result"]["tools"]
+            if tool["name"] == "get_pack"
+        )["inputSchema"]
+        self.assertEqual(set(schema["properties"]), {"pack_id", "source_id", "search", "metrics"})
+        self.assertEqual(schema["properties"]["metrics"]["maxItems"], 10)
+        rejected = [
+            {"pack_id": "un_wpp", "source_id": "un_wpp", "search": "population"},
+            {"pack_id": "un_wpp", "detail": "full"},
+            {"pack_id": "un_wpp", "search": "x"},
+            {"pack_id": "un_wpp", "metrics": []},
+            {"pack_id": "un_wpp", "metrics": [f"m{i}" for i in range(11)]},
+            {"pack_id": "un_wpp", "metrics": ["a", "a"]},
+            {"source_id": "un_wpp"},
+        ]
+        # The pre-dispatch rate gate counts rejected calls; keep them out of the shared test budget.
+        with mock.patch("mapmover.routes.mcp._live_tool_rate_limit_response", return_value=None):
+            for arguments in rejected:
+                with self.subTest(arguments=arguments):
+                    self.assertEqual(get_pack(arguments)["error"]["code"], -32602)
+
     def test_data_facade_rejects_geometry_tool_and_geometry_catalog(self):
         result = self.call("data", "convert_reference", {"from_system": "zip", "value": "00601"})
         self.assertEqual(result["error"]["code"], -32601)

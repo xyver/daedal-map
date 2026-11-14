@@ -1571,14 +1571,24 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
         pack = {"pack_id": "example_pack", "sources": [{
             "source_id": "example_source", "metrics": {"example_metric": {"name": "Example"}},
         }]}
-        with mock.patch("mapmover.routes.mcp.load_api_pack_detail", return_value=pack):
+        # The suite shares one in-process rate limiter; keep these calls out of its budget.
+        with mock.patch("mapmover.routes.mcp.load_api_pack_detail", return_value=pack), \
+             mock.patch("mapmover.data_loading.load_source_metadata", return_value=None), \
+             mock.patch("mapmover.routes.mcp._live_tool_rate_limit_response", return_value=None):
             envelope = _mcp_call(self.client, "tools/call", {
                 "name": "get_pack", "arguments": {"pack_id": "example_pack"},
             }, path="/mcp")
+            narrowed = _mcp_call(self.client, "tools/call", {
+                "name": "get_pack", "arguments": {"pack_id": "example_pack", "source_id": "example_source"},
+            }, path="/mcp")
 
         result = envelope["result"]
-        self.assertEqual(result["structuredContent"]["sources"][0]["metric_ids"], ["example_metric"])
+        self.assertEqual(result["structuredContent"]["detail"], "sources")
+        self.assertEqual(result["structuredContent"]["sources"][0]["metric_count"], 1)
         self.assertEqual(result["content"], [])
+        source_view = narrowed["result"]["structuredContent"]
+        self.assertEqual(source_view["detail"], "source_metrics")
+        self.assertEqual([m["metric_id"] for m in source_view["metrics"]], ["example_metric"])
 
     def test_discovery_contracts_reject_extra_fields_before_lookup(self) -> None:
         for name, arguments in (

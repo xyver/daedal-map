@@ -50,10 +50,14 @@ country runtime catalogs and unpublished lifecycle records remain in the
 private published lane.
 
 Use the direct catalog URLs for complete inventory reads. MCP `get_catalog`
-returns compact selection views, `get_pack` drills into one selected data pack
-or geometry family, and their download detail points to the complete published
-metadata where applicable. Candidate, WIP, and audit/provenance records remain
-on private runtime surfaces and are never mirrored to the downloadable lane.
+returns compact selection views. `get_pack` narrows one data pack in steps:
+`pack_id` alone lists the pack's sources; adding `source_id` lists that source's
+metrics with names, units, years, and aggregation plus its query fields;
+`search` matches metrics across the pack; and `metrics` returns full detail for
+up to ten exact ids. Each response stays bounded regardless of pack size.
+Geometry families and scopes use `get_geography`. Candidate, WIP, and
+audit/provenance records remain on private runtime surfaces and are never
+mirrored to the downloadable lane.
 
 ## API/MCP Versus Downloads
 

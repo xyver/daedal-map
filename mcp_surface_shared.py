@@ -212,11 +212,24 @@ def build_tool_definitions(*, include_paused: bool = False) -> list[dict]:
         {
             "name": "get_pack",
             "title": "Inspect One Data Pack",
-            "description": "After get_catalog(data), supply one exact data pack_id. Returns its metrics, time coverage, filters, and access metadata. Geometry families and scopes use get_geography.",
+            "description": "After get_catalog(data), supply one exact data pack_id to list its sources. Then narrow with at most one of source_id, search, or metrics. Geometry families and scopes use get_geography.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "pack_id": {"type": "string", "description": _pack_id_description()},
+                    "source_id": {
+                        "type": "string", "minLength": 1,
+                        "description": "Optional. One source_id from this pack's sources list. Returns every metric in that source with name, unit, years, and aggregation, plus the source's filterable fields, sortable fields, and time field.",
+                    },
+                    "search": {
+                        "type": "string", "minLength": 2, "maxLength": 100,
+                        "description": "Optional. Terms matched against metric ids, names, descriptions, and keywords across this pack's sources; every term must match. Returns up to 25 compact metric lines.",
+                    },
+                    "metrics": {
+                        "type": "array", "minItems": 1, "maxItems": 10, "uniqueItems": True,
+                        "items": {"type": "string", "minLength": 1},
+                        "description": "Optional. Up to 10 exact metric ids from this pack. Returns full stored detail for each, including description, coverage by era, value statistics, and every source that holds it.",
+                    },
                 },
                 "required": ["pack_id"],
                 "additionalProperties": False,

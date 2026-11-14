@@ -40,7 +40,11 @@ DATA_TOOL_IDS = frozenset().union(
 
 DATA_TOOL_DESCRIPTIONS = {
     "get_catalog": "Choose data or geometry to list published pack IDs or family and scope IDs. The response includes a complete catalog download URL. Use get_pack for data or get_geography for geometry.",
-    "get_pack": "Inspect one exact data pack ID for its metrics, time coverage, and query metadata before get_data.",
+    "get_pack": (
+        "Narrow one data pack before get_data. With only pack_id, lists the pack's sources and their coverage. "
+        "Add source_id to list that source's metrics (name, unit, years, aggregation) and its filterable and sortable fields; "
+        "search to match metrics across the pack by name, description, or keyword; or metrics for full detail on up to 10 exact ids."
+    ),
     "get_geography": "Inspect one published geometry family across scopes or one scope across families. Returns coverage and known editions from catalog metadata only. Optional year selects the latest admitted edition no later than that year when the selected catalog has an edition index; an unavailable index is reported explicitly.",
     "get_data": "Retrieve rows from one selected published data pack using exact metrics, loc_id-based region filters, time/metric filters, sorting, and a row limit. Disaster event rows include stable event_id values for get_event drill-down. A parent administrative loc_id selects matching descendant rows at the pack's published grain. Call get_pack first; geometry families use their focused next-step tools.",
     "get_live_earthquake_events": "Fetch recent preliminary USGS earthquake events in the shared data-result shape. Use get_data with pack_id='earthquakes' for canonical enriched history.",
@@ -149,8 +153,14 @@ def data_tool_output_schema(tool_name: str) -> dict[str, Any] | None:
             properties={
                 "catalog": {"type": "string", "enum": ["data"]},
                 "pack_id": {"type": "string"},
-                "detail": {"type": "string", "enum": ["lite", "full", "download"]},
+                "detail": {"type": "string", "enum": ["sources", "source_metrics", "metric_detail", "metric_search"]},
                 "sources": {"type": "array", "items": {"type": "object"}},
+                "source": {"type": "object"},
+                "query_contract": {"type": "object"},
+                "metrics": {"type": "array", "items": {"type": "object"}},
+                "unknown_metrics": {"type": "array", "items": {"type": "string"}},
+                "match_count": {"type": "integer", "minimum": 0},
+                "truncated": {"type": "boolean"},
                 "material_policy": {"type": "object"},
                 "download_url": {"type": "string"},
                 "full_call": {"type": "object"},
@@ -338,19 +348,23 @@ def normalize_data_tool_error(
     elif code in {"metric_not_available", "multi_source_not_supported"} and pack_id:
         if code == "multi_source_not_supported":
             error["retry_hint"] = (
-                "Call get_pack with detail='full', then retry get_data with a metric subset "
-                "that belongs to one published source. get_data does not accept source_id."
+                "Call get_pack with source_id to list one source's metrics, then retry get_data with a "
+                "metric subset from that one source. get_data does not accept source_id."
             )
+        else:
+            error.setdefault("retry_hint", (
+                "Call get_pack with search='<terms>' or source_id to find exact metric ids, then retry get_data."
+            ))
         next_step = {
             "action": "inspect_pack_query_contract",
             "tool": "get_pack",
-            "arguments": {"pack_id": pack_id, "detail": "full"},
+            "arguments": {"pack_id": pack_id},
         }
     elif code in {"unknown_source", "pack_not_found"}:
         next_step = {
             "action": "refresh_catalog",
             "tool": "get_catalog",
-            "arguments": {"catalog": "data", "detail": "lite"},
+            "arguments": {"catalog": "data"},
         }
     elif code == "event_not_found" and pack_id:
         error["retry_hint"] = (
@@ -360,7 +374,7 @@ def normalize_data_tool_error(
         next_step = {
             "action": "inspect_pack_then_find_event",
             "tool": "get_pack",
-            "arguments": {"pack_id": pack_id, "detail": "full"},
+            "arguments": {"pack_id": pack_id},
         }
     else:
         next_step = {

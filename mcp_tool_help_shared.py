@@ -49,11 +49,20 @@ TOOL_GUIDANCE: dict[str, dict[str, Any]] = {
         {"catalog": "geometry"}, ["packs", "families", "scopes", "download_url"], ["get_pack", "get_geography"]
     ),
     "get_pack": _g(
-        ["You selected one data pack and need its metrics, time coverage, and query contract."],
-        ["Executing a dataset query", "Inspecting geometry families"],
-        {"pack_id": "earthquakes"},
-        ["catalog", "pack_id", "sources", "metrics", "next_step", "download_url"],
-        ["get_data"], ["source metadata", "release/freshness fields"]
+        [
+            "You selected one data pack and need to see which sources it contains (pack_id only).",
+            "You chose a source and need its exact metric ids, units, years, and filterable or sortable fields (add source_id).",
+            "You know what you want to measure but not the metric id (add search), or need full definitions for chosen ids (add metrics).",
+        ],
+        ["Executing a dataset query", "Inspecting geometry families", "Combining source_id, search, and metrics in one call"],
+        [
+            {"pack_id": "world_bank_wdi"},
+            {"pack_id": "world_bank_wdi", "source_id": "wb_social"},
+            {"pack_id": "world_bank_wdi", "search": "unemployment"},
+            {"pack_id": "world_bank_wdi", "metrics": ["unemployment_total_l_uem_totl_ne_zs"]},
+        ],
+        ["detail", "sources", "source", "query_contract", "metrics", "match_count", "next_step"],
+        ["get_pack", "get_data"], ["source metadata", "release/freshness fields"]
     ),
     "get_geography": _g(
         ["You know one geometry family ID or scope ID and need its published coverage and known edition years."],

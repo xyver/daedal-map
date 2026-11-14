@@ -31,7 +31,13 @@ from mcp_discovery_shared import (
     compact_pack_detail,
     filter_data_catalog_payload,
     full_catalog_payload,
+    PACK_METRIC_DETAIL_LIMIT,
+    PACK_SEARCH_MAX_CHARS,
+    PACK_SEARCH_MIN_CHARS,
     mcp_full_pack_detail,
+    mcp_pack_metric_detail,
+    mcp_pack_metric_search,
+    mcp_pack_source_detail,
     pack_download_payload,
 )
 from mcp_runtime_shared import jsonrpc_error_envelope, jsonrpc_result_envelope, mcp_tool_error_payload
@@ -669,6 +675,37 @@ def _tool_definition(tool_name: str) -> dict[str, Any] | None:
         (tool for tool in _tool_definitions() if str(tool.get("name") or "") == tool_name),
         None,
     )
+
+
+_GET_PACK_SELECTORS = ("source_id", "search", "metrics")
+
+
+def _get_pack_argument_error(arguments: Any) -> str | None:
+    """Validate get_pack: one pack_id plus at most one narrowing selector."""
+    usage = "get_pack takes a nonempty pack_id plus at most one of source_id, search, or metrics"
+    if not isinstance(arguments, dict):
+        return usage
+    unknown = sorted(set(arguments) - {"pack_id", *_GET_PACK_SELECTORS})
+    if unknown:
+        return f"{usage}; unsupported argument(s): {', '.join(unknown)}"
+    if not isinstance(arguments.get("pack_id"), str) or not arguments["pack_id"].strip():
+        return usage
+    selectors = [name for name in _GET_PACK_SELECTORS if name in arguments]
+    if len(selectors) > 1:
+        return f"{usage}; received {', '.join(selectors)}. Call get_pack once per selector."
+    if "source_id" in arguments and (not isinstance(arguments["source_id"], str) or not arguments["source_id"].strip()):
+        return "source_id must be a nonempty string from this pack's sources list"
+    if "search" in arguments:
+        search = arguments["search"]
+        if not isinstance(search, str) or not (PACK_SEARCH_MIN_CHARS <= len(search.strip()) <= PACK_SEARCH_MAX_CHARS):
+            return f"search must be a string of {PACK_SEARCH_MIN_CHARS} to {PACK_SEARCH_MAX_CHARS} characters"
+    if "metrics" in arguments:
+        metrics = arguments["metrics"]
+        if (not isinstance(metrics, list) or not metrics or len(metrics) > PACK_METRIC_DETAIL_LIMIT
+                or not all(isinstance(m, str) and m.strip() for m in metrics)
+                or len({m.strip() for m in metrics}) != len(metrics)):
+            return f"metrics must be 1 to {PACK_METRIC_DETAIL_LIMIT} unique nonempty metric ids"
+    return None
 
 
 def _facade_prompts(pack_id: str | None) -> list[dict[str, Any]]:
@@ -6174,8 +6211,9 @@ async def mcp_endpoint(request: Request, pack_id: str | None = None):
                                    error_code=(payload.get("error") or {}).get("code"))
 
     if tool_name == "get_pack":
-        if set(arguments) != {"pack_id"} or not isinstance(arguments.get("pack_id"), str) or not arguments["pack_id"].strip():
-            return _jsonrpc_error(request_id, -32602, "get_pack requires only a nonempty data pack_id")
+        pack_selector_error = _get_pack_argument_error(arguments)
+        if pack_selector_error:
+            return _jsonrpc_error(request_id, -32602, pack_selector_error)
         pack_id = arguments["pack_id"].strip()
         if pack_id.lower() in set(tool_family_ids()) | set(tool_family_alias_ids()):
             return _jsonrpc_error(request_id, -32602, "Geometry families use get_geography(family_id=...) instead of get_pack")
@@ -6192,9 +6230,23 @@ async def mcp_endpoint(request: Request, pack_id: str | None = None):
             return _finish_data_helper(request, tool_name=tool_name, started_at=helper_started_at,
                                        payload={"error": "Pack not found", "pack_id": pack_id},
                                        rpc_request_id=request_id, is_error=True, error_code="pack_not_found")
-        payload = mcp_full_pack_detail(payload, catalog="data")
+        from mapmover.data_loading import load_source_metadata
+        if "source_id" in arguments:
+            payload = mcp_pack_source_detail(payload, source_id=arguments["source_id"].strip(),
+                                             source_metadata=load_source_metadata)
+        elif "metrics" in arguments:
+            payload = mcp_pack_metric_detail(payload, metric_ids=[m.strip() for m in arguments["metrics"]],
+                                             source_metadata=load_source_metadata)
+        elif "search" in arguments:
+            payload = mcp_pack_metric_search(payload, query=arguments["search"].strip(),
+                                             source_metadata=load_source_metadata)
+        else:
+            payload = mcp_full_pack_detail(payload, catalog="data", source_metadata=load_source_metadata)
+        pack_error = payload.get("error") if isinstance(payload, dict) else None
         return _finish_data_helper(request, tool_name=tool_name, started_at=helper_started_at,
-                                   payload=payload, rpc_request_id=request_id)
+                                   payload=payload, rpc_request_id=request_id,
+                                   is_error=bool(pack_error),
+                                   error_code=pack_error.get("code") if isinstance(pack_error, dict) else None)
 
     if tool_name == "get_live_earthquake_events":
         rate_limit_response = _live_tool_rate_limit_response(request, tool_name, request_id)

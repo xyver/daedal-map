@@ -893,7 +893,7 @@ class BlindCallerHelpTests(unittest.TestCase):
 
         examples = {
             "get_catalog": {"catalog": "data", "detail": "lite", "packs": []},
-            "get_pack": {"catalog": "data", "pack_id": "currency", "detail": "lite"},
+            "get_pack": {"catalog": "data", "pack_id": "currency", "detail": "sources"},
             "get_data": {"source_id": "example", "row_count": 0, "rows": []},
             "get_event": {"event_id": "event-1", "pack_id": "earthquakes", "event": {}},
         }
@@ -956,7 +956,7 @@ class BlindCallerHelpTests(unittest.TestCase):
         self.assertEqual(multi_source["next_step"], {
             "action": "inspect_pack_query_contract",
             "tool": "get_pack",
-            "arguments": {"pack_id": "world_bank_wdi", "detail": "full"},
+            "arguments": {"pack_id": "world_bank_wdi"},
         })
         self.assertIn("does not accept source_id", multi_source["error"]["retry_hint"])
 

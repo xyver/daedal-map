@@ -57,7 +57,7 @@ class StdioToolHelpTests(unittest.TestCase):
         self.assertEqual(payload["help_topic"], "overview")
         self.assertEqual(
             [step["tool"] for step in payload["workflow"]["steps"]],
-            ["get_catalog", "get_pack", "get_data"],
+            ["get_catalog", "get_pack", "get_pack", "get_data"],
         )
         self.assertEqual(payload["next_step"]["tool"], "get_catalog")
         self.assertIn("loc_ids", payload["loc_id_boundary"]["rule"])
