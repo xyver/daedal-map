@@ -102,6 +102,19 @@ def _source_material_record(source_id: str) -> dict[str, Any]:
     return {}
 
 
+def _pack_material_record(pack_id: str) -> dict[str, Any]:
+    """Read one pack's generated catalog record (name, version) for citations."""
+    from mapmover.catalog_surface import catalog_surface_scope
+
+    if not pack_id:
+        return {}
+    with catalog_surface_scope("api"):
+        for pack in (load_catalog() or {}).get("packs", []):
+            if isinstance(pack, dict) and str(pack.get("pack_id") or "").strip() == pack_id:
+                return pack
+    return {}
+
+
 def _get_request_ip(request: Request) -> str | None:
     return get_client_ip(request)
 
@@ -1367,6 +1380,15 @@ async def execute_query_dataset_payload(req: Request, payload: dict[str, Any]) -
         "metric_availability": metric_response_contract["metric_availability"],
         "response_obligations": metric_response_contract["response_obligations"],
     }
+    from material_policy_shared import query_result_citation
+
+    result_citation = query_result_citation(
+        source_material_record,
+        _pack_material_record(str(spec.pack_id or "")),
+        accessed=datetime.now(timezone.utc).date().isoformat(),
+    )
+    if result_citation:
+        payload_out["citation"] = result_citation
     if include_provenance:
         payload_out["provenance"] = {
             "pack_id": spec.pack_id,
