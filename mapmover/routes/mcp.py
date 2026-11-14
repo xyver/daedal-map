@@ -476,6 +476,25 @@ RETIRED_DATA_TOOL_REPLACEMENTS: dict[str, dict[str, Any]] = {
     "get_disaster_links_for_event": {"tool": "get_event"},
     "search_disaster_links": {"tool": "get_event"},
     "get_disaster_link_chain": {"tool": "get_event"},
+    # Retired geography names from the pre-2026-10 public surface.
+    "resolve_reference": {"tool": "convert_reference"},
+    "resolve_points": {"tool": "resolve_point", "arguments": {"points": []}},
+    "loc_id_info": {"tool": "get_loc_id_info"},
+    "list_reference_systems": {"tool": "get_catalog", "arguments": {"catalog": "geometry"}},
+    "read_geometry_catalog": {"tool": "get_catalog", "arguments": {"catalog": "geometry"}},
+    "get_geometry": {"tool": "get_shape"},
+}
+
+# Builder tools that exist in code but are deliberately unpublished until their
+# large-job contract and release gates are admitted. They are not renamed, so
+# callers get "not public" plus the closest bounded public alternative.
+PAUSED_TOOL_ALTERNATIVES: dict[str, str | None] = {
+    "estimate_conversion_job": "convert_reference",
+    "create_conversion_job": "convert_reference",
+    "estimate_geometry_package": "get_shape",
+    "create_geometry_export": "get_shape",
+    "resolve_loc_id_scope": "identify_reference_system",
+    "get_job_status": None,
 }
 
 
@@ -5544,7 +5563,6 @@ async def _execute_get_event_tool(
         )
     try:
         include = [str(value).strip().lower() for value in (payload.get("include") or [])]
-        requested_limit = int(payload.get("limit") or 100)
         base_limit = _tool_batch_item_limit("get_event", default=500)
         geometry_policy = tool_sub_limit("get_event", "geometry")
         geometry_limit_env = str(geometry_policy.get("limit_env") or "").strip()
@@ -5553,6 +5571,9 @@ async def _execute_get_event_tool(
             or int(geometry_policy.get("free_item_limit") or base_limit)
         )
         effective_limit = min(base_limit, geometry_limit) if "geometry" in include else base_limit
+        # An omitted limit takes the default capped at the ceiling that applies,
+        # so include=["geometry"] without a limit no longer fails its own check.
+        requested_limit = int(payload.get("limit") or min(100, effective_limit))
         if requested_limit < 1 or requested_limit > effective_limit:
             limit_kind = "geometry expansion" if "geometry" in include else "event companion rows"
             return _jsonrpc_response(
@@ -5941,6 +5962,23 @@ async def mcp_endpoint(request: Request, pack_id: str | None = None):
                     },
                 },
             )
+        if tool_name in PAUSED_TOOL_ALTERNATIVES:
+            alternative = PAUSED_TOOL_ALTERNATIVES[tool_name]
+            paused_data: dict[str, Any] = {
+                "error": {
+                    "code": "tool_not_public",
+                    "message": f"Tool '{tool_name}' is paused and not part of the public MCP surface.",
+                },
+                "guidance": {
+                    "action": "use_public_alternative" if alternative else "refresh_tools",
+                    "message": "Refresh tools/list for the current public tools.",
+                },
+            }
+            if alternative:
+                paused_data["alternative"] = {"tool": alternative}
+                paused_data["next_step"] = {"tool": "get_tool_help", "arguments": {"tool_name": alternative}}
+            suffix = f"; the closest public tool is '{alternative}'" if alternative else ""
+            return _jsonrpc_error(request_id, -32601, f"Tool '{tool_name}' is not public{suffix}", data=paused_data)
         return _jsonrpc_error(request_id, -32601, f"Tool '{tool_name}' not found")
     if not _tool_allowed_for_facade(tool_name, normalized_pack_id):
         return _jsonrpc_error(request_id, -32601, f"Tool '{tool_name}' is not available on this MCP facade")

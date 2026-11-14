@@ -1116,6 +1116,57 @@ class TrustedArtifactBypassTests(unittest.TestCase):
         self.assertEqual(result["structuredContent"]["limit"], 2)
         event_lookup.assert_not_called()
 
+    def test_get_event_geometry_without_limit_uses_the_capped_default(self) -> None:
+        event_payload = {
+            "event_id": "USA-HRCN-example", "pack_id": "hurricanes", "source_id": "hurricanes",
+            "event_type": "hurricane", "schema_class": "event_track", "event": {"event_id": "USA-HRCN-example"},
+            "available": {"geometry": True}, "included": ["geometry"], "geometry": {"frames": []},
+        }
+        with (
+            mock.patch.dict("os.environ", {"MCP_TOOL_GEOMETRY_BATCH_LIMIT_GET_EVENT": "25"}, clear=False),
+            mock.patch("mapmover.routes.mcp.rate_limiter.check", return_value=(True, 0)),
+            mock.patch("mapmover.routes.mcp.get_event_payload", return_value=event_payload) as event_lookup,
+            mock.patch(
+                "mapmover.routes.mcp._pack_material_effective_access",
+                return_value={"allow": True, "settlement_required": False, "access_lane": "free"},
+            ),
+        ):
+            envelope = _tool_call_envelope(
+                self.client,
+                "get_event",
+                {"event_id": "USA-HRCN-example", "pack_id": "hurricanes", "source_id": "hurricanes",
+                 "include": ["geometry"]},
+            )
+
+        result = envelope["result"]
+        self.assertFalse(result.get("isError"))
+        event_lookup.assert_called_once()
+        self.assertEqual(event_lookup.call_args.kwargs["limit"], 25)
+
+    def test_retired_geography_and_paused_tools_name_a_public_tool(self) -> None:
+        retired = {
+            "resolve_reference": "convert_reference",
+            "resolve_points": "resolve_point",
+            "loc_id_info": "get_loc_id_info",
+            "list_reference_systems": "get_catalog",
+            "read_geometry_catalog": "get_catalog",
+            "get_geometry": "get_shape",
+        }
+        with mock.patch("mapmover.routes.mcp.rate_limiter.check", return_value=(True, 0)):
+            for name, replacement in retired.items():
+                with self.subTest(tool=name):
+                    data = _tool_call_envelope(self.client, name, {})["error"]["data"]
+                    self.assertEqual(data["error"]["code"], "tool_retired")
+                    self.assertEqual(data["replacement"]["tool"], replacement)
+            paused = _tool_call_envelope(self.client, "create_conversion_job", {})["error"]
+            job_status = _tool_call_envelope(self.client, "get_job_status", {})["error"]
+            unknown = _tool_call_envelope(self.client, "definitely_not_a_tool", {})["error"]
+        self.assertEqual(paused["data"]["error"]["code"], "tool_not_public")
+        self.assertEqual(paused["data"]["alternative"], {"tool": "convert_reference"})
+        self.assertEqual(job_status["data"]["error"]["code"], "tool_not_public")
+        self.assertNotIn("alternative", job_status["data"])
+        self.assertEqual(unknown["message"], "Tool 'definitely_not_a_tool' not found")
+
     def test_trusted_token_lifts_the_cap_on_every_capped_tool(self) -> None:
         env = {"ARTIFACT_ACCESS_TOKENS": f"qa={self.token}"}
         cases = {
