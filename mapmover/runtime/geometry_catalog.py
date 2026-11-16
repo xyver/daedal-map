@@ -8,6 +8,7 @@ API, and MCP path the same name -> canonical ``loc_id`` lookup.
 from __future__ import annotations
 
 import json
+import os
 import re
 from fnmatch import fnmatchcase
 from functools import lru_cache
@@ -96,7 +97,11 @@ def _load_geometry_catalog_cached(_epoch: int) -> dict[str, Any]:
 
     if not _is_cloud_mode():
         try:
-            payload = json.loads(CATALOG_PATH.read_text(encoding="utf-8"))
+            candidate = str(os.getenv("GEOGRAPHY_GEOMETRY_CATALOG_CANDIDATE", "")).strip()
+            path = Path(candidate).resolve() if candidate else CATALOG_PATH
+            if candidate and not path.is_relative_to(GEOMETRY_DIR.parent.resolve()):
+                raise ValueError("candidate geometry catalog escaped DATA_ROOT")
+            payload = json.loads(path.read_text(encoding="utf-8"))
             if isinstance(payload, dict):
                 return _merge_crosswalks(payload)
         except (OSError, json.JSONDecodeError):

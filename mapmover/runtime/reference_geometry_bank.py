@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 import pandas as pd
+import pyarrow.parquet as pq
 from pyproj import CRS, Transformer
 from pyproj.exceptions import ProjError
 from shapely.geometry import mapping, shape
@@ -95,6 +96,20 @@ def _safe_partition_path(bank_root: Path, value: str | None) -> Path | None:
     except ValueError:
         return None
     return path
+
+
+def inline_reference_wkb_bytes(loc_id: str) -> int:
+    """Read an exact selected Global cell's WKB size before GeoJSON expansion."""
+    identity_rows = identities([loc_id], require_route=True)
+    if len(identity_rows) != 1:
+        return 0
+    identity = identity_rows[0]
+    bank = _safe_bank_root(identity.get("geometry_bank"))
+    if bank is None or bank.suffix.lower() != ".parquet":
+        return 0
+    geometry_id = str(identity.get("geometry_loc_id") or loc_id)
+    table = pq.read_table(bank, columns=["geometry"], filters=[("loc_id", "=", geometry_id)])
+    return sum(len(value) for value in table.column("geometry").to_pylist() if value is not None)
 
 
 def _read_shape_partition(path: Path, loc_ids: list[str]) -> pd.DataFrame:

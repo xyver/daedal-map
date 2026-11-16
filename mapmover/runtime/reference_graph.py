@@ -370,7 +370,13 @@ def _country_discovery_index_current(country: str, cloud_mode: bool, root_text: 
 
 def global_reference_graph_root() -> Path | None:
     """Return the complete global graph used after country authority."""
-    root = (DATA_ROOT / GLOBAL_GRAPH_RELATIVE).resolve()
+    candidate = str(os.getenv("GEOGRAPHY_GLOBAL_REFERENCE_GRAPH_ROOT", "")).strip()
+    if candidate and not is_cloud_mode():
+        root = Path(candidate).resolve()
+        if not root.is_relative_to(DATA_ROOT.resolve()):
+            raise ValueError("candidate Global graph root escaped DATA_ROOT")
+    else:
+        root = (DATA_ROOT / GLOBAL_GRAPH_RELATIVE).resolve()
     manifest = _graph_json(root / "manifest.json") or {}
     if manifest.get("graph_scope") != "global":
         return None
@@ -1342,6 +1348,15 @@ def indexed_public_alias_candidates(loc_ids: list[str]) -> dict[str, list[dict[s
     by_country: dict[str, list[str]] = {}
     for value in requested:
         by_country.setdefault(value.split("-", 1)[0], []).append(value)
+    global_values = by_country.pop("GLOBAL", [])
+    if global_values and global_reference_graph_root() is None:
+        return None
+    global_root = global_reference_graph_root()
+    for country, values in list(by_country.items()):
+        if country not in roots and global_root is not None and _route_paths(
+            global_root, IDENTITY_ROUTE_INDEX, "loc_id", values,
+        ):
+            by_country.pop(country)
     if any(country not in roots or not _country_discovery_index_current(
         country, is_cloud_mode(), str(roots[country]),
     ) for country in by_country):

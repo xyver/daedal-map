@@ -4702,6 +4702,23 @@ async def _execute_get_geometry_tool(request: Request, arguments: dict[str, Any]
         from mapmover.runtime.admin_spine_query import (
             admin0_inline_geometry_bytes, layout_available,
         )
+        from mapmover.runtime.reference_geometry_bank import inline_reference_wkb_bytes
+
+        for loc_id in loc_ids:
+            if not str(loc_id).upper().startswith("GLOBAL-"):
+                continue
+            estimated_bytes = await run_mcp_blocking(
+                "get_geometry_global_size_preflight", inline_reference_wkb_bytes, loc_id,
+            )
+            if estimated_bytes > 16 * 1024 * 1024:
+                error_payload = _batch_error_payload(
+                    request_id=request_id, batch_id=batch_id,
+                    code="geometry_too_large_for_inline",
+                    message="Exact Global geometry exceeds the bounded inline response size; use its Detail download.",
+                    loc_id_count=len(loc_ids),
+                )
+                error_payload["estimated_wkb_bytes"] = estimated_bytes
+                return _jsonrpc_response(_tool_result(error_payload, is_error=True), rpc_request_id)
 
         for row in access_rows or []:
             country_id = str(row.get("loc_id") or "").strip().upper()
