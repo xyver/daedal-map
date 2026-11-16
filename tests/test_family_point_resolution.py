@@ -14,6 +14,54 @@ from mapmover.runtime.family_point_resolution import (
 
 
 class FamilyPointResolutionTests(unittest.TestCase):
+    def test_global_family_uses_selected_bounded_route_and_exact_containment(self):
+        catalog = {
+            "domain_profiles": [{"release_unit_id": "GLOBAL", "family_ids": ["ecological_region"],
+                                 "active_release": {"release_id": "global_geometry_1_2_0"}}],
+            "runtime_query_layouts": {"family_points": {"GLOBAL": {"ecological_region": {
+                "scope_id": "GLOBAL", "family": "ecological_region",
+                "source_release_id": "global_geometry_1_2_0", "index_path": "point_index.parquet",
+            }}}},
+        }
+        candidates = pd.DataFrame([{
+            "point_position": 0, "loc_id": "GLOBAL-RESOLVE-1",
+            "shape_path": "geometry/global/shapes.parquet",
+            "geometry_loc_id": "GLOBAL-RESOLVE-1", "family": "ecological_region",
+        }])
+        shapes = pd.DataFrame([{
+            "loc_id": "GLOBAL-RESOLVE-1", "name": "Test ecoregion",
+            "family": "ecological_region", "geometry": mapping(box(0, 0, 2, 2)),
+        }])
+        with (
+            patch("mapmover.runtime.family_point_resolution.load_geometry_catalog", return_value=catalog),
+            patch("mapmover.runtime.family_point_resolution.parquet_available", return_value=True),
+            patch("mapmover.runtime.family_point_resolution.read_bbox_candidates_for_points",
+                  return_value=candidates),
+            patch("mapmover.runtime.family_point_resolution.load_routed_family_geometry",
+                  return_value=shapes) as routed,
+            patch("mapmover.runtime.family_point_resolution.load_reference_graph_geometry") as graph,
+        ):
+            result = resolve_family_points("GLOBAL", ["ecological_region"],
+                                           [{"lon": 1, "lat": 1}])[0]["ecological_region"]
+        self.assertEqual(result["status"], "matched")
+        self.assertEqual(result["matches"][0]["loc_id"], "GLOBAL-RESOLVE-1")
+        routed.assert_called_once()
+        graph.assert_not_called()
+
+    def test_global_family_without_selected_route_fails_closed(self):
+        catalog = {"domain_profiles": [{"release_unit_id": "GLOBAL",
+                                        "family_ids": ["ecological_region"],
+                                        "active_release": {"release_id": "global_geometry_1_2_0"}}]}
+        with (
+            patch("mapmover.runtime.family_point_resolution.load_geometry_catalog", return_value=catalog),
+            patch("mapmover.runtime.family_point_resolution.read_bbox_candidates_for_points") as read,
+        ):
+            result = resolve_family_points("GLOBAL", ["ecological_region"],
+                                           [{"lon": 1, "lat": 1}])[0]["ecological_region"]
+        self.assertEqual(result["status"], "family_lookup_error")
+        self.assertEqual(result["error"]["code"], "family_shape_index_missing")
+        read.assert_not_called()
+
     def test_cancelled_predicate_route_stops_before_next_file_or_shapes(self):
         stop_event = threading.Event()
 
