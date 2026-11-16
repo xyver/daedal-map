@@ -159,27 +159,16 @@ def resolve_family_points(
         return results
 
     catalog = load_geometry_catalog()
-    if country == "GLOBAL":
-        domain_profile = next((
-            row for row in catalog.get("domain_profiles") or []
-            if row.get("release_unit_id") == "GLOBAL"
-        ), {})
-        available = set(domain_profile.get("family_ids") or [])
-        # Global families need a selected bounded route. Never fall back to a
-        # scan of the candidate's large family shape banks.
-        artifacts = {}
-        active_release = str((domain_profile.get("active_release") or {}).get("release_id") or "")
-    else:
-        capability = country_capability_record(catalog, country) or {}
-        available = set(capability.get("available_family_ids") or [])
-        artifacts = family_artifacts(country)
-        active_release = next((
-            str((item.get("active_release") or {}).get("release_id") or "")
-            for item in catalog.get("country_profiles") or []
-            if item.get("country_code") == country
-        ), "")
+    capability = country_capability_record(catalog, country) or {}
+    available = set(capability.get("available_family_ids") or [])
+    artifacts = family_artifacts(country)
     point_layouts = ((catalog.get("runtime_query_layouts") or {}).get("family_points") or {})
     country_layouts = point_layouts.get(country) or {}
+    active_release = next((
+        str((item.get("active_release") or {}).get("release_id") or "")
+        for item in catalog.get("country_profiles") or []
+        if item.get("country_code") == country
+    ), "")
 
     for family in requested:
         if stop_event is not None and stop_event.is_set():
@@ -209,9 +198,7 @@ def resolve_family_points(
             continue
         predicate_paths = family_files.get("predicate_paths") or []
         exact_paths = family_files.get("exact_paths") or []
-        if (country == "GLOBAL" and not selected_layout) or (
-            not selected_layout and (not predicate_paths or not exact_paths)
-        ):
+        if not selected_layout and (not predicate_paths or not exact_paths):
             for result in results:
                 result[family] = {
                     "family": family,
@@ -230,18 +217,16 @@ def resolve_family_points(
             if selected_layout:
                 mark_mcp_stage("family_index_candidates")
                 index_path = str(selected_layout.get("index_path") or "").strip()
-                relative_index = Path(index_path.replace("\\", "/"))
-                if (selected_layout.get("scope_id", selected_layout.get("country")) != country
+                if (selected_layout.get("country") != country
                         or selected_layout.get("family") != family
                         or selected_layout.get("source_release_id") != active_release
-                        or not active_release or not index_path
-                        or relative_index.is_absolute() or ".." in relative_index.parts):
+                        or not index_path):
                     raise ValueError("Declared family point route is incomplete or mismatched")
-                if not parquet_available(DATA_ROOT / relative_index):
+                if not parquet_available(DATA_ROOT / Path(index_path)):
                     raise FileNotFoundError("Declared family point index is unavailable")
                 record_mcp_file(index_path)
                 candidates = read_bbox_candidates_for_points(
-                    DATA_ROOT / relative_index, point_rows,
+                    DATA_ROOT / Path(index_path), point_rows,
                     columns=POINT_INDEX_COLUMNS,
                 )
                 candidate_rows = candidates.to_dict("records")
