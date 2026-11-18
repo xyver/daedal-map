@@ -707,7 +707,9 @@ class CatalogDrivenPackFacadeTests(unittest.TestCase):
     def test_static_data_pack_registry_cannot_override_catalog_admission(self) -> None:
         with mock.patch("mapmover.routes.mcp.load_api_catalog", return_value={"packs": []}):
             response = self.client.get("/mcp/currency")
-        self.assertEqual(response.status_code, 404)
+        # Not admitted by the catalog, so not served. "currency" is also a
+        # retired per-pack endpoint, which answers 410 instead of 404.
+        self.assertEqual(response.status_code, 410)
 
     def test_catalog_text_overrides_static_data_pack_profile(self) -> None:
         catalog = {"packs": [{

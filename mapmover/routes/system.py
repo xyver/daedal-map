@@ -1808,6 +1808,12 @@ def _normalize_mcp_facade_pack_id(pack_id: str | None) -> str | None:
     return _normalize_pack_id(pack_id)
 
 
+def _unknown_mcp_facade_response(pack_id: str | None) -> JSONResponse:
+    from mapmover.routes.mcp import unknown_facade_response
+
+    return unknown_facade_response(pack_id)
+
+
 def _mcp_remote_path(pack_id: str | None = None) -> str:
     normalized = _normalize_mcp_facade_pack_id(pack_id)
     return f"/mcp/{normalized}" if normalized else "/mcp"
@@ -2653,7 +2659,7 @@ async def get_openai_apps_challenge():
 async def get_pack_mcp_server_card(pack_id: str):
     normalized = _normalize_mcp_facade_pack_id(pack_id)
     if not normalized:
-        return JSONResponse({"error": "Pack MCP facade not found"}, status_code=404)
+        return _unknown_mcp_facade_response(pack_id)
     response = JSONResponse(_build_mcp_server_card_payload(normalized))
     response.headers["Cache-Control"] = "no-store"
     return response
@@ -2710,7 +2716,7 @@ async def get_mcp_server_json():
 async def get_pack_mcp_server_json(pack_id: str):
     normalized = _normalize_mcp_facade_pack_id(pack_id)
     if not normalized:
-        return JSONResponse({"error": "Pack MCP facade not found"}, status_code=404)
+        return _unknown_mcp_facade_response(pack_id)
     response = JSONResponse(_build_mcp_server_json_payload(normalized))
     response.headers["Cache-Control"] = "no-store"
     return response

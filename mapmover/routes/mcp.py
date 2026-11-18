@@ -5712,7 +5712,7 @@ async def mcp_endpoint_info(pack_id: str | None = None):
         pack_id = None
     normalized_pack_id = _normalize_pack_id(pack_id)
     if pack_id and not normalized_pack_id:
-        return JSONResponse({"error": "Pack MCP facade not found"}, status_code=404)
+        return unknown_facade_response(pack_id)
     if normalized_pack_id == "free":
         how_to_start = [
             "Call get_catalog, then get_geography for a selected family or get_pack for a data pack.",
@@ -5751,6 +5751,32 @@ async def mcp_endpoint_info(pack_id: str | None = None):
     response.headers["MCP-Protocol-Version"] = MCP_PROTOCOL_VERSION
     response.headers["Cache-Control"] = "no-store"
     return response
+
+
+# Per-pack facade slugs that were listed in registries and directories and are
+# no longer served as their own endpoints. Stale copies of those listings keep
+# calling them (53k requests in the 30 days to 2026-11-18). 410 Gone tells
+# crawlers the endpoint is retired, where 404 reads as possibly temporary; the
+# body names the endpoint to use. The packs themselves are catalog-governed:
+# if the catalog admits one again, normalization succeeds and this response is
+# never reached, but per-pack endpoints are no longer advertised entry points.
+RETIRED_MCP_FACADES = frozenset({"currency", "worldpop", "distributed_manufacturing"})
+
+
+def unknown_facade_response(pack_id: str | None) -> JSONResponse:
+    slug = str(pack_id or "").strip().lower()
+    if slug in RETIRED_MCP_FACADES:
+        response = JSONResponse(
+            {
+                "error": "This per-pack MCP endpoint is retired. Use the main endpoint and get_catalog.",
+                "retired_facade": slug,
+                "use_instead": "https://app.daedalmap.com/mcp",
+            },
+            status_code=410,
+        )
+        response.headers["Cache-Control"] = "public, max-age=86400"
+        return response
+    return JSONResponse({"error": "Pack MCP facade not found"}, status_code=404)
 
 
 # --- Modern (2026-07-28) stateless protocol ---------------------------------
@@ -6021,7 +6047,7 @@ async def _mcp_endpoint_impl(request: Request, pack_id: str | None = None):
         **({"mcp_source_registry": source_registry} if source_registry else {}),
     }
     if pack_id and not normalized_pack_id:
-        return JSONResponse({"error": "Pack MCP facade not found"}, status_code=404)
+        return unknown_facade_response(pack_id)
     if not _mcp_origin_allowed(request):
         return JSONResponse({"error": "Origin not allowed"}, status_code=403)
 

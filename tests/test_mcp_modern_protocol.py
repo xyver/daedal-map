@@ -209,6 +209,27 @@ class ModernProtocolTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["error"]["code"], -32601)
 
+    # --- retired facades --------------------------------------------------------
+
+    def test_retired_facades_answer_410_and_point_to_the_umbrella(self) -> None:
+        from mapmover.routes.system import router as system_router
+
+        app = FastAPI()
+        app.include_router(mcp_router)
+        app.include_router(system_router)
+        client = TestClient(app)
+        for slug in ("currency", "worldpop", "distributed_manufacturing"):
+            for response in (
+                client.post(f"/mcp/{slug}", json={"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}),
+                client.get(f"/mcp/{slug}"),
+                client.get(f"/mcp/{slug}/server.json"),
+                client.get(f"/.well-known/mcp/{slug}/server-card.json"),
+            ):
+                self.assertEqual(response.status_code, 410, (slug, response.request.url))
+                self.assertEqual(response.json()["use_instead"], "https://app.daedalmap.com/mcp")
+        self.assertEqual(client.post("/mcp/never_existed", json={"jsonrpc": "2.0", "id": 1, "method": "ping"}).status_code, 404)
+        self.assertEqual(client.get("/mcp/never_existed/server.json").status_code, 404)
+
     # --- rollback switch -------------------------------------------------------
 
     def test_disabled_modern_protocol_restores_legacy_fallback_trigger(self) -> None:
