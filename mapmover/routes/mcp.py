@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import hashlib
 import math
@@ -492,8 +493,17 @@ def _guard_mcp_execution(tool_name: str):
 
     return decorate
 
+# This endpoint is dual-era (MCP 2026-07-28, "Versioning and Compatibility"):
+# - legacy revisions open with an `initialize` handshake and are served as before;
+# - modern revisions carry protocol version, client identity, and capabilities
+#   in every request's `_meta` and are served statelessly.
+# MCP_PROTOCOL_VERSION stays the default answer to an `initialize` whose
+# requested version this server does not recognize.
 MCP_PROTOCOL_VERSION = "2025-06-18"
-SUPPORTED_PROTOCOL_VERSIONS = {MCP_PROTOCOL_VERSION, "2024-11-05"}
+SUPPORTED_PROTOCOL_VERSIONS = {"2025-11-25", MCP_PROTOCOL_VERSION, "2025-03-26", "2024-11-05"}
+MCP_MODERN_PROTOCOL_VERSION = "2026-07-28"
+MODERN_PROTOCOL_VERSIONS = {MCP_MODERN_PROTOCOL_VERSION}
+ADVERTISED_PROTOCOL_VERSIONS = [MCP_MODERN_PROTOCOL_VERSION, "2025-11-25", MCP_PROTOCOL_VERSION, "2025-03-26", "2024-11-05"]
 SERVER_INFO = {
     "name": "com.daedalmap/county-map",
     "title": "DaedalMap Geographic Data and Tools",
@@ -5743,6 +5753,190 @@ async def mcp_endpoint_info(pack_id: str | None = None):
     return response
 
 
+# --- Modern (2026-07-28) stateless protocol ---------------------------------
+# Spec: basic/versioning, basic/index (_meta), basic/transports/streamable-http,
+# server/discover, server/utilities/caching.
+META_PROTOCOL_VERSION = "io.modelcontextprotocol/protocolVersion"
+META_CLIENT_INFO = "io.modelcontextprotocol/clientInfo"
+META_CLIENT_CAPABILITIES = "io.modelcontextprotocol/clientCapabilities"
+META_SERVER_INFO = "io.modelcontextprotocol/serverInfo"
+ERROR_HEADER_MISMATCH = -32020
+ERROR_UNSUPPORTED_PROTOCOL_VERSION = -32022
+# Legacy-only methods that 2026-07-28 removed; a modern request for them is an
+# unknown method (HTTP 404, -32601).
+MODERN_REMOVED_METHODS = frozenset({
+    "ping", "logging/setLevel", "resources/subscribe", "resources/unsubscribe",
+    "notifications/initialized", "notifications/cancelled",
+})
+# Results that MUST carry ttlMs and cacheScope. Lists and resources are the
+# same for every caller on a facade, so they are public.
+MODERN_CACHEABLE_METHODS = frozenset({
+    "tools/list", "prompts/list", "resources/list", "resources/templates/list", "resources/read",
+})
+MODERN_LIST_TTL_MS = 15 * 60 * 1000
+MODERN_DISCOVER_TTL_MS = 60 * 60 * 1000
+# Request body field mirrored in the Mcp-Name header, per method.
+MODERN_NAME_HEADER_SOURCES = {"tools/call": "name", "prompts/get": "name", "resources/read": "uri"}
+
+
+def _modern_protocol_enabled() -> bool:
+    """Rollback switch. With MCP_MODERN_PROTOCOL_ENABLED=0 the endpoint is legacy-only."""
+    return str(os.getenv("MCP_MODERN_PROTOCOL_ENABLED", "1")).strip().lower() not in {"0", "false", "no", "off"}
+
+
+def _decode_mcp_header_value(raw: str) -> str | None:
+    """Undo the `=?base64?...?=` sentinel encoding used for Mcp-Name values."""
+    if raw.startswith("=?base64?") and raw.endswith("?="):
+        try:
+            return base64.b64decode(raw[len("=?base64?"):-2], validate=True).decode("utf-8")
+        except Exception:
+            return None
+    return raw
+
+
+def _modern_error(request_id: Any, code: int, message: str, *, data: dict[str, Any] | None = None,
+                  status_code: int = 400) -> JSONResponse:
+    response = _jsonrpc_error(request_id, code, message, data=data, status_code=status_code)
+    response.headers["MCP-Protocol-Version"] = MCP_MODERN_PROTOCOL_VERSION
+    return response
+
+
+def _resolve_request_era(
+    request: Request, method: str, params: dict[str, Any], request_id: Any, protocol_header: str,
+) -> tuple[str | None, JSONResponse | None]:
+    """Decide how one request is served: (modern_version, None), (None, None) for
+    legacy, or (None, error_response).
+
+    `initialize` always selects legacy semantics. A request is modern when its
+    `_meta` declares a protocol version or its MCP-Protocol-Version header names
+    a version this server does not serve as legacy.
+    """
+    if method == "initialize":
+        return None, None
+    meta = params.get("_meta") if isinstance(params.get("_meta"), dict) else {}
+    meta_version = str(meta.get(META_PROTOCOL_VERSION) or "").strip()
+    header_is_legacy = (not protocol_header) or protocol_header in SUPPORTED_PROTOCOL_VERSIONS
+    if not _modern_protocol_enabled():
+        if not header_is_legacy:
+            return None, _jsonrpc_error(
+                request_id, -32000, "Unsupported protocol version",
+                data={"supported": sorted(SUPPORTED_PROTOCOL_VERSIONS)}, status_code=400,
+            )
+        return None, None
+    if not meta_version and header_is_legacy:
+        return None, None
+    if meta_version and protocol_header and meta_version != protocol_header:
+        return None, _modern_error(
+            request_id, ERROR_HEADER_MISMATCH,
+            f"Header mismatch: MCP-Protocol-Version '{protocol_header}' does not match _meta protocolVersion '{meta_version}'",
+        )
+    requested = meta_version or protocol_header
+    if requested in SUPPORTED_PROTOCOL_VERSIONS:
+        # A legacy version declared in _meta: serve it with legacy semantics.
+        return None, None
+    if requested not in MODERN_PROTOCOL_VERSIONS:
+        return None, _modern_error(
+            request_id, ERROR_UNSUPPORTED_PROTOCOL_VERSION, "Unsupported protocol version",
+            data={"supported": list(ADVERTISED_PROTOCOL_VERSIONS), "requested": requested},
+        )
+    if not protocol_header:
+        return None, _modern_error(request_id, ERROR_HEADER_MISMATCH, "Header mismatch: MCP-Protocol-Version header is required")
+    if not meta_version:
+        return None, _modern_error(request_id, -32602, f"Invalid params: _meta is missing '{META_PROTOCOL_VERSION}'")
+    if not isinstance(meta.get(META_CLIENT_CAPABILITIES), dict):
+        return None, _modern_error(request_id, -32602, f"Invalid params: _meta is missing '{META_CLIENT_CAPABILITIES}'")
+    method_header = str(request.headers.get("Mcp-Method") or "").strip()
+    if method_header != method:
+        detail = "is required" if not method_header else f"value '{method_header}' does not match body method '{method}'"
+        return None, _modern_error(request_id, ERROR_HEADER_MISMATCH, f"Header mismatch: Mcp-Method header {detail}")
+    name_field = MODERN_NAME_HEADER_SOURCES.get(method)
+    if name_field:
+        expected = str(params.get(name_field) or "")
+        raw_name = request.headers.get("Mcp-Name")
+        decoded = _decode_mcp_header_value(raw_name) if raw_name is not None else None
+        if decoded != expected:
+            detail = "is required" if raw_name is None else "does not match the request body"
+            return None, _modern_error(request_id, ERROR_HEADER_MISMATCH, f"Header mismatch: Mcp-Name header {detail}")
+    return requested, None
+
+
+def _modern_client_analytics(params: dict[str, Any], version: str) -> dict[str, str]:
+    """Client identity declared on a modern request. Self-reported software, not a person."""
+    meta = params.get("_meta") if isinstance(params.get("_meta"), dict) else {}
+    info = meta.get(META_CLIENT_INFO) if isinstance(meta.get(META_CLIENT_INFO), dict) else {}
+    context = {"mcp_protocol_version": version}
+    name = str(info.get("name") or "").strip()[:100]
+    client_version = str(info.get("version") or "").strip()[:50]
+    if name:
+        context["mcp_client_name"] = name
+    if client_version:
+        context["mcp_client_version"] = client_version
+    return context
+
+
+def _modern_discover_response(pack_id: str | None, request_id: Any) -> JSONResponse:
+    return _jsonrpc_response(
+        {
+            "resultType": "complete",
+            "supportedVersions": list(ADVERTISED_PROTOCOL_VERSIONS),
+            "capabilities": {"tools": {}, "resources": {}, "prompts": {}},
+            "_meta": {META_SERVER_INFO: get_server_info(pack_id)},
+            "instructions": get_server_description(pack_id),
+            "ttlMs": MODERN_DISCOVER_TTL_MS,
+            "cacheScope": "public",
+        },
+        request_id,
+    )
+
+
+def _modernize_response(request: Request, response: Response) -> Response:
+    """Shape a handler's JSON-RPC response for a modern request.
+
+    Every result gains `resultType` and `_meta.serverInfo`; cacheable results
+    gain `ttlMs`/`cacheScope`; an unknown method becomes HTTP 404. Handlers stay
+    era-agnostic, so legacy responses are byte-for-byte unchanged.
+    """
+    version = getattr(request.state, "mcp_modern_version", None) or MCP_MODERN_PROTOCOL_VERSION
+    response.headers["MCP-Protocol-Version"] = version
+    if not isinstance(response, JSONResponse):
+        return response
+    try:
+        body = json.loads(bytes(response.body).decode("utf-8"))
+    except Exception:
+        return response
+    if not isinstance(body, dict):
+        return response
+    metadata = getattr(request.state, "analytics_metadata", {}) or {}
+    method = str(metadata.get("mcp_method") or "")
+    status_code = response.status_code
+    error = body.get("error")
+    if isinstance(error, dict):
+        if error.get("code") == -32601 and method != "tools/call" and status_code == 200:
+            status_code = 404
+        else:
+            return response
+    else:
+        result = body.get("result")
+        if not isinstance(result, dict):
+            return response
+        result = dict(result)
+        result.setdefault("resultType", "complete")
+        meta = dict(result["_meta"]) if isinstance(result.get("_meta"), dict) else {}
+        meta.setdefault(META_SERVER_INFO, get_server_info(getattr(request.state, "mcp_facade_pack_id", None)))
+        result["_meta"] = meta
+        if method in MODERN_CACHEABLE_METHODS:
+            result.setdefault("ttlMs", MODERN_LIST_TTL_MS)
+            result.setdefault("cacheScope", "public")
+        body["result"] = result
+    shaped = JSONResponse(body, status_code=status_code)
+    content_headers = {b"content-length", b"content-type"}
+    shaped.raw_headers = [
+        *(item for item in shaped.raw_headers if item[0].lower() in content_headers),
+        *(item for item in response.raw_headers if item[0].lower() not in content_headers),
+    ]
+    return shaped
+
+
 @router.post("/mcp")
 @router.post("/mcp/{pack_id}")
 @router.post("/mcp/account/{pack_id}")
@@ -5757,6 +5951,8 @@ async def mcp_endpoint(request: Request, pack_id: str | None = None):
         API_USAGE_EVENT_RECORDER.reset(token)
     if not recorded and not getattr(request.state, "mcp_usage_row_written", False):
         _log_unrecorded_tool_call_rejection(request, response, started_at)
+    if getattr(request.state, "mcp_modern_version", None):
+        response = _modernize_response(request, response)
     return response
 
 
@@ -5853,18 +6049,38 @@ async def _mcp_endpoint_impl(request: Request, pack_id: str | None = None):
     }
 
     protocol_header = str(request.headers.get("MCP-Protocol-Version") or "").strip()
-    if method != "initialize" and protocol_header and protocol_header not in SUPPORTED_PROTOCOL_VERSIONS:
-        return _jsonrpc_error(
-            request_id,
-            -32000,
-            "Unsupported protocol version",
-            data={"supported": sorted(SUPPORTED_PROTOCOL_VERSIONS)},
-            status_code=400,
-        )
+    modern_version, era_error = _resolve_request_era(request, method, params, request_id, protocol_header)
+    if era_error is not None:
+        return era_error
+    request.state.mcp_facade_pack_id = normalized_pack_id
+    if modern_version:
+        request.state.mcp_modern_version = modern_version
+        request.state.analytics_metadata = {
+            **getattr(request.state, "analytics_metadata", {}),
+            **_modern_client_analytics(params, modern_version),
+        }
+        if "id" not in body:
+            # 2026-07-28 defines no client notifications over Streamable HTTP.
+            response = Response(status_code=202)
+            response.headers["Cache-Control"] = "no-store"
+            return response
+        if method == "server/discover":
+            return _modern_discover_response(normalized_pack_id, request_id)
+        if method in MODERN_REMOVED_METHODS:
+            return _modern_error(request_id, -32601, f"Method '{method}' not found", status_code=404)
+    elif protocol_header:
+        request.state.analytics_metadata = {
+            **getattr(request.state, "analytics_metadata", {}),
+            "mcp_protocol_version": protocol_header,
+        }
 
     if method == "initialize":
         requested_version = str(params.get("protocolVersion") or "").strip()
         negotiated = requested_version if requested_version in SUPPORTED_PROTOCOL_VERSIONS else MCP_PROTOCOL_VERSION
+        request.state.analytics_metadata = {
+            **getattr(request.state, "analytics_metadata", {}),
+            "mcp_protocol_version": negotiated,
+        }
         client_info = params.get("clientInfo")
         if isinstance(client_info, dict):
             request.state.analytics_metadata = {
