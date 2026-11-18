@@ -8,6 +8,7 @@ import os
 import hashlib
 import time
 from concurrent.futures import ThreadPoolExecutor
+from contextvars import ContextVar
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Optional
@@ -228,6 +229,13 @@ def _should_mirror_route_event_to_control_plane(
     return False
 
 
+# Set by a caller (the MCP endpoint) to a fresh list before handling one
+# request. Every log_api_query_event call in that context appends to it, so
+# the caller can tell whether the request already wrote a usage row. A list is
+# used so calls made from worker threads with a copied context still register.
+API_USAGE_EVENT_RECORDER: ContextVar[list | None] = ContextVar("api_usage_event_recorder", default=None)
+
+
 def log_api_query_event(
     *,
     request_id: str,
@@ -255,6 +263,9 @@ def log_api_query_event(
     revenue_attributed_usdc_base_units: int | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> None:
+    recorder = API_USAGE_EVENT_RECORDER.get()
+    if recorder is not None:
+        recorder.append(source_id)
     if _runtime_analytics_disabled():
         return
     identity_meta = metadata if isinstance(metadata, dict) else {}

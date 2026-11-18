@@ -7,6 +7,7 @@ import math
 import numbers
 import os
 import re
+import secrets
 import time
 import threading
 import uuid
@@ -73,7 +74,12 @@ from mapmover.routes.disasters.related import (
     get_event_payload,
 )
 from mapmover.security import get_allowed_origins, get_client_ip, is_local_loopback_request, rate_limiter
-from mapmover.logging_analytics import hash_ip_for_analytics, log_api_query_event, logger
+from mapmover.logging_analytics import (
+    API_USAGE_EVENT_RECORDER,
+    hash_ip_for_analytics,
+    log_api_query_event,
+    logger,
+)
 from tool_access_shared import (
     FAMILY_GEOGRAPHY,
     tool_capability_id,
@@ -141,6 +147,117 @@ def _mcp_client_analytics_context(params: dict[str, Any]) -> dict[str, str]:
     if str(raw.get("surface") or "").strip() == "try_dataset":
         context["surface"] = "try_dataset"
     return context
+
+
+# Anonymous MCP connection grouping. The id is random, carries only the
+# client's self-reported software name (for example "claude-ai"), and exists
+# to tell one busy connection from many light ones in analytics. It is never
+# used for identity, access, limits, or billing, and a missing or unknown id is
+# always accepted so a client is never forced to reconnect.
+MCP_SESSION_HEADER = "Mcp-Session-Id"
+_MCP_SESSION_PATTERN = re.compile(r"^dm1\.([a-z0-9-]{1,40})\.([0-9a-f]{24})$")
+
+
+def _mcp_client_slug(client_info: Any) -> str:
+    name = str(client_info.get("name") or "") if isinstance(client_info, dict) else ""
+    slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")[:40].strip("-")
+    return slug or "unknown"
+
+
+def _new_mcp_session_id(client_info: Any) -> str:
+    return f"dm1.{_mcp_client_slug(client_info)}.{secrets.token_hex(12)}"
+
+
+def _mcp_session_analytics_context(request: Request) -> dict[str, str]:
+    raw = str(request.headers.get(MCP_SESSION_HEADER) or "").strip()
+    match = _MCP_SESSION_PATTERN.fullmatch(raw)
+    if not match:
+        return {}
+    return {"mcp_client_name": match.group(1), "mcp_session_id": match.group(2)}
+
+
+# What a tool call asked for, reduced to structural identifiers. Free text
+# (questions, identifier values, names), coordinates, and uploaded values are
+# never copied; only allowlisted fields, list lengths, and loc_id country
+# prefixes are kept.
+_ANALYTICS_TOKEN_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,79}$")
+_MCP_ARGUMENT_ANALYTICS_FIELDS: dict[str, tuple[str, ...]] = {
+    "get_catalog": ("catalog",),
+    "get_pack": ("pack_id",),
+    "get_tool_help": ("tool_name", "topic"),
+    "get_data": ("pack_id", "limit"),
+    "get_event": ("pack_id", "source_id", "geometry_mode"),
+    "get_geography": ("family_id", "scope_id", "year"),
+    "get_shape": ("include_polygon",),
+    "resolve_point": ("scope_id", "family", "water_kind"),
+    "resolve_deep_point": ("family", "target_admin_level"),
+    "resolve_bbox": ("scope_id",),
+    "convert_reference": (
+        "from_system", "to_system", "iso3", "country_hint", "target_admin_level",
+        "admin_level_hint", "crosswalk_id",
+    ),
+    "identify_reference_system": ("country_scope", "validation_scope"),
+    "identify_dataset_geography": ("country_scope",),
+}
+_MCP_ARGUMENT_LOC_ID_FIELDS = ("loc_id", "loc_ids", "shallow_loc_id", "left_loc_id", "right_loc_id")
+_MCP_ARGUMENT_COUNT_FIELDS = ("points", "items", "loc_ids", "identifiers", "columns", "corners")
+
+
+def _analytics_token(value: Any) -> str | None:
+    if value is None or isinstance(value, (dict, list)):
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    return text if _ANALYTICS_TOKEN_PATTERN.fullmatch(text) else "other"
+
+
+def _loc_id_country(value: Any) -> str | None:
+    text = str(value or "").strip() if isinstance(value, str) else ""
+    if not text:
+        return None
+    head = text.split("-", 1)[0].upper()
+    return head if re.fullmatch(r"[A-Z0-9_]{2,12}", head) else "other"
+
+
+def _mcp_argument_analytics(tool_name: str, arguments: Any) -> dict[str, Any]:
+    if not isinstance(arguments, dict):
+        return {}
+    summary: dict[str, Any] = {}
+    for key in _MCP_ARGUMENT_ANALYTICS_FIELDS.get(tool_name, ()):
+        value = arguments.get(key)
+        if isinstance(value, bool) or (isinstance(value, int) and abs(value) < 10**9):
+            summary[key] = value
+            continue
+        token = _analytics_token(value)
+        if token:
+            summary[key] = token
+    if tool_name == "get_data":
+        metrics = arguments.get("metrics")
+        if isinstance(metrics, list):
+            tokens = [token for token in (_analytics_token(item) for item in metrics[:10]) if token]
+            if tokens:
+                summary["metrics"] = tokens
+            summary["metrics_count"] = len(metrics)
+        filters = arguments.get("filters")
+        if isinstance(filters, dict) and filters:
+            summary["filter_keys"] = sorted(
+                token for token in (_analytics_token(key) for key in list(filters)[:20]) if token
+            )
+    countries: set[str] = set()
+    for key in _MCP_ARGUMENT_LOC_ID_FIELDS:
+        value = arguments.get(key)
+        for item in (value[:50] if isinstance(value, list) else [value]):
+            country = _loc_id_country(item)
+            if country:
+                countries.add(country)
+    if countries:
+        summary["loc_id_countries"] = sorted(countries)[:10]
+    for key in _MCP_ARGUMENT_COUNT_FIELDS:
+        value = arguments.get(key)
+        if isinstance(value, list):
+            summary[f"{key}_count"] = len(value)
+    return {"mcp_args": summary} if summary else {}
 
 
 def _reference_analytics_metadata(payload: dict[str, Any], result: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -1644,6 +1761,7 @@ def _log_mcp_tool_usage_event(
     request.state.analytics_pack_id = analytics_pack_id
     request.state.analytics_source_id = tool_name
     request.state.analytics_metadata = {key: value for key, value in merged_metadata.items() if value is not None}
+    request.state.mcp_usage_row_written = True
     try:
         ip_hash = hash_ip_for_analytics(get_client_ip(request))
         caller_identity = request_caller_identity(request, ip_hash=ip_hash)
@@ -5630,6 +5748,73 @@ async def mcp_endpoint_info(pack_id: str | None = None):
 @router.post("/mcp/account/{pack_id}")
 @router.post("/mcp/x402/{pack_id}")
 async def mcp_endpoint(request: Request, pack_id: str | None = None):
+    started_at = time.perf_counter()
+    recorded: list = []
+    token = API_USAGE_EVENT_RECORDER.set(recorded)
+    try:
+        response = await _mcp_endpoint_impl(request, pack_id)
+    finally:
+        API_USAGE_EVENT_RECORDER.reset(token)
+    if not recorded and not getattr(request.state, "mcp_usage_row_written", False):
+        _log_unrecorded_tool_call_rejection(request, response, started_at)
+    return response
+
+
+def _log_unrecorded_tool_call_rejection(request: Request, response: Response, started_at: float) -> None:
+    """Record a tools/call that was rejected before any handler wrote a usage row.
+
+    These are JSON-RPC errors returned with HTTP 200 (unknown or retired tool,
+    unexpected fields, coordinates sent to a loc_id tool, malformed
+    arguments). Non-200 rejections such as rate limits are already recorded as
+    security events and are skipped here to avoid double counting.
+    """
+    metadata = getattr(request.state, "analytics_metadata", {}) or {}
+    if metadata.get("mcp_method") != "tools/call" or getattr(response, "status_code", 0) != 200:
+        return
+    try:
+        body = json.loads((getattr(response, "body", b"") or b"").decode("utf-8"))
+    except Exception:
+        return
+    error = body.get("error") if isinstance(body, dict) else None
+    if not isinstance(error, dict):
+        return
+    data = error.get("data") if isinstance(error.get("data"), dict) else {}
+    nested = data.get("error")
+    if isinstance(nested, dict):
+        code = str(nested.get("code") or "").strip()
+    else:
+        code = str(nested or "").strip()
+    code = code or f"jsonrpc_{error.get('code')}"
+    tool_name = str(metadata.get("mcp_tool_name") or "").strip() or "(none)"
+    extra: dict[str, Any] = {}
+    if tool_name != "(none)" and _tool_definition(tool_name) is None:
+        # A name the model invented or remembered from an older surface.
+        extra["requested_tool"] = _analytics_token(tool_name)
+        tool_name = "(unknown_tool)"
+    args = metadata.get("mcp_args") if isinstance(metadata.get("mcp_args"), dict) else {}
+    pack = str(args.get("pack_id") or "").strip().lower()
+    try:
+        capability_id = tool_capability_id(tool_name)
+    except Exception:
+        capability_id = "mcp_protocol_rejection"
+    request.state.analytics_error_code = code
+    _log_mcp_tool_usage_event(
+        request,
+        request_id="",
+        tool_name=tool_name,
+        capability_id=capability_id or "mcp_protocol_rejection",
+        decision="deny",
+        started_at=started_at,
+        row_count=0,
+        query_granularity="single",
+        response_payload=body,
+        error_code=code[:80],
+        analytics_pack_id=pack if tool_name in {"get_data", "get_event", "get_pack"} and pack else ANALYTICS_PACK_DISCOVERY,
+        metadata={"event": "mcp_protocol_rejection", "jsonrpc_error_code": error.get("code"), **extra},
+    )
+
+
+async def _mcp_endpoint_impl(request: Request, pack_id: str | None = None):
     if pack_id in {"account", "x402"}:
         pack_id = None
     normalized_pack_id = _normalize_pack_id(pack_id)
@@ -5664,6 +5849,7 @@ async def mcp_endpoint(request: Request, pack_id: str | None = None):
     request.state.analytics_metadata = {
         **getattr(request.state, "analytics_metadata", {}),
         **_mcp_client_analytics_context(params),
+        **_mcp_session_analytics_context(request),
     }
 
     protocol_header = str(request.headers.get("MCP-Protocol-Version") or "").strip()
@@ -5700,6 +5886,7 @@ async def mcp_endpoint(request: Request, pack_id: str | None = None):
             request_id,
         )
         response.headers["MCP-Protocol-Version"] = negotiated
+        response.headers[MCP_SESSION_HEADER] = _new_mcp_session_id(client_info)
         return response
 
     if method in {"notifications/initialized", "notifications/cancelled"}:
@@ -5767,6 +5954,7 @@ async def mcp_endpoint(request: Request, pack_id: str | None = None):
     request.state.analytics_metadata = {
         **getattr(request.state, "analytics_metadata", {}),
         "mcp_tool_name": tool_name or None,
+        **_mcp_argument_analytics(tool_name, arguments),
     }
     if not tool_name:
         return _jsonrpc_error(request_id, -32602, "Tool name is required")
