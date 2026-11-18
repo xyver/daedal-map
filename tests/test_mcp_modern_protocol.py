@@ -243,7 +243,10 @@ class ModernProtocolTests(unittest.TestCase):
         names = {prompt["name"] for prompt in listed["result"]["prompts"]}
         self.assertIn("largest_earthquake_in_range", names)
         self.assertNotIn("fx_history_for_country", names)
+        self.assertNotIn("country_indicator_history", names)
         self.assertIn("error", fx)
+        # Prompts that name no pack (conversions, coordinates) stay available.
+        self.assertIn("convert_census_code", names)
 
     def test_main_server_json_is_the_registry_listing(self) -> None:
         from mapmover.routes.mcp import MAIN_REGISTRY_LISTING

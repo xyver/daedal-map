@@ -841,6 +841,7 @@ PROMPT_REQUIRED_PACKS: dict[str, frozenset[str]] = {
     "largest_earthquake_in_range": frozenset({"earthquakes"}),
     "count_disaster_events": frozenset({"earthquakes", "volcanoes", "tsunamis", "hurricanes"}),
     "fx_history_for_country": frozenset({"currency"}),
+    "country_indicator_history": frozenset({"world_bank_wdi"}),
 }
 
 
