@@ -12,6 +12,9 @@ from mcp_discovery_shared import (
     filter_data_catalog_payload,
     full_catalog_payload,
     mcp_full_pack_detail,
+    mcp_pack_metric_detail,
+    mcp_pack_metric_search,
+    mcp_pack_source_detail,
     pack_download_payload,
 )
 from mapmover.runtime import reference_exchange
@@ -147,8 +150,12 @@ class MCPDiscoveryCompactionTests(unittest.TestCase):
 
         self.assertEqual(
             [step["tool"] for step in workflow["steps"]],
-            ["get_catalog", "get_pack", "get_data"],
+            ["get_catalog", "get_pack", "get_pack", "get_data"],
         )
+        # Every advertised call must pass the live argument validators.
+        self.assertEqual(workflow["steps"][0]["arguments"], {"catalog": "data"})
+        self.assertEqual(set(workflow["steps"][1]["arguments"]), {"pack_id"})
+        self.assertEqual(set(workflow["steps"][2]["arguments"]), {"pack_id", "source_id"})
         self.assertEqual(workflow["help"]["overview"]["arguments"]["topic"], "overview")
 
     def test_catalog_full_adds_metric_ids_but_not_raw_policy(self) -> None:
@@ -173,9 +180,12 @@ class MCPDiscoveryCompactionTests(unittest.TestCase):
         full = mcp_full_pack_detail(source, catalog="data")
         download = pack_download_payload("demo", catalog="data", payload=source)
 
-        self.assertEqual(full["detail"], "query_metadata")
+        self.assertEqual(full["detail"], "sources")
         self.assertNotIn("material_policy", full)
-        self.assertEqual(full["sources"][0]["metric_ids"], ["population"])
+        self.assertEqual(full["sources"][0]["metric_count"], 1)
+        self.assertNotIn("metric_ids", full["sources"][0])
+        self.assertEqual(full["sources"][0]["metrics_call"],
+                         {"tool": "get_pack", "arguments": {"pack_id": "demo", "source_id": "demo_source"}})
         self.assertEqual(full["metric_count"], 1)
         self.assertNotIn("full_call", full)
         self.assertNotIn("reference", str(full))
@@ -184,6 +194,110 @@ class MCPDiscoveryCompactionTests(unittest.TestCase):
         self.assertEqual(download["detail"], "download")
         self.assertEqual(download["download_url"], "https://app.daedalmap.com/api/v1/packs/demo/download")
         self.assertNotIn("metrics", download)
+
+    def _narrowing_pack(self):
+        pack = {
+            "pack_id": "wdi",
+            "sources": [
+                {"source_id": "wb_economy", "source_name": "Economy", "time_granularity": "yearly",
+                 "metrics": {"unemployment_total_pct_labor_force": {"name": "Unemployment, total", "unit": "%",
+                                                                   "years": [1991, 2025], "countries": 187}}},
+                {"source_id": "wb_social", "source_name": "Social",
+                 "metrics": {
+                     "unemployment_total_pct_labor_force": {"name": "Unemployment, total", "unit": "%"},
+                     "unemployment_national": {"name": "Unemployment (national estimate)", "unit": "%"},
+                     "gini_index": {"name": "Gini index", "unit": "index"},
+                 }},
+            ],
+        }
+        metadata = {
+            "wb_social": {
+                "description": "Social, labor, and poverty indicators.",
+                "time_field": "timestamp", "filterable_fields": ["loc_id", "year"], "sortable_fields": ["loc_id", "year"],
+                "temporal_coverage": {"start": "1960-01-01", "end": "2025-01-01", "granularity": "yearly"},
+                "metrics": {
+                    "unemployment_national": {"aggregation": "weighted_avg", "wdi_code": "SL.UEM.TOTL.NE.ZS",
+                                              "keywords": ["labor", "jobless"], "description": "National estimate.",
+                                              "years": [1960, 2025], "countries": 209},
+                    "gini_index": {"aggregation": "none", "keywords": ["inequality"]},
+                },
+            },
+        }
+        return pack, metadata.get
+
+    def test_pack_sources_view_lists_sources_without_metric_dump(self) -> None:
+        pack, loader = self._narrowing_pack()
+        result = mcp_full_pack_detail(pack, catalog="data", source_metadata=loader)
+        self.assertEqual(result["detail"], "sources")
+        self.assertEqual([s["source_id"] for s in result["sources"]], ["wb_economy", "wb_social"])
+        social = result["sources"][1]
+        self.assertEqual(social["description"], "Social, labor, and poverty indicators.")
+        self.assertEqual(social["metric_count"], 3)
+        self.assertEqual(social["temporal_coverage"]["end"], "2025-01-01")
+        self.assertEqual(result["metric_count"], 3)  # distinct ids across sources
+        self.assertNotIn("unemployment_national", json.dumps(result))
+
+    def test_pack_source_view_merges_metadata_and_query_contract(self) -> None:
+        pack, loader = self._narrowing_pack()
+        result = mcp_pack_source_detail(pack, source_id="wb_social", source_metadata=loader)
+        self.assertEqual(result["detail"], "source_metrics")
+        self.assertEqual(result["query_contract"]["sortable_fields"], ["loc_id", "year"])
+        self.assertEqual(result["query_contract"]["time_field"], "timestamp")
+        lines = {line["metric_id"]: line for line in result["metrics"]}
+        national = lines["unemployment_national"]
+        self.assertEqual(national["aggregation"], "weighted_avg")
+        self.assertEqual(national["source_code"], "SL.UEM.TOTL.NE.ZS")
+        self.assertEqual(national["source_code_system"], "wdi_code")
+        self.assertEqual(national["years"], [1960, 2025])
+        self.assertEqual(national["country_count"], 209)
+        self.assertNotIn("description", national)  # compact lines leave definitions to metrics=
+        self.assertEqual(lines["unemployment_total_pct_labor_force"]["also_in_sources"], ["wb_economy"])
+
+    def test_pack_source_view_names_valid_sources_on_miss(self) -> None:
+        pack, loader = self._narrowing_pack()
+        result = mcp_pack_source_detail(pack, source_id="wb_missing", source_metadata=loader)
+        self.assertEqual(result["error"]["code"], "source_not_in_pack")
+        self.assertEqual(result["error"]["details"]["available_source_ids"], ["wb_economy", "wb_social"])
+
+    def test_pack_metric_detail_returns_every_occurrence_and_unknowns(self) -> None:
+        pack, loader = self._narrowing_pack()
+        result = mcp_pack_metric_detail(
+            pack, metric_ids=["unemployment_total_pct_labor_force", "unemployment_national", "nope"],
+            source_metadata=loader,
+        )
+        self.assertEqual(result["detail"], "metric_detail")
+        by_id = {item["metric_id"]: item for item in result["metrics"]}
+        self.assertEqual([o["source_id"] for o in by_id["unemployment_total_pct_labor_force"]["occurrences"]],
+                         ["wb_economy", "wb_social"])
+        national = by_id["unemployment_national"]["occurrences"][0]
+        self.assertEqual(national["description"], "National estimate.")
+        self.assertEqual(national["source_code"], "SL.UEM.TOTL.NE.ZS")
+        self.assertNotIn("wdi_code", national)
+        self.assertEqual(result["unknown_metrics"], ["nope"])
+        missing = mcp_pack_metric_detail(pack, metric_ids=["nope"], source_metadata=loader)
+        self.assertEqual(missing["error"]["code"], "metric_not_in_pack")
+
+    def test_pack_metric_search_matches_all_terms_and_ranks_titles_first(self) -> None:
+        pack, loader = self._narrowing_pack()
+        result = mcp_pack_metric_search(pack, query="unemployment", source_metadata=loader)
+        self.assertEqual(result["detail"], "metric_search")
+        self.assertEqual(result["match_count"], 3)
+        self.assertFalse(result["truncated"])
+        keyword_hit = mcp_pack_metric_search(pack, query="jobless", source_metadata=loader)
+        self.assertEqual([m["metric_id"] for m in keyword_hit["metrics"]], ["unemployment_national"])
+        both_terms = mcp_pack_metric_search(pack, query="unemployment national", source_metadata=loader)
+        self.assertEqual([m["metric_id"] for m in both_terms["metrics"]], ["unemployment_national"])
+        none = mcp_pack_metric_search(pack, query="tsunami", source_metadata=loader)
+        self.assertEqual(none["match_count"], 0)
+        self.assertIn("retry_hint", none)
+
+    def test_pack_metric_search_caps_results(self) -> None:
+        metrics = {f"population_{i:03d}": {"name": f"Population {i}"} for i in range(40)}
+        pack = {"pack_id": "big", "sources": [{"source_id": "s", "metrics": metrics}]}
+        result = mcp_pack_metric_search(pack, query="population")
+        self.assertEqual(result["match_count"], 40)
+        self.assertTrue(result["truncated"])
+        self.assertEqual(len(result["metrics"]), 25)
 
     def test_pack_next_step_uses_its_published_specialist_tool(self) -> None:
         result = compact_pack_detail({

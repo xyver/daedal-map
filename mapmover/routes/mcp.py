@@ -33,7 +33,13 @@ from mcp_discovery_shared import (
     compact_pack_detail,
     filter_data_catalog_payload,
     full_catalog_payload,
+    PACK_METRIC_DETAIL_LIMIT,
+    PACK_SEARCH_MAX_CHARS,
+    PACK_SEARCH_MIN_CHARS,
     mcp_full_pack_detail,
+    mcp_pack_metric_detail,
+    mcp_pack_metric_search,
+    mcp_pack_source_detail,
     pack_download_payload,
 )
 from mcp_runtime_shared import jsonrpc_error_envelope, jsonrpc_result_envelope, mcp_tool_error_payload
@@ -560,6 +566,10 @@ PRODUCT_FACADE_TOOL_NAMES = {
     }),
     "data": frozenset({"get_tool_help", "get_catalog", "get_pack", "get_data", "get_event"}),
 }
+FREE_FACADE_PROMPT_NAMES = frozenset({
+    "convert_census_code", "place_from_coordinates", "find_geography_columns", "country_indicator_history",
+})
+PRODUCT_FACADE_PROMPT_NAMES = {"free": FREE_FACADE_PROMPT_NAMES, "data": frozenset()}
 
 PACK_TOOL_ALLOWLIST: dict[str, set[str]] = pack_tool_allowlists()
 
@@ -604,6 +614,25 @@ RETIRED_DATA_TOOL_REPLACEMENTS: dict[str, dict[str, Any]] = {
     "get_disaster_links_for_event": {"tool": "get_event"},
     "search_disaster_links": {"tool": "get_event"},
     "get_disaster_link_chain": {"tool": "get_event"},
+    # Retired geography names from the pre-2026-10 public surface.
+    "resolve_reference": {"tool": "convert_reference"},
+    "resolve_points": {"tool": "resolve_point", "arguments": {"points": []}},
+    "loc_id_info": {"tool": "get_loc_id_info"},
+    "list_reference_systems": {"tool": "get_catalog", "arguments": {"catalog": "geometry"}},
+    "read_geometry_catalog": {"tool": "get_catalog", "arguments": {"catalog": "geometry"}},
+    "get_geometry": {"tool": "get_shape"},
+}
+
+# Builder tools that exist in code but are deliberately unpublished until their
+# large-job contract and release gates are admitted. They are not renamed, so
+# callers get "not public" plus the closest bounded public alternative.
+PAUSED_TOOL_ALTERNATIVES: dict[str, str | None] = {
+    "estimate_conversion_job": "convert_reference",
+    "create_conversion_job": "convert_reference",
+    "estimate_geometry_package": "get_shape",
+    "create_geometry_export": "get_shape",
+    "resolve_loc_id_scope": "identify_reference_system",
+    "get_job_status": None,
 }
 
 
@@ -820,13 +849,50 @@ def _prompt_is_live(prompt_name: str) -> bool:
     return required is None or any(_api_catalog_pack(pack) is not None for pack in required)
 
 
+_GET_PACK_SELECTORS = ("source_id", "search", "metrics")
+
+
+def _get_pack_argument_error(arguments: Any) -> str | None:
+    """Validate get_pack: one pack_id plus at most one narrowing selector."""
+    usage = "get_pack takes a nonempty pack_id plus at most one of source_id, search, or metrics"
+    if not isinstance(arguments, dict):
+        return usage
+    unknown = sorted(set(arguments) - {"pack_id", *_GET_PACK_SELECTORS})
+    if unknown:
+        return f"{usage}; unsupported argument(s): {', '.join(unknown)}"
+    if not isinstance(arguments.get("pack_id"), str) or not arguments["pack_id"].strip():
+        return usage
+    selectors = [name for name in _GET_PACK_SELECTORS if name in arguments]
+    if len(selectors) > 1:
+        return f"{usage}; received {', '.join(selectors)}. Call get_pack once per selector."
+    if "source_id" in arguments and (not isinstance(arguments["source_id"], str) or not arguments["source_id"].strip()):
+        return "source_id must be a nonempty string from this pack's sources list"
+    if "search" in arguments:
+        search = arguments["search"]
+        if not isinstance(search, str) or not (PACK_SEARCH_MIN_CHARS <= len(search.strip()) <= PACK_SEARCH_MAX_CHARS):
+            return f"search must be a string of {PACK_SEARCH_MIN_CHARS} to {PACK_SEARCH_MAX_CHARS} characters"
+    if "metrics" in arguments:
+        metrics = arguments["metrics"]
+        if (not isinstance(metrics, list) or not metrics or len(metrics) > PACK_METRIC_DETAIL_LIMIT
+                or not all(isinstance(m, str) and m.strip() for m in metrics)
+                or len({m.strip() for m in metrics}) != len(metrics)):
+            return f"metrics must be 1 to {PACK_METRIC_DETAIL_LIMIT} unique nonempty metric ids"
+    return None
+
+
 def _facade_prompts(pack_id: str | None) -> list[dict[str, Any]]:
     normalized = _normalize_pack_id(pack_id)
     prompts = [prompt for prompt in _prompt_definitions() if _prompt_is_live(str(prompt.get("name") or ""))]
     if not normalized:
         return prompts
-    allowed = PACK_PROMPT_ALLOWLIST.get(normalized, set())
+    allowed = _facade_prompt_allowlist(normalized)
     return [prompt for prompt in prompts if str(prompt.get("name") or "") in allowed]
+
+
+def _facade_prompt_allowlist(normalized: str) -> frozenset[str] | set[str]:
+    if normalized in PRODUCT_FACADE_PROMPT_NAMES:
+        return PRODUCT_FACADE_PROMPT_NAMES[normalized]
+    return PACK_PROMPT_ALLOWLIST.get(normalized, set())
 
 
 def _prompt_allowed_for_facade(prompt_name: str, pack_id: str | None) -> bool:
@@ -835,7 +901,7 @@ def _prompt_allowed_for_facade(prompt_name: str, pack_id: str | None) -> bool:
     normalized = _normalize_pack_id(pack_id)
     if not normalized:
         return True
-    return prompt_name in PACK_PROMPT_ALLOWLIST.get(normalized, set())
+    return prompt_name in _facade_prompt_allowlist(normalized)
 
 
 def _resource_allowed_for_facade(uri: str, pack_id: str | None) -> bool:
@@ -2356,7 +2422,155 @@ def _prompt_definitions() -> list[dict[str, Any]]:
                 {"name": "end", "description": "Inclusive end date in YYYY-MM-DD format.", "required": True},
             ],
         },
+        {
+            "name": "convert_census_code",
+            "title": "Convert a Census Code to a Place",
+            "description": "Convert a US FIPS code, Census GEOID, or ZIP Code Tabulation Area (ZCTA) to its DaedalMap loc_id, name, and parent places.",
+            "arguments": [
+                {"name": "code", "description": "The code to convert, such as 51059 (FIPS county) or 22030 (ZCTA).", "required": True},
+                {"name": "code_type", "description": "fips for FIPS codes and Census GEOIDs, or zcta for ZIP Code Tabulation Areas. Defaults to fips.", "required": False},
+            ],
+        },
+        {
+            "name": "place_from_coordinates",
+            "title": "Find the Place at Coordinates",
+            "description": "Reverse geocode a latitude and longitude to its country and administrative areas, such as state and county.",
+            "arguments": [
+                {"name": "lat", "description": "Latitude in WGS84 decimal degrees, such as 38.8977.", "required": True},
+                {"name": "lon", "description": "Longitude in WGS84 decimal degrees, such as -77.0365.", "required": True},
+            ],
+        },
+        {
+            "name": "find_geography_columns",
+            "title": "Find Geography Columns in a Dataset",
+            "description": "Identify which columns in a pasted table hold place names, codes, or coordinates, then convert them to DaedalMap loc_ids for joining.",
+            "arguments": [
+                {"name": "country", "description": "Optional ISO3 country the dataset covers, such as USA or BRA.", "required": False},
+            ],
+        },
+        {
+            "name": "country_indicator_history",
+            "title": "Country Indicator History",
+            "description": "Retrieve a published development indicator, such as GDP or population, for one or more countries over a year range.",
+            "arguments": [
+                {"name": "countries", "description": "Comma-separated ISO3 country codes, such as CAN,MEX.", "required": True},
+                {"name": "indicator", "description": "What to measure, such as GDP per capita or population.", "required": True},
+                {"name": "start_year", "description": "Optional first year, such as 2010.", "required": False},
+                {"name": "end_year", "description": "Optional last year, such as 2020.", "required": False},
+            ],
+        },
     ]
+
+
+_PROMPT_CITATION_RULE = (
+    "When you report results, name the source and edition or vintage the tool returned, "
+    "and say plainly when a match is ambiguous, missing, or from a different year than requested."
+)
+
+
+def _prompt_message(description: str, text: str) -> dict[str, Any]:
+    return {"description": description, "messages": [{"role": "user", "content": {"type": "text", "text": text}}]}
+
+
+def _render_free_prompt(name: str, arguments: dict[str, Any]) -> dict[str, Any] | None:
+    if name == "convert_census_code":
+        code = str(arguments.get("code") or "51059").strip() or "51059"
+        code_type = str(arguments.get("code_type") or "fips").strip().lower()
+        from_system = "zcta" if code_type in {"zcta", "zip", "zip_code"} else "fips"
+        text = (
+            f"Safety: {AGENT_SAFETY_NOTICE}\n\n"
+            f"Convert the US code {code} to its DaedalMap loc_id with `convert_reference`, then report the place name, "
+            "its family and admin level, and its parent state. If the code is ambiguous or not found, say so instead of guessing.\n\n"
+            "Suggested tool call:\n"
+            "```json\n"
+            "{\n"
+            '  "name": "convert_reference",\n'
+            '  "arguments": {\n'
+            '    "iso3": "USA",\n'
+            f'    "from_system": {_json_prompt_string(from_system)},\n'
+            f'    "value": {_json_prompt_string(code)}\n'
+            "  }\n"
+            "}\n"
+            "```\n\n"
+            "Use `get_loc_id_info` on the returned loc_id for parent and related places.\n\n"
+            f"{_PROMPT_CITATION_RULE}"
+        )
+        return _prompt_message("Convert a US census code to a place.", text)
+
+    if name == "place_from_coordinates":
+        lat = _json_prompt_number_or_string(arguments.get("lat") or "38.8977")
+        lon = _json_prompt_number_or_string(arguments.get("lon") or "-77.0365")
+        text = (
+            f"Safety: {AGENT_SAFETY_NOTICE}\n\n"
+            f"Find the country and administrative areas containing latitude {lat}, longitude {lon}. "
+            "First resolve the point in GLOBAL administrative to identify the country. Then, if the catalog publishes that "
+            "country as its own scope, resolve the same point again with scope_id set to the returned ISO3 for deeper levels "
+            "such as state and county. Do not substitute a MARINE answer for a land miss; report a miss as a miss.\n\n"
+            "Suggested first tool call:\n"
+            "```json\n"
+            "{\n"
+            '  "name": "resolve_point",\n'
+            '  "arguments": {\n'
+            '    "scope_id": "GLOBAL",\n'
+            '    "family": "administrative",\n'
+            f'    "lat": {lat},\n'
+            f'    "lon": {lon}\n'
+            "  }\n"
+            "}\n"
+            "```\n\n"
+            f"{_PROMPT_CITATION_RULE}"
+        )
+        return _prompt_message("Reverse geocode coordinates to administrative areas.", text)
+
+    if name == "find_geography_columns":
+        country = str(arguments.get("country") or "").strip().upper()
+        scope_line = f"The dataset covers {country}; pass country_scope {_json_prompt_string(country)}.\n\n" if country else ""
+        text = (
+            f"Safety: {AGENT_SAFETY_NOTICE}\n\n"
+            "I will paste a table. Find the columns that hold geography (place names, codes, or latitude and longitude) "
+            "and prepare them for joining by DaedalMap loc_id.\n\n"
+            f"{scope_line}"
+            "1. Call `identify_dataset_geography` with the column names and a few representative values from each column.\n"
+            "2. For each identifier column it selects, call `identify_reference_system` within one country scope to confirm the code system.\n"
+            "3. Convert a sample of values with `convert_reference` and report the match rate, unmatched values, and any ambiguity.\n\n"
+            "Ask me only when a tool result says clarification is required.\n\n"
+            f"{_PROMPT_CITATION_RULE}"
+        )
+        return _prompt_message("Find and convert geography columns in a dataset.", text)
+
+    if name == "country_indicator_history":
+        countries = [item.strip().upper() for item in str(arguments.get("countries") or "CAN").split(",") if item.strip()]
+        ids_json = ", ".join(_json_prompt_string(item) for item in countries) or '"CAN"'
+        indicator = str(arguments.get("indicator") or "GDP per capita").strip() or "GDP per capita"
+        start_year = str(arguments.get("start_year") or "").strip()
+        end_year = str(arguments.get("end_year") or "").strip()
+        time_line = ""
+        if start_year or end_year:
+            time_line = f',\n      "time": {{"start": {_json_prompt_string(start_year or end_year)}, "end": {_json_prompt_string(end_year or start_year)}}}'
+        text = (
+            f"Safety: {AGENT_SAFETY_NOTICE}\n\n"
+            f"Retrieve {indicator} for {', '.join(countries) or 'CAN'}. Call `get_catalog` with catalog data to find a pack that "
+            "returns rows on this endpoint (world_bank_wdi is a common choice), then call `get_pack` to choose the exact metric id. "
+            "Do not guess metric ids.\n\n"
+            "Suggested data call after choosing the metric:\n"
+            "```json\n"
+            "{\n"
+            '  "name": "get_data",\n'
+            '  "arguments": {\n'
+            '    "pack_id": "world_bank_wdi",\n'
+            '    "metrics": ["<metric id from get_pack>"],\n'
+            '    "filters": {\n'
+            f'      "region_ids": [{ids_json}]{time_line}\n'
+            "    }\n"
+            "  }\n"
+            "}\n"
+            "```\n\n"
+            "Report missing years as missing; do not fill them.\n\n"
+            f"{_PROMPT_CITATION_RULE}"
+        )
+        return _prompt_message("Retrieve a country indicator over time.", text)
+
+    return None
 
 
 def _render_prompt(name: str, arguments: dict[str, Any]) -> dict[str, Any] | None:
@@ -2452,7 +2666,7 @@ def _render_prompt(name: str, arguments: dict[str, Any]) -> dict[str, Any] | Non
         )
         return {"description": "Fetch FX history for one or more countries.", "messages": [{"role": "user", "content": {"type": "text", "text": text}}]}
 
-    return None
+    return _render_free_prompt(name, arguments)
 
 
 def _resource_definitions() -> list[dict[str, Any]]:
@@ -5559,7 +5773,6 @@ async def _execute_get_event_tool(
         )
     try:
         include = [str(value).strip().lower() for value in (payload.get("include") or [])]
-        requested_limit = int(payload.get("limit") or 100)
         base_limit = _tool_batch_item_limit("get_event", default=500)
         geometry_policy = tool_sub_limit("get_event", "geometry")
         geometry_limit_env = str(geometry_policy.get("limit_env") or "").strip()
@@ -5568,6 +5781,9 @@ async def _execute_get_event_tool(
             or int(geometry_policy.get("free_item_limit") or base_limit)
         )
         effective_limit = min(base_limit, geometry_limit) if "geometry" in include else base_limit
+        # An omitted limit takes the default capped at the ceiling that applies,
+        # so include=["geometry"] without a limit no longer fails its own check.
+        requested_limit = int(payload.get("limit") or min(100, effective_limit))
         if requested_limit < 1 or requested_limit > effective_limit:
             limit_kind = "geometry expansion" if "geometry" in include else "event companion rows"
             return _jsonrpc_response(
@@ -6258,6 +6474,23 @@ async def _mcp_endpoint_impl(request: Request, pack_id: str | None = None):
                     },
                 },
             )
+        if tool_name in PAUSED_TOOL_ALTERNATIVES:
+            alternative = PAUSED_TOOL_ALTERNATIVES[tool_name]
+            paused_data: dict[str, Any] = {
+                "error": {
+                    "code": "tool_not_public",
+                    "message": f"Tool '{tool_name}' is paused and not part of the public MCP surface.",
+                },
+                "guidance": {
+                    "action": "use_public_alternative" if alternative else "refresh_tools",
+                    "message": "Refresh tools/list for the current public tools.",
+                },
+            }
+            if alternative:
+                paused_data["alternative"] = {"tool": alternative}
+                paused_data["next_step"] = {"tool": "get_tool_help", "arguments": {"tool_name": alternative}}
+            suffix = f"; the closest public tool is '{alternative}'" if alternative else ""
+            return _jsonrpc_error(request_id, -32601, f"Tool '{tool_name}' is not public{suffix}", data=paused_data)
         return _jsonrpc_error(request_id, -32601, f"Tool '{tool_name}' not found")
     if not _tool_allowed_for_facade(tool_name, normalized_pack_id):
         return _jsonrpc_error(request_id, -32601, f"Tool '{tool_name}' is not available on this MCP facade")
@@ -6535,8 +6768,9 @@ async def _mcp_endpoint_impl(request: Request, pack_id: str | None = None):
                                    error_code=(payload.get("error") or {}).get("code"))
 
     if tool_name == "get_pack":
-        if set(arguments) != {"pack_id"} or not isinstance(arguments.get("pack_id"), str) or not arguments["pack_id"].strip():
-            return _jsonrpc_error(request_id, -32602, "get_pack requires only a nonempty data pack_id")
+        pack_selector_error = _get_pack_argument_error(arguments)
+        if pack_selector_error:
+            return _jsonrpc_error(request_id, -32602, pack_selector_error)
         pack_id = arguments["pack_id"].strip()
         if pack_id.lower() in set(tool_family_ids()) | set(tool_family_alias_ids()):
             return _jsonrpc_error(request_id, -32602, "Geometry families use get_geography(family_id=...) instead of get_pack")
@@ -6553,9 +6787,23 @@ async def _mcp_endpoint_impl(request: Request, pack_id: str | None = None):
             return _finish_data_helper(request, tool_name=tool_name, started_at=helper_started_at,
                                        payload={"error": "Pack not found", "pack_id": pack_id},
                                        rpc_request_id=request_id, is_error=True, error_code="pack_not_found")
-        payload = mcp_full_pack_detail(payload, catalog="data")
+        from mapmover.data_loading import load_source_metadata
+        if "source_id" in arguments:
+            payload = mcp_pack_source_detail(payload, source_id=arguments["source_id"].strip(),
+                                             source_metadata=load_source_metadata)
+        elif "metrics" in arguments:
+            payload = mcp_pack_metric_detail(payload, metric_ids=[m.strip() for m in arguments["metrics"]],
+                                             source_metadata=load_source_metadata)
+        elif "search" in arguments:
+            payload = mcp_pack_metric_search(payload, query=arguments["search"].strip(),
+                                             source_metadata=load_source_metadata)
+        else:
+            payload = mcp_full_pack_detail(payload, catalog="data", source_metadata=load_source_metadata)
+        pack_error = payload.get("error") if isinstance(payload, dict) else None
         return _finish_data_helper(request, tool_name=tool_name, started_at=helper_started_at,
-                                   payload=payload, rpc_request_id=request_id)
+                                   payload=payload, rpc_request_id=request_id,
+                                   is_error=bool(pack_error),
+                                   error_code=pack_error.get("code") if isinstance(pack_error, dict) else None)
 
     if tool_name == "get_live_earthquake_events":
         rate_limit_response = _live_tool_rate_limit_response(request, tool_name, request_id)

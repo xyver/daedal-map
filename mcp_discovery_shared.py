@@ -35,19 +35,28 @@ CATALOG_DOWNLOADS = {
 
 # One canonical autonomous-agent path shared by instructions and help.
 DATA_ACCESS_WORKFLOW = {
-    "goal": "Find a published pack, learn its exact contract, then retrieve only the requested rows.",
+    "goal": "Find a published pack, narrow to its source and exact metrics, then retrieve only the requested rows.",
     "steps": [
         {
             "stage": "discover",
             "tool": "get_catalog",
-            "arguments": {"catalog": "data", "detail": "lite"},
+            "arguments": {"catalog": "data"},
             "outcome": "Choose one pack_id from its topic, geography, and time coverage.",
         },
         {
             "stage": "inspect",
             "tool": "get_pack",
-            "arguments": {"catalog": "data", "pack_id": "<selected pack_id>", "detail": "lite"},
-            "outcome": "Choose exact metrics, dimensions, filters, geography, and time bounds.",
+            "arguments": {"pack_id": "<selected pack_id>"},
+            "outcome": "See which sources the pack contains, with each source's time and geographic coverage.",
+        },
+        {
+            "stage": "narrow",
+            "tool": "get_pack",
+            "arguments": {"pack_id": "<selected pack_id>", "source_id": "<selected source_id>"},
+            "outcome": (
+                "List that source's metrics with names, units, and years, plus its filterable and sortable fields. "
+                "Alternatives: search='<terms>' to match metrics across the pack, or metrics=[...] for full detail."
+            ),
         },
         {
             "stage": "retrieve",
@@ -103,7 +112,7 @@ def _compact_pack_row(pack: dict[str, Any]) -> dict[str, Any]:
         row.setdefault("pack_id", pack_id)
         row["next_call"] = {
             "tool": "get_pack",
-            "arguments": {"catalog": "data", "pack_id": pack_id, "detail": "lite"},
+            "arguments": {"pack_id": pack_id},
         }
         row["download_url"] = f"{APP_ORIGIN}/api/v1/packs/{pack_id}/download"
     return row
@@ -278,8 +287,8 @@ def catalog_download_payload(catalog: str) -> dict[str, Any]:
     next_step = (
         {
             "stage": "inspect",
-            "tool": "get_pack",
-            "arguments": {"catalog": "geometry", "pack_id": "geography", "detail": "lite"},
+            "tool": "get_geography",
+            "arguments": {"scope_id": "<ISO3, GLOBAL, or MARINE>"},
         }
         if selected == "geometry"
         else data_access_workflow()["steps"][1]
@@ -441,51 +450,298 @@ def annotate_full_pack_detail(payload: Any, *, catalog: str) -> Any:
     return result
 
 
-def mcp_full_pack_detail(payload: Any, *, catalog: str) -> Any:
-    """Return bounded, executable pack metadata without expanding source records."""
-    if not isinstance(payload, dict):
-        return payload
-    result = compact_pack_detail(payload, catalog=catalog)
-    # The public get_pack schema has one exact pack_id selector. These older
-    # handoffs included removed catalog/detail arguments and invite retry loops.
-    result.pop("full_call", None)
-    result.pop("download_call", None)
-    result["detail"] = "query_metadata"
-    if result.get("preferred_tool") in {
-        "query_dataset", "get_earthquake_events", "get_volcanic_activity", "get_tsunami_events", "get_fx_rates",
-    }:
-        result["preferred_tool"] = "get_data"
-    source_summaries: list[dict[str, Any]] = []
-    all_metric_ids: set[str] = set()
+PACK_METRIC_DETAIL_LIMIT = 10
+PACK_METRIC_SEARCH_LIMIT = 25
+PACK_SOURCE_DESCRIPTION_CHARS = 280
+PACK_SEARCH_MIN_CHARS = 2
+PACK_SEARCH_MAX_CHARS = 100
+
+# Source-native indicator code fields, mapped to one public field name.
+_METRIC_SOURCE_CODE_FIELDS = ("wdi_code", "indicator_code", "source_code", "series_code")
+# Fields copied into every compact metric line; full detail adds the rest.
+_COMPACT_METRIC_FIELDS = ("name", "unit", "aggregation")
+_QUERY_CONTRACT_FIELDS = (
+    "time_field", "time_granularity", "location_field", "geographic_level",
+    "filterable_fields", "sortable_fields", "default_limit",
+)
+_LEGACY_DATA_TOOLS = {
+    "query_dataset", "get_earthquake_events", "get_volcanic_activity", "get_tsunami_events", "get_fx_rates",
+}
+
+SourceMetadataLoader = Any  # Callable[[str], dict | None]; Any keeps this module import-light.
+
+
+def _metric_ids_of(source: dict[str, Any]) -> list[str]:
+    metrics = source.get("metrics")
+    if isinstance(metrics, dict):
+        return sorted(str(key) for key in metrics if str(key))
+    if isinstance(metrics, list):
+        return sorted({
+            str(value if isinstance(value, str) else value.get("metric_id") or value.get("id") or "")
+            for value in metrics if isinstance(value, (str, dict))
+        } - {""})
+    if isinstance(source.get("metric_ids"), list):
+        return sorted({str(value) for value in source["metric_ids"] if str(value)})
+    return []
+
+
+def _source_metadata(source_id: str, loader: SourceMetadataLoader) -> dict[str, Any]:
+    if loader is None or not source_id:
+        return {}
+    try:
+        metadata = loader(source_id)
+    except Exception:
+        return {}
+    return metadata if isinstance(metadata, dict) else {}
+
+
+def _source_metric_records(source: dict[str, Any], metadata: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """Merge catalog metric facts with the richer source metadata record."""
+    records: dict[str, dict[str, Any]] = {}
+    catalog_metrics = source.get("metrics") if isinstance(source.get("metrics"), dict) else {}
+    metadata_metrics = metadata.get("metrics") if isinstance(metadata.get("metrics"), dict) else {}
+    for metric_id in sorted(set(catalog_metrics) | set(metadata_metrics) | set(_metric_ids_of(source))):
+        merged: dict[str, Any] = {}
+        for layer in (catalog_metrics.get(metric_id), metadata_metrics.get(metric_id)):
+            if isinstance(layer, dict):
+                merged.update(layer)
+            elif isinstance(layer, str) and layer.strip():
+                merged.setdefault("description", layer)
+        records[str(metric_id)] = merged
+    return records
+
+
+def _years_range(value: Any) -> list[Any] | None:
+    if isinstance(value, (list, tuple)) and len(value) == 2:
+        return [value[0], value[1]]
+    return None
+
+
+def _source_code(record: dict[str, Any]) -> dict[str, Any]:
+    for field in _METRIC_SOURCE_CODE_FIELDS:
+        value = record.get(field)
+        if value not in (None, ""):
+            return {"source_code": value, "source_code_system": field}
+    return {}
+
+
+def _compact_metric_line(metric_id: str, record: dict[str, Any], source_id: str,
+                         also_in: list[str]) -> dict[str, Any]:
+    line: dict[str, Any] = {"metric_id": metric_id, "source_id": source_id}
+    line.update(_copy_present(record, _COMPACT_METRIC_FIELDS))
+    years = _years_range(record.get("years"))
+    if years:
+        line["years"] = years
+    if record.get("countries") is not None:
+        line["country_count"] = record["countries"]
+    line.update(_source_code(record))
+    if also_in:
+        line["also_in_sources"] = also_in
+    return line
+
+
+def _pack_metric_index(payload: dict[str, Any], loader: SourceMetadataLoader) -> list[dict[str, Any]]:
+    """One entry per source with merged metric records, in catalog source order."""
+    index = []
     for source in payload.get("sources") or []:
         if not isinstance(source, dict):
             continue
-        metrics = source.get("metrics")
-        if isinstance(metrics, dict):
-            metric_ids = sorted(str(key) for key in metrics if str(key))
-        elif isinstance(metrics, list):
-            metric_ids = sorted({
-                str(value if isinstance(value, str) else value.get("metric_id") or value.get("id") or "")
-                for value in metrics if isinstance(value, (str, dict))
-            } - {""})
-        elif isinstance(source.get("metric_ids"), list):
-            metric_ids = sorted({str(value) for value in source["metric_ids"] if str(value)})
-        else:
-            metric_ids = []
-        all_metric_ids.update(metric_ids)
-        source_summaries.append({
-            **_copy_present(source, ("source_id", "source_name", "time_granularity", "geographic_level")),
-            "metric_count": len(metric_ids),
-            "metric_ids": metric_ids,
+        source_id = str(source.get("source_id") or "").strip()
+        if not source_id:
+            continue
+        metadata = _source_metadata(source_id, loader)
+        index.append({
+            "source": source,
+            "metadata": metadata,
+            "source_id": source_id,
+            "metrics": _source_metric_records(source, metadata),
         })
-    if source_summaries:
-        result["sources"] = source_summaries
-        result["source_count"] = len(source_summaries)
-    if all_metric_ids:
-        result["metric_count"] = len(all_metric_ids)
+    return index
+
+
+def _metric_locations(index: list[dict[str, Any]]) -> dict[str, list[str]]:
+    locations: dict[str, list[str]] = {}
+    for entry in index:
+        for metric_id in entry["metrics"]:
+            locations.setdefault(metric_id, []).append(entry["source_id"])
+    return locations
+
+
+def _temporal_bounds(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    bounds = _copy_present(value, ("start", "end", "granularity"))
+    return bounds or None
+
+
+def _source_summary(entry: dict[str, Any], pack_id: str) -> dict[str, Any]:
+    source, metadata = entry["source"], entry["metadata"]
+    summary = _copy_present(source, ("source_id", "source_name", "data_type", "time_granularity", "geographic_level"))
+    description = str(metadata.get("description") or source.get("llm_summary") or "").strip()
+    if description:
+        if len(description) > PACK_SOURCE_DESCRIPTION_CHARS:
+            description = description[:PACK_SOURCE_DESCRIPTION_CHARS].rsplit(" ", 1)[0] + "..."
+        summary["description"] = description
+    temporal = _temporal_bounds(metadata.get("temporal_coverage") or source.get("temporal_coverage"))
+    if temporal:
+        summary["temporal_coverage"] = temporal
+    summary["metric_count"] = len(entry["metrics"])
+    summary["metrics_call"] = {"tool": "get_pack", "arguments": {"pack_id": pack_id, "source_id": entry["source_id"]}}
+    return summary
+
+
+def _query_contract(entry: dict[str, Any]) -> dict[str, Any]:
+    contract: dict[str, Any] = {}
+    for field in _QUERY_CONTRACT_FIELDS:
+        value = entry["metadata"].get(field)
+        if value is None:
+            value = entry["source"].get(field)
+        if value is not None:
+            contract[field] = deepcopy(value)
+    temporal = _temporal_bounds(entry["metadata"].get("temporal_coverage") or entry["source"].get("temporal_coverage"))
+    if temporal:
+        contract["temporal_coverage"] = temporal
+    return contract
+
+
+def _pack_base(payload: dict[str, Any], catalog: str) -> dict[str, Any]:
+    result = compact_pack_detail(payload, catalog=catalog)
+    # The public get_pack schema takes pack_id plus one optional narrowing
+    # selector. These older handoffs used removed catalog/detail arguments.
+    result.pop("full_call", None)
+    result.pop("download_call", None)
+    if result.get("preferred_tool") in _LEGACY_DATA_TOOLS:
+        result["preferred_tool"] = "get_data"
+    return result
+
+
+def _pack_error(pack_id: str, code: str, message: str, **details: Any) -> dict[str, Any]:
+    return {"pack_id": pack_id, "error": {"code": code, "message": message, "details": details}}
+
+
+def mcp_full_pack_detail(payload: Any, *, catalog: str, source_metadata: SourceMetadataLoader = None) -> Any:
+    """Shallow get_pack: what sources are in this pack and how to inspect each."""
+    if not isinstance(payload, dict):
+        return payload
+    result = _pack_base(payload, catalog)
+    pack_id = str(result.get("pack_id") or "").strip()
+    result["detail"] = "sources"
+    index = _pack_metric_index(payload, source_metadata)
+    if index:
+        result["sources"] = [_source_summary(entry, pack_id) for entry in index]
+        result["source_count"] = len(index)
+        result["metric_count"] = len(_metric_locations(index))
+        result["narrowing"] = (
+            "Call get_pack with one source_id to list that source's metrics and query fields, "
+            "search to match metrics across this pack, or metrics for full detail on up to "
+            f"{PACK_METRIC_DETAIL_LIMIT} exact metric ids."
+        )
     elif isinstance(payload.get("metrics"), dict):
         result["metric_ids"] = sorted(str(key) for key in payload["metrics"] if str(key))
         result["metric_count"] = len(result["metric_ids"])
+    return result
+
+
+def mcp_pack_source_detail(payload: Any, *, source_id: str, source_metadata: SourceMetadataLoader = None) -> Any:
+    """get_pack(source_id): every metric in one source plus its query contract."""
+    if not isinstance(payload, dict):
+        return payload
+    result = _pack_base(payload, "data")
+    pack_id = str(result.get("pack_id") or "").strip()
+    index = _pack_metric_index(payload, source_metadata)
+    entry = next((item for item in index if item["source_id"] == source_id), None)
+    if entry is None:
+        return _pack_error(
+            pack_id, "source_not_in_pack", f"Source '{source_id}' is not in pack '{pack_id}'.",
+            available_source_ids=[item["source_id"] for item in index],
+        )
+    locations = _metric_locations(index)
+    result["detail"] = "source_metrics"
+    result["source"] = _source_summary(entry, pack_id)
+    result["source"].pop("metrics_call", None)
+    result["query_contract"] = _query_contract(entry)
+    result["metrics"] = [
+        _compact_metric_line(metric_id, record, source_id, [s for s in locations[metric_id] if s != source_id])
+        for metric_id, record in entry["metrics"].items()
+    ]
+    result["metric_count"] = len(result["metrics"])
+    return result
+
+
+def mcp_pack_metric_detail(payload: Any, *, metric_ids: list[str], source_metadata: SourceMetadataLoader = None) -> Any:
+    """get_pack(metrics): full stored detail for a few exact metric ids."""
+    if not isinstance(payload, dict):
+        return payload
+    result = _pack_base(payload, "data")
+    pack_id = str(result.get("pack_id") or "").strip()
+    index = _pack_metric_index(payload, source_metadata)
+    details: list[dict[str, Any]] = []
+    unknown: list[str] = []
+    for metric_id in metric_ids:
+        occurrences = []
+        for entry in index:
+            record = entry["metrics"].get(metric_id)
+            if record is None:
+                continue
+            occurrence = {"source_id": entry["source_id"]}
+            occurrence.update(_copy_present(entry["source"], ("source_name", "time_granularity", "geographic_level")))
+            occurrence.update(deepcopy(record))
+            for field in _METRIC_SOURCE_CODE_FIELDS:
+                occurrence.pop(field, None)
+            occurrence.update(_source_code(record))
+            if "countries" in occurrence:
+                occurrence["country_count"] = occurrence.pop("countries")
+            occurrences.append(occurrence)
+        if occurrences:
+            details.append({"metric_id": metric_id, "occurrences": occurrences})
+        else:
+            unknown.append(metric_id)
+    if not details:
+        return _pack_error(
+            pack_id, "metric_not_in_pack", f"None of the requested metrics are in pack '{pack_id}'.",
+            unknown_metrics=unknown, retry_hint="Call get_pack with search or source_id to find exact metric ids.",
+        )
+    result["detail"] = "metric_detail"
+    result["metrics"] = details
+    if unknown:
+        result["unknown_metrics"] = unknown
+    return result
+
+
+def _search_tokens(text: str) -> list[str]:
+    return [token for token in "".join(ch.lower() if ch.isalnum() else " " for ch in text).split() if token]
+
+
+def mcp_pack_metric_search(payload: Any, *, query: str, source_metadata: SourceMetadataLoader = None) -> Any:
+    """get_pack(search): compact metric lines whose id, name, description, or keywords match every term."""
+    if not isinstance(payload, dict):
+        return payload
+    result = _pack_base(payload, "data")
+    tokens = _search_tokens(query)
+    index = _pack_metric_index(payload, source_metadata)
+    locations = _metric_locations(index)
+    ranked: list[tuple[int, int, dict[str, Any]]] = []
+    order = 0
+    for entry in index:
+        for metric_id, record in entry["metrics"].items():
+            title = f"{metric_id} {record.get('name') or ''}".lower()
+            keywords = record.get("keywords") if isinstance(record.get("keywords"), list) else []
+            body = f"{title} {record.get('description') or ''} {' '.join(str(k) for k in keywords)}".lower()
+            if not tokens or not all(token in body for token in tokens):
+                continue
+            rank = 0 if all(token in title for token in tokens) else 1
+            others = [s for s in locations[metric_id] if s != entry["source_id"]]
+            ranked.append((rank, order, _compact_metric_line(metric_id, record, entry["source_id"], others)))
+            order += 1
+    ranked.sort(key=lambda item: (item[0], item[1]))
+    matches = [line for _, _, line in ranked]
+    result["detail"] = "metric_search"
+    result["search"] = query
+    result["match_count"] = len(matches)
+    result["truncated"] = len(matches) > PACK_METRIC_SEARCH_LIMIT
+    result["metrics"] = matches[:PACK_METRIC_SEARCH_LIMIT]
+    if not matches:
+        result["retry_hint"] = "No metric matched every term. Try fewer or broader terms, or list a source with source_id."
     return result
 
 
