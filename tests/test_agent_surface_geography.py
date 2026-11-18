@@ -14,14 +14,14 @@ def test_llm_surfaces_cover_every_current_geography_tool() -> None:
     ]
     surfaces = (render_app_llms_txt(), render_site_llms_txt(), render_site_llms_full())
 
-    assert len(tool_names) == 12
+    assert len(tool_names) == 14
     assert "identify_dataset_geography" in tool_names
+    assert {"resolve_bbox", "resolve_deep_bbox"} <= set(tool_names)
     for surface in surfaces:
         for tool_name in tool_names:
             assert f"`{tool_name}`" in surface
         assert "All packs share a loc_id" not in surface
         assert "four user-facing modes" not in surface
-        assert "include_references=true" in surface
         assert "country_scope" in surface
         assert "shallow scope" in surface
         assert "get_boundary" not in surface
@@ -38,7 +38,7 @@ def test_geography_workflow_is_question_first_and_bounded() -> None:
     workflow = geography_workflow_section()
 
     assert "Point to loc_id" in workflow
-    assert "What a loc_id is connected to" in workflow
+    assert "What a loc_id is directly connected to" in workflow
     assert "Shape lookup" in workflow
     assert "bounded batch" in workflow
     assert "not part of the public MCP roster" in workflow

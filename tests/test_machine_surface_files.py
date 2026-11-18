@@ -28,7 +28,10 @@ def test_machine_files_never_link_the_redirecting_apex_host():
 
 
 def test_named_mcp_facades_are_currently_published():
-    allowed = set(surface.facade_pack_ids()) | set(tool_family_ids()) | set(tool_family_alias_ids()) | {"account", "x402"}
+    allowed = (
+        set(surface.facade_pack_ids()) | set(tool_family_ids()) | set(tool_family_alias_ids())
+        | {"account", "x402", "free", "data"}
+    )
     for name, text in RENDERED.items():
         for segment in re.findall(r"/mcp/([a-z0-9_.-]+)", text):
             if segment == "server.json":

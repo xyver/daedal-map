@@ -2046,19 +2046,33 @@ def _build_apis_json_payload() -> dict:
 
 
 def _build_mcp_server_json_payload(pack_id: str | None = None) -> dict:
-    from mapmover.routes.mcp import get_server_description, get_server_info, get_server_registry_meta
+    from mapmover.routes.mcp import (
+        MAIN_REGISTRY_LISTING,
+        get_server_description,
+        get_server_info,
+        get_server_registry_meta,
+    )
 
     app_url = _public_app_url()
     normalized = _normalize_mcp_facade_pack_id(pack_id)
     server_info = get_server_info(normalized)
     publisher_meta = get_server_registry_meta(normalized)
     publisher_meta["pricing"] = _mcp_pricing_payload(normalized)
+    # The main endpoint's server.json is the Registry listing itself: the
+    # Registry's short card copy and Registry version line, not the agent
+    # instructions (served on initialize) or the app software version.
+    if normalized is None:
+        description = MAIN_REGISTRY_LISTING["description"]
+        version = MAIN_REGISTRY_LISTING["version"]
+    else:
+        description = get_server_description(normalized)
+        version = server_info["version"]
     return {
         "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
         "name": server_info["name"],
         "title": server_info["title"],
-        "description": get_server_description(normalized),
-        "version": server_info["version"],
+        "description": description,
+        "version": version,
         "repository": {
             "url": "https://github.com/xyver/daedal-map",
             "source": "github",

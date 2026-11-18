@@ -230,6 +230,33 @@ class ModernProtocolTests(unittest.TestCase):
         self.assertEqual(client.post("/mcp/never_existed", json={"jsonrpc": "2.0", "id": 1, "method": "ping"}).status_code, 404)
         self.assertEqual(client.get("/mcp/never_existed/server.json").status_code, 404)
 
+    # --- listing hygiene ---------------------------------------------------------
+
+    def test_prompts_are_offered_only_for_admitted_packs(self) -> None:
+        catalog = {"packs": [{"pack_id": "earthquakes"}]}
+        with mock.patch("mapmover.routes.mcp.load_api_catalog", return_value=catalog):
+            listed = self.client.post("/mcp", json={"jsonrpc": "2.0", "id": 1, "method": "prompts/list"}).json()
+            fx = self.client.post("/mcp", json={
+                "jsonrpc": "2.0", "id": 2, "method": "prompts/get",
+                "params": {"name": "fx_history_for_country", "arguments": {}},
+            }).json()
+        names = {prompt["name"] for prompt in listed["result"]["prompts"]}
+        self.assertIn("largest_earthquake_in_range", names)
+        self.assertNotIn("fx_history_for_country", names)
+        self.assertIn("error", fx)
+
+    def test_main_server_json_is_the_registry_listing(self) -> None:
+        from mapmover.routes.mcp import MAIN_REGISTRY_LISTING
+        from mapmover.routes.system import _build_mcp_server_json_payload
+
+        payload = _build_mcp_server_json_payload(None)
+        self.assertEqual(payload["name"], "com.daedalmap/county-map")
+        self.assertEqual(payload["version"], MAIN_REGISTRY_LISTING["version"])
+        self.assertEqual(payload["description"], MAIN_REGISTRY_LISTING["description"])
+        self.assertLessEqual(len(payload["description"]), 100)
+        highlights = " ".join(payload["_meta"]["io.modelcontextprotocol.registry/publisher-provided"]["highlights"])
+        self.assertNotIn("FX", highlights)
+
     # --- rollback switch -------------------------------------------------------
 
     def test_disabled_modern_protocol_restores_legacy_fallback_trigger(self) -> None:

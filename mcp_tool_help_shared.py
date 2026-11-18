@@ -159,7 +159,7 @@ TOOL_GUIDANCE: dict[str, dict[str, Any]] = {
     "get_data": _g(
         ["You selected a published data pack and need its canonical rows or supported aggregate metrics."],
         ["Calling geometry tool families", "Passing internal source_id values", "Passing direct filter fields outside filters.equals or filters.compare", "Guessing metrics without get_pack", "Unbounded event scans"],
-        {"pack_id": "currency", "metrics": ["local_per_usd"], "filters": {"region_ids": ["CAN"], "time": {"start": "2024-01-01", "end": "2024-01-31"}}},
+        {"pack_id": "world_bank_wdi", "metrics": ["gdp_current_usd"], "filters": {"region_ids": ["CAN"], "time": {"start": "2020-01-01", "end": "2020-12-31"}}, "limit": 3},
         ["rows", "row_count", "source_id", "pack_id", "filters_applied", "provenance"], ["get_event", "get_pack"], ["source metadata", "release/freshness", "license"]
     ),
 }

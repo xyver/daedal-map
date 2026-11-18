@@ -7,11 +7,8 @@ from typing import Callable, Iterable
 from pack_registry_shared import (
     agent_data_workflow,
     pack_display_name,
-    pack_mcp_server_profile,
-    pack_registry_alias,
     published_pack_ids,
     tool_family_catalog_entry,
-    tool_family_ids,
 )
 from pack_pricing_shared import FREE_PACK_IDS, PAID_PACK_IDS
 
@@ -140,8 +137,15 @@ def example_paid_pack_ids(limit: int = 2) -> tuple[str, ...]:
     return paid_pack_ids()[:limit]
 
 
-def example_facade_ids(limit: int = 6) -> tuple[str, ...]:
-    return facade_pack_ids()[:limit]
+def mcp_entrance_bullets(app_origin: str) -> str:
+    """The three published MCP entrances. Other /mcp/... paths keep working for
+    existing clients but are intentionally not advertised."""
+    base = app_origin.rstrip("/")
+    return (
+        f"- `{base}/mcp` - the main endpoint: every geography and data tool, free discovery, and policy-priced execution\n"
+        f"- `{base}/mcp/free` - the free subset: never charges; rejects paid material and above-free batches\n"
+        f"- `{base}/mcp/geography` - geography only: coordinates, place names, and outside codes to loc_id, plus coverage, shapes, and comparisons"
+    )
 
 
 def _code_list(items, *, prefix: str = "", conjunction: str = "or") -> str:
@@ -155,52 +159,23 @@ def current_pack_code_bullets() -> str:
     return "\n".join(f"- `{pack_id}`" for pack_id in current_pack_ids())
 
 
-def facade_link_bullets(app_origin: str) -> str:
-    lines: list[str] = []
-    base = app_origin.rstrip("/")
-    for pack_id in facade_pack_ids():
-        line = f"- [{pack_id}]({base}/mcp/{pack_id})"
-        alias = pack_registry_alias(pack_id)
-        if alias:
-            line += f" - registry-published under the searchable name `{alias}`"
-        lines.append(line)
-    return "\n".join(lines)
-
-
-def facade_server_json_lines(app_origin: str) -> str:
-    base = app_origin.rstrip("/")
-    return "\n".join(f"- `GET {base}/mcp/{pack_id}/server.json`" for pack_id in facade_pack_ids())
-
-
-def facade_transport_lines(app_origin: str) -> str:
-    base = app_origin.rstrip("/")
-    lines: list[str] = []
-    for pack_id in facade_pack_ids():
-        lines.append(f"- `GET {base}/mcp/{pack_id}`")
-        lines.append(f"- `POST {base}/mcp/{pack_id}`")
-    return "\n".join(lines)
-
-
 def geography_tools_section(app_origin: str) -> str:
-    """Registry-driven markdown block for geography/utility tool families.
+    """Registry-driven markdown block for the geography tools.
 
-    Tool families (e.g. geography) are not data packs, so they are not in
-    published_pack_ids(); they are surfaced here from tool_family_ids() so the
-    machine-readable agent surfaces advertise the free loc_id spine tools.
+    Geography tools are not data packs, so they are not in published_pack_ids().
+    They are listed from the geography tool family, whose roster covers every
+    geography tool, and advertised on the one geography-only endpoint plus the
+    main endpoint.
     """
     base = app_origin.rstrip("/")
-    blocks: list[str] = []
-    for family_id in tool_family_ids():
-        entry = tool_family_catalog_entry(family_id)
-        profile = pack_mcp_server_profile(family_id)
-        tool_line = ", ".join(f"`{tool.get('name')}`" for tool in (entry.get("tools") or []))
-        blocks.append(
-            f"- `{family_id}` utility family (free per-call allowance) - {entry.get('description')}\n"
-            f"  - facade: `{base}/mcp/{family_id}` (registry name `{profile.get('name')}`)\n"
-            f"  - tools: {tool_line}\n"
-            f"  - also reachable on the umbrella `{base}/mcp`; free within each tool's per-call allowance, account credit above it"
-        )
-    return "\n".join(blocks)
+    entry = tool_family_catalog_entry("geography")
+    tool_line = ", ".join(f"`{tool.get('name')}`" for tool in (entry.get("tools") or []))
+    return (
+        f"- Geography tools (free per-call allowance) - {entry.get('description')}\n"
+        f"  - tools: {tool_line}\n"
+        f"  - on the main endpoint `{base}/mcp` and the geography-only endpoint `{base}/mcp/geography`; "
+        "free within each tool's per-call allowance, account credit above it"
+    )
 
 
 def data_tool_entries() -> list[dict[str, str]]:
@@ -266,10 +241,6 @@ def coverage_section(app_origin: str, site_origin: str) -> str:
     )
 
 
-def pack_sentence() -> str:
-    return ", ".join(facade_pack_ids())
-
-
 def free_vs_paid_sentence() -> str:
     return (
         f"Free packs: {free_pack_csv()}. "
@@ -318,10 +289,10 @@ def render_app_llms_txt(*, app_origin: str = DEFAULT_APP_ORIGIN, site_origin: st
         "This host is the human-facing app at app.daedalmap.com.\n"
         "Agents, crawlers, and developer bots can use the MCP server and agent docs below.\n\n"
         "## MCP first\n"
-        f"- Remote MCP server: {app_origin}/mcp\n"
+        f"{mcp_entrance_bullets(app_origin)}\n"
         f"- MCP server metadata: {app_origin}/mcp/server.json\n"
         "- Registry identity: com.daedalmap/county-map\n"
-        "- Current transport: streamable HTTP\n"
+        "- Current transport: streamable HTTP (MCP 2026-07-28 stateless requests and earlier initialize-based clients)\n"
         "- MCP wraps the same discovery and execution lane as the hosted API\n\n"
         "## Agent lane\n"
         f"- Start here for agents: {site_origin}/agents\n"
@@ -397,8 +368,7 @@ def render_site_llms_txt(*, app_origin: str = DEFAULT_APP_ORIGIN, site_origin: s
         "- Agents reading HTML start at `/agents`\n"
         "- Bots and crawlers start at `/llms.txt`\n"
         "- MCP-capable clients should use `/mcp`\n"
-        "- Direct HTTP clients should use `/api/v1/guide`, `/api/v1/catalog`, `/api/v1/packs/{pack_id}`, and `/api/v1/query/dataset`\n"
-        "- Pack-specific MCP facades are listed in the expanded guide\n\n"
+        "- Direct HTTP clients should use `/api/v1/guide`, `/api/v1/catalog`, `/api/v1/packs/{pack_id}`, and `/api/v1/query/dataset`\n\n"
         "## Live endpoints\n\n"
         f"- [GET /mcp/server.json]({app_origin}/mcp/server.json)\n"
         f"- [GET /mcp]({app_origin}/mcp)\n"
@@ -408,8 +378,8 @@ def render_site_llms_txt(*, app_origin: str = DEFAULT_APP_ORIGIN, site_origin: s
         f"- [GET /api/v1/packs/{{pack_id}}]({app_origin}/api/v1/packs/earthquakes)\n"
         f"- [POST /api/v1/query/dataset]({app_origin}/api/v1/query/dataset)\n\n"
         f"{coverage_section(app_origin, site_origin)}\n"
-        "## Registry facades\n\n"
-        f"{facade_link_bullets(app_origin)}\n\n"
+        "## MCP endpoints\n\n"
+        f"{mcp_entrance_bullets(app_origin)}\n\n"
         "## Geography utility tools (free per-call allowance)\n\n"
         "A geographic reference and geometry family, free within each tool's per-call allowance: resolve coordinates and codes, inspect loc_id identities and relationships, discover country and family coverage, retrieve boundaries, and follow published crosswalks. The administrative spine is the main join surface; other geography families retain distinct identities.\n\n"
         f"{geography_tools_section(app_origin)}\n\n"
@@ -454,22 +424,21 @@ def render_site_llms_full(*, app_origin: str = DEFAULT_APP_ORIGIN, site_origin: 
         f"- [Geometry Tools]({site_origin}/docs/geometry-tools)\n"
         f"- [Geometry Family Definitions]({site_origin}/docs/geometry-families)\n\n"
         "## Publishing and directory layers\n\n"
-        "DaedalMap's public agent surface is organized into three discovery layers:\n\n"
+        "DaedalMap's public agent surface has these discovery layers:\n\n"
         f"- HTML agent reference: `{site_origin}/agents`\n"
         f"- Machine-readable listing: `{site_origin}/llms.txt` and `{site_origin}/llms-full.txt`\n"
-        f"- Umbrella MCP: `{app_origin}/mcp`\n"
-        f"- Individual MCP facades: pack-specific endpoints such as `{app_origin}/mcp/{example_facade_ids(1)[0]}`\n\n"
-        "Use the HTML agent reference for broad directories. Use\n"
-        "the umbrella MCP when a directory requires a direct MCP endpoint. Use the\n"
-        "individual MCP facades only where pack-specific search matters, such as the\n"
-        "official MCP Registry.\n\n"
+        "- Three MCP endpoints:\n"
+        f"{mcp_entrance_bullets(app_origin)}\n\n"
+        "Directories and registries list the main endpoint. The free endpoint backs\n"
+        "the ChatGPT and Claude connector listings. Older pack-specific MCP paths\n"
+        "keep working for existing clients but are not advertised; new clients\n"
+        "should use the main endpoint and `get_catalog`.\n\n"
         "Recommended hierarchy:\n\n"
         f"- Developers configuring clients start at `{site_origin}/devs`\n"
         f"- Agents reading HTML start at `{site_origin}/agents`\n"
         f"- Bots and crawlers start at `{site_origin}/llms.txt`\n"
         f"- MCP-capable clients should use `{app_origin}/mcp`\n"
-        "- Direct HTTP clients should use the hosted `/api/v1/...` discovery and query endpoints\n"
-        "- Pack-specific facades are for registry discoverability, not the main product entry point\n\n"
+        "- Direct HTTP clients should use the hosted `/api/v1/...` discovery and query endpoints\n\n"
         "Suggested broad directory entry:\n\n"
         "DaedalMap Geographic Reference and Geometry - Geographic interoperability infrastructure\n"
         "for agents and researchers. Identify reference systems, transform\n"
@@ -478,14 +447,11 @@ def render_site_llms_full(*, app_origin: str = DEFAULT_APP_ORIGIN, site_origin: 
         f"connect compatible datasets. Start at {site_origin}/agents.\n\n"
         "## Hosted bot entry points\n\n"
         f"- `GET {app_origin}/mcp/server.json`\n"
-        f"{facade_server_json_lines(app_origin)}\n"
         f"- `GET {app_origin}/api/v1/guide`\n"
         f"- `GET {app_origin}/api/v1/catalog`\n"
         f"- `GET {app_origin}/api/v1/packs/{{pack_id}}`\n"
         f"- `POST {app_origin}/api/v1/query/dataset`\n"
-        f"- `GET {app_origin}/mcp`\n"
-        f"- `POST {app_origin}/mcp`\n"
-        f"{facade_transport_lines(app_origin)}\n\n"
+        f"- `GET` and `POST {app_origin}/mcp`, `{app_origin}/mcp/free`, `{app_origin}/mcp/geography`\n\n"
         "## Complete public catalog snapshots\n\n"
         f"- Data: `{app_origin}/api/v1/catalog/download`\n"
         f"- Geometry: `{app_origin}/api/v1/geometry/catalog/download`\n"
@@ -504,16 +470,13 @@ def render_site_llms_full(*, app_origin: str = DEFAULT_APP_ORIGIN, site_origin: 
         "Free discovery lives at `GET /api/v1/guide`, `GET /api/v1/catalog`, and\n"
         "`GET /api/v1/packs/{pack_id}`. Execution lives at `POST /api/v1/query/dataset`.\n"
         f"{free_pack_display_csv()} are free lanes. {paid_pack_display_csv()} challenge via HTTP `402`.\n"
-        "MCP is available at `/mcp` and wraps the same hosted discovery and execution lane.\n"
-        "Floods and tornadoes have dedicated MCP facades alongside the other\n"
-        "registry-published packs.\n\n"
+        "MCP is available at `/mcp` and wraps the same hosted discovery and execution lane.\n\n"
         "Short bot-facing positioning:\n\n"
         "- loc_id resolution, reference identification, geometry discovery and retrieval, and published crosswalk tools, free within each tool's per-call allowance\n"
         "- remote MCP server for earthquake, tsunami, volcano, hurricane, flood, tornado, SDG, World Factbook, and development-indicator data queries\n"
         "- free discovery plus mixed free and paid structured retrieval\n"
         "- deterministic outputs over a maintained geographic reference graph and reusable geometry library\n"
-        f"- the umbrella MCP is the canonical live product; pack facades such as `{pack_sentence()}` are narrow official-registry entrypoints over the same shared backend\n"
-        "- Smithery remains pointed at the umbrella MCP entrypoint\n\n"
+        "- the main `/mcp` endpoint is the canonical live product and the one registry listing\n\n"
         "Suggested tags:\n\n"
         "- geographic intelligence\n"
         "- disaster intelligence\n"
@@ -536,8 +499,7 @@ def render_site_llms_full(*, app_origin: str = DEFAULT_APP_ORIGIN, site_origin: 
         "MCP exposes the same published data and geography contracts as the hosted API.\n"
         "Discovery, request limits, and payment behavior follow the selected pack.\n"
         f"If a client supports remote MCP, use `{app_origin}/mcp` as the first choice.\n"
-        "If not, use the hosted HTTP API lane directly.\n"
-        f"For official-registry discoverability, narrow facades such as {_code_list(example_facade_ids(), prefix=app_origin + '/mcp/', conjunction='and')} can be listed as pack-specific entrypoints without changing the runtime architecture.\n\n"
+        "If not, use the hosted HTTP API lane directly.\n\n"
         "## Geography note\n\n"
         "Read the `loc_id` guide before assuming region filters behave the same across all packs.\n"
         "Country ids and hierarchical geography are common, but tsunami examples may also use reviewed named-water loc_ids such as `IHO1953-240001002` for the Mediterranean Sea; `XOO` is deprecated.\n\n"
