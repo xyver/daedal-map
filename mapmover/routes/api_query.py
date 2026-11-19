@@ -397,6 +397,12 @@ async def execute_query_dataset_payload(req: Request, payload: dict[str, Any]) -
     requested_metrics_raw = payload.get("metrics")
     requested_metrics = [str(metric).strip() for metric in (requested_metrics_raw or []) if str(metric).strip()]
     time_filter = payload.get("filters", {}).get("time") if isinstance(payload.get("filters"), dict) else None
+    raw_routing_region_ids = payload.get("filters", {}).get("region_ids") if isinstance(payload.get("filters"), dict) else None
+    routing_region_ids = (
+        [str(item) for item in raw_routing_region_ids if str(item).strip()]
+        if isinstance(raw_routing_region_ids, list)
+        else []
+    )
     requested_granularity = None
     if isinstance(time_filter, dict):
         requested_granularity = time_filter.get("granularity")
@@ -407,6 +413,7 @@ async def execute_query_dataset_payload(req: Request, payload: dict[str, Any]) -
             source_id,
             requested_metrics,
             requested_granularity=requested_granularity,
+            region_ids=routing_region_ids,
         )
         if str(source_as_pack.get("resolution") or "").strip() in {"default_source", "single_source"}:
             pack_id = source_id
@@ -420,6 +427,7 @@ async def execute_query_dataset_payload(req: Request, payload: dict[str, Any]) -
             pack_id,
             requested_metrics,
             requested_granularity=requested_granularity,
+            region_ids=routing_region_ids,
         )
         resolution = str(pack_resolution.get("resolution") or "")
         if resolution == "unknown_metrics":

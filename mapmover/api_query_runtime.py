@@ -1280,8 +1280,43 @@ def normalize_time_granularity(value: str | None) -> str | None:
     return alias_map.get(normalized, normalized)
 
 
-def resolve_pack_sources_for_metrics(pack_id: str, metrics: list[str]) -> dict[str, Any]:
+def _region_countries(region_ids: list[str] | None) -> set[str]:
+    """ISO3 prefixes of administrative region_ids (``USA-CA-007`` -> ``USA``)."""
+    countries: set[str] = set()
+    for region_id in region_ids or []:
+        head = str(region_id or "").strip().split("-", 1)[0].upper()
+        if len(head) == 3 and head.isalpha():
+            countries.add(head)
+    return countries
+
+
+def _source_region_fit(metadata: dict[str, Any], countries: set[str]) -> int:
+    """Rank a source against the requested countries using its declared scope.
+
+    A source scoped to one country is the home source for requests inside that
+    country (+1) and the wrong source for requests outside it (-1). Global or
+    undeclared sources stay neutral, so non-place queries route as before.
+    """
+    if not countries:
+        return 0
+    scope = str((metadata or {}).get("scope") or "").strip().upper()
+    if len(scope) != 3 or not scope.isalpha():
+        return 0
+    if countries <= {scope}:
+        return 1
+    if scope not in countries:
+        return -1
+    return 0
+
+
+def resolve_pack_sources_for_metrics(
+    pack_id: str,
+    metrics: list[str],
+    *,
+    region_ids: list[str] | None = None,
+) -> dict[str, Any]:
     normalized_pack_id = str(pack_id or "").strip()
+    region_countries = _region_countries(region_ids)
     normalized_metrics = [str(metric).strip() for metric in (metrics or []) if str(metric).strip()]
     if not normalized_pack_id or not normalized_metrics:
         return {
@@ -1345,7 +1380,7 @@ def resolve_pack_sources_for_metrics(pack_id: str, metrics: list[str]) -> dict[s
             "unknown_metrics": unknown_metrics,
         }
 
-    source_scores: list[tuple[int, float, str]] = []
+    source_scores: list[tuple[int, int, float, str]] = []
     for source_id in candidate_sources:
         metadata = per_source_metadata.get(source_id) or {}
         metric_keys = per_source_metric_keys.get(source_id, set())
@@ -1376,11 +1411,15 @@ def resolve_pack_sources_for_metrics(pack_id: str, metrics: list[str]) -> dict[s
         # event archive).  When the canonical source id equals the pack id,
         # keep that pack-default promise ahead of supplemental event lanes.
         event_source_priority = 2 if is_event_source and source_id == normalized_pack_id else int(is_event_source)
-        source_scores.append((event_source_priority, score, source_id))
+        # A place-filtered query must not land on another country's source:
+        # a U.S. county query routed to the Canadian fire database returns no
+        # rows. Region fit ranks ahead of density and event priority.
+        region_fit = _source_region_fit(metadata, region_countries)
+        source_scores.append((region_fit, event_source_priority, score, source_id))
 
     if source_scores:
-        source_scores.sort(key=lambda item: (-item[0], -item[1], item[2]))
-        selected_source_id = source_scores[0][2]
+        source_scores.sort(key=lambda item: (-item[0], -item[1], -item[2], item[3]))
+        selected_source_id = source_scores[0][3]
         return {
             "pack_id": normalized_pack_id,
             "requested_metrics": normalized_metrics,
@@ -1541,6 +1580,7 @@ def resolve_pack_source_for_query(
     metrics: list[str],
     *,
     requested_granularity: str | None = None,
+    region_ids: list[str] | None = None,
 ) -> dict[str, Any]:
     normalized_metrics = [str(metric).strip() for metric in (metrics or []) if str(metric).strip()]
     if not normalized_metrics:
@@ -1549,7 +1589,7 @@ def resolve_pack_source_for_query(
             requested_granularity=requested_granularity,
         )
 
-    base = resolve_pack_sources_for_metrics(pack_id, metrics)
+    base = resolve_pack_sources_for_metrics(pack_id, metrics, region_ids=region_ids)
     if base.get("resolution") != "single_source":
         base["requested_granularity"] = normalize_time_granularity(requested_granularity)
         return base

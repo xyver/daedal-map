@@ -93,6 +93,40 @@ class CatalogTruncationTests(unittest.TestCase):
         self.assertEqual(_truncate_words("short", 40), "short")
 
 
+class RegionAwareSourceRoutingTests(unittest.TestCase):
+    def test_home_country_source_wins_and_foreign_source_drops(self):
+        from mapmover.api_query_runtime import _region_countries, _source_region_fit
+
+        countries = _region_countries(["USA-CA-007"])
+        self.assertEqual(countries, {"USA"})
+        self.assertEqual(_source_region_fit({"scope": "usa"}, countries), 1)
+        self.assertEqual(_source_region_fit({"scope": "CAN"}, countries), -1)
+        self.assertEqual(_source_region_fit({"scope": "global"}, countries), 0)
+        self.assertEqual(_source_region_fit({}, countries), 0)
+        self.assertEqual(_source_region_fit({"scope": "CAN"}, set()), 0)
+
+    def test_pack_metric_routing_uses_region(self):
+        from mapmover import api_query_runtime as runtime
+
+        metadata = {
+            "can_wildfires": {"scope": "CAN", "metrics": {"area_km2": {"density": 0.99}}},
+            "wildfires_usa": {"scope": "USA", "metrics": {"area_km2": {"density": 0.5}}},
+        }
+        spec = ApiSourceSpec(
+            source_id="x", pack_id="wildfires", parquet_name="x.parquet", query_mode="single_source_events",
+            location_field="loc_id", time_field="timestamp", time_granularity="event",
+            metrics={"area_km2": ApiMetricSpec(metric_id="area_km2", column="area_km2", description="")},
+            filterable_fields={"loc_id"}, sortable_fields={"area_km2"},
+        )
+        with patch.object(runtime, "_get_mcp_pack_source_ids", return_value=list(metadata)), \
+                patch.object(runtime, "load_source_metadata", side_effect=lambda s: metadata[s]), \
+                patch.object(runtime, "get_api_source_spec", return_value=spec):
+            unscoped = runtime.resolve_pack_sources_for_metrics("wildfires", ["area_km2"])
+            scoped = runtime.resolve_pack_sources_for_metrics("wildfires", ["area_km2"], region_ids=["USA-CA-007"])
+        self.assertEqual(unscoped["selected_source_id"], "can_wildfires")
+        self.assertEqual(scoped["selected_source_id"], "wildfires_usa")
+
+
 VOLCANO_SPEC = ApiSourceSpec(
     source_id="volcanoes_events",
     pack_id="volcanoes",
