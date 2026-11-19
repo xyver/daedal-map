@@ -68,6 +68,7 @@ from mapmover.api_query_commercial import (
     get_trusted_artifact_token,
     pack_effective_access,
     pack_requires_commercial_access,
+    quoted_amount_is_zero,
     settle_commercial_access,
     settlement_headers,
 )
@@ -416,7 +417,15 @@ def _apply_mcp_payment_mode(request: Request, payload: dict[str, Any]) -> dict[s
     routed = dict(payload or {})
     if mode == "smart":
         routed["payment_choice_required"] = True
-        routed["message"] = "This MCP call is paid. Retry on /mcp/account with an X-API-Key to spend account credit."
+        context = routed.get("context") if isinstance(routed.get("context"), dict) else {}
+        pricing = routed.get("daedalmap_pricing") or context.get("pricing")
+        if quoted_amount_is_zero(pricing):
+            routed["message"] = (
+                "This pack needs an account API key. This call is quoted at $0 (inside the included rows), "
+                "so no credit is spent: retry on /mcp/account with an X-API-Key."
+            )
+        else:
+            routed["message"] = "This MCP call is paid. Retry on /mcp/account with an X-API-Key to spend account credit."
     elif mode == "account":
         routed.pop("challenge", None)
         routed["account_credit_required"] = True

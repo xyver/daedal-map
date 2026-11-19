@@ -168,6 +168,23 @@ def post_commercial_access(path: str, payload: dict[str, Any]) -> tuple[int, dic
     return response.status_code, body
 
 
+ZERO_QUOTE_MESSAGE = (
+    "This call is quoted at $0 because it fits inside the included rows, so no credit is spent. "
+    "The pack is still a paid pack, so the call needs an account API key: retry on /mcp/account "
+    "(MCP) or with an X-API-Key header (REST)."
+)
+
+
+def quoted_amount_is_zero(pricing: dict[str, Any] | None) -> bool:
+    """True when a verifier quote exists and prices this call at zero."""
+    if not isinstance(pricing, dict) or "amount_usdc_base_units" not in pricing:
+        return False
+    try:
+        return int(pricing.get("amount_usdc_base_units") or 0) == 0
+    except (TypeError, ValueError):
+        return False
+
+
 def commercial_access_response(
     request_id: str | None,
     verifier_payload: dict[str, Any] | None,
@@ -202,9 +219,13 @@ def commercial_access_response(
 
     def pricing_payload(pricing: dict[str, Any] | None = None) -> dict[str, Any]:
         pricing = pricing if isinstance(pricing, dict) else {}
+        message = "Small queries stay cheap; broad scans cost more or need narrower filters."
+        if quoted_amount_is_zero(pricing):
+            message = ZERO_QUOTE_MESSAGE
         return {
-            "message": "Small queries stay cheap; broad scans cost more or need narrower filters.",
+            "message": message,
             "price_display": pricing.get("price_display"),
+            "amount_usdc_base_units": pricing.get("amount_usdc_base_units"),
             "scope_class": pricing.get("scope_class"),
             "soft_cap_usd": pricing.get("soft_cap_usd"),
             "suggestions": pricing.get("suggestions") or [],
