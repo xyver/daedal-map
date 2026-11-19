@@ -32,17 +32,20 @@ def _build_query_scope_warning(scope: dict[str, Any], message: str) -> dict[str,
     }
 
 
-def _build_query_scope_cap_info(scope: dict[str, Any]) -> dict[str, Any]:
-    estimated_work_score = max(1, int(scope.get("estimated_work_score") or 0))
-    return {
+def _build_query_scope_cap_info(scope: dict[str, Any], matching_rows: int | None = None) -> dict[str, Any]:
+    # available_rows is a row count. Report it only when a count was actually
+    # run; the work score is not a row count and must not be presented as one.
+    cap_info: dict[str, Any] = {
         "cap_hit": True,
         "returned_rows": 0,
-        "available_rows": estimated_work_score,
         "cap_value": 0,
         "cap_reason": "query_scope_gate",
         "cap_kind": "display_warning",
         "measure": "query_scope",
     }
+    if matching_rows is not None:
+        cap_info["available_rows"] = int(matching_rows)
+    return cap_info
 
 
 def format_query_time_value(value: Any) -> Any:
@@ -153,8 +156,8 @@ def query_scope_suggestions(scope: dict[str, Any]) -> list[str]:
         suggestions.append("Add a time range, such as year_start/year_end or start/end.")
     elif scope.get("time_span_years") and int(scope.get("time_span_years") or 0) > 5:
         suggestions.append("Use a narrower time window when you only need a sample or top-N result.")
-    if not scope.get("has_region_filter"):
-        suggestions.append("Add region_ids to limit the geographic scope.")
+    if not scope.get("has_region_filter") and not scope.get("has_field_filter"):
+        suggestions.append("Add region_ids, or an exact filters.equals value on a filterable field such as a name.")
     if not scope.get("is_event_count"):
         suggestions.append("Use event_count when you only need an aggregate count.")
     if scope.get("user_sort_count") and not scope.get("has_region_filter"):
@@ -175,7 +178,14 @@ def build_query_scope(
     output_format: str,
     available_start: Any = None,
     available_end: Any = None,
+    field_filter_count: int = 0,
 ) -> dict[str, Any]:
+    """Score a request's scan size.
+
+    field_filter_count counts exact or list filters on non-location, non-time
+    fields (filters.equals or direct field filters). An exact match on a
+    descriptive field narrows an event scan the way region_ids does.
+    """
     time_span_years, time_start, time_end, time_span_estimated = scope_time_span_years(
         normalized_time,
         available_start=available_start,
@@ -185,6 +195,8 @@ def build_query_scope(
     is_event_count = metrics == ["event_count"]
     has_region_filter = bool(normalized_region_ids)
     has_time_filter = bool(normalized_time)
+    field_filter_count = max(0, int(field_filter_count or 0))
+    has_field_filter = field_filter_count > 0
 
     work_score = 0
     if not has_time_filter and spec.time_field:
@@ -198,7 +210,7 @@ def build_query_scope(
             work_score += 10
 
     region_count = len(normalized_region_ids)
-    if not has_region_filter:
+    if not has_region_filter and not has_field_filter:
         work_score += 20
     elif region_count > 25:
         work_score += 20
@@ -208,7 +220,7 @@ def build_query_scope(
     if not is_event_count:
         work_score += 15
     if requested_sort_count:
-        work_score += 20 if not has_region_filter and (time_span_years is None or time_span_years > 5) else 10
+        work_score += 20 if not (has_region_filter or has_field_filter) and (time_span_years is None or time_span_years > 5) else 10
     if compare_filter_count:
         work_score = max(0, work_score - min(15, compare_filter_count * 5))
     if limit > 500:
@@ -238,6 +250,8 @@ def build_query_scope(
         "has_time_filter": has_time_filter,
         "region_count": region_count,
         "has_region_filter": has_region_filter,
+        "field_filter_count": field_filter_count,
+        "has_field_filter": has_field_filter,
         "compare_filter_count": compare_filter_count,
         "sort_count": len(normalized_sort),
         "user_sort_count": requested_sort_count,
@@ -251,6 +265,7 @@ def build_query_scope(
                 "has_time_filter": has_time_filter,
                 "time_span_years": time_span_years,
                 "has_region_filter": has_region_filter,
+                "has_field_filter": has_field_filter,
                 "is_event_count": is_event_count,
                 "user_sort_count": requested_sort_count,
             }
@@ -258,12 +273,46 @@ def build_query_scope(
     }
 
 
-def query_scope_rejection(scope: dict[str, Any]) -> dict[str, Any] | None:
+def query_scope_limits() -> dict[str, int]:
+    """The live anti-scan thresholds, read from the environment on each call."""
+    return {
+        "max_unscoped_years": env_int("QUERY_MAX_UNSCOPED_YEARS", 5, minimum=1),
+        "max_region_years": env_int("QUERY_MAX_REGION_YEARS", 50, minimum=1),
+        "max_aggregate_unscoped_years": env_int("QUERY_MAX_AGGREGATE_UNSCOPED_YEARS", 50, minimum=1),
+        "max_region_ids": env_int("QUERY_MAX_REGION_IDS", 25, minimum=1),
+        "reject_score": env_int("QUERY_REJECT_WORK_SCORE", 75, minimum=1),
+    }
+
+
+def query_scope_passing_shapes(limits: dict[str, int] | None = None) -> list[str]:
+    """Plain statements of request shapes the gate admits, for errors and help."""
+    limits = limits or query_scope_limits()
+    return [
+        f"Event rows with region_ids or an exact filters.equals value: up to {limits['max_region_years']} years.",
+        f"Event rows with neither: up to {limits['max_unscoped_years']} years.",
+        f"metrics=['event_count'] without region_ids: up to {limits['max_aggregate_unscoped_years']} years.",
+        f"region_ids: at most {limits['max_region_ids']} entries.",
+        "Any other request whose matching rows fit within its limit is admitted after a row count.",
+    ]
+
+
+def query_scope_is_count_probe_eligible(rejection: dict[str, Any] | None) -> bool:
+    """A row count can admit a rejected request, except for structural caps."""
+    if not rejection:
+        return False
+    return str(rejection.get("rule") or "") != "region_id_cap"
+
+
+def query_scope_rejection(
+    scope: dict[str, Any],
+    *,
+    matching_rows: int | None = None,
+) -> dict[str, Any] | None:
     if str(scope.get("query_mode") or "") != "single_source_events":
         return None
 
     no_time = not scope.get("has_time_filter")
-    no_region = not scope.get("has_region_filter")
+    narrowed = bool(scope.get("has_region_filter") or scope.get("has_field_filter"))
     is_event_count = bool(scope.get("is_event_count"))
     time_span_years = scope.get("time_span_years")
     try:
@@ -271,40 +320,85 @@ def query_scope_rejection(scope: dict[str, Any]) -> dict[str, Any] | None:
     except (TypeError, ValueError):
         span = None
 
-    max_unscoped_years = env_int("QUERY_MAX_UNSCOPED_YEARS", 5, minimum=1)
-    max_region_years = env_int("QUERY_MAX_REGION_YEARS", 50, minimum=1)
-    max_aggregate_unscoped_years = env_int("QUERY_MAX_AGGREGATE_UNSCOPED_YEARS", 50, minimum=1)
-    max_region_ids = env_int("QUERY_MAX_REGION_IDS", 25, minimum=1)
-    reject_score = env_int("QUERY_REJECT_WORK_SCORE", 75, minimum=1)
+    limits = query_scope_limits()
+    max_unscoped_years = limits["max_unscoped_years"]
+    max_region_years = limits["max_region_years"]
+    max_aggregate_unscoped_years = limits["max_aggregate_unscoped_years"]
+    max_region_ids = limits["max_region_ids"]
+    span_text = f"{span} years" if span is not None else "the full source time range"
 
     if int(scope.get("region_count") or 0) > max_region_ids:
+        rule = "region_id_cap"
         reason = f"region_ids is limited to {max_region_ids} entries for live dataset queries."
-    elif no_time and no_region and not is_event_count:
-        reason = "Event row queries must include a time filter or region_ids."
-    elif no_time and no_region and bool(scope.get("user_sort_count")):
-        reason = "Sorting a full event dataset without time or geography filters is too broad for live API access."
-    elif no_region and span is not None and span > (max_aggregate_unscoped_years if is_event_count else max_unscoped_years):
-        reason = "This time window is too broad without region_ids for live API access."
-    elif scope.get("has_region_filter") and span is not None and span > max_region_years and not is_event_count:
-        reason = "This time window is too broad for row-level live API access."
-    elif int(scope.get("estimated_work_score") or 0) >= reject_score:
+        retry_hint = f"Split the request into calls of at most {max_region_ids} region_ids."
+    elif no_time and not narrowed and not is_event_count:
+        rule = "unscoped_rows"
+        reason = "Event row queries must include a time filter, region_ids, or an exact filters.equals value."
+        retry_hint = f"Add filters.time spanning at most {max_unscoped_years} years, or add region_ids."
+    elif no_time and not narrowed and bool(scope.get("user_sort_count")):
+        rule = "unscoped_sort"
+        reason = (
+            "Sorting a full event dataset without time, region_ids, or an exact field filter "
+            "is too broad for live API access."
+        )
+        retry_hint = "Add filters.time or region_ids before sorting."
+    elif not narrowed and span is not None and span > (max_aggregate_unscoped_years if is_event_count else max_unscoped_years):
+        allowed = max_aggregate_unscoped_years if is_event_count else max_unscoped_years
+        rule = "unscoped_time_window"
+        reason = (
+            f"This request covers {span_text} with no region_ids or exact field filter; "
+            f"the limit without one is {allowed} years."
+        )
+        retry_hint = (
+            f"Add region_ids (up to {max_region_years} years), add an exact filters.equals value, "
+            f"or narrow filters.time to {allowed} years or fewer."
+        )
+    elif narrowed and span is not None and span > max_region_years and not is_event_count:
+        rule = "narrowed_time_window"
+        reason = (
+            f"This request covers {span_text} of event rows; the limit with region_ids "
+            f"or a field filter is {max_region_years} years."
+        )
+        retry_hint = f"Narrow filters.time to {max_region_years} years or fewer, or request metrics=['event_count']."
+    elif int(scope.get("estimated_work_score") or 0) >= limits["reject_score"]:
+        rule = "work_score"
         reason = "This request is too broad for live API access."
+        retry_hint = "Narrow the request by time, region_ids, an exact field filter, or use event_count."
     else:
         return None
 
+    if matching_rows is not None:
+        reason += (
+            f" A row count found {int(matching_rows)} matching rows, more than the "
+            f"requested limit of {int(scope.get('limit') or 0)}."
+        )
+
     display_warning = _build_query_scope_warning(scope, reason)
-    cap_info = _build_query_scope_cap_info(scope)
+    cap_info = _build_query_scope_cap_info(scope, matching_rows)
+    details: dict[str, Any] = {
+        "rule": rule,
+        "scope_class": scope.get("scope_class"),
+        "estimated_work_score": scope.get("estimated_work_score"),
+        "requested": {
+            "time_span_years": span,
+            "region_count": int(scope.get("region_count") or 0),
+            "field_filter_count": int(scope.get("field_filter_count") or 0),
+            "event_count_only": is_event_count,
+            "limit": int(scope.get("limit") or 0),
+        },
+        "passing_shapes": query_scope_passing_shapes(limits),
+        "suggestions": scope.get("pricing_guidance") or query_scope_suggestions(scope),
+        "display_warning": display_warning,
+        "cap_info": cap_info,
+    }
+    if matching_rows is not None:
+        details["matching_rows"] = int(matching_rows)
     return {
         "code": "query_too_broad",
+        "rule": rule,
         "message": reason,
-        "details": {
-            "scope_class": scope.get("scope_class"),
-            "estimated_work_score": scope.get("estimated_work_score"),
-            "suggestions": scope.get("pricing_guidance") or query_scope_suggestions(scope),
-            "display_warning": display_warning,
-            "cap_info": cap_info,
-        },
-        "retry_hint": "Narrow the request by time, geography, or aggregation before retrying.",
+        "details": details,
+        "retry_hint": retry_hint,
     }
 
 

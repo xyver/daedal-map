@@ -38,6 +38,7 @@ from mapmover.api_query_scope import (
     format_query_time_value,
     normalize_region_ids,
     parse_time_filter,
+    query_scope_is_count_probe_eligible,
     query_scope_rejection,
     validate_metrics,
 )
@@ -56,6 +57,7 @@ from mapmover.api_query_runtime import (
     get_api_source_columns,
     get_api_source_spec,
     get_api_source_time_bounds,
+    get_source_parquet_path,
     is_temporal_time_field,
     normalize_time_granularity,
     resolve_effective_time_spec,
@@ -67,6 +69,7 @@ from mapmover.runtime.filter_primitives import resolve_exact_id_filter_field
 from mapmover.runtime.geography_reference import classify_loc_id_family
 from mapmover.runtime.source_response_semantics import (
     collect_metric_response_contract,
+    collect_sparse_metric_warnings,
 )
 from mapmover.data_loading import load_catalog, load_source_metadata
 from mapmover.security import get_client_ip, is_local_loopback_request, rate_limiter
@@ -113,6 +116,123 @@ def _pack_material_record(pack_id: str) -> dict[str, Any]:
             if isinstance(pack, dict) and str(pack.get("pack_id") or "").strip() == pack_id:
                 return pack
     return {}
+
+
+EVENT_LABEL_FIELD_LIMIT = 6
+_TEXT_COLUMN_TYPES = {"VARCHAR", "STRING", "TEXT"}
+COUNTRY_ATTRIBUTION_SCAN_LIMIT = 5000
+
+
+def _text_column_types(spec) -> dict[str, str]:
+    from mapmover.duckdb_helpers import parquet_column_types
+
+    try:
+        return parquet_column_types(get_source_parquet_path(spec))
+    except Exception:
+        return {}
+
+
+def _event_label_fields(spec, *, exclude: set[str]) -> list[str]:
+    """Descriptive text fields returned on every event row.
+
+    Taken from the source's own published filterable fields, so no per-pack
+    list exists: a filterable text column that is not a location, time,
+    identity, or metric column is a label (for example volcano_name, country,
+    region). Name-like fields sort first.
+    """
+    if spec.query_mode != "single_source_events":
+        return []
+    column_types = _text_column_types(spec)
+    if not column_types:
+        return []
+    skip = {
+        spec.location_field,
+        spec.time_field,
+        "event_id",
+        "source_event_id",
+        *spec.hierarchical_filter_fields,
+        *spec.delimited_hierarchical_filter_fields,
+        *exclude,
+    }
+    candidates = [
+        column for column in spec.filterable_fields
+        if column
+        and column not in skip
+        and "loc_id" not in column.lower()
+        and str(column_types.get(column) or "").upper() in _TEXT_COLUMN_TYPES
+    ]
+    candidates.sort(key=lambda column: (0 if column.lower().endswith("name") else 1, column))
+    return candidates[:EVENT_LABEL_FIELD_LIMIT]
+
+
+def _loc_id_within(loc_id: Any, prefixes: list[str]) -> bool:
+    value = str(loc_id or "").strip().upper()
+    return any(value == prefix or value.startswith(f"{prefix}-") for prefix in prefixes)
+
+
+async def _country_events_outside_regions(
+    spec,
+    *,
+    region_ids: list[str],
+    exact_filters: dict[str, Any],
+    in_filters: dict[str, list[Any]],
+    compare_filters: list[tuple[str, str, Any]],
+) -> dict[str, Any] | None:
+    """Count events a source attributes to a requested country but locates elsewhere.
+
+    Offshore events (a volcano island, a submarine earthquake) can carry a
+    marine loc_id while the source's own country field names the country, so
+    a country region_ids filter silently drops them. This reports them; it
+    does not change what region_ids matches.
+    """
+    if spec.query_mode != "single_source_events" or spec.location_filter_mode != "hierarchical_loc_id":
+        return None
+    country_codes = [value for value in region_ids if classify_loc_id_family(value) == "admin_0"]
+    if not country_codes:
+        return None
+    country_field = spec.location_lookup_field or "country"
+    if str(_text_column_types(spec).get(country_field) or "").upper() not in _TEXT_COLUMN_TYPES:
+        return None
+    country_names = [str(name).strip().upper() for name in get_country_names_from_codes(country_codes)]
+    country_names = [name for name in country_names if name]
+    if not country_names:
+        return None
+    try:
+        rows = await run_mcp_blocking(
+            "get_data",
+            execute_dataset_query,
+            spec,
+            select_columns=[spec.location_field],
+            exact_filters=exact_filters or None,
+            in_filters={**in_filters, country_field: country_names},
+            compare_filters=compare_filters or None,
+            limit=COUNTRY_ATTRIBUTION_SCAN_LIMIT,
+        )
+    except Exception:
+        return None
+    prefixes = [str(value).strip().upper() for value in region_ids if str(value).strip()]
+    outside: dict[str, int] = {}
+    for row in rows:
+        loc_id = str(row.get(spec.location_field) or "").strip()
+        if loc_id and not _loc_id_within(loc_id, prefixes):
+            outside[loc_id] = outside.get(loc_id, 0) + 1
+    if not outside:
+        return None
+    total = sum(outside.values())
+    top = sorted(outside.items(), key=lambda item: (-item[1], item[0]))[:10]
+    return {
+        "code": "country_events_outside_region_ids",
+        "message": (
+            f"{total} events that this source's {country_field} field attributes to "
+            f"{', '.join(country_codes)} are located outside the requested region_ids "
+            "(for example in a marine area) and were not included. Add the listed loc_ids "
+            "to region_ids to include them."
+        ),
+        "count": total,
+        "attribution_field": country_field,
+        "loc_ids": [{"loc_id": loc_id, "events": count} for loc_id, count in top],
+        "scan_limited": len(rows) >= COUNTRY_ATTRIBUTION_SCAN_LIMIT,
+    }
 
 
 def _get_request_ip(request: Request) -> str | None:
@@ -635,6 +755,8 @@ async def execute_query_dataset_payload(req: Request, payload: dict[str, Any]) -
             source_id=source_id,
         )
 
+    # Exact filters on descriptive fields narrow the scan for the scope gate.
+    field_filter_fields: set[str] = set()
     reserved_filter_keys = {"region_ids", "time", "equals", "compare"}
     direct_filter_fields = {
         key: value
@@ -683,8 +805,12 @@ async def execute_query_dataset_payload(req: Request, payload: dict[str, Any]) -
                     )
                 if value:
                     in_filters[resolved_field_name] = value
+                    if resolved_field_name not in {spec.location_field, spec.time_field}:
+                        field_filter_fields.add(resolved_field_name)
                 continue
             exact_filters[resolved_field_name] = value
+            if value is not None and resolved_field_name not in {spec.location_field, spec.time_field}:
+                field_filter_fields.add(resolved_field_name)
 
     equals_filters = filters.get("equals") or {}
     if equals_filters:
@@ -717,6 +843,8 @@ async def execute_query_dataset_payload(req: Request, payload: dict[str, Any]) -
                     source_id=source_id,
                 )
             exact_filters[resolved_field_name] = value
+            if value is not None and resolved_field_name not in {spec.location_field, spec.time_field}:
+                field_filter_fields.add(resolved_field_name)
 
     raw_compare_filters = filters.get("compare") or []
     if raw_compare_filters:
@@ -883,7 +1011,22 @@ async def execute_query_dataset_payload(req: Request, payload: dict[str, Any]) -
 
     requested_sort_count = len(sort) if isinstance(sort, list) else 0
     metric_columns = [spec.metrics[metric].column for metric in metrics]
-    default_sort_field = metric_columns[0] if metric_columns else spec.time_field
+    # Event rows default to time order: a metric-ascending default surfaced
+    # the smallest events first and read as "these are all the events".
+    event_time_default = bool(
+        spec.query_mode == "single_source_events"
+        and spec.time_field
+        # A mixed-temporal source can swap its effective time field (for
+        # example year to timestamp); that column is still the row time.
+        and (spec.time_field in spec.sortable_fields or spec.time_field in available_columns)
+        and not selected_dimensions
+        and metrics != ["event_count"]
+    )
+    if event_time_default:
+        default_sort_field = spec.time_field
+    else:
+        default_sort_field = metric_columns[0] if metric_columns else spec.time_field
+    sort_defaulted = not sort
     sort_entries = sort or [{"field": default_sort_field, "direction": "asc"}]
     normalized_sort: list[dict[str, str]] = []
     sort_items: list[tuple[str, str]] = []
@@ -921,7 +1064,8 @@ async def execute_query_dataset_payload(req: Request, payload: dict[str, Any]) -
                 source_id=source_id,
             )
         actual_sort_field = metric_columns[0] if sort_field == "value" and len(metric_columns) == 1 else sort_field
-        if actual_sort_field not in spec.sortable_fields:
+        default_time_sort = sort_defaulted and actual_sort_field == spec.time_field
+        if actual_sort_field not in spec.sortable_fields and not default_time_sort:
             return error_response(
                 request_id,
                 "invalid_sort_field",
@@ -1037,6 +1181,7 @@ async def execute_query_dataset_payload(req: Request, payload: dict[str, Any]) -
         output_format=output_format,
         available_start=available_start,
         available_end=available_end,
+        field_filter_count=len(field_filter_fields),
     )
     get_api_analytics_metadata(
         req,
@@ -1048,6 +1193,37 @@ async def execute_query_dataset_payload(req: Request, payload: dict[str, Any]) -
     # and tool limits are the safeguard; the public anti-scan gate would make
     # the two supported Research surfaces disagree on the same query.
     scope_rejection = None if getattr(req.state, "research_source_contract", False) else query_scope_rejection(query_scope)
+    if (
+        scope_rejection
+        and query_scope_is_count_probe_eligible(scope_rejection)
+        and str(os.getenv("QUERY_SCOPE_ROW_COUNT_ENABLED", "1")).strip() != "0"
+    ):
+        # The score only estimates scan size. Count the matching rows and
+        # admit the request when they fit the requested limit, so a narrow
+        # but long query (one volcano across a century) is not refused.
+        matching_rows: int | None = None
+        try:
+            count_rows = await run_mcp_blocking(
+                "get_data",
+                execute_dataset_query,
+                spec,
+                select_columns=[],
+                exact_filters=exact_filters or None,
+                in_filters=in_filters or None,
+                hierarchical_prefix_filters=hierarchical_prefix_filters or None,
+                compare_filters=compare_filters or None,
+                count_only=True,
+            )
+            matching_rows = int((count_rows or [{}])[0].get("row_count"))
+        except Exception:
+            matching_rows = None
+        if matching_rows is not None:
+            query_scope["matching_rows"] = matching_rows
+            if matching_rows <= limit:
+                query_scope["admitted_by_row_count"] = True
+                scope_rejection = None
+            else:
+                scope_rejection = query_scope_rejection(query_scope, matching_rows=matching_rows)
     if scope_rejection:
         return error_response(
             request_id,
@@ -1250,6 +1426,15 @@ async def execute_query_dataset_payload(req: Request, payload: dict[str, Any]) -
         for identity_column in reversed(event_identity_columns):
             if identity_column not in select_columns:
                 select_columns.insert(0, identity_column)
+    event_label_fields: list[str] = []
+    if spec.query_mode == "single_source_events" and not selected_dimensions:
+        event_label_fields = [
+            column for column in _event_label_fields(spec, exclude=set(metric_columns))
+            if column in available_columns
+        ]
+        for label_field in event_label_fields:
+            if label_field not in select_columns:
+                select_columns.append(label_field)
     for sort_field, _sort_direction in sort_items:
         if sort_field not in select_columns:
             select_columns.append(sort_field)
@@ -1323,6 +1508,8 @@ async def execute_query_dataset_payload(req: Request, payload: dict[str, Any]) -
             shaped["loc_id"] = json_safe_value(row.get(spec.location_field))
             for identity_column in event_identity_columns:
                 shaped[identity_column] = json_safe_value(row.get(identity_column))
+            for label_field in event_label_fields:
+                shaped[label_field] = json_safe_value(row.get(label_field))
         if spec.time_field and not selected_dimensions:
             shaped[spec.time_field] = json_safe_value(format_query_time_value(row.get(spec.time_field)))
         non_null_metric_count = 0
@@ -1363,6 +1550,36 @@ async def execute_query_dataset_payload(req: Request, payload: dict[str, Any]) -
         load_source_metadata_func=load_source_metadata,
     )
     warnings.extend(metric_response_contract["warnings"])
+    column_to_metric = {spec.metrics[metric].column: metric for metric in metrics}
+    metric_uses: dict[str, list[str]] = {}
+    for sort_field, _direction in sort_items:
+        if sort_field in column_to_metric:
+            metric_uses.setdefault(column_to_metric[sort_field], []).append("sort")
+    for compare_field, _op, _value in compare_filters:
+        if compare_field in column_to_metric:
+            metric_uses.setdefault(column_to_metric[compare_field], []).append("compare")
+    if len(metrics) == 1 and metrics[0] != "event_count":
+        metric_uses.setdefault(metrics[0], []).append("only_metric")
+    warnings.extend(
+        collect_sparse_metric_warnings(
+            metric_response_contract["metric_availability"],
+            metric_uses=metric_uses,
+        )
+    )
+    if normalized_region_ids and not selected_dimensions:
+        outside_warning = await _country_events_outside_regions(
+            spec,
+            region_ids=normalized_region_ids,
+            exact_filters={
+                key: value for key, value in exact_filters.items() if key != spec.location_field
+            },
+            in_filters={
+                key: value for key, value in in_filters.items() if key != spec.location_field
+            },
+            compare_filters=compare_filters,
+        )
+        if outside_warning:
+            warnings.append(outside_warning)
 
     payload_out: dict[str, Any] = {
         "request_id": request_id,
@@ -1372,6 +1589,7 @@ async def execute_query_dataset_payload(req: Request, payload: dict[str, Any]) -
         "query_mode": spec.query_mode,
         "filters_applied": filters_applied,
         "sort": normalized_sort,
+        "sort_defaulted": sort_defaulted,
         "aggregation": {"dimensions": dimension_ids, "include_labels": label_columns} if selected_dimensions else None,
         "row_count": len(response_rows),
         "truncated": False,
@@ -1380,6 +1598,13 @@ async def execute_query_dataset_payload(req: Request, payload: dict[str, Any]) -
         "metric_availability": metric_response_contract["metric_availability"],
         "response_obligations": metric_response_contract["response_obligations"],
     }
+    if event_label_fields:
+        payload_out["label_fields"] = event_label_fields
+    if query_scope.get("admitted_by_row_count"):
+        payload_out["scope_note"] = (
+            f"Admitted after a row count: {query_scope.get('matching_rows')} rows matched, "
+            f"within the requested limit of {limit}."
+        )
     from material_policy_shared import query_result_citation
 
     result_citation = query_result_citation(

@@ -166,10 +166,14 @@ TOOL_GUIDANCE: dict[str, dict[str, Any]] = {
         ["get_data"], ["source event id", "relationship source/method", "companion-layer provenance"]
     ),
     "get_data": _g(
-        ["You selected a published data pack and need its canonical rows or supported aggregate metrics."],
+        [
+            "You selected a published data pack and need its canonical rows or supported aggregate metrics.",
+            "Event rows over a long window: add region_ids or an exact filters.equals value (such as a name field from get_pack); without either, event row windows are short. A query whose matching rows fit its limit is admitted after a row count, and a query_too_broad error lists the passing shapes in details.passing_shapes.",
+            "Event rows come back in time order unless you send sort, and carry the source's descriptive text fields (listed in label_fields). To rank, send sort with the metric and direction desc.",
+        ],
         ["Calling geometry tool families", "Passing internal source_id values", "Passing direct filter fields outside filters.equals or filters.compare", "Guessing metrics without get_pack", "Unbounded event scans"],
         {"pack_id": "world_bank_wdi", "metrics": ["gdp_current_usd"], "filters": {"region_ids": ["CAN"], "time": {"start": "2020-01-01", "end": "2020-12-31"}}, "limit": 3},
-        ["rows", "row_count", "source_id", "pack_id", "filters_applied", "provenance"], ["get_event", "get_pack"], ["source metadata", "release/freshness", "license"]
+        ["rows", "row_count", "label_fields", "sort", "sort_defaulted", "warnings", "metric_availability", "source_id", "pack_id", "filters_applied", "provenance"], ["get_event", "get_pack"], ["source metadata", "release/freshness", "license"]
     ),
 }
 

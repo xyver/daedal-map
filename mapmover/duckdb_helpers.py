@@ -671,22 +671,27 @@ def _normalize_ts_for_duckdb(val: str | None) -> str | None:
 
 
 def parquet_columns(parquet_path: Path, *, raw_geoparquet: bool = False) -> set[str]:
+    return set(parquet_column_types(parquet_path, raw_geoparquet=raw_geoparquet))
+
+
+def parquet_column_types(parquet_path: Path, *, raw_geoparquet: bool = False) -> dict[str, str]:
+    """Return {column: DuckDB type name} for a parquet file, cached like parquet_columns."""
     if duckdb is None:
-        return set()
+        return {}
     cloud_mode = is_cloud_mode()
     if not cloud_mode:
         if not parquet_path.exists():
-            return set()
+            return {}
         try:
             stat = parquet_path.stat()
             signature = (int(stat.st_mtime_ns), int(stat.st_size))
             cache_key = f"{parquet_path.resolve()}|raw={int(raw_geoparquet)}"
         except OSError:
-            return set()
+            return {}
         with _PARQUET_COLUMNS_CACHE_LOCK:
             cached = _PARQUET_COLUMNS_CACHE.get(cache_key)
             if cached and cached[0] == signature:
-                return set(cached[1])
+                return dict(cached[1])
     else:
         cache_key = "|".join((
             os.environ.get("S3_BUCKET", ""),
@@ -703,17 +708,17 @@ def parquet_columns(parquet_path: Path, *, raw_geoparquet: bool = False) -> set[
         with _PARQUET_COLUMNS_CACHE_LOCK:
             cached = _PARQUET_CLOUD_COLUMNS_CACHE.get(cache_key)
             if cached and cached[0] > now:
-                return set(cached[1])
+                return dict(cached[1])
     uri = path_to_uri(parquet_path)
     rows = run_rows(
         "DESCRIBE SELECT * FROM read_parquet(?)", [uri], raw_geoparquet=raw_geoparquet
     )
-    columns = {row[0] for row in rows}
+    columns = {str(row[0]): str(row[1]) if len(row) > 1 else "" for row in rows}
     with _PARQUET_COLUMNS_CACHE_LOCK:
         if not cloud_mode:
-            _PARQUET_COLUMNS_CACHE[cache_key] = (signature, set(columns))
+            _PARQUET_COLUMNS_CACHE[cache_key] = (signature, dict(columns))
         else:
-            _PARQUET_CLOUD_COLUMNS_CACHE[cache_key] = (now + cache_seconds, set(columns))
+            _PARQUET_CLOUD_COLUMNS_CACHE[cache_key] = (now + cache_seconds, dict(columns))
     return columns
 
 

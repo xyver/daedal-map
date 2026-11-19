@@ -2147,6 +2147,51 @@ def _jsonrpc_error(request_id: Any, code: int, message: str, *, data: dict[str, 
     return response
 
 
+def _truncate_words(text: Any, limit: int) -> str:
+    """Shorten text at a word boundary and mark the cut with '...'."""
+    value = " ".join(str(text or "").split())
+    if len(value) <= limit:
+        return value
+    cut = value[: max(0, limit - 3)]
+    if " " in cut:
+        cut = cut.rsplit(" ", 1)[0]
+    return cut.rstrip(" ,;:.-") + "..."
+
+
+def _pack_citation(pack_id: str, source_ids: list[str]) -> dict[str, Any] | None:
+    """The same catalog-owned citation get_data returns, merged across a pack's sources.
+
+    get_pack previously carried no licence field, so its provenance reported
+    not_reported while get_data for the same pack reported the licence.
+    """
+    from datetime import date as _date
+
+    from material_policy_shared import query_result_citation
+    from mapmover.routes.api_query import _pack_material_record, _source_material_record
+
+    pack_record = _pack_material_record(pack_id)
+    accessed = _date.today().isoformat()
+    merged: dict[str, Any] | None = None
+    seen_attribution: set[str] = set()
+    seen_sources: set[str] = set()
+    for source_id in source_ids:
+        citation = query_result_citation(_source_material_record(source_id), pack_record, accessed=accessed)
+        if not citation:
+            continue
+        if merged is None:
+            merged = {**citation, "attribution": [], "sources": []}
+        for line in citation.get("attribution") or []:
+            if line not in seen_attribution:
+                seen_attribution.add(line)
+                merged["attribution"].append(line)
+        for entry in citation.get("sources") or []:
+            key = str(entry.get("text") or "")
+            if key and key not in seen_sources:
+                seen_sources.add(key)
+                merged["sources"].append(entry)
+    return merged
+
+
 def _provenance_summary(payload: dict[str, Any]) -> dict[str, Any]:
     """Normalize provenance already present in a result without inventing it."""
     aliases = {
@@ -6730,7 +6775,7 @@ async def _mcp_endpoint_impl(request: Request, pack_id: str | None = None):
             payload = {
                 "ok": True, "catalog": "data",
                 "packs": [{"pack_id": row.get("pack_id"), "name": row.get("pack_name") or row.get("pack_id"),
-                           "description": str(row.get("description") or "")[:200],
+                           "description": _truncate_words(row.get("description"), 200),
                            "free_get_data_policy": (
                                "eligible" if str(row.get("pack_id") or "").strip().lower() in free_pack_ids
                                else "blocked_paid_pack"
@@ -6789,6 +6834,11 @@ async def _mcp_endpoint_impl(request: Request, pack_id: str | None = None):
                                        payload={"error": "Pack not found", "pack_id": pack_id},
                                        rpc_request_id=request_id, is_error=True, error_code="pack_not_found")
         from mapmover.data_loading import load_source_metadata
+        pack_source_ids = [
+            str(item.get("source_id") if isinstance(item, dict) else item)
+            for item in (payload.get("source_ids") or payload.get("sources") or [])
+            if (item.get("source_id") if isinstance(item, dict) else item)
+        ] if isinstance(payload, dict) else []
         if "source_id" in arguments:
             payload = mcp_pack_source_detail(payload, source_id=arguments["source_id"].strip(),
                                              source_metadata=load_source_metadata)
@@ -6801,6 +6851,17 @@ async def _mcp_endpoint_impl(request: Request, pack_id: str | None = None):
         else:
             payload = mcp_full_pack_detail(payload, catalog="data", source_metadata=load_source_metadata)
         pack_error = payload.get("error") if isinstance(payload, dict) else None
+        if isinstance(payload, dict) and not pack_error and "citation" not in payload:
+            citation_source_ids = (
+                [arguments["source_id"].strip()] if "source_id" in arguments
+                else pack_source_ids
+            )
+            try:
+                pack_citation = _pack_citation(pack_id, citation_source_ids)
+            except Exception:
+                pack_citation = None
+            if pack_citation:
+                payload = {**payload, "citation": pack_citation}
         return _finish_data_helper(request, tool_name=tool_name, started_at=helper_started_at,
                                    payload=payload, rpc_request_id=request_id,
                                    is_error=bool(pack_error),

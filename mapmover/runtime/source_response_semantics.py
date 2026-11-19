@@ -211,6 +211,44 @@ def collect_metric_availability_warnings(
     ]
 
 
+SPARSE_METRIC_DENSITY = 0.05
+
+
+def collect_sparse_metric_warnings(
+    metric_availability: dict[str, dict],
+    *,
+    metric_uses: dict[str, list[str]],
+) -> list[dict]:
+    """Warn when a caller sorts, filters, or selects only a metric that is mostly null.
+
+    ``metric_uses`` maps metric id to how the request used it ("sort",
+    "compare", "only_metric"). Density is the source-published non-null share.
+    """
+    sparse: list[dict] = []
+    for metric_id, uses in (metric_uses or {}).items():
+        availability = (metric_availability or {}).get(metric_id) or {}
+        try:
+            density = float(availability.get("density"))
+        except (TypeError, ValueError):
+            continue
+        if density >= SPARSE_METRIC_DENSITY or not uses:
+            continue
+        sparse.append({"metric": metric_id, "density": density, "used_for": sorted(set(uses))})
+    if not sparse:
+        return []
+    return [
+        {
+            "code": "sparse_metric",
+            "message": (
+                "One or more metrics this request sorts, filters, or relies on are reported for "
+                f"under {int(SPARSE_METRIC_DENSITY * 100)}% of source rows. Rows without a value are "
+                "omitted or sort last, so results describe only the events that report it, not all events."
+            ),
+            "metrics": sparse,
+        }
+    ]
+
+
 def collect_metric_response_contract(
     source_id: str,
     metric_ids: list[str],
