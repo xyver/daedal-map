@@ -11,6 +11,7 @@ from typing import Any
 
 import pyarrow.parquet as pq
 import pyarrow as pa
+import pyarrow.dataset as ds
 from shapely import from_wkb, from_wkt
 from shapely.geometry import Point, mapping, shape
 
@@ -20,6 +21,10 @@ for _runtime_root in (_PACKAGE_ROOT, _PACKAGE_ROOT / "runtime"):
         sys.path.insert(0, str(_runtime_root))
 from mcp_surface_shared import (MARINE_JURISDICTION_FAMILIES, MARINE_POINT_FAMILIES,
                                 build_tool_definitions, public_geometry_family_id)
+from mapmover.runtime.bbox_geometry import (
+    MAX_BBOX_CANDIDATES, overlap_percentages, projected_viewport, rectangle_bounds,
+)
+from mapmover.runtime.global_admin_spine_policy import GLOBAL_ADMIN2_SYSTEMS, admitted_admin_match
 
 
 def _shape(value):
@@ -30,7 +35,7 @@ def _shape(value):
 
 TOOLS = {
     "get_tool_help", "get_catalog", "get_pack", "get_geography",
-    "resolve_point", "resolve_deep_point", "get_loc_id_info",
+    "resolve_point", "resolve_deep_point", "resolve_bbox", "resolve_deep_bbox", "get_loc_id_info",
     "identify_dataset_geography", "identify_reference_system",
     "convert_reference", "compare_geographies", "get_shape",
 }
@@ -69,6 +74,7 @@ class DownloadedGeometryBackend:
         self.verified = {}
         self.schemas = {}
         self.family_index = {}
+        self.bbox_indexes = {}
         for sidecar in sorted(self.root.rglob("geometry.json")):
             payload = json.loads(sidecar.read_text(encoding="utf-8"))
             sidecar.resolve().relative_to(self.root)
@@ -182,11 +188,13 @@ class DownloadedGeometryBackend:
 
     def _load(self, *, geometry: bool = False, loc_ids=None, country=None, admin_level=None, point=None,
               selected_path: Path | None = None, reference_only: bool = False,
-              strict_country: bool = False):
+              strict_country: bool = False, selected_package=None):
         wanted = {"loc_id", "parent_id", "parent_loc_id", "admin_level", "type", "name", "iso_a3", "country_iso3", "family", "subtype", "level", "centroid_lon", "centroid_lat", "has_polygon", "bbox_min_lon", "bbox_min_lat", "bbox_max_lon", "bbox_max_lat"}
         if geometry: wanted.update({"geometry", "geometry_wkb"})
         rows = []
         for package, file in self._records():
+            if selected_package is not None and package is not selected_package:
+                continue
             if selected_path is not None and file["local_path"] != selected_path:
                 continue
             meta = package["metadata"]
@@ -252,6 +260,9 @@ class DownloadedGeometryBackend:
     def call(self, name: str, args: dict[str, Any]) -> dict[str, Any]:
         if name not in TOOLS:
             raise ValueError(f"Unknown Geometry tool: {name}; refresh tools/list")
+        if name in {"resolve_bbox", "resolve_deep_bbox"}:
+            # Bbox errors have the same structured codes as the hosted tools.
+            return self._resolve_bbox(args, deep=name == "resolve_deep_bbox")
         self._validate_call(name, args)
         return getattr(self, f"_call_{name}")(args)
 
@@ -573,6 +584,229 @@ class DownloadedGeometryBackend:
 
     def _call_resolve_deep_point(self, args: dict[str, Any]) -> dict[str, Any]:
         return self._resolve_points(args, deep=True)
+
+    def _bbox_package(self, scope):
+        packages = [p for p in self.packages
+                    if str(p["metadata"].get("country_code") or "").upper() == scope
+                    and p["metadata"].get("package_tier") in {"display", "detail"}]
+        if not packages:
+            return None
+        rank = {"display": 1, "detail": 2}
+        best = max(rank[p["metadata"]["package_tier"]] for p in packages)
+        selected = [p for p in packages if rank[p["metadata"]["package_tier"]] == best]
+        if len(selected) != 1:
+            raise ValueError(f"Ambiguous installed bbox package for {scope}; remove duplicate editions")
+        return selected[0]
+
+    @staticmethod
+    def _bbox_banks(package, scope, owner=None):
+        """Select one edition's admin banks; never include another scope/family."""
+        component = "exact" if package["metadata"]["package_tier"] == "detail" else "display"
+        files = {f["archive_path"]: f for f in package["files"] if f.get("component") == component}
+        if scope == "GLOBAL":
+            names = [f"{component}/admin_{level}.parquet" for level in range(3)]
+            return [(files[name], level) for level, name in enumerate(names)] if all(n in files for n in names) else []
+        shallow = [f for name, f in files.items() if re.fullmatch(
+            rf"{component}/(?:admin/admin_0/[^/]+|admin_0_3)\.parquet", name)]
+        if len(shallow) != 1:
+            return []
+        banks = [(shallow[0], None)]
+        if owner:
+            for name, file in files.items():
+                match = re.fullmatch(rf"{component}/admin/admin_([4-6])/[^/]+\.parquet", name)
+                if match and Path(name).stem.split("_", 1)[-1] == owner:
+                    banks.append((file, int(match.group(1))))
+        return banks
+
+    def _bbox_index(self, package, file, level):
+        """Use stored bounds, or cache bounds only after a streaming first read."""
+        bounds_columns = ("bbox_min_lon", "bbox_min_lat", "bbox_max_lon", "bbox_max_lat")
+        if package["metadata"].get("country_code") == "GLOBAL":
+            index = next((f for f in package["files"]
+                          if f["archive_path"] == "predicate/admin_bbox_index.parquet"), None)
+            if index is not None:
+                self._verify_file(index)
+                return ds.dataset(index["local_path"], format="parquet")
+        self._verify_file(file)
+        path = file["local_path"]
+        schema = self.schemas[path]
+        if all(c in schema.names for c in (*bounds_columns, "admin_level")):
+            return ds.dataset(path, format="parquet")
+        cached = self.bbox_indexes.get(path)
+        if cached is not None:
+            return ds.dataset(cached)
+        geometry_column = next((c for c in ("geometry", "geometry_wkb") if c in schema.names), None)
+        if geometry_column is None:
+            raise ValueError(f"Administrative bank has no geometry: {file['archive_path']}")
+        columns = [c for c in ("loc_id", "admin_level", "admin_1_loc_id", "source_attributes_json")
+                   if c in schema.names] + [geometry_column]
+        rows = []
+        # Older portable Display packs omit bbox columns. Do not retain their
+        # polygons or rescan them for each viewport; only this compact index lives on.
+        for batch in pq.ParquetFile(path).iter_batches(batch_size=16, columns=columns):
+            for row in batch.to_pylist():
+                if row[geometry_column] is None:
+                    continue
+                geometry = _shape(row[geometry_column])
+                if geometry.is_empty:
+                    continue
+                attributes = json.loads(row.get("source_attributes_json") or "{}")
+                rows.append({"loc_id": row["loc_id"],
+                             "admin_level": row.get("admin_level") if row.get("admin_level") is not None else level,
+                             "admin_1_loc_id": row.get("admin_1_loc_id") or attributes.get("admin_1_loc_id"),
+                             **dict(zip(bounds_columns, geometry.bounds))})
+        index_schema = pa.schema([("loc_id", pa.string()), ("admin_level", pa.int32()),
+                                  ("admin_1_loc_id", pa.string()),
+                                  *((c, pa.float64()) for c in bounds_columns)])
+        table = pa.Table.from_pylist(rows, schema=index_schema)
+        self.bbox_indexes[path] = table
+        return ds.dataset(table)
+
+    def _bbox_candidates(self, package, file, level, bounds, *, owner, owner_of, limit):
+        index = self._bbox_index(package, file, level)
+        west, south, east, north = bounds
+        expression = ((ds.field("bbox_min_lon") < east) & (ds.field("bbox_max_lon") > west)
+                      & (ds.field("bbox_min_lat") < north) & (ds.field("bbox_max_lat") > south))
+        expression &= (ds.field("admin_level") == level if level is not None else
+                       (ds.field("admin_level") >= (1 if owner else 0)) & (ds.field("admin_level") <= 3))
+        columns = [c for c in ("loc_id", "admin_level", "admin_1_loc_id") if c in index.schema.names]
+        rows = []
+        # A shallow bank may omit its owner column. In that case the selected
+        # package's parent graph supplies the owner before applying the limit.
+        for batch in index.scanner(columns=columns, filter=expression, batch_size=128).to_batches():
+            for row in batch.to_pylist():
+                if owner and (row.get("admin_1_loc_id") or (owner if level is not None else owner_of(row["loc_id"]))) != owner:
+                    continue
+                rows.append(row)
+                if len(rows) >= limit:
+                    return rows
+        return rows
+
+    def _bbox_shape_rows(self, file, ids):
+        self._verify_file(file)
+        path = file["local_path"]
+        columns = [c for c in ("loc_id", "name", "admin_level", "parent_loc_id", "parent_id", "geometry", "geometry_wkb")
+                   if c in self.schemas[path].names]
+        scanner = ds.dataset(path, format="parquet").scanner(
+            columns=columns, filter=ds.field("loc_id").isin(sorted(ids)), batch_size=16)
+        for batch in scanner.to_batches():
+            yield from batch.to_pylist()
+
+    def _resolve_bbox(self, args, *, deep):
+        request_id = str(args.get("request_id") or "") if isinstance(args, dict) else ""
+        def error(code, message):
+            return {"request_id": request_id, "error": {"code": code, "message": message}}
+        allowed = {"corners", "request_id", "shallow_loc_id" if deep else "scope_id"}
+        if not isinstance(args, dict) or set(args) - allowed:
+            return error("bbox_contract_violation", "Unexpected bbox arguments; use get_tool_help")
+        try:
+            bounds = rectangle_bounds(args.get("corners"))
+            viewport = projected_viewport(bounds)
+        except (TypeError, ValueError) as exc:
+            return error("invalid_bbox", str(exc))
+        shallow = args.get("shallow_loc_id")
+        if deep:
+            if not isinstance(shallow, str) or not shallow.strip():
+                return error("shallow_loc_id_required", "Supply deep_scope_loc_id from a country-scoped resolve_bbox result")
+            shallow = shallow.strip().upper()
+            scope = shallow.split("-", 1)[0]
+            if "-" not in shallow or len(scope) != 3 or not scope.isalpha():
+                return error("invalid_shallow_loc_id", "Select a country Admin 1, 2, or 3 identity")
+        else:
+            scope = str(args.get("scope_id", "GLOBAL") or "").strip().upper()
+            countries = {str(p["metadata"].get("country_code") or "").upper() for p in self.packages}
+            if scope != "GLOBAL" and (scope not in countries or len(scope) != 3 or not scope.isalpha()):
+                return error("invalid_bbox_scope", "Select GLOBAL or one installed ISO3 country")
+        package = self._bbox_package(scope)
+        if package is None:
+            return error("shallow_scope_unavailable" if deep else "selected_scope_unavailable",
+                         "Install a Display or Detail package for the selected scope")
+        identities = {}
+        def identity(loc_id):
+            if loc_id not in identities:
+                rows = self._load(loc_ids=[loc_id], reference_only=True, selected_package=package)
+                identities[loc_id] = next(iter(self._dedupe(rows)), None)
+            return identities[loc_id]
+        def owner_of(loc_id):
+            seen = set()
+            while loc_id and loc_id not in seen:
+                seen.add(loc_id)
+                row = identity(loc_id)
+                if not row:
+                    return None
+                if row.get("admin_level") == 1:
+                    return loc_id
+                loc_id = row.get("parent_id")
+            return None
+        owner = None
+        if deep:
+            anchor = identity(shallow)
+            if not anchor or anchor.get("admin_level") not in (1, 2, 3):
+                return error("invalid_shallow_loc_id", "Select an Admin 1-3 identity from this installed country package")
+            owner = owner_of(shallow)
+            if not owner:
+                return error("shallow_scope_unresolved", "The Admin 1 owner could not be resolved")
+        banks = self._bbox_banks(package, scope, owner)
+        if not banks:
+            return error("selected_scope_unavailable", "The selected package has no complete administrative bbox layout")
+        selections, count = [], 0
+        for file, level in banks:
+            candidates = self._bbox_candidates(package, file, level, bounds, owner=owner,
+                                               owner_of=owner_of, limit=MAX_BBOX_CANDIDATES + 1 - count)
+            count += len(candidates)
+            if count > MAX_BBOX_CANDIDATES:
+                return {**error("bbox_too_broad", "Viewport intersects too many admin candidates; zoom in"),
+                        "candidate_limit": MAX_BBOX_CANDIDATES}
+            if scope == "GLOBAL":
+                candidates = [r for r in candidates if admitted_admin_match(r["loc_id"], r["admin_level"])]
+            selections.append((file, {r["loc_id"]: r for r in candidates}))
+        ids = {loc_id for _, candidates in selections for loc_id in candidates}
+        if ids:
+            identities.update({r["loc_id"]: r for r in self._dedupe(self._load(
+                loc_ids=sorted(ids), reference_only=True, selected_package=package))})
+        matches = []
+        for file, candidates in selections:
+            if not candidates:
+                continue
+            found = set()
+            for row in self._bbox_shape_rows(file, candidates):
+                loc_id = row["loc_id"]
+                found.add(loc_id)
+                geometry = row.get("geometry") if row.get("geometry") is not None else row.get("geometry_wkb")
+                if geometry is None:
+                    continue
+                percentages = overlap_percentages(_shape(geometry), viewport)
+                if percentages is None:
+                    continue
+                reference = identities.get(loc_id) or {}
+                parent = reference.get("parent_id") or row.get("parent_loc_id") or row.get("parent_id") or ""
+                match = {"loc_id": loc_id, "name": reference.get("name") or row.get("name") or loc_id,
+                         "admin_level": candidates[loc_id]["admin_level"], **percentages}
+                if scope == "GLOBAL":
+                    match.update(baseline_loc_id=loc_id, parent_baseline_loc_id=parent)
+                else:
+                    match["parent_loc_id"] = parent
+                    if not deep:
+                        country_owner = candidates[loc_id].get("admin_1_loc_id") or owner_of(loc_id)
+                        if country_owner:
+                            match["deep_scope_loc_id"] = country_owner
+                matches.append(match)
+            if found != set(candidates):
+                return error("selected_scope_unavailable", "The installed bbox index refers to missing shapes")
+        matches.sort(key=lambda row: (-row["intersection_over_union_pct"], -row["view_coverage_pct"], row["loc_id"]))
+        levels = range(1, 7) if deep else range(3 if scope == "GLOBAL" else 4)
+        result = {"request_id": request_id, "bbox": dict(zip(("west", "south", "east", "north"), bounds)),
+                  "best_match": matches[0] if matches else None,
+                  "matches_by_admin_level": {str(level): [r for r in matches if r["admin_level"] == level][:5] for level in levels},
+                  "ranking": "highest equal-area intersection-over-union"}
+        if deep:
+            result.update(shallow_loc_id=shallow, admin_1_scope=owner, query_layout="country_admin_spine_deep")
+        elif scope == "GLOBAL":
+            result.update(geometry_release=package["metadata"].get("version"), query_layout="global_admin0_2_point",
+                          admin2_systems=GLOBAL_ADMIN2_SYSTEMS)
+        else:
+            result.update(scope_id=scope, query_layout="country_admin_spine_shallow")
+        return result
 
     def _identity(self, loc_id: str) -> dict[str, Any] | None:
         # Identity queries should not hash or scan geometry banks. The graph

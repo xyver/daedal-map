@@ -13,17 +13,9 @@ from ..paths import GEOMETRY_DIR
 from .geometry_catalog import load_geometry_catalog
 from .geometry_predicate_query import read_bbox_candidates_for_points, read_rows_by_ids
 from .geometry_storage_layout import catalog_artifact_path
-from .global_admin_spine_policy import admitted_admin_match
+from .global_admin_spine_policy import GLOBAL_ADMIN2_SYSTEMS, admitted_admin_match
 
 logger = logging.getLogger(__name__)
-
-# Global results retain their source IDs; country scopes use country IDs.
-GLOBAL_ADMIN2_SYSTEMS = {
-    "geometry_source": "GeoBoundaries Admin 2",
-    "country_source": "country-pack Admin 2",
-    "relationship": "The two Admin 2 systems can define different areas. A shared Admin 2 label does not make their boundaries interchangeable.",
-}
-
 
 def _selected_layout() -> dict[str, Any] | None:
     catalog = load_geometry_catalog()

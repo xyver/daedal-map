@@ -6,16 +6,20 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import pyarrow as pa
 import pyarrow.parquet as pq
+from shapely.geometry import Polygon, box
 
 from downloaded_geometry_backend import DownloadedGeometryBackend
+import downloaded_geometry_backend as backend_module
 
 
 def _package(root: Path, name: str, profile: str, unit: str, files: dict[str, tuple[str, list[dict]]],
              tier: str | None = None):
     base = root / name
+    base.mkdir(parents=True, exist_ok=True)
     members = []
     for archive, (component, rows) in files.items():
         target = base / archive
@@ -29,6 +33,179 @@ def _package(root: Path, name: str, profile: str, unit: str, files: dict[str, tu
                "external_system": "overture_gers" if unit == "BRIDGES" else None,
                "files": members}
     (base / "geometry.json").write_text(json.dumps(sidecar), encoding="utf-8")
+
+
+class InstalledBBoxTest(unittest.TestCase):
+    corners = [{"lat": 0, "lon": 0}, {"lat": 0, "lon": 2},
+               {"lat": 2, "lon": 0}, {"lat": 2, "lon": 2}]
+
+    @staticmethod
+    def row(loc_id, level, parent="", bounds=(0, 0, 2, 2), *, indexed=True, owner=None):
+        row = {"loc_id": loc_id, "name": loc_id, "admin_level": level,
+               "parent_loc_id": parent, "geometry": box(*bounds).wkb}
+        if indexed:
+            row.update(dict(zip(("bbox_min_lon", "bbox_min_lat", "bbox_max_lon", "bbox_max_lat"), bounds)))
+        if owner is not None:
+            row["admin_1_loc_id"] = owner
+        return row
+
+    def global_package(self, root, *, indexed=True, extra=None, tier="display"):
+        component = "exact" if tier == "detail" else "display"
+        rows = [self.row("CAN", 0, bounds=(-5, -5, 5, 5), indexed=indexed),
+                self.row("CAN-GNT", 1, "CAN", bounds=(0, 0, 1, 2), indexed=indexed),
+                self.row("CAN-GNT-GER", 2, "CAN-GNT", indexed=indexed)]
+        files = {f"{component}/admin_{level}.parquet": (component, [row]) for level, row in enumerate(rows)}
+        files["reference/identities.parquet"] = ("reference", [
+            {"loc_id": r["loc_id"], "admin_level": r["admin_level"], "parent_loc_id": r["parent_loc_id"],
+             "name": "Northwest Territories" if r["admin_level"] == 1 else r["name"]} for r in rows])
+        files.update(extra or {})
+        _package(root, "global", "downloadable_geometry_package", "GLOBAL", files, tier=tier)
+
+    def country_package(self, root, *, tier="detail"):
+        component = "exact" if tier == "detail" else "display"
+        rows = [self.row("CAN", 0, bounds=(-5, -5, 5, 5), owner=""),
+                self.row("CAN-NT", 1, "CAN", owner="CAN-NT"),
+                self.row("CAN-NT-1", 2, "CAN-NT", bounds=(0, 0, 1, 2), owner="CAN-NT"),
+                self.row("CAN-AB", 1, "CAN", owner="CAN-AB")]
+        deep_rows = [self.row("CAN-NT-1-4", 4, "CAN-NT-1", owner="CAN-NT"),
+                     self.row("CAN-NT-1-4-5", 5, "CAN-NT-1-4", owner="CAN-NT")]
+        files = {f"{component}/admin/admin_0/0000_admin_0_3.parquet": (component, rows),
+                 "reference/identities.parquet": ("reference", [
+                     {k: v for k, v in r.items() if k != "geometry"} for r in rows + deep_rows])}
+        if tier == "detail":
+            for r in deep_rows:
+                files[f"exact/admin/admin_{r['admin_level']}/0001_CAN-NT.parquet"] = ("exact", [r])
+            files["exact/admin/admin_4/0002_CAN-AB.parquet"] = ("exact", [self.row("CAN-AB-4", 4, "CAN-AB")])
+        _package(root, "country", "downloadable_geometry_package", "CAN", files, tier=tier)
+
+    def test_global_identity_parent_ranking_and_country_scope_are_distinct(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            self.global_package(root)
+            self.country_package(root)
+            backend = DownloadedGeometryBackend(root)
+            global_result = backend.call("resolve_bbox", {"corners": self.corners})
+            best = global_result["best_match"]
+            self.assertEqual(best["loc_id"], "CAN-GNT")
+            self.assertEqual(best["name"], "Northwest Territories")
+            self.assertEqual(best["parent_baseline_loc_id"], "CAN")
+            self.assertEqual(best["view_coverage_pct"], 50)
+            self.assertEqual(best["loc_id_coverage_pct"], 100)
+            self.assertEqual(best["intersection_over_union_pct"], 50)
+            self.assertEqual(global_result["matches_by_admin_level"]["2"], [])
+            self.assertTrue(all("global" in str(p) for p in backend.verified))
+            country = backend.call("resolve_bbox", {"corners": self.corners, "scope_id": "can"})
+            self.assertEqual(country["scope_id"], "CAN")
+            self.assertEqual(country["matches_by_admin_level"]["2"][0]["parent_loc_id"], "CAN-NT")
+            self.assertEqual(country["matches_by_admin_level"]["2"][0]["deep_scope_loc_id"], "CAN-NT")
+            self.assertNotIn("CAN-GNT", {r["loc_id"] for rs in country["matches_by_admin_level"].values() for r in rs})
+
+    def test_deep_bbox_uses_admin1_owner_and_all_declared_levels(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            self.global_package(root)
+            self.country_package(root)
+            backend = DownloadedGeometryBackend(root)
+            result = backend.call("resolve_deep_bbox", {"corners": self.corners, "shallow_loc_id": "can-nt-1"})
+            self.assertEqual(result["admin_1_scope"], "CAN-NT")
+            self.assertEqual([len(result["matches_by_admin_level"][str(level)]) for level in range(1, 7)], [1, 1, 0, 1, 1, 0])
+            self.assertEqual(result["matches_by_admin_level"]["5"][0]["parent_loc_id"], "CAN-NT-1-4")
+            self.assertFalse(any("global" in str(p) or "0002_CAN-AB" in str(p) for p in backend.verified))
+            for bad_id in ("CAN", "CAN-GNT", "CAN-NT-1-4"):
+                self.assertEqual(backend.call("resolve_deep_bbox", {"corners": self.corners, "shallow_loc_id": bad_id})["error"]["code"], "invalid_shallow_loc_id")
+
+    def test_display_deep_bbox_keeps_shallow_matches_without_inventing_deep_data(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            self.country_package(root, tier="display")
+            result = DownloadedGeometryBackend(root).call("resolve_deep_bbox", {"corners": self.corners, "shallow_loc_id": "CAN-NT"})
+            self.assertTrue(result["matches_by_admin_level"]["1"])
+            self.assertEqual(result["matches_by_admin_level"]["4"], [])
+
+    def test_portable_display_bounds_are_cached_and_unmatched_shapes_are_not_read_again(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            self.global_package(root, indexed=False)
+            backend = DownloadedGeometryBackend(root)
+            first = backend.call("resolve_bbox", {"corners": self.corners})
+            self.assertEqual(len(backend.bbox_indexes), 3)
+            indexes = dict(backend.bbox_indexes)
+            second = backend.call("resolve_bbox", {"corners": list(reversed(self.corners))})
+            self.assertEqual(first, second)
+            self.assertTrue(all(backend.bbox_indexes[p] is t for p, t in indexes.items()))
+            with mock.patch.object(backend_module, "_shape", side_effect=AssertionError("unmatched shape decoded")):
+                empty = backend.call("resolve_bbox", {"corners": [{"lat": lat, "lon": lon} for lat in (20, 21) for lon in (20, 21)]})
+            self.assertIsNone(empty["best_match"])
+
+    def test_candidate_limit_applies_before_geometry_and_across_admin_levels(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            candidates = [{"loc_id": f"AAA-{i}", "admin_level": 0 if i < 300 else 1,
+                           "bbox_min_lon": 0., "bbox_min_lat": 0., "bbox_max_lon": 2., "bbox_max_lat": 2.} for i in range(501)]
+            self.global_package(root, tier="detail", extra={"predicate/admin_bbox_index.parquet": ("predicate", candidates)})
+            backend = DownloadedGeometryBackend(root)
+            with mock.patch.object(backend, "_bbox_shape_rows", side_effect=AssertionError("geometry opened")):
+                result = backend.call("resolve_bbox", {"corners": self.corners})
+            self.assertEqual(result["error"]["code"], "bbox_too_broad")
+            self.assertEqual(result["candidate_limit"], 500)
+            self.assertEqual({p.name for p in backend.verified}, {"admin_bbox_index.parquet"})
+
+    def test_invalid_bbox_contracts_fail_before_any_file_read(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            self.global_package(root)
+            backend = DownloadedGeometryBackend(root)
+            bad_corners = [self.corners[:3], [self.corners[0]] * 4,
+                           [{"lat": lat, "lon": lon} for lat in (0, 2) for lon in (-179, 179)]]
+            for value in (True, float("nan"), float("inf"), "1", 86):
+                bad_corners.append([{**self.corners[0], "lat": value}, *self.corners[1:]])
+            bad_corners.append([{**self.corners[0], "extra": 1}, *self.corners[1:]])
+            for corners in bad_corners:
+                with self.subTest(corners=corners):
+                    self.assertEqual(backend.call("resolve_bbox", {"corners": corners})["error"]["code"], "invalid_bbox")
+            self.assertEqual(backend.call("resolve_bbox", {"corners": self.corners, "scope_id": "MARINE"})["error"]["code"], "invalid_bbox_scope")
+            self.assertEqual(backend.call("resolve_bbox", {"corners": self.corners, "shallow_loc_id": "CAN-NT"})["error"]["code"], "bbox_contract_violation")
+            self.assertEqual(backend.call("resolve_deep_bbox", {"corners": self.corners})["error"]["code"], "shallow_loc_id_required")
+            self.assertFalse(backend.verified)
+
+    def test_lite_has_no_bbox_geometry_and_does_not_borrow_global(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            self.global_package(root)
+            _package(root, "lite", "downloadable_geometry_package", "CAN", {
+                "reference/identities.parquet": ("reference", [{"loc_id": "CAN-NT", "admin_level": 1}]),
+            }, tier="lite")
+            backend = DownloadedGeometryBackend(root)
+            self.assertEqual(backend.call("resolve_bbox", {"corners": self.corners, "scope_id": "CAN"})["error"]["code"], "selected_scope_unavailable")
+            self.assertFalse(backend.verified)
+
+    def test_stale_bbox_index_does_not_silently_drop_missing_shapes(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            index = [{"loc_id": "AAA-MISSING", "admin_level": 1,
+                      "bbox_min_lon": 0., "bbox_min_lat": 0., "bbox_max_lon": 2., "bbox_max_lat": 2.}]
+            self.global_package(root, tier="detail", extra={"predicate/admin_bbox_index.parquet": ("predicate", index)})
+            backend = DownloadedGeometryBackend(root)
+            self.assertEqual(backend.call("resolve_bbox", {"corners": self.corners})["error"]["code"], "selected_scope_unavailable")
+
+    def test_border_touch_and_polygon_hole_do_not_count_as_area_overlap(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            touch = self.row("AAA-TOUCH", 1, "AAA", bounds=(2, 0, 3, 2))
+            hole = self.row("AAA-HOLE", 1, "AAA", bounds=(-2, -2, 4, 4))
+            hole["geometry"] = Polygon(box(-2, -2, 4, 4).exterior.coords,
+                                       [box(-1, -1, 3, 3).exterior.coords]).wkb
+            self.global_package(root, extra={"display/admin_1.parquet": ("display", [touch, hole])})
+            result = DownloadedGeometryBackend(root).call("resolve_bbox", {"corners": self.corners})
+            self.assertEqual(result["matches_by_admin_level"]["1"], [])
+
+    def test_same_tier_duplicates_are_rejected_instead_of_mixing_releases(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            self.global_package(root)
+            _package(root, "duplicate", "downloadable_geometry_package", "GLOBAL", {}, tier="display")
+            with self.assertRaisesRegex(ValueError, "Ambiguous installed bbox package"):
+                DownloadedGeometryBackend(root).call("resolve_bbox", {"corners": self.corners})
 
 
 class InstalledSideFamilyTest(unittest.TestCase):

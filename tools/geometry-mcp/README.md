@@ -29,6 +29,22 @@ reference system, not a geometry family. `convert_reference` returns a scalar
 one admitted `equivalent_identity` edge. Overlap and containment edges remain
 typed relationships in `matches`.
 
+`resolve_bbox` compares four corners of one non-wrapping rectangular viewport.
+Omit `scope_id` for Global Admin 0–2 source IDs, or select an installed ISO3
+country for its Admin 0–3 IDs. `resolve_deep_bbox` takes a country's
+`deep_scope_loc_id` and compares Admin 1–6 within that Admin 1 owner, using the
+levels available in the installed edition. Lite has no polygon lookup. Display
+uses simplified polygons; Detail uses exact polygons. Installing a Detail
+edition takes precedence over Display for that scope. Duplicate editions of
+the same tier must be removed before bbox lookup.
+
+Both tools use the hosted rectangle validation, equal-area overlap ranking,
+Global admission policy, and 500-candidate limit. An overly broad viewport
+returns `bbox_too_broad`; zoom in before retrying. Existing bounds are used
+before reading selected polygons. Older Display files without bounds require
+one streaming read on first use; the server caches only their compact bounds
+index in memory. Later calls reuse that index. No remote lookup is performed.
+
 Before publishing a runtime update, check Lite, Display, and Detail ZIPs for
 every published country against the same sidecar and Parquet layout contract.
 Country-specific bank counts and depth may differ. Rerun installed-package
