@@ -89,6 +89,7 @@ class InstalledBBoxTest(unittest.TestCase):
             self.assertEqual(best["loc_id"], "CAN-GNT")
             self.assertEqual(best["name"], "Northwest Territories")
             self.assertEqual(best["parent_baseline_loc_id"], "CAN")
+            self.assertEqual(global_result["matches_by_admin_level"]["0"][0]["parent_baseline_loc_id"], "WORLD")
             self.assertEqual(best["view_coverage_pct"], 50)
             self.assertEqual(best["loc_id_coverage_pct"], 100)
             self.assertEqual(best["intersection_over_union_pct"], 50)
@@ -96,9 +97,19 @@ class InstalledBBoxTest(unittest.TestCase):
             self.assertTrue(all("global" in str(p) for p in backend.verified))
             country = backend.call("resolve_bbox", {"corners": self.corners, "scope_id": "can"})
             self.assertEqual(country["scope_id"], "CAN")
+            self.assertEqual(country["matches_by_admin_level"]["0"][0]["parent_loc_id"], "")
             self.assertEqual(country["matches_by_admin_level"]["2"][0]["parent_loc_id"], "CAN-NT")
             self.assertEqual(country["matches_by_admin_level"]["2"][0]["deep_scope_loc_id"], "CAN-NT")
             self.assertNotIn("CAN-GNT", {r["loc_id"] for rs in country["matches_by_admin_level"].values() for r in rs})
+
+    def test_global_bbox_preserves_explicit_root_parent(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            self.global_package(root, extra={"reference/identities.parquet": ("reference", [
+                {"loc_id": "CAN", "admin_level": 0, "parent_loc_id": "EXPLICIT-ROOT", "name": "Canada"}])})
+            result = DownloadedGeometryBackend(root).call("resolve_bbox", {"corners": self.corners})
+            self.assertEqual(result["matches_by_admin_level"]["0"][0]["parent_baseline_loc_id"], "EXPLICIT-ROOT")
+            self.assertEqual(result["matches_by_admin_level"]["1"][0]["parent_baseline_loc_id"], "CAN")
 
     def test_deep_bbox_uses_admin1_owner_and_all_declared_levels(self):
         with tempfile.TemporaryDirectory() as temp:

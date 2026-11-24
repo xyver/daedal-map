@@ -27,6 +27,34 @@ class _Objects:
         output.write(self.values[key])
 
 
+def test_downloaded_geometry_success_and_error_envelopes_match_hosted(tmp_path, monkeypatch):
+    import server
+
+    class Backend:
+        def __init__(self, root):
+            pass
+
+        def call(self, name, arguments):
+            if name == "invalid":
+                raise ValueError("invalid tool")
+            if name == "resolve_bbox":
+                return {"error": {"code": "invalid_bbox"}}
+            return {"loc_id": "CAN", "name": "Canada"}
+
+    monkeypatch.setitem(sys.modules, "downloaded_geometry_backend", SimpleNamespace(
+        DownloadedGeometryBackend=Backend, tool_definitions=lambda: []))
+    monkeypatch.setattr(server, "_configure_environment", lambda *a, **k: None)
+    client = TestClient(server.create_app(tmp_path, services="geometry"))
+    def call(name):
+        return client.post("/mcp/geometry", json={"jsonrpc": "2.0", "id": 1,
+            "method": "tools/call", "params": {"name": name, "arguments": {}}}).json()["result"]
+    success = call("get_loc_id_info")
+    assert "isError" not in success
+    assert json.loads(success["content"][0]["text"]) == success["structuredContent"]
+    assert call("resolve_bbox")["isError"] is True
+    assert call("invalid")["isError"] is True
+
+
 def test_local_and_cloud_use_same_relative_catalog_and_data_paths(tmp_path, monkeypatch):
     values = {"staging/catalog.json": json.dumps({"sources": [{"source_id": "x"}]}).encode(),
               "staging/global/x/data.parquet": b"parquet fixture bytes"}

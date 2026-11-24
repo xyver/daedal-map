@@ -819,6 +819,10 @@ class DownloadedGeometryBackend:
                     continue
                 reference = identities.get(loc_id) or {}
                 parent = reference.get("parent_id") or row.get("parent_loc_id") or row.get("parent_id") or ""
+                # Portable Global Admin0 roots omit the synthetic WORLD edge.
+                # The hosted bbox contract exposes it; never replace a real parent.
+                if scope == "GLOBAL" and candidates[loc_id]["admin_level"] == 0 and not parent:
+                    parent = "WORLD"
                 match = {"loc_id": loc_id, "name": reference.get("name") or row.get("name") or loc_id,
                          "admin_level": candidates[loc_id]["admin_level"], **percentages}
                 if scope == "GLOBAL":
