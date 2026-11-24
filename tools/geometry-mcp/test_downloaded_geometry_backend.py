@@ -150,6 +150,44 @@ class InstalledBBoxTest(unittest.TestCase):
             self.assertEqual(result["candidate_limit"], 500)
             self.assertEqual({p.name for p in backend.verified}, {"admin_bbox_index.parquet"})
 
+    def test_cached_shapes_skip_parquet_but_still_reject_changed_member(self):
+        with tempfile.TemporaryDirectory() as temp:
+            self.global_package(Path(temp))
+            backend = DownloadedGeometryBackend(temp)
+            file = next(f for f in backend.packages[0]["files"]
+                        if f["archive_path"] == "display/admin_0.parquet")
+            first = list(backend._bbox_shape_rows(file, {"CAN"}))
+            with mock.patch.object(backend_module.ds, "dataset", side_effect=AssertionError("Parquet reread")):
+                self.assertEqual(first, list(backend._bbox_shape_rows(file, {"CAN"})))
+            # A response consumer cannot mutate the retained metadata.
+            first[0]["name"] = "changed"
+            self.assertEqual(list(backend._bbox_shape_rows(file, {"CAN"}))[0]["name"], "CAN")
+            with file["local_path"].open("ab") as stream:
+                stream.write(b"changed")
+            with self.assertRaisesRegex(ValueError, "hash/size mismatch"):
+                list(backend._bbox_shape_rows(file, {"CAN"}))
+
+    def test_cache_byte_and_row_limits_preserve_results_after_eviction(self):
+        with tempfile.TemporaryDirectory() as temp:
+            self.country_package(Path(temp))
+            for byte_limit, row_limit in ((1, 128), (240, 128), (10000, 1)):
+                with self.subTest(bytes=byte_limit, rows=row_limit), \
+                        mock.patch.object(backend_module, "MAX_BBOX_CACHE_BYTES", byte_limit), \
+                        mock.patch.object(backend_module, "MAX_BBOX_CACHE_ROWS", row_limit):
+                    backend = DownloadedGeometryBackend(temp)
+                    file = next(f for f in backend.packages[0]["files"]
+                                if f["archive_path"].endswith("0000_admin_0_3.parquet"))
+                    first = {}
+                    for loc_id in ("CAN", "CAN-NT", "CAN-NT-1", "CAN-AB", "CAN"):
+                        row = list(backend._bbox_shape_rows(file, {loc_id}))[0]
+                        self.assertEqual(row, first.setdefault(loc_id, row))
+                        self.assertLessEqual(backend.bbox_cache_bytes, byte_limit)
+                        self.assertLessEqual(len(backend.bbox_shape_cache), row_limit)
+                    if byte_limit == 1:
+                        self.assertFalse(backend.bbox_shape_cache)
+                    else:
+                        self.assertEqual(next(reversed(backend.bbox_shape_cache))[-1], "CAN")
+
     def test_invalid_bbox_contracts_fail_before_any_file_read(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

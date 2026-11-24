@@ -5,8 +5,8 @@ import math
 from typing import Any
 
 from pyproj import Transformer
+from shapely import transform
 from shapely.geometry import box
-from shapely.ops import transform
 
 MAX_BBOX_CANDIDATES = 500
 _AREA_TRANSFORM = Transformer.from_crs("EPSG:4326", "EPSG:6933", always_xy=True).transform
@@ -36,7 +36,7 @@ def rectangle_bounds(corners: list[dict[str, Any]]) -> tuple[float, float, float
 
 
 def projected_viewport(bounds):
-    viewport = transform(_AREA_TRANSFORM, box(*bounds))
+    viewport = transform(box(*bounds), _AREA_TRANSFORM, interleaved=False)
     if viewport.area <= 0:
         raise ValueError("viewport has zero projected area")
     return viewport
@@ -44,7 +44,7 @@ def projected_viewport(bounds):
 
 def overlap_percentages(geometry, viewport):
     """Return the shared ranking metrics, or None for no positive-area overlap."""
-    projected = transform(_AREA_TRANSFORM, geometry)
+    projected = transform(geometry, _AREA_TRANSFORM, interleaved=False)
     area = projected.area
     if projected.is_empty or area <= 0:
         return None

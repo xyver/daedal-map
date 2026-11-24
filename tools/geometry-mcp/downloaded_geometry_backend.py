@@ -6,7 +6,9 @@ import hashlib
 import math
 import re
 import sys
+from collections import OrderedDict
 from pathlib import Path
+from threading import Lock
 from typing import Any
 
 import pyarrow.parquet as pq
@@ -40,6 +42,8 @@ TOOLS = {
     "convert_reference", "compare_geographies", "get_shape",
 }
 MAX_INLINE_GEOMETRY_BYTES = 16 * 1024 * 1024
+MAX_BBOX_CACHE_BYTES = 64 * 1024 * 1024
+MAX_BBOX_CACHE_ROWS = 128
 
 
 def _check_inline_geometry_budget(rows):
@@ -75,6 +79,12 @@ class DownloadedGeometryBackend:
         self.schemas = {}
         self.family_index = {}
         self.bbox_indexes = {}
+        # Cache only selected serialized rows, never an entire geometry bank.
+        # Both payload bytes and row count are bounded; each hit still verifies
+        # the installed member before reuse. Cache lifetime is this backend.
+        self.bbox_shape_cache = OrderedDict()
+        self.bbox_cache_bytes = 0
+        self.bbox_cache_lock = Lock()
         for sidecar in sorted(self.root.rglob("geometry.json")):
             payload = json.loads(sidecar.read_text(encoding="utf-8"))
             sidecar.resolve().relative_to(self.root)
@@ -685,12 +695,41 @@ class DownloadedGeometryBackend:
     def _bbox_shape_rows(self, file, ids):
         self._verify_file(file)
         path = file["local_path"]
+        missing = set(ids)
+        cached = []
+        with self.bbox_cache_lock:
+            for loc_id in sorted(ids):
+                key = (path, file["sha256"], loc_id)
+                entry = self.bbox_shape_cache.get(key)
+                if entry is not None:
+                    self.bbox_shape_cache.move_to_end(key)
+                    cached.append(dict(entry[0]))
+                    missing.remove(loc_id)
+        yield from cached
+        if not missing:
+            return
         columns = [c for c in ("loc_id", "name", "admin_level", "parent_loc_id", "parent_id", "geometry", "geometry_wkb")
                    if c in self.schemas[path].names]
         scanner = ds.dataset(path, format="parquet").scanner(
-            columns=columns, filter=ds.field("loc_id").isin(sorted(ids)), batch_size=16)
+            columns=columns, filter=ds.field("loc_id").isin(sorted(missing)), batch_size=16)
         for batch in scanner.to_batches():
-            yield from batch.to_pylist()
+            for row in batch.to_pylist():
+                size = sum(len(v.encode("utf-8")) if isinstance(v, str) else len(v)
+                           for v in row.values() if isinstance(v, (str, bytes)))
+                if size <= MAX_BBOX_CACHE_BYTES:
+                    key = (path, file["sha256"], row["loc_id"])
+                    with self.bbox_cache_lock:
+                        old = self.bbox_shape_cache.pop(key, None)
+                        if old is not None:
+                            self.bbox_cache_bytes -= old[1]
+                        while self.bbox_shape_cache and (
+                                self.bbox_cache_bytes + size > MAX_BBOX_CACHE_BYTES
+                                or len(self.bbox_shape_cache) >= MAX_BBOX_CACHE_ROWS):
+                            _, (_, removed_size) = self.bbox_shape_cache.popitem(last=False)
+                            self.bbox_cache_bytes -= removed_size
+                        self.bbox_shape_cache[key] = (dict(row), size)
+                        self.bbox_cache_bytes += size
+                yield row
 
     def _resolve_bbox(self, args, *, deep):
         request_id = str(args.get("request_id") or "") if isinstance(args, dict) else ""
