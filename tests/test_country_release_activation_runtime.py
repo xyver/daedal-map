@@ -72,7 +72,7 @@ def test_cloud_partition_index_is_read_through_shared_artifact_seam(tmp_path: Pa
         patch.object(reference_graph, "DATA_ROOT", tmp_path),
         patch.object(reference_graph, "is_cloud_mode", return_value=True),
         patch.object(reference_graph, "select_rows", return_value=frame) as reader,
-        patch.object(reference_graph, "_country_release_paths", return_value={digest: (current,)}),
+        patch.object(reference_graph, "_release_paths", return_value={digest: (current,)}),
     ):
         paths = reference_graph._partition_paths(root, "identities")
     assert paths == [partition]

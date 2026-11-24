@@ -35,6 +35,78 @@ from mapmover.runtime.reference_graph import (
 from mapmover.runtime import reference_graph
 
 
+class ReleasedGraphScopeTests(unittest.TestCase):
+    def tearDown(self):
+        reference_graph.clear_reference_graph_cache()
+
+    def domain_fixture(self, unit="GLOBAL"):
+        release_id = unit.lower() + "_release_1_2_0"
+        relative = f"geometry/{unit.lower()}/releases/1.2.0/reference_graph/partitions/identities.parquet"
+        manifest = {"release_unit": {"id": unit}, "release_id": release_id, "version": "1.2.0",
+                    "objects": [{"sha256": "a" * 64, "source_paths": [relative]}]}
+        raw = json.dumps(manifest).encode()
+        profile = {"release_unit_id": unit, "release_id": release_id, "release_version": "1.2.0",
+                   "release_status": "staging_candidate", "active_release": {"manifest": {
+                       "path": f"geometry/{unit.lower()}/releases/1.2.0/manifest.json",
+                       "sha256": hashlib.sha256(raw).hexdigest(), "bytes": len(raw)}}}
+        graph = {"graph_scope": unit.lower(), "scope_id": unit, "release_id": release_id}
+        return relative, raw, profile, graph
+
+    def resolve(self, relative, raw, profile, graph, digest="a" * 64):
+        with (
+            mock.patch.object(reference_graph, "is_cloud_mode", return_value=True),
+            mock.patch.object(reference_graph, "_graph_json", return_value=graph),
+            mock.patch.object(reference_graph, "load_geometry_catalog", return_value={"domain_profiles": [profile]}),
+            mock.patch.object(reference_graph, "read_artifact_bytes", return_value=raw) as reader,
+        ):
+            result = reference_graph._published_partition_path(
+                reference_graph.DATA_ROOT / f"geometry/{profile['release_unit_id'].lower()}/reference_graph", relative, digest)
+            reader.assert_called_once_with(profile['active_release']['manifest']['path'], lane="active")
+            return result
+
+    def test_domain_graphs_use_selected_release_objects(self):
+        for unit in ("GLOBAL", "MARINE"):
+            with self.subTest(unit=unit):
+                relative, raw, profile, graph = self.domain_fixture(unit)
+                self.assertEqual(self.resolve(relative, raw, profile, graph), reference_graph.DATA_ROOT / relative)
+
+    def test_domain_graph_rejects_stale_or_unpinned_selection(self):
+        for mutation in ("hash", "size", "graph_release", "manifest_unit", "path", "unknown_hash", "alias_path"):
+            with self.subTest(mutation=mutation):
+                reference_graph.clear_reference_graph_cache()
+                relative, raw, profile, graph = self.domain_fixture()
+                digest = "a" * 64
+                pin = profile['active_release']['manifest']
+                if mutation == "hash": pin['sha256'] = "0" * 64
+                elif mutation == "size": pin['bytes'] += 1
+                elif mutation == "graph_release": graph['release_id'] = 'old_release'
+                elif mutation == "manifest_unit":
+                    manifest = json.loads(raw); manifest['release_unit']['id'] = 'MARINE'
+                    raw = json.dumps(manifest).encode()
+                    pin.update(sha256=hashlib.sha256(raw).hexdigest(), bytes=len(raw))
+                elif mutation == "path": pin['path'] = 'geometry/global/../marine/manifest.json'
+                elif mutation == "unknown_hash": digest = "b" * 64
+                else: relative = 'geometry/global/scratch/identities.parquet'
+                with self.assertRaises((ValueError, reference_graph.ReferenceRouteUnavailable)):
+                    self.resolve(relative, raw, profile, graph, digest)
+
+    def test_country_keeps_its_selected_release_authority(self):
+        relative = 'geometry/countries/CAN/reference/graph/partitions/identities.parquet'
+        profile = {'country_code': 'CAN', 'release_status': 'published', 'release_version': '1.3.5'}
+        manifest = {'runtime': {'reference': 'geometry/countries/CAN/reference/'},
+                    'objects': [{'sha256': 'a' * 64, 'source_paths': [relative]}]}
+        with (
+            mock.patch.object(reference_graph, 'is_cloud_mode', return_value=True),
+            mock.patch.object(reference_graph, '_graph_json', return_value={'country': 'CAN', 'graph_scope': 'country'}),
+            mock.patch.object(reference_graph, 'load_geometry_catalog', return_value={'country_profiles': [profile]}),
+            mock.patch.object(reference_graph, 'read_artifact_json', return_value=manifest) as reader,
+        ):
+            result = reference_graph._published_partition_path(
+                reference_graph.DATA_ROOT / 'geometry/countries/CAN/reference/graph', relative, 'a' * 64)
+            self.assertEqual(result, reference_graph.DATA_ROOT / relative)
+            reader.assert_called_once_with('geometry/countries/CAN/releases/1.3.5/manifest.json', lane='active')
+
+
 class ReferenceGraphRuntimeTests(unittest.TestCase):
     def test_canonical_route_never_falls_back_to_unpinned_path(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -920,6 +992,27 @@ class ReferenceGraphRuntimeTests(unittest.TestCase):
              mock.patch.object(reference_graph, "_missing_graph_files") as missing:
             self.assertIsNone(reference_graph.global_reference_graph_root())
             missing.assert_not_called()
+
+    def test_cloud_unselected_country_ids_reach_global_without_country_scan(self) -> None:
+        global_root = self.root / 'geometry/global/reference_graph'
+        for loc_id in ('ABW', 'ARG-NULL1'):
+            with (
+                self.subTest(loc_id=loc_id),
+                mock.patch.object(reference_graph, 'is_cloud_mode', return_value=True),
+                mock.patch.object(reference_graph, 'load_geometry_catalog', return_value={'country_profiles': []}),
+                mock.patch.object(reference_graph, 'reference_graph_roots') as discovery,
+                mock.patch.object(reference_graph, 'global_reference_graph_root', return_value=global_root),
+            ):
+                self.assertEqual(reference_graph.graph_roots_for_loc_id(loc_id), [global_root])
+                discovery.assert_not_called()
+
+    def test_cloud_unselected_country_without_global_returns_no_graph(self) -> None:
+        with (
+            mock.patch.object(reference_graph, 'is_cloud_mode', return_value=True),
+            mock.patch.object(reference_graph, 'load_geometry_catalog', return_value={'country_profiles': []}),
+            mock.patch.object(reference_graph, 'global_reference_graph_root', return_value=None),
+        ):
+            self.assertEqual(reference_graph.graph_roots_for_loc_id('ARG-NULL1'), [])
 
 
 if __name__ == "__main__":

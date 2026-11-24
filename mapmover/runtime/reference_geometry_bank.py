@@ -108,8 +108,16 @@ def inline_reference_wkb_bytes(loc_id: str) -> int:
     if bank is None or bank.suffix.lower() != ".parquet":
         return 0
     geometry_id = str(identity.get("geometry_loc_id") or loc_id)
-    table = pq.read_table(bank, columns=["geometry"], filters=[("loc_id", "=", geometry_id)])
-    return sum(len(value) for value in table.column("geometry").to_pylist() if value is not None)
+    # Measure stored WKB through the same local/S3 translation as shape reads.
+    # Aggregate in DuckDB so a response-budget check never materializes a large
+    # geometry in Python or expands it to GeoJSON merely to discover its size.
+    rows = run_df(
+        'SELECT COALESCE(SUM(octet_length("geometry")), 0) AS wkb_bytes '
+        'FROM read_parquet(?) WHERE "loc_id" BETWEEN ? AND ?',
+        [path_to_uri(bank), geometry_id, geometry_id],
+        raw_geoparquet=True,
+    )
+    return int(rows.iloc[0]["wkb_bytes"]) if not rows.empty else 0
 
 
 def _read_shape_partition(path: Path, loc_ids: list[str]) -> pd.DataFrame:

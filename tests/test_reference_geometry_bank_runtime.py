@@ -20,6 +20,7 @@ from mapmover.runtime.reference_geometry_bank import (
     _safe_bank_root,
     _safe_partition_path,
     load_reference_graph_geometry,
+    inline_reference_wkb_bytes,
 )
 
 
@@ -32,6 +33,41 @@ CANADA_DB_BANK = DATA_ROOT / "geometry" / "countries" / "CAN" / "dissemination_b
 class ReferenceGeometryBankRuntimeTests(unittest.TestCase):
     def tearDown(self):
         _geoparquet_crs.cache_clear()
+
+    def test_size_budget_uses_shared_remote_reader_without_local_geometry_open(self):
+        import duckdb
+        remote_uri = 's3://bucket/staging/geometry/global/shapes.parquet'
+        with tempfile.TemporaryDirectory() as directory:
+            physical = Path(directory) / 'shapes.parquet'
+            data = pa.table({'loc_id': ['selected', 'selected', 'selected', 'other'],
+                             'geometry': [b'abc', None, b'defgh', b'not selected']})
+            pq.write_table(data, physical)
+            connection = duckdb.connect()
+            try:
+                def query(sql, params, *, raw_geoparquet=False):
+                    self.assertTrue(raw_geoparquet)
+                    self.assertEqual(params, [remote_uri, 'selected', 'selected'])
+                    return connection.execute(sql, [str(physical), *params[1:]]).df()
+                with (
+                    patch('mapmover.runtime.reference_geometry_bank.identities', return_value=[{
+                        'geometry_bank': 'geometry/global/shapes.parquet', 'geometry_loc_id': 'selected'}]),
+                    patch('mapmover.runtime.reference_geometry_bank.path_to_uri', return_value=remote_uri),
+                    patch('mapmover.runtime.reference_geometry_bank.run_df', side_effect=query),
+                    patch('mapmover.runtime.reference_geometry_bank.pq.read_table', side_effect=AssertionError('local open')),
+                ):
+                    self.assertEqual(inline_reference_wkb_bytes('GLOBAL-canonical-id'), 8)
+            finally:
+                connection.close()
+
+    def test_size_budget_does_not_query_missing_or_polygonless_identity(self):
+        for identities in ([], [{'geometry_bank': ''}], [{'geometry_bank': '../outside.parquet'}]):
+            with (
+                self.subTest(identities=identities),
+                patch('mapmover.runtime.reference_geometry_bank.identities', return_value=identities),
+                patch('mapmover.runtime.reference_geometry_bank.run_df') as query,
+            ):
+                self.assertEqual(inline_reference_wkb_bytes('ARG-NULL1'), 0)
+                query.assert_not_called()
 
     def test_remote_geometry_metadata_uses_resolved_uri_not_logical_local_path(self):
         geo_metadata = json.dumps({

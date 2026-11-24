@@ -287,31 +287,51 @@ def clear_reference_graph_cache() -> None:
     _missing_graph_files.cache_clear()
     _discover_roots.cache_clear()
     _country_discovery_index_current.cache_clear()
-    _country_release_paths.cache_clear()
+    _release_paths.cache_clear()
     _partition_source_map.cache_clear()
     _compact_admin_route_specs.cache_clear()
 
 
 @lru_cache(maxsize=32)
-def _country_release_paths(country: str) -> dict[str, tuple[str, ...]]:
-    """Load the one hash-to-clean-path authority for a contained country."""
+def _release_paths(unit: str, scope: str = "country", release_id: str = "") -> dict[str, tuple[str, ...]]:
+    """Load the selected release's hash-to-path authority for any graph scope."""
+    domain = scope != "country"
     profile = next(
         (
-            item for item in load_geometry_catalog().get("country_profiles") or []
+            item for item in load_geometry_catalog().get("domain_profiles" if domain else "country_profiles") or []
             if isinstance(item, dict)
-            and str(item.get("country_code") or "").upper() == country
-            and str(item.get("release_status") or "") in {"approved_for_publication", "published"}
+            and str(item.get("release_unit_id" if domain else "country_code") or "").upper() == unit
+            and (domain or str(item.get("release_status") or "") in {"approved_for_publication", "published"})
         ),
         None,
     )
     if profile is None:
         return {}
+    if domain:
+        # Domain catalogs already select a pinned release manifest, whose objects
+        # use the same hash/source_paths contract as country releases. Workflow
+        # labels can survive publication; the active catalog is the selector.
+        version = str(profile.get("release_version") or "")
+        pin = (profile.get("active_release") or {}).get("manifest") or {}
+        if (not re.fullmatch(r"[A-Z][A-Z0-9_]*", unit)
+                or not re.fullmatch(r"\d+\.\d+\.\d+", version)
+                or not release_id or release_id != profile.get("release_id")
+                or pin.get("path") != f"geometry/{unit.lower()}/releases/{version}/manifest.json"):
+            raise ReferenceRouteUnavailable(f"{unit} graph differs from the selected domain release")
+        raw = read_artifact_bytes(pin["path"], lane="active")
+        if hashlib.sha256(raw).hexdigest() != pin.get("sha256") or len(raw) != pin.get("bytes"):
+            raise ReferenceRouteUnavailable(f"{unit} release manifest differs from its catalog pin")
+        manifest = json.loads(raw)
+        if (manifest.get("release_unit", {}).get("id") != unit
+                or manifest.get("release_id") != release_id or manifest.get("version") != version):
+            raise ReferenceRouteUnavailable(f"{unit} release manifest identity differs")
+        return released_artifact_paths_by_hash(manifest)
     try:
-        relative = country_release_manifest_relative(country, profile)
+        relative = country_release_manifest_relative(unit, profile)
         manifest = read_artifact_json(relative, lane="active") if is_cloud_mode() else _graph_json(DATA_ROOT / relative)
     except Exception:
         return {}
-    expected_reference = f"geometry/countries/{country}/reference/"
+    expected_reference = f"geometry/countries/{unit}/reference/"
     if str(((manifest or {}).get("runtime") or {}).get("reference") or "") != expected_reference:
         return {}
     return released_artifact_paths_by_hash(manifest or {})
@@ -332,9 +352,14 @@ def _published_partition_path(root: Path, source: Any, sha256: Any) -> Path:
     if not is_cloud_mode():
         return DATA_ROOT / original
     country = _country_for_root(root)
+    graph = _graph_json(root / "manifest.json") or {}
+    scope = str(graph.get("graph_scope") or "country")
+    domain = scope in {"global", "marine", "domain"}
+    unit = str(graph.get("scope_id") or "").upper() if domain else country
     relative = released_artifact_path(
-        original, str(sha256 or ""), _country_release_paths(country),
-        strict=_strict_country_layout(country),
+        original, str(sha256 or ""),
+        _release_paths(unit, scope if domain else "country", str(graph.get("release_id") or "") if domain else ""),
+        strict=domain or _strict_country_layout(country),
     )
     return DATA_ROOT / relative
 
@@ -410,7 +435,10 @@ def graph_roots_for_loc_id(loc_id: str | None) -> list[Path]:
                 root = country_reference_root(DATA_ROOT, prefix, profile).resolve()
                 _require_candidate_admission(root, profile)
                 return [root]
-        return []
+        # Global owns baseline Admin and hierarchy-only IDs for countries
+        # without an admitted pack. A selected country above remains exclusive.
+        global_root = global_reference_graph_root()
+        return [global_root] if global_root is not None else []
     country_roots = reference_graph_roots()
     if prefix in country_roots:
         # A country-prefixed identity has one authoritative pack. Do not probe

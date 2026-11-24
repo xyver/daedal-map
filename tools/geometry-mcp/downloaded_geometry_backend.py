@@ -134,7 +134,7 @@ class DownloadedGeometryBackend:
 
     def _reference_rows(self, kind: str, *, country: str | None = None,
                         filters: list[tuple[str, str, Any]] | None = None,
-                        limit: int = 10000) -> list[dict[str, Any]]:
+                        limit: int = 10000, truncate: bool = False) -> list[dict[str, Any]]:
         rows: list[dict[str, Any]] = []
         for package, file in self._records():
             archive = file["archive_path"].replace("\\", "/")
@@ -147,10 +147,18 @@ class DownloadedGeometryBackend:
             if filters and any(item[0] not in schema.names for item in filters):
                 continue
             local_filters = filters or None
-            selected = pq.read_table(file["local_path"], filters=local_filters).to_pylist()
+            if truncate:
+                import pyarrow.dataset as ds
+                dataset = ds.dataset(file["local_path"], format="parquet")
+                expression = pq.filters_to_expression(local_filters) if local_filters else None
+                selected = dataset.head(limit - len(rows), filter=expression).to_pylist()
+            else:
+                selected = pq.read_table(file["local_path"], filters=local_filters).to_pylist()
             for row in selected:
                 row["_package_id"] = package["metadata"].get("package_id")
             rows.extend(selected)
+            if truncate and len(rows) >= limit:
+                return rows
             if len(rows) > limit:
                 raise ValueError(f"Reference {kind} selection exceeds {limit} rows; narrow the request")
         return rows
@@ -175,7 +183,7 @@ class DownloadedGeometryBackend:
     def _load(self, *, geometry: bool = False, loc_ids=None, country=None, admin_level=None, point=None,
               selected_path: Path | None = None, reference_only: bool = False,
               strict_country: bool = False):
-        wanted = {"loc_id", "parent_id", "admin_level", "type", "name", "iso_a3", "country_iso3", "family", "subtype", "level", "centroid_lon", "centroid_lat", "has_polygon", "bbox_min_lon", "bbox_min_lat", "bbox_max_lon", "bbox_max_lat"}
+        wanted = {"loc_id", "parent_id", "parent_loc_id", "admin_level", "type", "name", "iso_a3", "country_iso3", "family", "subtype", "level", "centroid_lon", "centroid_lat", "has_polygon", "bbox_min_lon", "bbox_min_lat", "bbox_max_lon", "bbox_max_lat"}
         if geometry: wanted.update({"geometry", "geometry_wkb"})
         rows = []
         for package, file in self._records():
@@ -211,6 +219,11 @@ class DownloadedGeometryBackend:
                 filters.extend([("bbox_min_lon", "<=", point.x), ("bbox_max_lon", ">=", point.x), ("bbox_min_lat", "<=", point.y), ("bbox_max_lat", ">=", point.y)])
             table = pq.read_table(path, columns=columns, filters=filters or None)
             for row in table.to_pylist():
+                parent = row.get("parent_loc_id") or row.get("parent_id")
+                if (row.get("parent_loc_id") and row.get("parent_id")
+                        and row["parent_loc_id"] != row["parent_id"]):
+                    raise ValueError(f"Conflicting parent IDs for {row['loc_id']} in {archive}")
+                row["parent_id"] = parent
                 if row.get("geometry") is None and row.get("geometry_wkb") is not None:
                     row["geometry"] = row.pop("geometry_wkb")
                 if admin_level == 0 and row.get("admin_level") is None and row.get("loc_id") == country:
@@ -562,7 +575,11 @@ class DownloadedGeometryBackend:
         return self._resolve_points(args, deep=True)
 
     def _identity(self, loc_id: str) -> dict[str, Any] | None:
-        rows = self._dedupe(self._load(loc_ids=[loc_id]))
+        # Identity queries should not hash or scan geometry banks. The graph
+        # owns parent/level metadata even when the shape schema omits it.
+        rows = self._dedupe(self._load(loc_ids=[loc_id], reference_only=True))
+        if not rows:
+            rows = self._dedupe(self._load(loc_ids=[loc_id]))
         return rows[0] if rows else None
 
     def _identity_in_scope(self, loc_id: str, scope: str) -> dict[str, Any] | None:
@@ -576,9 +593,9 @@ class DownloadedGeometryBackend:
             return {"loc_id": loc_id, "error": {"code": "not_found", "message": "loc_id has no installed identity"}}
         country = identity["country"]
         edges = self._reference_rows("relationships", country=country,
-                                     filters=[("source_loc_id", "=", loc_id)], limit=10000)
+                                     filters=[("source_loc_id", "=", loc_id)], limit=51, truncate=True)
         incoming = self._reference_rows("relationships", country=country,
-                                        filters=[("target_loc_id", "=", loc_id)], limit=10000)
+                                        filters=[("target_loc_id", "=", loc_id)], limit=51, truncate=True)
         connections = []
         for edge, direction in [(edge, "outgoing") for edge in edges] + [(edge, "incoming") for edge in incoming]:
             connections.append({"loc_id": edge["target_loc_id"] if direction == "outgoing" else edge["source_loc_id"],
@@ -794,7 +811,7 @@ class DownloadedGeometryBackend:
         identity = self._identity(loc_id)
         if identity is None:
             return {"loc_id": loc_id, "error": {"code": "not_found", "message": "loc_id is absent from installed packages"}}
-        rows = self._dedupe(self._load(geometry=include, loc_ids=[loc_id])) if include else [identity]
+        rows = self._dedupe(self._load(geometry=include, loc_ids=[loc_id]))
         shape_row = rows[0] if rows else None
         if include and shape_row is None:
             return {"loc_id": loc_id, "error": {"code": "shape_unavailable", "message": "Install Display or Detail for this polygon"}}
@@ -806,6 +823,9 @@ class DownloadedGeometryBackend:
                "centroid_lon": identity.get("centroid_lon"), "centroid_lat": identity.get("centroid_lat"),
                "bbox_min_lon": identity.get("bbox_min_lon"), "bbox_min_lat": identity.get("bbox_min_lat"),
                "bbox_max_lon": identity.get("bbox_max_lon"), "bbox_max_lat": identity.get("bbox_max_lat")}
+        for field in ("centroid_lon", "centroid_lat", "bbox_min_lon", "bbox_min_lat", "bbox_max_lon", "bbox_max_lat"):
+            if out[field] is None and shape_row:
+                out[field] = shape_row.get(field)
         if not has_shape:
             out["error"] = {"code": "shape_unavailable", "message": "No installed polygon exists for this loc_id"}
         if include:
