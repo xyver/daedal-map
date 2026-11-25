@@ -342,17 +342,36 @@ PACK_REGISTRY: dict[str, dict] = {
     },
     "world_factbook": {
         "display_name": "World Factbook",
-        "pricing": "paid_x402_base_usdc",
+        "pricing": "free",
         "mcp_tool_allowlist": ("get_catalog", "get_pack", "get_data"),
         "mcp_name": "com.daedalmap/world_factbook",
         "mcp_title": "DaedalMap CIA World Factbook",
-        "mcp_description": "CIA World Factbook country indicators for infrastructure, energy, demographics, and economy. Paid per call from account credit. Small queries stay cheap; very broad scans cost more or need narrower filters. Call unpaid first to see the exact price before committing.",
+        "mcp_description": "CIA World Factbook country indicators for infrastructure, energy, demographics, and economy. Free hosted data access; no payment required.",
         "registry_meta": {
             "categories": ["economic", "data", "geospatial"],
             "highlights": [
                 "111 CIA World Factbook indicators from 2002-2026 editions",
-                "Paid MCP access for country infrastructure and economy metrics",
+                "Free MCP access for country infrastructure and economy metrics",
                 "Country-level lookups tied to DaedalMap loc_id geography",
+            ],
+        },
+        "routing": {
+            "preferred_tool": "get_data",
+        },
+    },
+    "global_resources": {
+        "display_name": "Global Resources Pack",
+        "pricing": "free",
+        "mcp_tool_allowlist": ("get_catalog", "get_pack", "get_data"),
+        "mcp_name": "com.daedalmap/global_resources",
+        "mcp_title": "DaedalMap Global Resources Pack",
+        "mcp_description": "Global mine and mineral resource records from eight reviewed source products. Free hosted data access; no payment required.",
+        "registry_meta": {
+            "categories": ["resources", "geospatial", "data"],
+            "highlights": [
+                "Mines, mineral deposits, and copper resource assessment tracts",
+                "Free MCP access to Global Resources Pack records",
+                "Location references tied to DaedalMap loc_id geography",
             ],
         },
         "routing": {
