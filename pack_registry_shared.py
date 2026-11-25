@@ -18,6 +18,8 @@ from tool_access_shared import (
 # - public display names
 # - preferred MCP routing hints
 #
+# Packs without an authored pricing value use the free publication default.
+# Individual pack pricing remains an editable registry choice.
 # Keep this module stdlib-only so runtime, site, stdio, and helper scripts can
 # import it safely.
 

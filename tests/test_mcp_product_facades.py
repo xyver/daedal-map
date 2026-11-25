@@ -7,20 +7,19 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
 
+from mapmover.data_loading import _pack_is_paid
 from mapmover.routes.mcp import router as mcp_router
 from mapmover.routes.system import _build_mcp_server_card_payload, _build_mcp_server_json_payload
-from pack_registry_shared import free_pack_ids, paid_pack_ids, pack_mcp_server_profile
+from pack_registry_shared import PACK_REGISTRY, free_pack_ids, paid_pack_ids
 
 
 class ProductFacadeTests(unittest.TestCase):
-    def test_pack_defaults_keep_only_disasters_paid(self):
-        self.assertEqual(set(paid_pack_ids()), {
-            "earthquakes", "hurricanes", "tornadoes", "tsunamis", "wildfires",
-        })
-        for pack_id in ("world_factbook", "global_resources"):
-            with self.subTest(pack_id=pack_id):
-                self.assertIn(pack_id, free_pack_ids())
-                self.assertEqual(pack_mcp_server_profile(pack_id)["pricing"], "free")
+    def test_pack_without_pricing_defaults_to_free(self):
+        with mock.patch.dict(PACK_REGISTRY, {"unpriced_pack": {"display_name": "Unpriced"}}):
+            self.assertIn("unpriced_pack", free_pack_ids())
+            self.assertNotIn("unpriced_pack", paid_pack_ids())
+            self.assertFalse(_pack_is_paid("unpriced_pack"))
+        self.assertFalse(_pack_is_paid("newly_published_pack"))
 
     @classmethod
     def setUpClass(cls):
