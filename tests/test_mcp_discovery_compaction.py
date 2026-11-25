@@ -183,9 +183,8 @@ class MCPDiscoveryCompactionTests(unittest.TestCase):
         self.assertEqual(full["detail"], "sources")
         self.assertNotIn("material_policy", full)
         self.assertEqual(full["sources"][0]["metric_count"], 1)
-        self.assertNotIn("metric_ids", full["sources"][0])
-        self.assertEqual(full["sources"][0]["metrics_call"],
-                         {"tool": "get_pack", "arguments": {"pack_id": "demo", "source_id": "demo_source"}})
+        self.assertEqual(full["sources"][0]["metric_ids"], ["population"])
+        self.assertNotIn("metrics_call", full["sources"][0])
         self.assertEqual(full["metric_count"], 1)
         self.assertNotIn("full_call", full)
         self.assertNotIn("reference", str(full))
@@ -225,7 +224,7 @@ class MCPDiscoveryCompactionTests(unittest.TestCase):
         }
         return pack, metadata.get
 
-    def test_pack_sources_view_lists_sources_without_metric_dump(self) -> None:
+    def test_pack_sources_view_lists_bounded_metric_ids(self) -> None:
         pack, loader = self._narrowing_pack()
         result = mcp_full_pack_detail(pack, catalog="data", source_metadata=loader)
         self.assertEqual(result["detail"], "sources")
@@ -235,7 +234,7 @@ class MCPDiscoveryCompactionTests(unittest.TestCase):
         self.assertEqual(social["metric_count"], 3)
         self.assertEqual(social["temporal_coverage"]["end"], "2025-01-01")
         self.assertEqual(result["metric_count"], 3)  # distinct ids across sources
-        self.assertNotIn("unemployment_national", json.dumps(result))
+        self.assertIn("unemployment_national", social["metric_ids"])
 
     def test_pack_source_view_merges_metadata_and_query_contract(self) -> None:
         pack, loader = self._narrowing_pack()

@@ -598,7 +598,10 @@ def _source_summary(entry: dict[str, Any], pack_id: str) -> dict[str, Any]:
     if temporal:
         summary["temporal_coverage"] = temporal
     summary["metric_count"] = len(entry["metrics"])
-    summary["metrics_call"] = {"tool": "get_pack", "arguments": {"pack_id": pack_id, "source_id": entry["source_id"]}}
+    metric_ids = list(entry["metrics"])
+    summary["metric_ids"] = metric_ids[:20]
+    if len(metric_ids) > 20:
+        summary["metric_ids_truncated"] = True
     return summary
 
 
@@ -657,8 +660,9 @@ def mcp_full_pack_detail(payload: Any, *, catalog: str, source_metadata: SourceM
                     result["quick_start"]["first_query_template"] = deepcopy(arguments)
                 break
         result["narrowing"] = (
-            "Call get_pack with one source_id to list that source's metrics and query fields, "
-            "search to match metrics across this pack, or metrics for full detail on up to "
+            "Use a source's listed metric_ids with get_data to select its rows. "
+            "Clients exposing optional get_pack selectors may also narrow by "
+            "source_id, search, or up to "
             f"{PACK_METRIC_DETAIL_LIMIT} exact metric ids."
         )
     elif isinstance(payload.get("metrics"), dict):
