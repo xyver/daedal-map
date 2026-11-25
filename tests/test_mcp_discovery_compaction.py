@@ -263,6 +263,20 @@ class MCPDiscoveryCompactionTests(unittest.TestCase):
                           "metrics": ["gini_index"], "filters": {}, "limit": 100},
         })
 
+    def test_pack_starter_uses_hydrated_source_metrics(self) -> None:
+        pack, loader = self._narrowing_pack()
+        pack["sources"][1]["catalog_surfaces"] = ["api", "mcp"]
+        pack["sources"][1].pop("metrics", None)
+        pack["quick_start"] = {"first_query_template": {"pack_id": pack["pack_id"], "metrics": []}}
+        result = mcp_full_pack_detail(pack, catalog="data", source_metadata=loader)
+        self.assertEqual(result["next_step"], {
+            "tool": "get_data",
+            "arguments": {"pack_id": pack["pack_id"], "source_id": "wb_social",
+                          "metrics": ["gini_index"], "filters": {}, "limit": 100},
+        })
+        self.assertEqual(result["quick_start"]["first_query_template"],
+                         result["next_step"]["arguments"])
+
     def test_pack_source_view_names_valid_sources_on_miss(self) -> None:
         pack, loader = self._narrowing_pack()
         result = mcp_pack_source_detail(pack, source_id="wb_missing", source_metadata=loader)

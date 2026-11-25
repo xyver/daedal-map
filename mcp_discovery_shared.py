@@ -649,6 +649,19 @@ def mcp_full_pack_detail(payload: Any, *, catalog: str, source_metadata: SourceM
         result["sources"] = [_source_summary(entry, pack_id) for entry in index]
         result["source_count"] = len(index)
         result["metric_count"] = len(_metric_locations(index))
+        if result.get("next_step", {}).get("tool") != "get_data":
+            for entry in index:
+                if ("mcp" in (entry["source"].get("catalog_surfaces") or [])
+                        and entry["metrics"]):
+                    arguments = {
+                        "pack_id": pack_id, "source_id": entry["source_id"],
+                        "metrics": [next(iter(entry["metrics"]))],
+                        "filters": {}, "limit": 100,
+                    }
+                    result["next_step"] = {"tool": "get_data", "arguments": arguments}
+                    if isinstance(result.get("quick_start"), dict):
+                        result["quick_start"]["first_query_template"] = deepcopy(arguments)
+                    break
         result["narrowing"] = (
             "Call get_pack with one source_id to list that source's metrics and query fields, "
             "search to match metrics across this pack, or metrics for full detail on up to "
