@@ -326,9 +326,25 @@ def _data_query_call(payload: dict[str, Any]) -> dict[str, Any]:
     if execution_tool in legacy_data_tools:
         execution_tool = "get_data"
     if execution_tool == "get_data":
-        arguments.pop("source_id", None)
         arguments.setdefault("pack_id", str(payload.get("pack_id") or "<selected pack_id>"))
-        arguments.setdefault("metrics", [])
+        metrics = arguments.get("metrics")
+        if not isinstance(metrics, list) or not metrics:
+            # Record packs can have many sources with the same record_count
+            # metric. Pick an actual source/metric pair from hydrated metadata
+            # instead of publishing an uncallable empty-metrics template.
+            for source in payload.get("sources") or []:
+                if not isinstance(source, dict):
+                    continue
+                source_id = str(source.get("source_id") or "").strip()
+                if "mcp" not in (source.get("catalog_surfaces") or []):
+                    continue
+                metric_ids = _metric_ids_of(source)
+                if source_id and metric_ids:
+                    arguments["source_id"] = source_id
+                    arguments["metrics"] = [metric_ids[0]]
+                    break
+            else:
+                return {"tool": "get_pack", "arguments": {"pack_id": arguments["pack_id"]}}
         arguments.setdefault("filters", {})
     return {"tool": execution_tool, "arguments": arguments}
 
@@ -405,6 +421,8 @@ def compact_pack_detail(payload: Any, *, catalog: str = "data") -> Any:
     next_step = _data_query_call(payload)
     if quick_start and next_step.get("tool") == "get_data":
         quick_start["first_query_template"] = deepcopy(next_step["arguments"])
+    elif quick_start:
+        quick_start.pop("first_query_template", None)
     result.update({
         "catalog": selected_catalog,
         "kind": "tool_family" if selected_catalog == "geometry" else "data_pack",
@@ -665,6 +683,16 @@ def mcp_pack_source_detail(payload: Any, *, source_id: str, source_metadata: Sou
         for metric_id, record in entry["metrics"].items()
     ]
     result["metric_count"] = len(result["metrics"])
+    if ("mcp" in (entry["source"].get("catalog_surfaces") or [])
+            and result["metrics"]):
+        result["next_step"] = {
+            "tool": "get_data",
+            "arguments": {"pack_id": pack_id, "source_id": source_id,
+                          "metrics": [result["metrics"][0]["metric_id"]],
+                          "filters": {}, "limit": 100},
+        }
+    else:
+        result["next_step"] = {"tool": "get_pack", "arguments": {"pack_id": pack_id}}
     return result
 
 

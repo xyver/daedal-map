@@ -2972,6 +2972,9 @@ def _get_data_input_error(arguments: dict[str, Any]) -> str | None:
     """Validate the public MCP query shape before the shared HTTP executor."""
     if not isinstance(arguments.get("pack_id"), str) or not arguments["pack_id"].strip():
         return "pack_id must be one nonempty published data pack ID from get_pack"
+    if "source_id" in arguments and (not isinstance(arguments["source_id"], str)
+                                  or not arguments["source_id"].strip()):
+        return "source_id must be one nonempty published source ID from get_pack"
     metrics = arguments.get("metrics")
     if (not isinstance(metrics, list) or not metrics
             or any(not isinstance(value, str) or not value.strip() for value in metrics)
@@ -3040,6 +3043,39 @@ async def _execute_paid_tool(request: Request, tool_name: str, arguments: dict[s
             }, status_code=400), is_error=True),
             rpc_request_id,
         )
+
+    if tool_name == "get_data" and arguments.get("source_id"):
+        from mapmover.api_query_runtime import get_api_source_spec
+        from mapmover.catalog_surface import is_mcp_distribution_source
+
+        pack_id = arguments["pack_id"].strip()
+        source_id = arguments["source_id"].strip()
+        pack = load_api_pack_detail(pack_id, hydrate_source_metadata=False)
+        source_ids = set(pack.get("source_ids") or []) if isinstance(pack, dict) else set()
+        published_sources = {
+            item.get("source_id"): item
+            for item in (pack.get("sources") or [])
+            if isinstance(item, dict) and item.get("source_id")
+        } if isinstance(pack, dict) else {}
+        spec = get_api_source_spec(source_id)
+        if (source_id not in source_ids or spec is None or spec.pack_id != pack_id
+                or not is_mcp_distribution_source(published_sources.get(source_id))):
+            return _jsonrpc_response(
+                _tool_result(normalize_data_tool_error("get_data", {
+                    "request_id": payload.get("request_id"),
+                    "pack_id": pack_id,
+                    "source_id": source_id,
+                    "error": {
+                        "code": "source_not_in_pack",
+                        "message": "Select an MCP-published source_id listed for this pack by get_pack.",
+                    },
+                }, status_code=400), is_error=True),
+                rpc_request_id,
+            )
+        # The shared API executor accepts either a source or a pack selector.
+        # Keep pack_id for the MCP/free gate above, then pass the verified source.
+        payload.pop("pack_id", None)
+        payload["source_id"] = source_id
 
     response = await execute_query_dataset_payload(request, payload)
 

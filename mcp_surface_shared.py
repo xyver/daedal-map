@@ -896,12 +896,13 @@ def build_tool_definitions(*, include_paused: bool = False) -> list[dict]:
         {
             "name": "get_data",
             "title": "Get Data",
-            "description": "The single workhorse for published data-pack rows inside the loc_id universe. After get_pack, pass its pack_id, exact metric ids, structured filters, sort, and row limit. filters.region_ids accepts canonical loc_ids; an administrative parent such as USA-TX matches descendant rows at the pack's published geography grain. For disaster event rows, pass the same pack_id, result's source_id, and one row's exact event_id to get_event. Use resolution/onboarding tools before get_data when the input is coordinates, outside codes, names, or an unidentified user column. Pack metadata owns get_data source routing, time grain, geography, access, and pack-specific rules; callers do not choose internal source_id values for get_data. Geometry tool families use their focused next_step tools instead of this row-query contract.",
+            "description": "Retrieve published data-pack rows inside the loc_id universe. After get_pack, pass its pack_id, exact metric ids, structured filters, sort, and row limit. For a pack with multiple record datasets, pass one published source_id from get_pack to select that dataset; omit it to use metric-based routing. filters.region_ids accepts canonical loc_ids; an administrative parent such as USA-TX matches descendant rows at the pack's published geography grain. For disaster event rows, pass the same pack_id, result's source_id, and one row's exact event_id to get_event. Use resolution/onboarding tools before get_data when the input is coordinates, outside codes, names, or an unidentified user column. Geometry tool families use their focused next_step tools instead of this row-query contract.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "request_id": {"type": "string", "description": "Optional caller-supplied request id for tracing and idempotency."},
                     "pack_id": {"type": "string", "minLength": 1, "description": _pack_id_description()},
+                    "source_id": {"type": "string", "minLength": 1, "description": "Optional published source_id belonging to pack_id. Selects one dataset when several sources expose the same metric; inspect it with get_pack(pack_id, source_id) first."},
                     "metrics": {"type": "array", "minItems": 1, "uniqueItems": True, "items": {"type": "string", "minLength": 1}, "description": "Exact metric ids from get_pack. Use event_count for aggregate counts only when get_pack publishes it."},
                     "filters": _data_filters_schema(),
                     "sort": _data_sort_schema(),

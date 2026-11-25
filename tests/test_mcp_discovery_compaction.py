@@ -253,6 +253,16 @@ class MCPDiscoveryCompactionTests(unittest.TestCase):
         self.assertNotIn("description", national)  # compact lines leave definitions to metrics=
         self.assertEqual(lines["unemployment_total_pct_labor_force"]["also_in_sources"], ["wb_economy"])
 
+    def test_mcp_source_detail_advertises_an_executable_record_query(self) -> None:
+        pack, loader = self._narrowing_pack()
+        pack["sources"][1]["catalog_surfaces"] = ["api", "mcp"]
+        result = mcp_pack_source_detail(pack, source_id="wb_social", source_metadata=loader)
+        self.assertEqual(result["next_step"], {
+            "tool": "get_data",
+            "arguments": {"pack_id": pack["pack_id"], "source_id": "wb_social",
+                          "metrics": ["gini_index"], "filters": {}, "limit": 100},
+        })
+
     def test_pack_source_view_names_valid_sources_on_miss(self) -> None:
         pack, loader = self._narrowing_pack()
         result = mcp_pack_source_detail(pack, source_id="wb_missing", source_metadata=loader)
@@ -310,7 +320,7 @@ class MCPDiscoveryCompactionTests(unittest.TestCase):
         self.assertEqual(result["next_step"]["arguments"]["pack_id"], "earthquakes")
         self.assertNotIn("source_id", result["next_step"]["arguments"])
 
-    def test_current_get_data_metadata_is_normalized_to_the_public_schema(self) -> None:
+    def test_current_get_data_metadata_keeps_an_explicit_source_selector(self) -> None:
         result = compact_pack_detail({
             "pack_id": "currency",
             "preferred_tool": "get_data",
@@ -321,10 +331,26 @@ class MCPDiscoveryCompactionTests(unittest.TestCase):
             "tool": "get_data",
             "arguments": {
                 "pack_id": "currency",
+                "source_id": "currency",
                 "metrics": ["rate"],
                 "filters": {},
             },
         })
+
+    def test_record_pack_starter_chooses_a_source_and_real_metric(self) -> None:
+        result = compact_pack_detail({
+            "pack_id": "global_resources",
+            "quick_start": {"first_query_template": {"pack_id": "global_resources", "metrics": []}},
+            "sources": [
+                {"source_id": "fineprint_mine_production", "catalog_surfaces": [], "metrics": {}},
+                {"source_id": "msha_mines", "catalog_surfaces": ["api", "mcp"],
+                 "metrics": {"record_count": {"name": "Records"}}},
+            ],
+        })
+        expected = {"pack_id": "global_resources", "source_id": "msha_mines",
+                    "metrics": ["record_count"], "filters": {}}
+        self.assertEqual(result["next_step"], {"tool": "get_data", "arguments": expected})
+        self.assertEqual(result["quick_start"]["first_query_template"], expected)
 
     def test_download_view_is_a_small_railway_handoff(self) -> None:
         data = catalog_download_payload("data")

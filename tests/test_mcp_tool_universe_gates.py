@@ -14,6 +14,7 @@ import asyncio
 import json
 from pathlib import Path
 import unittest
+from types import SimpleNamespace
 from unittest import mock
 
 from fastapi import FastAPI, Request
@@ -36,6 +37,7 @@ from mapmover.routes.mcp import (
     router as mcp_router,
 )
 from mapmover.security import is_local_loopback_request
+from mcp_surface_shared import build_tool_definitions
 
 
 def _tool_call_envelope(
@@ -81,6 +83,52 @@ class ResolvePointPayloadShapeTests(unittest.TestCase):
 
 
 class McpAccountScopeTests(unittest.TestCase):
+    def test_get_data_source_selector_uses_published_pack_membership(self):
+        schema = next(tool["inputSchema"] for tool in build_tool_definitions()
+                      if tool["name"] == "get_data")
+        self.assertIn("source_id", schema["properties"])
+        request = self._request_for_mode("smart")
+        arguments = {"pack_id": "global_resources", "source_id": "msha_mines",
+                     "metrics": ["record_count"], "filters": {}, "limit": 1}
+        execute = mock.AsyncMock(return_value=JSONResponse({
+            "pack_id": "global_resources", "source_id": "msha_mines",
+            "row_count": 1, "rows": [{"record_count": 1}],
+        }))
+        with mock.patch("mapmover.routes.mcp.load_api_pack_detail",
+                        return_value={"source_ids": ["msha_mines"], "sources": [
+                            {"source_id": "msha_mines", "catalog_surfaces": ["api", "mcp"]}]}), \
+             mock.patch("mapmover.api_query_runtime.get_api_source_spec",
+                        return_value=SimpleNamespace(pack_id="global_resources")), \
+             mock.patch("mapmover.routes.mcp.execute_query_dataset_payload", new=execute):
+            response = asyncio.run(_execute_paid_tool(request, "get_data", arguments, "rows-1"))
+        submitted = execute.await_args.args[1]
+        self.assertEqual(submitted["source_id"], "msha_mines")
+        self.assertNotIn("pack_id", submitted)
+        self.assertEqual(json.loads(response.body)["result"]["structuredContent"]["row_count"], 1)
+
+        with mock.patch("mapmover.routes.mcp.load_api_pack_detail",
+                        return_value={"source_ids": ["msha_mines"], "sources": [
+                            {"source_id": "msha_mines", "catalog_surfaces": ["api", "mcp"]}]}), \
+             mock.patch("mapmover.api_query_runtime.get_api_source_spec",
+                        return_value=SimpleNamespace(pack_id="other_pack")), \
+             mock.patch("mapmover.routes.mcp.execute_query_dataset_payload", new=execute):
+            denied = asyncio.run(_execute_paid_tool(
+                request, "get_data", {**arguments, "source_id": "other_source"}, "rows-2"))
+        self.assertEqual(json.loads(denied.body)["result"]["structuredContent"]["error"]["code"],
+                         "source_not_in_pack")
+        self.assertEqual(execute.await_count, 1)
+
+        with mock.patch("mapmover.routes.mcp.load_api_pack_detail",
+                        return_value={"source_ids": ["msha_mines"], "sources": [
+                            {"source_id": "msha_mines", "catalog_surfaces": ["api", "research"]}]}), \
+             mock.patch("mapmover.api_query_runtime.get_api_source_spec",
+                        return_value=SimpleNamespace(pack_id="global_resources")), \
+             mock.patch("mapmover.routes.mcp.execute_query_dataset_payload", new=execute):
+            denied = asyncio.run(_execute_paid_tool(request, "get_data", arguments, "rows-3"))
+        self.assertEqual(json.loads(denied.body)["result"]["structuredContent"]["error"]["code"],
+                         "source_not_in_pack")
+        self.assertEqual(execute.await_count, 1)
+
     def test_tools_share_a_small_explicit_permission_vocabulary(self):
         self.assertEqual(_required_mcp_permission("get_catalog"), "packs:read")
         self.assertEqual(_required_mcp_permission("resolve_point"), "geometry:read")
@@ -840,7 +888,7 @@ class BlindCallerHelpTests(unittest.TestCase):
                 self.assertEqual(definition.get("annotations", {}).get("destructiveHint"), False)
                 self.assertEqual(definition.get("annotations", {}).get("idempotentHint"), True)
 
-        canonical_fields = {"request_id", "pack_id", "metrics", "filters", "sort", "limit", "output"}
+        canonical_fields = {"request_id", "pack_id", "source_id", "metrics", "filters", "sort", "limit", "output"}
         self.assertEqual(
             set(definitions["get_data"]["inputSchema"]["properties"]),
             canonical_fields,

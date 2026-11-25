@@ -1,6 +1,6 @@
 {
   "name": "daedalmap-free",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Use DaedalMap's geographic reference and published data tools through its remote MCP server.",
   "author": {
     "name": "DaedalMap",
@@ -37,6 +37,7 @@
           "positive": [
             {"description": "Discover free data packs", "prompt": "Which free country-level data packs can I query on DaedalMap?", "tools_triggered": "get_catalog", "expected_behavior": "Distinguish packs eligible for free get_data calls from discoverable paid packs, and explain that execution still depends on material clearance and an API-ready source."},
             {"description": "Retrieve a bounded free data result", "prompt": "Get Canada's 2020 GDP in current US dollars from World Bank WDI on DaedalMap.", "tools_triggered": "get_catalog, get_pack, get_data", "expected_behavior": "Return the published Canada 2020 GDP row, with its pack and metric identified."},
+            {"description": "Retrieve a Global Resources record", "prompt": "Find one MSHA mine record from the free Global Resources Pack on DaedalMap.", "tools_triggered": "get_pack, get_data", "expected_behavior": "Inspect source_id msha_mines, query record_count with that source_id, and return an actual mine row. Do not claim that catalog discovery alone proves retrieval."},
             {"description": "Convert a county name to loc_id", "prompt": "What is the DaedalMap loc_id for Fairfax County, Virginia?", "tools_triggered": "convert_reference", "expected_behavior": "Return USA-VA-059 as the resolved loc_id and identify the input reference."},
             {"description": "Resolve a coordinate", "prompt": "In the USA administrative family, which area contains latitude 38.8977, longitude -77.0365?", "tools_triggered": "resolve_point", "expected_behavior": "Return an available administrative chain and the deepest resolved loc_id with coverage status."},
             {"description": "Identify a scoped dataset geography", "prompt": "These Brazilian municipality_code values are 1200013 and 1200054. Identify their geography, using Brazil as the country scope.", "tools_triggered": "identify_dataset_geography", "expected_behavior": "Recognize municipality_code as a Brazil geographic reference and report ambiguity across matching systems or vintages without silently choosing one."}
@@ -49,7 +50,7 @@
         }
       },
       "publication": {
-        "release_notes": "DaedalMap geographic reference and published data workflows. Listing copy updated for review."
+        "release_notes": "Adds a Global Resources source-level row retrieval reviewer check and refreshes the free connector tool scan for source_id queries."
       }
     }
   }
