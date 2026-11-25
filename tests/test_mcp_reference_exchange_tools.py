@@ -1682,7 +1682,7 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
             "get_geography", {"scope_id": "MARINE"},
         )
         self.assertTrue(payload["ok"])
-        self.assertTrue(any(row["family_id"] == "marine_jurisdiction" for row in payload["coverage"]))
+        self.assertTrue(any(row["family_id"] == "exclusive_economic_zone" for row in payload["coverage"]))
         self.assertEqual(payload["admin_spine"]["release_unit_kind"], "global_domain")
 
     def test_read_geometry_catalog_returns_agent_summary(self) -> None:
