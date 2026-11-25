@@ -81,10 +81,31 @@ class ProductFacadeTests(unittest.TestCase):
             large = self.call("free", "get_data", {"pack_id": "demo", "limit": 101})
             allowed = self.call("free", "get_data", {"pack_id": "demo"})
         self.assertEqual(paid["result"]["structuredContent"]["error"]["code"], "free_pack_required")
+        self.assertEqual(paid["result"]["structuredContent"]["guidance"]["action"], "correct_call_then_retry")
         self.assertEqual(large["result"]["structuredContent"]["error"]["code"], "free_facade_limit_exceeded")
         self.assertEqual(allowed, {"ok": True})
         self.assertEqual(execute.await_count, 1)
         self.assertEqual(execute.await_args.args[2]["limit"], 100)
+
+    def test_paid_pack_denial_guides_account_setup_without_argument_retry(self):
+        with mock.patch("mapmover.routes.mcp._execute_paid_tool") as execute:
+            result = self.call("free", "get_data", {
+                "pack_id": "earthquakes", "metrics": ["event_count"], "limit": 3,
+            })["result"]
+        payload = result["structuredContent"]
+        self.assertTrue(result["isError"])
+        self.assertEqual(payload["error"]["code"], "free_pack_required")
+        self.assertEqual(payload["pack_id"], "earthquakes")
+        self.assertEqual(payload["guidance"]["action"], "paid_access_required")
+        self.assertFalse(payload["guidance"]["retryable"])
+        self.assertIn("account API key", payload["error"]["message"])
+        self.assertTrue(payload["guidance"]["signup_url"].endswith("/login?mode=signup"))
+        self.assertTrue(payload["guidance"]["account_url"].endswith("/account?tab=agents"))
+        self.assertTrue(payload["guidance"]["credits_url"].endswith("/account?tab=payments"))
+        self.assertTrue(payload["guidance"]["pack_url"].endswith("/packs/earthquakes"))
+        self.assertTrue(payload["guidance"]["mcp_endpoint"].endswith("/mcp/account"))
+        self.assertEqual(payload["clarification"]["reason"], "account_access_required")
+        execute.assert_not_called()
 
     def test_free_catalog_labels_pack_policy_without_promising_execution(self):
         catalog = {"packs": [

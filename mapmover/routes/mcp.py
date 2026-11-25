@@ -1024,6 +1024,45 @@ def _free_facade_gate(request: Request, tool_name: str, arguments: dict[str, Any
     return None
 
 
+def _paid_pack_free_facade_denial(pack_id: str) -> dict[str, Any]:
+    """Explain the account route without suggesting a query-argument retry."""
+    return {
+        "ok": False,
+        "error": {
+            "code": "free_pack_required",
+            "message": (
+                f"The {pack_id} data pack cannot return rows through /mcp/free. "
+                "Use an account API key on /mcp/account to query this paid pack."
+            ),
+        },
+        "pack_id": pack_id,
+        "facade": "free",
+        "guidance": {
+            "action": "paid_access_required",
+            "retryable": False,
+            "message": (
+                "The query may be valid; changing its arguments will not unlock this pack "
+                "on the free connector. Create an account, make an API key, then "
+                "connect to the account MCP endpoint. Add credits in your account "
+                "if the quoted call needs them. Purchases are completed on the "
+                "account page, not through this connector."
+            ),
+            "signup_url": _docs_url("/login?mode=signup"),
+            "account_url": _docs_url("/account?tab=agents"),
+            "credits_url": _docs_url("/account?tab=payments"),
+            "pricing_url": _docs_url("/pricing"),
+            "pack_url": _docs_url(f"/packs/{pack_id}"),
+            "mcp_endpoint": f"{_public_app_url()}/mcp/account",
+            "credential_header": "X-API-Key",
+        },
+        "clarification": {
+            "required": False,
+            "reason": "account_access_required",
+            "questions": [],
+        },
+    }
+
+
 def _parse_env_int(name: str, default: int) -> int:
     import os
 
@@ -6596,10 +6635,15 @@ async def _mcp_endpoint_impl(request: Request, pack_id: str | None = None):
         free_denial = _free_facade_gate(request, tool_name, arguments)
         if free_denial is not None:
             code, message = free_denial
-            payload = {
-                "ok": False, "error": {"code": code, "message": message},
-                "facade": "free", "request_id": caller_request_id or None,
-            }
+            requested_pack_id = str(arguments.get("pack_id") or "").strip().lower()
+            if code == "free_pack_required" and requested_pack_id in _paid_pack_ids():
+                payload = _paid_pack_free_facade_denial(requested_pack_id)
+                payload["request_id"] = caller_request_id or None
+            else:
+                payload = {
+                    "ok": False, "error": {"code": code, "message": message},
+                    "facade": "free", "request_id": caller_request_id or None,
+                }
             _log_mcp_tool_usage_event(
                 request,
                 request_id=caller_request_id,
