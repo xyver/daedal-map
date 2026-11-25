@@ -861,9 +861,13 @@ def _build_metric_specs_from_metadata(metadata: dict[str, Any] | None) -> dict[s
             )
         else:
             description = str(metric_info).strip()
+        physical_column = (
+            str(metric_info.get("column") or metric_key).strip()
+            if isinstance(metric_info, dict) else metric_key
+        )
         built[metric_key] = ApiMetricSpec(
             metric_id=metric_key,
-            column=metric_key,
+            column=physical_column,
             description=description,
         )
     return built
@@ -1010,6 +1014,7 @@ def _build_dynamic_source_spec(source_id: str) -> ApiSourceSpec | None:
         if field_name:
             sortable_fields.add(field_name)
     sortable_fields.update(metrics.keys())
+    sortable_fields.update(metric.column for metric in metrics.values())
     analysis_dimensions = parse_analysis_dimensions(metadata, available_columns=available_cols)
 
     return ApiSourceSpec(

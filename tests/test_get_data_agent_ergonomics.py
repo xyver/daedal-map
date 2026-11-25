@@ -94,6 +94,28 @@ class CatalogTruncationTests(unittest.TestCase):
 
 
 class RegionAwareSourceRoutingTests(unittest.TestCase):
+    def test_metadata_metric_can_name_an_existing_physical_column(self):
+        from mapmover.api_query_runtime import _build_metric_specs_from_metadata
+
+        metrics = _build_metric_specs_from_metadata({"metrics": {
+            "msha_mines_record_count": {"column": "record_count", "description": "MSHA mine records"},
+        }})
+        self.assertEqual(metrics["msha_mines_record_count"].column, "record_count")
+
+    def test_distinct_pack_metrics_select_their_declared_sources(self):
+        from mapmover import api_query_runtime as runtime
+
+        metadata = {
+            "msha_mines": {"scope": "USA", "metrics": {"msha_mines_record_count": {"column": "record_count"}}},
+            "usgs_mrds": {"scope": "global", "metrics": {"usgs_mrds_record_count": {"column": "record_count"}}},
+        }
+        with patch.object(runtime, "_get_mcp_pack_source_ids", return_value=list(metadata)), \
+                patch.object(runtime, "load_source_metadata", side_effect=lambda source_id: metadata[source_id]):
+            msha = runtime.resolve_pack_sources_for_metrics("global_resources", ["msha_mines_record_count"])
+            mrds = runtime.resolve_pack_sources_for_metrics("global_resources", ["usgs_mrds_record_count"])
+        self.assertEqual(msha["selected_source_id"], "msha_mines")
+        self.assertEqual(mrds["selected_source_id"], "usgs_mrds")
+
     def test_home_country_source_wins_and_foreign_source_drops(self):
         from mapmover.api_query_runtime import _region_countries, _source_region_fit
 
