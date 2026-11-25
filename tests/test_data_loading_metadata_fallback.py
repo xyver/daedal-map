@@ -8,6 +8,54 @@ from mapmover import data_loading
 
 
 class SourceMetadataFallbackTests(unittest.TestCase):
+    def test_cloud_source_path_prefers_published_catalog_over_stale_wip_cache(self):
+        with TemporaryDirectory() as temp, patch(
+            "mapmover.data_loading.DATA_ROOT", Path(temp)
+        ), patch("mapmover.data_loading.get_data_plane_mode", return_value="cloud"), patch(
+            "mapmover.data_loading._requested_catalog_surface", return_value="published"
+        ), patch("mapmover.data_loading._catalog_cache", {
+            "sources": [{"source_id": "new_mine", "path": "sources/new_mine"}]
+        }), patch("mapmover.data_loading._full_catalog_cache", {"sources": []}):
+            self.assertEqual(data_loading.get_source_path("new_mine"),
+                             Path(temp) / "sources" / "new_mine")
+
+    def test_cloud_source_path_cold_cache_reads_published_catalog_without_recursion(self):
+        with TemporaryDirectory() as temp, patch(
+            "mapmover.data_loading.DATA_ROOT", Path(temp)
+        ), patch("mapmover.data_loading.get_data_plane_mode", return_value="cloud"), patch(
+            "mapmover.data_loading._requested_catalog_surface", return_value="published"
+        ), patch("mapmover.data_loading._catalog_cache", None), patch(
+            "mapmover.data_loading._full_catalog_cache", {"sources": []}
+        ), patch("mapmover.data_loading.load_catalog", side_effect=AssertionError("recursive catalog load")), patch(
+            "mapmover.data_loading._fetch_json_from_s3", return_value={
+                "sources": [{"source_id": "new_mine", "path": "sources/new_mine"}]
+            }
+        ) as fetch_json:
+            self.assertEqual(data_loading.get_source_path("new_mine"),
+                             Path(temp) / "sources" / "new_mine")
+            fetch_json.assert_called_once_with("catalog.json")
+
+    def test_cloud_source_path_rejects_missing_published_source(self):
+        with patch("mapmover.data_loading.get_data_plane_mode", return_value="cloud"), patch(
+            "mapmover.data_loading._requested_catalog_surface", return_value="published"
+        ), patch("mapmover.data_loading._catalog_cache", {"sources": []}), patch(
+            "mapmover.data_loading._full_catalog_cache", {
+                "sources": [{"source_id": "new_mine", "path": "global/new_mine"}]
+        }):
+            with self.assertRaises(KeyError):
+                data_loading.get_source_path("new_mine")
+
+    def test_cloud_reference_uses_published_source_path(self):
+        with patch("mapmover.data_loading.get_data_plane_mode", return_value="cloud"), patch(
+            "mapmover.data_loading._requested_catalog_surface", return_value="published"
+        ), patch("mapmover.data_loading._catalog_cache", {
+            "sources": [{"source_id": "new_mine", "path": "sources/new_mine"}]
+        }), patch("mapmover.data_loading.load_full_catalog", side_effect=AssertionError("WIP catalog used")), patch(
+            "mapmover.data_loading._fetch_json_from_s3", return_value={"source_id": "new_mine"}
+        ) as fetch_json:
+            self.assertEqual(data_loading.load_source_reference("new_mine"), {"source_id": "new_mine"})
+            fetch_json.assert_called_once_with("sources/new_mine/reference.json")
+
     def test_local_catalog_only_loads_overlay_metadata_without_recursing(self):
         with TemporaryDirectory() as temp:
             root = Path(temp)

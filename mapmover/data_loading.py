@@ -913,14 +913,25 @@ def get_source_path(source_id: str):
     # metadata for one overlay must use that raw catalog already in memory;
     # load_full_catalog() falls back to load_catalog() when no WIP catalog is
     # installed, which would recurse back into overlay construction.
-    catalog = _full_catalog_cache or _catalog_cache or load_full_catalog()
+    published_cloud = get_data_plane_mode() == "cloud" and _requested_catalog_surface() != "wip"
+    # The published catalog owns hosted source paths. The WIP inventory may be
+    # older and cannot supply a path for a published source.
+    if published_cloud:
+        # Read the raw published JSON on a cold cache. load_catalog() can
+        # recurse here while it is still building its first overlay tree.
+        catalog = _catalog_cache or _fetch_json_from_s3("catalog.json")
+    else:
+        catalog = _full_catalog_cache or _catalog_cache or load_full_catalog()
     for source in catalog.get("sources", []):
         if source.get("source_id") == source_id:
-            # Use path field if present, otherwise fall back to old structure
-            source_path = source.get("path", f"global/{source_id}")
+            source_path = source.get("path")
+            if published_cloud and not source_path:
+                raise ValueError(f"Published source {source_id} has no catalog path")
+            source_path = source_path or f"global/{source_id}"
             return DATA_ROOT / source_path
 
-    # Source not in catalog - try old path as fallback
+    if published_cloud:
+        raise KeyError(f"Source {source_id} is absent from the published catalog")
     return DATA_ROOT / "global" / source_id
 
 
@@ -958,19 +969,15 @@ def load_source_metadata(source_id: str):
                         catalog_error,
                     )
                     catalog = {}
-        full_catalog = None
         source_rel_path = None
         for source in catalog.get("sources", []):
             if source.get("source_id") == source_id:
-                source_rel_path = source.get("path", f"global/{source_id}")
+                source_rel_path = source.get("path")
                 break
-        if source_rel_path is None and _requested_catalog_surface() != "wip":
-            full_catalog = load_full_catalog() or {}
-            for source in full_catalog.get("sources", []):
-                if source.get("source_id") == source_id:
-                    source_rel_path = source.get("path", f"global/{source_id}")
-                    break
         if source_rel_path is None:
+            if _requested_catalog_surface() != "wip":
+                logger.error("Source %s is absent from the published catalog or has no path", source_id)
+                return None
             source_rel_path = f"global/{source_id}"
         try:
             metadata = _fetch_json_from_s3(f"{source_rel_path}/metadata.json")
@@ -994,20 +1001,16 @@ def load_source_metadata(source_id: str):
             # per-source metadata read failure rather than allowing a request to
             # be routed to an unrelated source.  It is a read-only resilience
             # fallback; the source-side metadata.json remains authoritative.
-            fallback_catalogs = [catalog]
-            if full_catalog is not None:
-                fallback_catalogs.append(full_catalog)
-            for fallback_catalog in fallback_catalogs:
-                for source in fallback_catalog.get("sources", []):
-                    if source.get("source_id") != source_id:
-                        continue
-                    metadata = deepcopy(source)
-                    _metadata_cache[source_id] = metadata
-                    logger.warning(
-                        "Using catalog-embedded metadata fallback for %s after cloud metadata read failure",
-                        source_id,
-                    )
-                    return metadata
+            for source in catalog.get("sources", []):
+                if source.get("source_id") != source_id:
+                    continue
+                metadata = deepcopy(source)
+                _metadata_cache[source_id] = metadata
+                logger.warning(
+                    "Using catalog-embedded metadata fallback for %s after cloud metadata read failure",
+                    source_id,
+                )
+                return metadata
             return None
 
     source_folder = get_source_path(source_id)
@@ -1041,13 +1044,19 @@ def load_source_reference(source_id: str):
     runtime_mode = get_data_plane_mode()
 
     if runtime_mode == "cloud":
-        catalog = load_full_catalog()
+        if _requested_catalog_surface() == "wip":
+            catalog = load_full_catalog()
+        else:
+            catalog = _catalog_cache or _fetch_json_from_s3("catalog.json")
         source_rel_path = None
         for source in catalog.get("sources", []):
             if source.get("source_id") == source_id:
-                source_rel_path = source.get("path", f"global/{source_id}")
+                source_rel_path = source.get("path")
                 break
         if source_rel_path is None:
+            if _requested_catalog_surface() != "wip":
+                logger.error("Reference source %s is absent from the published catalog or has no path", source_id)
+                return None
             source_rel_path = f"global/{source_id}"
         try:
             data = _fetch_json_from_s3(f"{source_rel_path}/reference.json")
