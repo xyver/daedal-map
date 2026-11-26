@@ -69,6 +69,8 @@ class AdmittedExternalBridge:
     source_license: dict[str, Any]
     runtime_path: str | None = None
     runtime_sha256: str | None = None
+    identity_translation_path: str | None = None
+    identity_translation_sha256: str | None = None
 
 
 @dataclass(frozen=True)
@@ -92,6 +94,7 @@ class ExternalReferenceEdge:
     edge_content_hash: str | None = None
     our_area_share: float | None = None
     their_area_share: float | None = None
+    preferred_loc_id: str | None = None
 
     @property
     def is_equivalence(self) -> bool:
@@ -287,7 +290,8 @@ def _local_release(adapter: ExternalReferenceAdapter) -> dict[str, Any]:
         and runtime_artifact.get("path")
         and runtime_artifact.get("sha256")
     ):
-        manifest = {**manifest, "runtime_layout": "compact_parquet", "runtime_artifact": runtime_artifact}
+        manifest = {**manifest, "runtime_layout": "compact_parquet", "runtime_artifact": runtime_artifact,
+                    "identity_translation": runtime_manifest.get("identity_translation")}
     return manifest
 
 
@@ -353,10 +357,16 @@ def admitted_bridge(adapter: ExternalReferenceAdapter) -> AdmittedExternalBridge
     runtime_sha256 = str(runtime.get("sha256") or "").strip().lower() or None
     if bool(runtime_path) != bool(runtime_sha256):
         return None
+    translation = manifest.get("identity_translation") if isinstance(manifest.get("identity_translation"), dict) else {}
+    translation_path = str(translation.get("path") or "").strip() or None
+    translation_sha256 = str(translation.get("sha256") or "").strip().lower() or None
+    if bool(translation_path) != bool(translation_sha256):
+        return None
     return AdmittedExternalBridge(
         adapter=adapter, release_fingerprint=fingerprint, source_release=source_release,
         partitions=partitions, source_license=dict(manifest.get("source_license") or {}),
         runtime_path=runtime_path, runtime_sha256=runtime_sha256,
+        identity_translation_path=translation_path, identity_translation_sha256=translation_sha256,
     )
 
 
@@ -409,7 +419,11 @@ def _bridge_available(bridge: AdmittedExternalBridge | None) -> bool:
     if is_cloud_mode():
         return True
     if bridge.runtime_path and bridge.runtime_sha256:
-        return _artifact_verified(bridge.runtime_path, bridge.runtime_sha256)
+        return _artifact_verified(bridge.runtime_path, bridge.runtime_sha256) and (
+            not bridge.identity_translation_path or _artifact_verified(
+                bridge.identity_translation_path, bridge.identity_translation_sha256 or ""
+            )
+        )
     return all(
         _artifact_verified(partition.forward_path, partition.forward_sha256)
         and _artifact_verified(partition.reverse_path, partition.reverse_sha256)
@@ -461,6 +475,7 @@ def _edge(adapter: ExternalReferenceAdapter, row: dict[str, Any], partition: Ext
         edge_content_hash=str(_value(row, "edge_content_hash") or "").strip() or None,
         our_area_share=area_share("our_area_share"),
         their_area_share=area_share("their_area_share"),
+        preferred_loc_id=str(_value(row, "bridge_preferred_loc_id") or "").strip() or None,
     )
 
 
@@ -478,8 +493,11 @@ def _query_edges(
     else:
         paths = [partition.reverse_path if reverse else partition.forward_path for partition in partitions]
         hashes = [partition.reverse_sha256 if reverse else partition.forward_sha256 for partition in partitions]
-    if not is_cloud_mode() and not all(
-        _artifact_verified(path, digest) for path, digest in zip(paths, hashes)
+    translation_path = getattr(bridge, "identity_translation_path", None)
+    translation_sha256 = getattr(bridge, "identity_translation_sha256", None)
+    if not is_cloud_mode() and (
+        not all(_artifact_verified(path, digest) for path, digest in zip(paths, hashes))
+        or (translation_path and not _artifact_verified(translation_path, translation_sha256 or ""))
     ):
         return []
     try:
@@ -487,20 +505,27 @@ def _query_edges(
     except Exception as exc:
         raise ExternalReferenceUnavailable("selected external-reference artifact could not be opened") from exc
     column = adapter.internal_id_column if reverse else adapter.external_id_column
-    clauses = [f"{quote_ident(column)} IN ({', '.join('?' for _ in values)})"]
-    parameters: list[Any] = [uris, *values]
+    edge_column = f"edge.{quote_ident(column)}"
+    match_column = ("COALESCE(pref.preferred_loc_id, " + edge_column + ")") if reverse and translation_path else edge_column
+    clauses = [f"{match_column} IN ({', '.join('?' for _ in values)})"]
+    parameters: list[Any] = [uris]
+    if translation_path:
+        parameters.append(path_to_uri(DATA_ROOT / translation_path))
+    parameters.extend(values)
     for value, filter_column in (
         (source_release, adapter.source_release_column),
         (internal_release, adapter.internal_release_column),
         (str(country_scope or "").strip().upper() or None, adapter.country_column),
     ):
         if value:
-            clauses.append(f"{quote_ident(filter_column)} = ?")
+            clauses.append(f"edge.{quote_ident(filter_column)} = ?")
             parameters.append(value)
-    sql = (
-        "SELECT * FROM read_parquet(?, union_by_name=true, filename=true) WHERE "
-        + " AND ".join(clauses)
-    )
+    source = "read_parquet(?, union_by_name=true, filename=true) AS edge"
+    if translation_path:
+        source += (" LEFT JOIN read_parquet(?) AS pref ON "
+                   f"edge.{quote_ident(adapter.internal_id_column)} = pref.baseline_loc_id")
+    selected = "edge.*, pref.preferred_loc_id AS bridge_preferred_loc_id" if translation_path else "edge.*"
+    sql = f"SELECT {selected} FROM {source} WHERE " + " AND ".join(clauses)
     try:
         frame = run_df(sql, parameters)
     except Exception as exc:
@@ -571,42 +596,62 @@ def lookup_external_edges_batch(
     return grouped
 
 
-def _country_geometry_alias(loc_id: str) -> str | None:
-    """Use only an explicit, one-to-one published country geometry mapping."""
-    country = loc_id.split("-", 1)[0]
-    if len(country) != 3 or not country.isalpha():
-        return None
-    from ..foundation_helpers import load_country_crosswalk
+def _preferred_bridge_ids(bridge: AdmittedExternalBridge, bridge_ids: list[str]) -> dict[str, str]:
+    """Read the bridge's own pinned Global-to-preferred identity translation."""
+    path = bridge.identity_translation_path
+    digest = bridge.identity_translation_sha256
+    if not path or not bridge_ids:
+        return {}
+    if not is_cloud_mode() and not _artifact_verified(path, digest or ""):
+        raise ExternalReferenceUnavailable("bridge identity translation is unavailable")
+    placeholders = ", ".join("?" for _ in bridge_ids)
+    try:
+        frame = run_df(
+            f"SELECT baseline_loc_id, preferred_loc_id FROM read_parquet(?) "
+            f"WHERE baseline_loc_id IN ({placeholders})",
+            [path_to_uri(DATA_ROOT / path), *bridge_ids],
+        )
+    except Exception as exc:
+        raise ExternalReferenceUnavailable("bridge identity translation could not be queried") from exc
+    if frame is None:
+        return {}
+    return {str(row.baseline_loc_id): str(row.preferred_loc_id)
+            for row in frame.itertuples(index=False)}
 
-    crosswalk = load_country_crosswalk(country)
-    if not isinstance(crosswalk, dict):
+
+def _country_geometry_alias(loc_id: str) -> str | None:
+    """Translate a preferred country ID to its Global baseline in the bridge."""
+    adapter = get_external_adapter(GERS_SYSTEM)
+    bridge = admitted_bridge(adapter) if adapter else None
+    if bridge is None:
         return None
-    mappings = crosswalk.get("mappings") or {}
-    if not isinstance(mappings, dict):
+    path = bridge.identity_translation_path
+    if not path:
         return None
-    alias = mappings.get(loc_id)
-    if not isinstance(alias, str) or not alias.startswith(country + "-G"):
+    if not is_cloud_mode() and not _artifact_verified(path, bridge.identity_translation_sha256 or ""):
+        raise ExternalReferenceUnavailable("bridge identity translation is unavailable")
+    try:
+        frame = run_df(
+            "SELECT baseline_loc_id FROM read_parquet(?) WHERE preferred_loc_id = ?",
+            [path_to_uri(DATA_ROOT / path), loc_id],
+        )
+    except Exception as exc:
+        raise ExternalReferenceUnavailable("bridge identity translation could not be queried") from exc
+    if frame is None or len(frame) != 1:
         return None
-    if sum(value == alias for value in mappings.values()) != 1:
-        return None
-    return alias
+    baseline = str(frame.iloc[0]["baseline_loc_id"])
+    return baseline if baseline != loc_id else None
 
 
 def country_loc_id_aliases(country: str, bridge_ids: list[str]) -> dict[str, str]:
-    """Return only unique country IDs for stored global bridge IDs."""
-    from ..foundation_helpers import load_country_crosswalk
-
-    crosswalk = load_country_crosswalk(country)
-    mappings = crosswalk.get("mappings") if isinstance(crosswalk, dict) else None
-    if not isinstance(mappings, dict):
+    """Return the bridge-bundled preferred ID for Global bridge identities."""
+    adapter = get_external_adapter(GERS_SYSTEM)
+    bridge = admitted_bridge(adapter) if adapter else None
+    if bridge is None:
         return {}
-    reverse: dict[str, list[str]] = {}
-    for local_id, geometry_id in mappings.items():
-        if (isinstance(local_id, str) and isinstance(geometry_id, str)
-                and local_id.startswith(country + "-") and geometry_id.startswith(country + "-G")):
-            reverse.setdefault(geometry_id, []).append(local_id)
-    return {bridge_id: reverse[bridge_id][0] for bridge_id in bridge_ids
-            if len(reverse.get(bridge_id, [])) == 1}
+    ids = [value for value in bridge_ids if value.startswith(country + "-G")]
+    return {key: value for key, value in _preferred_bridge_ids(bridge, ids).items()
+            if value != key and value.startswith(country + "-")}
 
 
 def lookup_loc_id_edges(
@@ -626,14 +671,6 @@ def lookup_loc_id_edges(
         source_release=source_release, internal_release=internal_release,
         country_scope=country_scope,
     )
-    if not edges:
-        alias = _country_geometry_alias(requested)
-        if alias:
-            edges = _query_edges(
-                bridge, partitions, reverse=True, values=[alias],
-                source_release=source_release, internal_release=internal_release,
-                country_scope=country_scope,
-            )
     edges.sort(key=lambda edge: (not edge.is_equivalence, -(edge.geometry_confidence or 0.0), edge.external_id))
     return edges if limit is None else edges[:max(0, int(limit))]
 
@@ -668,20 +705,7 @@ def lookup_loc_id_edges_batch(
         source_release=source_release, internal_release=internal_release,
         country_scope=country_scope,
     ):
-        grouped.setdefault(edge.loc_id, []).append(edge)
-    missing_aliases = {value: alias for value in requested if not grouped[value]
-                       if (alias := _country_geometry_alias(value))}
-    if missing_aliases:
-        alias_rows = _query_edges(
-            bridge, partitions, reverse=True, values=list(set(missing_aliases.values())),
-            source_release=source_release, internal_release=internal_release,
-            country_scope=country_scope,
-        )
-        by_alias: dict[str, list[ExternalReferenceEdge]] = {}
-        for edge in alias_rows:
-            by_alias.setdefault(edge.loc_id, []).append(edge)
-        for requested_id, alias in missing_aliases.items():
-            grouped[requested_id] = list(by_alias.get(alias, []))
+        grouped.setdefault(edge.preferred_loc_id or edge.loc_id, []).append(edge)
     maximum = None if limit is None else max(0, int(limit))
     for loc_id, edges in grouped.items():
         edges.sort(key=lambda edge: (not edge.is_equivalence, -(edge.geometry_confidence or 0.0), edge.external_id))

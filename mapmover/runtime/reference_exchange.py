@@ -333,7 +333,7 @@ def _external_reference_payload(
         payload["identity_translation"] = {
             "bridge_loc_id": stored_loc_id,
             "country_loc_id": country_alias,
-            "source": "published_country_geometry_crosswalk",
+            "source": "bridge_bundled_global_to_preferred_lookup",
         }
     return _clean_json(payload)
 

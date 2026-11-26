@@ -109,7 +109,7 @@ def _summary(adapter: Any) -> dict[str, Any]:
         "zero_overlap_note": "When both published shares are zero, boundary contact and sub-precision positive area remain indistinguishable. A positive published share establishes positive area at this precision.",
         "edge_provenance_status": "not_in_compact_artifact",
         "edge_provenance_note": "This release exposes source and internal releases plus the runtime artifact SHA-256, but the compact file omits per-edge IDs and generation hashes.",
-        "country_loc_id_alias_source": "published_country_geometry_crosswalk",
+        "country_loc_id_alias_source": "bridge_bundled_global_to_preferred_lookup",
         "country_loc_id_alias_note": "Explicit one-to-one country-to-global geometry mappings can resolve a country loc_id against the stored bridge ID; both IDs remain visible in query results.",
     }
 
@@ -172,8 +172,10 @@ def query_bridge(*, system: str, country_scope: str, external_id: str | None = N
     if external_id:
         aliases = _country_aliases_for_bridge_ids(scope, result["identity_bindings"])
         if aliases:
+            result["bridge_loc_id_bindings"] = list(result["identity_bindings"])
+            result["identity_bindings"] = [aliases.get(value, value) for value in result["identity_bindings"]]
             result["country_loc_id_bindings"] = aliases
-            result["country_loc_id_translation_source"] = "published_country_geometry_crosswalk"
+            result["country_loc_id_translation_source"] = "bridge_bundled_global_to_preferred_lookup"
     if loc_id:
         stored_ids = sorted({str(edge["loc_id"]) for edge in result["edges"]
                              if edge.get("loc_id") and edge["loc_id"] != value})
@@ -181,7 +183,7 @@ def query_bridge(*, system: str, country_scope: str, external_id: str | None = N
             result["identity_translation"] = {
                 "requested_loc_id": value,
                 "bridge_loc_ids": stored_ids,
-                "source": "published_country_geometry_crosswalk",
+                "source": "bridge_bundled_global_to_preferred_lookup",
                 "note": "The bridge edge retains its stored global geometry ID; the requested country loc_id is an explicit lookup alias.",
             }
     return result

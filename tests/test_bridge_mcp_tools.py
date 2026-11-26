@@ -107,42 +107,36 @@ class BridgeMcpToolsTests(unittest.TestCase):
             self.assertEqual(bridge_mcp.country_bridge_coverage('USA'), [])
         bridge_mcp._published_partition_metadata.cache_clear()
 
-    def test_country_crosswalk_alias_is_a_reverse_lookup_only(self):
+    def test_bridge_owned_translation_uses_one_normalized_reverse_query(self):
         from types import SimpleNamespace
         from mapmover.runtime import external_reference_adapters as adapters
 
         edge = SimpleNamespace(loc_id='CAN-G182249235B24619009834807',
+                               preferred_loc_id='CAN-BC',
                                external_id='24bc6352-7e6d-4841-8b92-7611ff5000ce',
                                is_equivalence=True, geometry_confidence=0.99)
-        crosswalk = {'mappings': {'CAN-BC': edge.loc_id}}
+        bridge = SimpleNamespace(identity_translation_path='geometry/bridge/preferred_lookup.parquet',
+                                 identity_translation_sha256='a' * 64)
         calls = []
 
         def query(_bridge, _partitions, *, values, **_kwargs):
             calls.append(values)
-            return [edge] if values == [edge.loc_id] else []
+            return [edge] if values == ['CAN-BC'] else []
 
-        with mock.patch('mapmover.foundation_helpers.load_country_crosswalk', return_value=crosswalk), \
-             mock.patch.object(adapters, 'get_external_adapter', return_value=SimpleNamespace()), \
-             mock.patch.object(adapters, 'admitted_bridge', return_value=SimpleNamespace()), \
+        with mock.patch.object(adapters, 'get_external_adapter', return_value=SimpleNamespace()), \
+             mock.patch.object(adapters, 'admitted_bridge', return_value=bridge), \
              mock.patch.object(adapters, '_bridge_available', return_value=True), \
              mock.patch.object(adapters, '_selected_partitions', return_value=[]), \
              mock.patch.object(adapters, '_query_edges', side_effect=query):
             rows = adapters.lookup_loc_id_edges_batch('overture_gers', ['CAN-BC'], country_scope='CAN')
         self.assertEqual([row.external_id for row in rows['CAN-BC']], [edge.external_id])
-        self.assertEqual(calls, [['CAN-BC'], [edge.loc_id]])
-        with mock.patch('mapmover.foundation_helpers.load_country_crosswalk', return_value=crosswalk):
-            self.assertEqual(adapters._country_geometry_alias('CAN-BC'), edge.loc_id)
-            self.assertIsNone(adapters._country_geometry_alias('CAN-XX'))
-        from mapmover.runtime import bridge_mcp
-        with mock.patch('mapmover.foundation_helpers.load_country_crosswalk', return_value=crosswalk):
-            self.assertEqual(
-                bridge_mcp._country_aliases_for_bridge_ids('CAN', [edge.loc_id]),
-                {edge.loc_id: 'CAN-BC'},
-            )
-        with mock.patch('mapmover.foundation_helpers.load_country_crosswalk',
-                        return_value={'mappings': {'CAN-BC': edge.loc_id, 'CAN-XX': edge.loc_id}}):
-            self.assertIsNone(adapters._country_geometry_alias('CAN-BC'))
-            self.assertEqual(bridge_mcp._country_aliases_for_bridge_ids('CAN', [edge.loc_id]), {})
+        self.assertEqual(calls, [['CAN-BC']])
+        with mock.patch.object(adapters, 'get_external_adapter', return_value=SimpleNamespace()), \
+             mock.patch.object(adapters, 'admitted_bridge', return_value=bridge), \
+             mock.patch.object(adapters, '_preferred_bridge_ids',
+                               return_value={edge.loc_id: 'CAN-BC'}):
+            self.assertEqual(adapters.country_loc_id_aliases('CAN', [edge.loc_id]),
+                             {edge.loc_id: 'CAN-BC'})
 
     def test_zero_confidence_overlap_keeps_area_evidence_uncertain(self):
         from bridge_tools_shared import bridge_edge

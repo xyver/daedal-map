@@ -185,7 +185,7 @@ class ReferenceExchangeRuntimeTests(unittest.TestCase):
         ])
         self.assertEqual(batched[0]["results"][0]["value"], "USA-VA-059-492000-POSTAL-22030")
 
-    def test_gers_round_trip_uses_unique_country_alias_and_keeps_bridge_id(self) -> None:
+    def test_gers_round_trip_uses_bundled_preferred_lookup_and_keeps_bridge_id(self) -> None:
         gers = "24bc6352-7e6d-4841-8b92-7611ff5000ce"
         bridge_id = "CAN-G182249235B24619009834807"
         edge = ExternalReferenceEdge(
@@ -201,8 +201,8 @@ class ReferenceExchangeRuntimeTests(unittest.TestCase):
             mock.patch.object(reference_exchange, "adapter_available", return_value=True),
             mock.patch.object(reference_exchange, "lookup_external_edges", return_value=[edge]),
             mock.patch.object(reference_exchange, "lookup_external_edges_batch", return_value={gers: [edge]}),
-            mock.patch("mapmover.foundation_helpers.load_country_crosswalk",
-                       return_value={"mappings": {"CAN-BC": bridge_id}}),
+            mock.patch.object(reference_exchange, "country_loc_id_aliases",
+                              return_value={bridge_id: "CAN-BC"}),
         ):
             single = convert_reference(**request)
             batch = reference_exchange.convert_references_batch([request])[0]
@@ -210,17 +210,16 @@ class ReferenceExchangeRuntimeTests(unittest.TestCase):
             self.assertEqual(result["results"][0]["value"], "CAN-BC")
             self.assertEqual(result["from"]["bridge_loc_id"], bridge_id)
             self.assertEqual(result["from"]["identity_translation"]["source"],
-                             "published_country_geometry_crosswalk")
+                             "bridge_bundled_global_to_preferred_lookup")
         with (
             mock.patch.object(reference_exchange, "_catalog_crosswalks", return_value=[]),
             mock.patch.object(reference_exchange, "adapter_available", return_value=True),
             mock.patch.object(reference_exchange, "lookup_external_edges", return_value=[edge]),
-            mock.patch("mapmover.foundation_helpers.load_country_crosswalk",
-                       return_value={"mappings": {"CAN-BC": bridge_id, "CAN-XX": bridge_id}}),
+            mock.patch.object(reference_exchange, "country_loc_id_aliases", return_value={}),
         ):
-            ambiguous = convert_reference(**request)
-        self.assertEqual(ambiguous["results"][0]["value"], bridge_id)
-        self.assertNotIn("identity_translation", ambiguous["from"])
+            untranslated = convert_reference(**request)
+        self.assertEqual(untranslated["results"][0]["value"], bridge_id)
+        self.assertNotIn("identity_translation", untranslated["from"])
 
     def test_forward_bridge_relationship_exposes_overlap_classification(self) -> None:
         gers = "506017c0-8932-44b5-b82c-92f9dcffdcf1"

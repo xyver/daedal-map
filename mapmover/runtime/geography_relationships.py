@@ -398,6 +398,17 @@ def _direct_graph_relationship(left_loc_id: str, right_loc_id: str,
     }
 
 
+def _comparison_country_alias(loc_id: str) -> str:
+    """Resolve a unique published country ID before opening the graph."""
+    canonical = canonicalize_loc_id(loc_id)
+    country = canonical.split("-", 1)[0]
+    if not canonical.startswith(country + "-G") or len(country) != 3:
+        return canonical
+    from .external_reference_adapters import country_loc_id_aliases
+
+    return country_loc_id_aliases(country, [canonical]).get(canonical, canonical)
+
+
 def compare_geographies(
     left_loc_id: str,
     right_loc_id: str,
@@ -415,8 +426,12 @@ def compare_geographies(
 
     resolution_fetcher = resolution_fetcher or resolve_loc_id_input
     identity_fetcher = identity_fetcher or _identity_state
-    left_resolution = resolution_fetcher(left_loc_id)
-    right_resolution = resolution_fetcher(right_loc_id)
+    left_requested = canonicalize_loc_id(left_loc_id)
+    right_requested = canonicalize_loc_id(right_loc_id)
+    left_alias = _comparison_country_alias(left_requested)
+    right_alias = _comparison_country_alias(right_requested)
+    left_resolution = resolution_fetcher(left_alias)
+    right_resolution = resolution_fetcher(right_alias)
     failed = [item for item in (left_resolution, right_resolution) if not item.get("ok")]
     if failed:
         return {
@@ -437,6 +452,12 @@ def compare_geographies(
     right_when = _parse_date(right_as_of, field="right_as_of") or common_when
     left_identity = identity_fetcher(left_id, left_when)
     right_identity = identity_fetcher(right_id, right_when)
+    for identity, requested, alias in ((left_identity, left_requested, left_alias),
+                                       (right_identity, right_requested, right_alias)):
+        if requested != alias:
+            identity["requested_loc_id"] = requested
+            identity["resolved_from_country_geometry_alias"] = True
+            identity["country_geometry_alias_source"] = "bridge_bundled_global_to_preferred_lookup"
     if any(item.get("lifecycle_status") == "unversioned" for item in (left_identity, right_identity)):
         return {
             "ok": False,
@@ -545,7 +566,7 @@ def compare_geographies_batch(items: list[dict[str, Any]]) -> list[dict[str, Any
     seen_requested: set[str] = set()
     for item in items:
         for field in ("left_loc_id", "right_loc_id"):
-            requested = canonicalize_loc_id(str(item.get(field) or ""))
+            requested = _comparison_country_alias(str(item.get(field) or ""))
             if requested and requested not in seen_requested:
                 seen_requested.add(requested)
                 requested_ids.append(requested)
