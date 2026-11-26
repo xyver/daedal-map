@@ -1608,6 +1608,15 @@ def geography_directory() -> dict[str, Any]:
         "families": [{"family_id": key, "label": value["label"],
                       "description": value.get("description")} for key, value in sorted(index.items())],
         "scopes": [value for _, value in sorted(scopes.items())],
+        "external_bridges": [{
+            "bridge_id": row.get("bridge_id"),
+            "system": row.get("external_system"),
+            "source_release": row.get("external_release"),
+            "row_count": row.get("row_count"),
+            "discovery_tool": "list_bridges",
+            "mcp_endpoint": "https://app.daedalmap.com/mcp/bridges",
+        } for row in _public_catalog_records(catalog, "external_reference_bridges")
+          if row.get("external_system") and str(row.get("status") or "").lower() in {"admitted", "published", "active"}],
         "download_url": "https://app.daedalmap.com/api/v1/geometry/catalog/download",
     }
 
@@ -1701,6 +1710,20 @@ def geography_detail(*, family_id: str | None = None, scope_id: str | None = Non
               "scope_id": scope or None, "requested_year": selection_year,
               "year_defaulted": year is None, "coverage": pairs}
     if scope:
+        from .external_reference_adapters import admitted_bridge, admitted_external_adapters
+        bridge_coverage = []
+        for adapter in admitted_external_adapters():
+            bridge = admitted_bridge(adapter)
+            partitions = [part for part in bridge.partitions if part.country == scope] if bridge else []
+            if partitions:
+                bridge_coverage.append({
+                    "system": adapter.system, "source_release": bridge.source_release,
+                    "partition_count": len(partitions),
+                    "coverage_status": "admitted_partition_present",
+                    "coverage_note": "Country coverage does not guarantee a correspondence for every loc_id or external feature type. Use get_bridge and query_bridge for an exact ID.",
+                    "mcp_endpoint": "https://app.daedalmap.com/mcp/bridges",
+                })
+        result["external_bridges"] = bridge_coverage
         coverage = country_coverage.get(scope)
         if coverage:
             result["admin_spine"] = {"active_admin_depth": coverage.get("active_admin_depth"),

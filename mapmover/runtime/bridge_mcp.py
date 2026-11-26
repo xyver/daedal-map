@@ -40,6 +40,11 @@ def _summary(adapter: Any) -> dict[str, Any]:
         "execution_status": "not_yet_verified" if is_cloud_mode() else "artifact_verified" if adapter_available(adapter) else "artifact_unavailable",
         "execution_status_note": "Admission and a catalog pointer do not prove that the runtime artifact can be read. Use query_bridge to verify execution.",
         "has_shapes": False,
+        "supported_external_id_kind": "division_id",
+        "division_area_id_status": "not_published_in_selected_release",
+        "geometry_confidence_meaning": "Minimum of source and target polygon area shares, rounded to four decimals. Zero may mean negligible rounded overlap or boundary contact; it does not prove positive-area overlap.",
+        "edge_provenance_status": "not_in_compact_artifact",
+        "edge_provenance_note": "This release exposes source and internal releases plus the runtime artifact SHA-256, but the compact file omits per-edge IDs and generation hashes.",
     }
 
 

@@ -186,7 +186,7 @@ def build_tool_definitions(*, include_paused: bool = False) -> list[dict]:
                 "type": "object",
                 "properties": {
                     "tool_name": {"type": "string", "description": "Exact tool name from tools/list. Do not combine with topic."},
-                    "topic": {"type": "string", "enum": ["overview", "data", "disasters", "custom_data", "geometry"], "description": "Workflow overview. Do not combine with tool_name."},
+                    "topic": {"type": "string", "enum": ["overview", "data", "disasters", "custom_data", "geometry", "bridges"], "description": "Workflow overview. Do not combine with tool_name."},
                     "question": {"type": "string", "description": "Optional question used only with a topic overview."},
                 },
                 "oneOf": [

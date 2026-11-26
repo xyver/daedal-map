@@ -428,6 +428,7 @@ TOPIC_TOOLS: dict[str, tuple[str, ...]] = {
     "custom_data": (
         "identify_dataset_geography", "identify_reference_system", "convert_reference",
     ),
+    "bridges": ("list_bridges", "get_bridge", "query_bridge", "get_tool_help"),
 }
 
 
@@ -436,6 +437,7 @@ TOPIC_SUMMARIES = {
     "data": "Use get_catalog to select a data pack, get_pack to learn its fields and routing, then query rows with loc_id-based region filters.",
     "disasters": "Use get_data to find event rows, then pass the same pack_id, the result's source_id, and one row's exact event_id to get_event.",
     "custom_data": "Identify geography from bounded samples, confirm the reference system, then convert a bounded identifier batch through loc_id.",
+    "bridges": "Discover admitted external reference bridges, inspect coverage and release, then query typed edges within one country.",
 }
 
 
@@ -448,6 +450,9 @@ def topic_help_payload(
 ) -> dict[str, Any]:
     """Return one bounded workflow overview through the shared help tool."""
     selected = str(topic or "").strip().lower()
+    question_text = str(question or "").lower()
+    if selected == "overview" and any(term in question_text for term in ("bridge", "gers", "overture")):
+        selected = "bridges"
     available = set(available_tool_names)
     if selected == "geometry":
         payload = geometry_topic_help_payload(
@@ -461,11 +466,21 @@ def topic_help_payload(
         ]
         return payload
     if selected not in TOPIC_TOOLS:
-        raise ValueError("topic must be overview, data, disasters, custom_data, or geometry")
+        raise ValueError("topic must be overview, data, disasters, custom_data, geometry, or bridges")
     tools = [name for name in TOPIC_TOOLS[selected] if not available or name in available]
     if selected in {"overview", "data", "disasters"}:
         workflow = data_access_workflow()
         start_here = workflow["steps"]
+        next_step = start_here[0]
+    elif selected == "bridges":
+        start_here = [
+            {"stage": "connect", "mcp_endpoint": "https://app.daedalmap.com/mcp/bridges"},
+            {"stage": "discover", "tool": "list_bridges", "arguments": {}},
+            {"stage": "inspect", "tool": "get_bridge", "arguments": {"system": "<system from list_bridges>"}},
+            {"stage": "query", "tool": "query_bridge",
+             "purpose": "Supply one ISO3 country and exactly one external_id or loc_id. Only equivalent_identity binds identities; a country listing does not guarantee every ID is mapped."},
+        ]
+        workflow = {"goal": TOPIC_SUMMARIES[selected], "steps": start_here}
         next_step = start_here[0]
     else:
         start_here = [

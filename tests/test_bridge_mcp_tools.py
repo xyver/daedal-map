@@ -61,6 +61,27 @@ class BridgeMcpToolsTests(unittest.TestCase):
             Draft202012Validator(schema).validate({'ok': False,
                 'error': {'code': 'bridge_artifact_unavailable', 'message': 'missing'}})
 
+    def test_bridge_discovery_metadata_and_help_handoff(self):
+        from mapmover.runtime import reference_exchange
+        from mcp_tool_help_shared import topic_help_payload
+
+        catalog = {"schema_version": "test", "external_reference_bridges": [{
+            "bridge_id": "overture_gers_loc_id_bridge", "external_system": "overture_gers",
+            "external_release": "2026-07-22.0", "row_count": 243162, "status": "admitted",
+        }]}
+        with mock.patch.object(reference_exchange, 'load_geometry_catalog', return_value=catalog), \
+             mock.patch.object(reference_exchange, '_published_geometry_family_index', return_value={}), \
+             mock.patch.object(reference_exchange, '_public_catalog_records',
+                               side_effect=lambda source, key: source.get(key, [])):
+            directory = reference_exchange.geography_directory()
+        self.assertEqual(directory['external_bridges'][0]['system'], 'overture_gers')
+        self.assertEqual(directory['external_bridges'][0]['source_release'], '2026-07-22.0')
+        overview = topic_help_payload('overview', question='How do I use Overture GERS bridges?',
+                                      available_tool_names=['get_tool_help', 'get_catalog'])
+        self.assertEqual(overview['help_topic'], 'bridges')
+        self.assertEqual(overview['start_here'][0]['mcp_endpoint'], 'https://app.daedalmap.com/mcp/bridges')
+        self.assertEqual(overview['available_tools'], ['get_tool_help'])
+
     def test_relationship_does_not_bind_identity(self):
         result = bridge_query_result(system='overture_gers', country_scope='CAN',
             direction='external_to_loc_id', value='example', rows=[
