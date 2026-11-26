@@ -154,7 +154,7 @@ TOOL_GUIDANCE: dict[str, dict[str, Any]] = {
             {"from_system": "admin_boundary", "iso3": "DEU", "items": [{"value": "Koeln", "country_hint": "DEU"}, {"value": "Bonn", "country_hint": "DEU"}]},
             {"iso3": "USA", "from_system": "zip", "value": "00601", "to_system": "nws_fire"},
         ],
-        ["from.resolved_loc_id", "from.match_type", "from.candidates", "results", "relationship_type", "weight"],
+        ["from.resolved_loc_id", "from.match_type", "from.candidates", "conversion_path", "results", "results.match_share_denominator", "relationship_type", "weight"],
         ["get_loc_id_info", "get_shape"],
         ["source and target systems", "bridge vintage", "relationship method", "artifact id"]
     ),

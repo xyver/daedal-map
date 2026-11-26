@@ -46,6 +46,52 @@ class ReferenceExchangeRuntimeTests(unittest.TestCase):
             elif levels == [None, None]:
                 self.assertIsNone(result["recommended_binding"]["geo_level"])
 
+    def test_single_reverse_bridge_miss_classifies_invalid_loc_id(self) -> None:
+        for resolved, code in [
+            ({"ok": False, "error": {"code": "loc_id_not_found",
+                                     "message": "unknown loc_id"}}, "loc_id_not_found"),
+            ({"ok": True, "resolved_loc_id": "CAN-BC-5931"},
+             "external_reference_not_found"),
+        ]:
+            with (
+                self.subTest(code=code),
+                mock.patch.object(reference_exchange, "adapter_available", return_value=True),
+                mock.patch.object(reference_exchange, "lookup_loc_id_edges", return_value=[]),
+                mock.patch.object(reference_exchange, "resolve_reference", return_value=resolved),
+            ):
+                result = convert_reference(from_system="loc_id", value="CAN-BC-5931",
+                                           to_system="gers", iso3="CAN")
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["error"]["code"], code)
+
+    def test_indirect_crosswalk_reports_intermediate_denominator(self) -> None:
+        resolved = {
+            "ok": True, "match_type": "crosswalk_overlap", "resolved_loc_id": "USA-CA-037",
+            "primary_match": {
+                "source": {"loc_id": "USA-Z-90210"},
+                "target": {"loc_id": "USA-CA-037"},
+                "source_area_share": 1.0,
+            },
+        }
+        references = [{"system": "overlay_nws_fire_weather_zone",
+                       "value": "USA-NWSFZ-CAZ383", "role": "crosswalk_overlap",
+                       "match_share": 0.166335,
+                       "match_share_denominator": "intermediate_admin_area",
+                       "measured_against_loc_id": "USA-CA-037"}]
+        with (
+            mock.patch.object(reference_exchange, "_catalog_crosswalks", return_value=[]),
+            mock.patch.object(reference_exchange, "resolve_reference", return_value=resolved),
+            mock.patch.object(reference_exchange, "loc_id_references",
+                              return_value={"ok": True, "references": references}),
+        ):
+            result = convert_reference(from_system="zip", value="90210",
+                                       to_system="nws_fire", iso3="USA")
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["conversion_path"]["source_loc_id"], "USA-Z-90210")
+        self.assertEqual(result["conversion_path"]["intermediate_loc_id"], "USA-CA-037")
+        self.assertFalse(result["conversion_path"]["direct_source_target_overlap_evaluated"])
+        self.assertEqual(result["results"][0]["match_share_denominator"], "intermediate_admin_area")
+
     def test_census_rejection_distinguishes_state_prefix_from_format(self) -> None:
         for value, message in [("99999", "FIPS prefix: 99"), ("0603", "digit US Census GEOID"), ("06abc", "digit US Census GEOID")]:
             single = resolve_reference(from_system="us_census_geoid", value=value, iso3="USA")

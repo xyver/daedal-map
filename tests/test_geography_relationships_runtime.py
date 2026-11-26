@@ -44,6 +44,21 @@ class GeographyRelationshipRuntimeTests(unittest.TestCase):
         self.assertEqual({row["loc_id"] for row in result["present_day_descendants"]},
                          {"BIH", "HRV", "SVN", "MKD", "SRB", "MNE"})
 
+    def test_historical_admin_level_comes_from_recorded_family(self) -> None:
+        from mapmover.runtime import geography_relationships as relationships
+
+        row = {"loc_id": "CAN-BC", "name": "59", "admin_level": None,
+               "geography_family": "admin_1", "family": "can_admin_1_2016_materialized_parent",
+               "valid_from": "2016-01-01"}
+        with (
+            mock.patch.object(relationships, "historical_entity_info", return_value=None),
+            mock.patch("mapmover.runtime.reference_graph.identity_at", return_value=row),
+        ):
+            result = relationships._identity_state("CAN-BC", None)
+        self.assertEqual(result["admin_level"], 1)
+        self.assertEqual(result["admin_level_source"], "geography_family")
+        self.assertEqual(result["name"], "59")
+
     def test_admin_spine_containment_never_queries_pair_graph(self) -> None:
         graph_fetcher = mock.Mock(side_effect=AssertionError("pair graph should not be read"))
         result = compare_geographies(

@@ -90,6 +90,8 @@ class ExternalReferenceEdge:
     partition_id: str | None = None
     bridge_generation_id: str | None = None
     edge_content_hash: str | None = None
+    our_area_share: float | None = None
+    their_area_share: float | None = None
 
     @property
     def is_equivalence(self) -> bool:
@@ -434,6 +436,12 @@ def _edge(adapter: ExternalReferenceAdapter, row: dict[str, Any], partition: Ext
         geometry_confidence = float(_value(row, adapter.geometry_confidence_column))
     except (TypeError, ValueError):
         geometry_confidence = None
+    def area_share(column: str) -> float | None:
+        try:
+            return float(_value(row, column))
+        except (TypeError, ValueError):
+            return None
+
     return ExternalReferenceEdge(
         external_id=str(_value(row, adapter.external_id_column) or ""),
         loc_id=str(_value(row, adapter.internal_id_column) or ""),
@@ -451,6 +459,8 @@ def _edge(adapter: ExternalReferenceAdapter, row: dict[str, Any], partition: Ext
         partition_id=str(_value(row, "partition_id") or (partition.partition_id if partition else "")).strip() or None,
         bridge_generation_id=str(_value(row, "bridge_generation_id") or "").strip() or None,
         edge_content_hash=str(_value(row, "edge_content_hash") or "").strip() or None,
+        our_area_share=area_share("our_area_share"),
+        their_area_share=area_share("their_area_share"),
     )
 
 

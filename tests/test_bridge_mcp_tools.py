@@ -144,6 +144,23 @@ class BridgeMcpToolsTests(unittest.TestCase):
             self.assertIsNone(adapters._country_geometry_alias('CAN-BC'))
             self.assertEqual(bridge_mcp._country_aliases_for_bridge_ids('CAN', [edge.loc_id]), {})
 
+    def test_zero_confidence_overlap_keeps_area_evidence_uncertain(self):
+        from bridge_tools_shared import bridge_edge
+
+        zero = bridge_edge({"relationship_type": "overlaps", "loc_id": "USA-AZ",
+                            "geometry_confidence": 0,
+                            "our_area_share": 0.0, "their_area_share": 0.0},
+                           system="overture_gers")
+        self.assertEqual(zero["area_overlap_status"],
+                         "indeterminate_rounded_zero_or_boundary_contact")
+        positive = bridge_edge({"relationship_type": "overlaps", "loc_id": "AFG-G",
+                                "geometry_confidence": 0,
+                                "our_area_share": 0.0, "their_area_share": 0.0001},
+                               system="overture_gers")
+        self.assertEqual(positive["area_overlap_status"],
+                         "positive_area_at_published_precision")
+        self.assertEqual(positive["external_area_share"], 0.0001)
+
     def test_relationship_does_not_bind_identity(self):
         result = bridge_query_result(system='overture_gers', country_scope='CAN',
             direction='external_to_loc_id', value='example', rows=[

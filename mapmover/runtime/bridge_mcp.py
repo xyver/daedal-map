@@ -105,6 +105,8 @@ def _summary(adapter: Any) -> dict[str, Any]:
         "supported_external_id_kind": "division_id",
         "division_area_id_status": "not_published_in_selected_release",
         "geometry_confidence_meaning": "Minimum of source and target polygon area shares, rounded to four decimals. Zero may mean negligible rounded overlap or boundary contact; it does not prove positive-area overlap.",
+        "area_share_meaning": {"loc_area_share": "Intersection area divided by the DaedalMap loc polygon area.", "external_area_share": "Intersection area divided by the Overture division polygon area."},
+        "zero_overlap_note": "When both published shares are zero, boundary contact and sub-precision positive area remain indistinguishable. A positive published share establishes positive area at this precision.",
         "edge_provenance_status": "not_in_compact_artifact",
         "edge_provenance_note": "This release exposes source and internal releases plus the runtime artifact SHA-256, but the compact file omits per-edge IDs and generation hashes.",
         "country_loc_id_alias_source": "published_country_geometry_crosswalk",
@@ -174,6 +176,9 @@ def query_bridge(*, system: str, country_scope: str, external_id: str | None = N
         return _error("bridge_artifact_unavailable", "The admitted bridge runtime artifact is unavailable")
     result = bridge_query_result(system=adapter.system, country_scope=scope, direction=direction,
         value=value, rows=[asdict(edge) for edge in grouped.get(value, [])], limit=limit)
+    bridge = admitted_bridge(adapter)
+    result["bridge_release_fingerprint"] = bridge.release_fingerprint if bridge else None
+    result["runtime_artifact_sha256"] = bridge.runtime_sha256 if bridge else None
     result["source_release_filter"] = source_release
     result["internal_release_filter"] = internal_release
     if external_id:

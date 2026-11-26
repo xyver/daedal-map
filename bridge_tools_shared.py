@@ -4,6 +4,17 @@ from typing import Any
 
 def bridge_edge(row: dict[str, Any], *, system: str) -> dict[str, Any]:
     relationship = str(row.get("relationship_type") or "overlaps")
+    loc_share = row.get("our_area_share")
+    external_share = row.get("their_area_share")
+    if relationship == "overlaps":
+        if any(isinstance(share, (int, float)) and share > 0 for share in (loc_share, external_share)):
+            area_status = "positive_area_at_published_precision"
+        elif loc_share == 0 and external_share == 0:
+            area_status = "indeterminate_rounded_zero_or_boundary_contact"
+        else:
+            area_status = "area_evidence_unavailable"
+    else:
+        area_status = None
     return {
         "external_system": system, "external_id": row.get("external_id") or row.get("gers_division_id"),
         "loc_id": row.get("loc_id"), "relationship_type": relationship,
@@ -14,6 +25,8 @@ def bridge_edge(row: dict[str, Any], *, system: str) -> dict[str, Any]:
         "source_level": row.get("source_level") if row.get("source_level") is not None else row.get("admin_level"),
         "external_subtype": row.get("external_subtype") or row.get("overture_subtype"),
         "identity_confidence": row.get("identity_confidence"), "geometry_confidence": row.get("geometry_confidence"),
+        "loc_area_share": loc_share, "external_area_share": external_share,
+        "area_overlap_status": area_status,
         "external_name": row.get("external_name") or row.get("overture_name"), "loc_name": row.get("loc_name"),
         "edge_id": row.get("edge_id"), "partition_id": row.get("partition_id"),
         "bridge_generation_id": row.get("bridge_generation_id"), "edge_content_hash": row.get("edge_content_hash"),

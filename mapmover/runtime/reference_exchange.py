@@ -2803,6 +2803,9 @@ def resolve_references_batch(requests: list[dict[str, Any]]) -> list[dict[str, A
 
 
 def _external_edge_reference(system: str, edge: Any) -> dict[str, Any]:
+    from bridge_tools_shared import bridge_edge
+
+    evidence = bridge_edge(edge_dict(edge), system=system)
     return {
         "system": system,
         "value": edge.external_id,
@@ -2821,6 +2824,9 @@ def _external_edge_reference(system: str, edge: Any) -> dict[str, Any]:
         "edge_content_hash": edge.edge_content_hash,
         "identity_confidence": edge.identity_confidence,
         "geometry_confidence": edge.geometry_confidence,
+        "loc_area_share": evidence["loc_area_share"],
+        "external_area_share": evidence["external_area_share"],
+        "area_overlap_status": evidence["area_overlap_status"],
     }
 
 
@@ -2916,6 +2922,11 @@ def loc_id_references(
                     "role": "crosswalk_overlap",
                     "relationship_vintage": overlap.get("relationship_vintage"),
                     "match_share": overlap.get("match_share"),
+                    "match_share_denominator": "intermediate_admin_area",
+                    "measured_against_loc_id": canonical,
+                    "source_area_share": overlap.get("source_area_share"),
+                    "target_area_share": overlap.get("target_area_share"),
+                    "intersection_area": overlap.get("intersection_area"),
                     "match_rank": overlap.get("match_rank"),
                     "is_primary": overlap.get("is_primary"),
                 })
@@ -3095,6 +3106,20 @@ def convert_reference(
                 "results": results,
                 "loc_id": canonical,
             })
+        # Match batch semantics on a miss: distinguish an unknown loc_id from
+        # a maintained identity that simply has no admitted bridge row.
+        validation = resolve_reference(from_system="loc_id", value=canonical,
+                                       iso3=loc_country or iso3)
+        if not validation.get("resolved_loc_id"):
+            return _clean_json({
+                "ok": False, "from": validation, "from_system": source,
+                "input": value, "to_system": target_adapter.system,
+                "results": [], "loc_id": canonical,
+                "error": validation.get("error") or {
+                    "code": "loc_id_not_found",
+                    "message": "no maintained identity or geometry matches that loc_id",
+                },
+            })
         return _clean_json({
             "ok": False,
             "from_system": source,
@@ -3186,13 +3211,17 @@ def convert_reference(
                 "message": f"no references found from loc_id to {target}",
             },
         })
-    return _clean_json({
+    payload = {
         "ok": True,
         "from": resolved,
         "to_system": target,
         "results": results,
         "loc_id": loc_id,
-    })
+    }
+    path = _intermediate_conversion_path(resolved, loc_id, results)
+    if path:
+        payload["conversion_path"] = path
+    return _clean_json(payload)
 
 
 def convert_references_batch(requests: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -3388,11 +3417,40 @@ def convert_references_batch(requests: list[dict[str, Any]]) -> list[dict[str, A
                     "role": "crosswalk_overlap",
                     "relationship_vintage": overlap.get("relationship_vintage"),
                     "match_share": overlap.get("match_share"),
+                    "match_share_denominator": "intermediate_admin_area",
+                    "measured_against_loc_id": loc_id,
+                    "source_area_share": overlap.get("source_area_share"),
+                    "target_area_share": overlap.get("target_area_share"),
+                    "intersection_area": overlap.get("intersection_area"),
                     "match_rank": overlap.get("match_rank"),
                     "is_primary": overlap.get("is_primary"),
                 })
             results[index] = _conversion_result_from_references(resolved, target, loc_id, references)
     return [result or {"ok": False, "error": "batch conversion produced no result"} for result in results]
+
+
+def _intermediate_conversion_path(
+    resolved: dict[str, Any], loc_id: str, references: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    """Describe a two-crosswalk route without asserting direct source overlap."""
+    if resolved.get("match_type") != "crosswalk_overlap":
+        return None
+    if not any(ref.get("role") == "crosswalk_overlap" for ref in references):
+        return None
+    primary = resolved.get("primary_match") or {}
+    source = primary.get("source") or {}
+    intermediate = primary.get("target") or {}
+    if not source.get("loc_id") or intermediate.get("loc_id") != loc_id:
+        return None
+    return {
+        "kind": "via_intermediate_admin",
+        "source_loc_id": source["loc_id"],
+        "intermediate_loc_id": loc_id,
+        "source_to_intermediate_share": primary.get("source_area_share"),
+        "source_to_intermediate_denominator": "source_area",
+        "intermediate_to_target_share_denominator": "intermediate_admin_area",
+        "direct_source_target_overlap_evaluated": False,
+    }
 
 
 def _conversion_result_from_references(
@@ -3411,13 +3469,17 @@ def _conversion_result_from_references(
                             if get_external_adapter(target) else f"no references found from loc_id to {target}"),
             },
         })
-    return _clean_json({
+    payload = {
         "ok": True,
         "from": resolved,
         "to_system": target,
         "results": references,
         "loc_id": loc_id,
-    })
+    }
+    path = _intermediate_conversion_path(resolved, loc_id, references)
+    if path:
+        payload["conversion_path"] = path
+    return _clean_json(payload)
 
 
 def _geometry_lineage(record: dict[str, Any]) -> dict[str, Any]:

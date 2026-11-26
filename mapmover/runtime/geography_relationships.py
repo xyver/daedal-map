@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from datetime import date
+import re
 from typing import Any, Callable
 
 from .geography_reference import canonicalize_loc_id, classify_loc_id_family
@@ -251,8 +252,13 @@ def _identity_state(loc_id: str, when: date | None) -> dict[str, Any]:
     graph_identity = identity_at(canonical, when)
     if graph_identity:
         valid_at = _valid_on(graph_identity, when)
+        metadata = dict(graph_identity)
+        family_level = re.fullmatch(r"admin_(\d+)", str(metadata.get("geography_family") or ""))
+        if metadata.get("admin_level") is None and family_level:
+            metadata["admin_level"] = int(family_level.group(1))
+            metadata["admin_level_source"] = "geography_family"
         return {
-            **graph_identity,
+            **metadata,
             "loc_id": canonical,
             "as_of": when.isoformat() if when else None,
             "valid_at_requested_time": valid_at,
