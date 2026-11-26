@@ -82,6 +82,31 @@ class BridgeMcpToolsTests(unittest.TestCase):
         self.assertEqual(overview['start_here'][0]['mcp_endpoint'], 'https://app.daedalmap.com/mcp/bridges')
         self.assertEqual(overview['available_tools'], ['get_tool_help'])
 
+    def test_cloud_country_coverage_reads_pinned_release_manifest(self):
+        from types import SimpleNamespace
+        from mapmover.runtime import bridge_mcp
+        from mapmover.runtime.external_reference_adapters import _release_fingerprint
+        manifest = {"profile": "external_reference_bridge", "external_system": "overture_gers",
+                    "external_release": "2026-07-22.0", "adapter": {},
+                    "partitions": [{"country_iso3": "CAN", "source_family": "region",
+                                    "internal_spine_release": "old_canada", "row_count": 48}]}
+        manifest['release_fingerprint'] = _release_fingerprint(manifest)
+        adapter = SimpleNamespace(system='overture_gers')
+        bridge = SimpleNamespace(release_fingerprint=manifest['release_fingerprint'],
+                                 source_release='2026-07-22.0', partitions=())
+        record = {'manifest_path': 'geometry/verified-release.json'}
+        bridge_mcp._published_partition_metadata.cache_clear()
+        with mock.patch.object(bridge_mcp, 'is_cloud_mode', return_value=True), \
+             mock.patch.object(bridge_mcp, 'admitted_external_adapters', return_value=[adapter]), \
+             mock.patch.object(bridge_mcp, 'admitted_bridge', return_value=bridge), \
+             mock.patch.object(bridge_mcp, '_record', return_value=record), \
+             mock.patch.object(bridge_mcp, 'read_artifact_json', return_value=manifest):
+            coverage = bridge_mcp.country_bridge_coverage('CAN')
+            self.assertEqual(coverage[0]['source_families'], ['region'])
+            self.assertEqual(coverage[0]['row_count'], 48)
+            self.assertEqual(bridge_mcp.country_bridge_coverage('USA'), [])
+        bridge_mcp._published_partition_metadata.cache_clear()
+
     def test_relationship_does_not_bind_identity(self):
         result = bridge_query_result(system='overture_gers', country_scope='CAN',
             direction='external_to_loc_id', value='example', rows=[

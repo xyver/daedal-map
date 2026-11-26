@@ -1710,20 +1710,8 @@ def geography_detail(*, family_id: str | None = None, scope_id: str | None = Non
               "scope_id": scope or None, "requested_year": selection_year,
               "year_defaulted": year is None, "coverage": pairs}
     if scope:
-        from .external_reference_adapters import admitted_bridge, admitted_external_adapters
-        bridge_coverage = []
-        for adapter in admitted_external_adapters():
-            bridge = admitted_bridge(adapter)
-            partitions = [part for part in bridge.partitions if part.country == scope] if bridge else []
-            if partitions:
-                bridge_coverage.append({
-                    "system": adapter.system, "source_release": bridge.source_release,
-                    "partition_count": len(partitions),
-                    "coverage_status": "admitted_partition_present",
-                    "coverage_note": "Country coverage does not guarantee a correspondence for every loc_id or external feature type. Use get_bridge and query_bridge for an exact ID.",
-                    "mcp_endpoint": "https://app.daedalmap.com/mcp/bridges",
-                })
-        result["external_bridges"] = bridge_coverage
+        from .bridge_mcp import country_bridge_coverage
+        result["external_bridges"] = country_bridge_coverage(scope)
         coverage = country_coverage.get(scope)
         if coverage:
             result["admin_spine"] = {"active_admin_depth": coverage.get("active_admin_depth"),
