@@ -448,7 +448,7 @@ async def execute_query_dataset_payload(req: Request, payload: dict[str, Any]) -
                 "This pack requires multiple sources for the requested metrics.",
                 400,
                 details={"required_sources": pack_resolution.get("required_sources") or []},
-                retry_hint="Choose metrics that can be satisfied by one source, or query a specific source_id.",
+                retry_hint="Choose metrics from one source in this pack. Query other sources in separate calls.",
                 pack_id=pack_id,
                 source_id="unknown",
             )
@@ -477,10 +477,10 @@ async def execute_query_dataset_payload(req: Request, payload: dict[str, Any]) -
             return error_response(
                 request_id,
                 "multi_source_not_supported",
-                f"Pack '{pack_id}' needs metrics or a specific source_id to choose the right execution source.",
+                f"Pack '{pack_id}' needs metrics to choose the right execution source.",
                 400,
                 details={"required_sources": pack_resolution.get("required_sources") or []},
-                retry_hint="Provide metrics, or query a specific source_id from this pack.",
+                retry_hint="Provide metric ids listed for one source in this pack.",
                 pack_id=pack_id,
                 source_id="unknown",
             )
@@ -491,7 +491,7 @@ async def execute_query_dataset_payload(req: Request, payload: dict[str, Any]) -
                 "unknown_source",
                 f"Pack '{pack_id}' could not be resolved to a published source.",
                 404,
-                retry_hint="Choose a published source_id from the catalog, or retry with a more specific pack request.",
+                retry_hint="Choose published metric ids from this pack's catalog entry.",
                 pack_id=pack_id,
                 source_id="unknown",
             )

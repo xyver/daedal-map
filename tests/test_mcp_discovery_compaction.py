@@ -235,6 +235,8 @@ class MCPDiscoveryCompactionTests(unittest.TestCase):
         self.assertEqual(social["temporal_coverage"]["end"], "2025-01-01")
         self.assertEqual(result["metric_count"], 3)  # distinct ids across sources
         self.assertIn("unemployment_national", social["metric_ids"])
+        self.assertEqual(social["filterable_fields"], ["loc_id", "year"])
+        self.assertNotIn("source_id", result["narrowing"])
 
     def test_pack_source_view_merges_metadata_and_query_contract(self) -> None:
         pack, loader = self._narrowing_pack()

@@ -602,6 +602,9 @@ def _source_summary(entry: dict[str, Any], pack_id: str) -> dict[str, Any]:
     summary["metric_ids"] = metric_ids[:20]
     if len(metric_ids) > 20:
         summary["metric_ids_truncated"] = True
+    filterable = metadata.get("filterable_fields") or source.get("filterable_fields") or []
+    if isinstance(filterable, list):
+        summary["filterable_fields"] = [str(field) for field in filterable if str(field).strip()]
     return summary
 
 
@@ -661,9 +664,7 @@ def mcp_full_pack_detail(payload: Any, *, catalog: str, source_metadata: SourceM
                 break
         result["narrowing"] = (
             "Use a source's listed metric_ids with get_data to select its rows. "
-            "Clients exposing optional get_pack selectors may also narrow by "
-            "source_id, search, or up to "
-            f"{PACK_METRIC_DETAIL_LIMIT} exact metric ids."
+            "Query different sources in separate get_data calls."
         )
     elif isinstance(payload.get("metrics"), dict):
         result["metric_ids"] = sorted(str(key) for key in payload["metrics"] if str(key))
@@ -741,7 +742,7 @@ def mcp_pack_metric_detail(payload: Any, *, metric_ids: list[str], source_metada
     if not details:
         return _pack_error(
             pack_id, "metric_not_in_pack", f"None of the requested metrics are in pack '{pack_id}'.",
-            unknown_metrics=unknown, retry_hint="Call get_pack with search or source_id to find exact metric ids.",
+            unknown_metrics=unknown, retry_hint="Call get_pack with pack_id to find exact metric_ids.",
         )
     result["detail"] = "metric_detail"
     result["metrics"] = details

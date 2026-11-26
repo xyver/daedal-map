@@ -960,7 +960,8 @@ class BlindCallerHelpTests(unittest.TestCase):
             "tool": "get_pack",
             "arguments": {"pack_id": "world_bank_wdi"},
         })
-        self.assertIn("does not accept source_id", multi_source["error"]["retry_hint"])
+        self.assertIn("metric_ids", multi_source["error"]["retry_hint"])
+        self.assertNotIn("source_id", multi_source["error"]["retry_hint"])
 
     def test_geometry_get_info_advertises_cold_start_sequence(self) -> None:
         response = self.client.get("/mcp/geography")

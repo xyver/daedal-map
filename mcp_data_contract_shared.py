@@ -348,12 +348,12 @@ def normalize_data_tool_error(
     elif code in {"metric_not_available", "multi_source_not_supported"} and pack_id:
         if code == "multi_source_not_supported":
             error["retry_hint"] = (
-                "Call get_pack with source_id to list one source's metrics, then retry get_data with a "
-                "metric subset from that one source. get_data does not accept source_id."
+                "Call get_pack with pack_id to see each source's metric_ids. "
+                "Retry get_data with metrics from only one source; make separate calls for other sources."
             )
         else:
             error.setdefault("retry_hint", (
-                "Call get_pack with search='<terms>' or source_id to find exact metric ids, then retry get_data."
+                "Call get_pack with pack_id to find exact metric_ids, then retry get_data."
             ))
         next_step = {
             "action": "inspect_pack_query_contract",
