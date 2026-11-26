@@ -156,11 +156,24 @@ def read_rows_by_ids(
     if path is None or not requested or not parquet_available(path):
         return pd.DataFrame(columns=selected)
     projection = ", ".join(quote_ident(column) for column in selected)
+    uri = path_to_uri(path)
+    if len(requested) <= 8:
+        # Sparse IN predicates can scan intervening geometry row groups before
+        # filtering. Equality scans prune those groups in the admitted banks.
+        # Keep one query/lease and bound the number of scans for large batches.
+        sql = " UNION ALL ".join(
+            f"SELECT {projection} FROM read_parquet(?) WHERE {quote_ident(id_column)} = ?"
+            for _ in requested
+        )
+        return run_df(
+            sql, [parameter for value in requested for parameter in (uri, value)],
+            raw_geoparquet=raw_geoparquet,
+        )
     placeholders = ", ".join("?" for _ in requested)
     return run_df(
         f"SELECT {projection} FROM read_parquet(?) "
         f"WHERE {quote_ident(id_column)} IN ({placeholders})",
-        [path_to_uri(path), *requested], raw_geoparquet=raw_geoparquet,
+        [uri, *requested], raw_geoparquet=raw_geoparquet,
     )
 
 

@@ -1,6 +1,7 @@
 from unittest.mock import MagicMock, patch
 
 import pandas as pd
+import pytest
 
 from mapmover.runtime import geometry_predicate_query
 
@@ -70,3 +71,20 @@ def test_hash_sharded_rows_use_one_duckdb_query_for_all_routed_files(tmp_path) -
     assert "read_parquet([?, ?], union_by_name=true)" in sql
     assert parameters[:2] == [str(paths[shard]) for shard in sorted(paths)]
     assert set(result["candidate_id"]) == set(values)
+
+
+@pytest.mark.parametrize("count", [1, 4, 9])
+def test_exact_rows_preserve_duplicates_missing_ids_and_projection(tmp_path, count) -> None:
+    path = tmp_path / "bank.parquet"
+    records = [{"loc_id": f"id-{i}", "geometry": bytes([i]), "unused": "x"} for i in range(15)]
+    records += [{"loc_id": "id-0", "geometry": b"second", "unused": "x"},
+                {"loc_id": "id-'quoted", "geometry": b"quoted", "unused": "x"}]
+    pd.DataFrame(records).to_parquet(path, index=False, row_group_size=1)
+    requested = [f"id-{i}" for i in range(count)] + ["id-0", "missing", "id-'quoted"]
+    result = geometry_predicate_query.read_rows_by_ids(
+        path, requested, id_column="loc_id", columns=["geometry", "loc_id"], raw_geoparquet=True,
+    )
+    assert list(result.columns) == ["loc_id", "geometry"]
+    actual = sorted((row.loc_id, bytes(row.geometry)) for row in result.itertuples())
+    expected = sorted((row["loc_id"], row["geometry"]) for row in records if row["loc_id"] in requested)
+    assert actual == expected

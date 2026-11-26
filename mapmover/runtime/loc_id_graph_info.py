@@ -102,6 +102,9 @@ def graph_info_items(loc_ids: list[str]) -> list[dict[str, Any]]:
     for values in by_country.values():
         try:
             found = indexed_public_alias_candidates(values)
+        except ReferenceRouteUnavailable as exc:
+            errors.update({value: _route_error(value, str(exc)) for value in values})
+            continue
         except Exception as exc:
             message = f"preferred-public alias index could not be read: {type(exc).__name__}"
             errors.update({value: _route_error(value, message) for value in values})

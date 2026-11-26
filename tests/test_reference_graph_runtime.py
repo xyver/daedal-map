@@ -829,6 +829,42 @@ class ReferenceGraphRuntimeTests(unittest.TestCase):
         ):
             self.assertIsNone(reference_graph.indexed_public_alias_candidates(["TST-PUBLIC-A"]))
 
+    def test_unknown_scope_uses_healthy_global_route_without_country_alias_index(self) -> None:
+        from mapmover.runtime import loc_id_graph_info
+
+        with (
+            mock.patch.object(reference_graph, "reference_graph_available", return_value=True),
+            mock.patch.object(reference_graph, "reference_graph_roots", return_value={}),
+            mock.patch.object(reference_graph, "load_geometry_catalog", return_value={}),
+            mock.patch.object(reference_graph, "global_reference_graph_root", return_value=self.root),
+            mock.patch.object(reference_graph, "_route_paths", return_value=[]) as route,
+            mock.patch.object(loc_id_graph_info, "identities", return_value=[]),
+        ):
+            result = loc_id_graph_info.graph_info_items(["NOT-A-LOC-ID"])
+        self.assertEqual(result[0]["error"]["code"], "not_found")
+        route.assert_called_once_with(
+            self.root, reference_graph.IDENTITY_ROUTE_INDEX, "loc_id", ["NOT-A-LOC-ID"], strict=True,
+        )
+
+    def test_unknown_scope_preserves_unavailable_global_route(self) -> None:
+        from mapmover.runtime import loc_id_graph_info
+
+        for root, message in ((None, "Global reference graph is unavailable"),
+                              (self.root, "selected Global index is stale")):
+            with (
+                self.subTest(root=root),
+                mock.patch.object(reference_graph, "reference_graph_available", return_value=True),
+                mock.patch.object(reference_graph, "reference_graph_roots", return_value={}),
+                mock.patch.object(reference_graph, "load_geometry_catalog", return_value={}),
+                mock.patch.object(reference_graph, "global_reference_graph_root", return_value=root),
+                mock.patch.object(reference_graph, "_route_paths",
+                                  side_effect=reference_graph.ReferenceRouteUnavailable(message)),
+            ):
+                result = loc_id_graph_info.graph_info_items(["NOT-A-LOC-ID"])
+            self.assertEqual(result[0]["error"]["code"], "reference_route_unavailable")
+            self.assertIn(message, result[0]["error"]["message"])
+            self.assertNotIn("alias index", result[0]["error"]["message"])
+
     def test_indexed_legacy_usa_aliases_use_official_codes_in_same_file(self) -> None:
         index = self.root / "geometry" / "countries" / "USA" / "reference_discovery" / "identifier_index.parquet"
         index.parent.mkdir(parents=True, exist_ok=True)

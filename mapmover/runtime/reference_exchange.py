@@ -2944,6 +2944,27 @@ def loc_id_references(
     ))
 
 
+def reference_source_admission_error(from_system: str, iso3: str) -> dict[str, str] | None:
+    """Share selected source admission between conversion and its discovery handoff."""
+    source = _normalize_system(from_system)
+    known_sources = {
+        LOC_ID_SYSTEM, "admin_local", "admin_geometry", "admin.native_id",
+        ADMIN_SYSTEM, "us_census_geoid", "geoboundaries.code",
+        "historical_country", "water_body", "marine_eez", "regional_base",
+    }
+    if source in known_sources or get_external_adapter(source):
+        return None
+    known_sources.update(
+        _normalize_system(item.get("system"))
+        for item in load_country_geometry_catalog(str(iso3 or "").upper()).get("reference_systems") or []
+        if isinstance(item, dict) and item.get("callable") is True
+    )
+    if source in known_sources:
+        return None
+    return {"code": "unsupported_source_system",
+            "message": f"{source} is not a published source system in {iso3}."}
+
+
 def _source_conversion_error(resolved: dict[str, Any]) -> dict[str, Any]:
     """Preserve typed source failures and distinguish ambiguous names from misses."""
     error = resolved.get("error")
@@ -3077,21 +3098,10 @@ def convert_reference(
                 "lineage": direct_record.get("source_material_identity"),
             },
         })
-    known_sources = {
-        LOC_ID_SYSTEM, "admin_local", "admin_geometry", "admin.native_id",
-        ADMIN_SYSTEM, "us_census_geoid", "geoboundaries.code",
-        "historical_country", "water_body", "marine_eez", "regional_base",
-    }
-    if source not in known_sources and not get_external_adapter(source):
-        known_sources.update(
-            _normalize_system(item.get("system"))
-            for item in load_country_geometry_catalog(str(iso3 or "").upper()).get("reference_systems") or []
-            if isinstance(item, dict) and item.get("callable") is True
-        )
-        if source not in known_sources:
-            return _clean_json({"ok": False, "from_system": source, "input": value,
-                "to_system": target, "results": [], "error": {"code": "unsupported_source_system",
-                "message": f"{source} is not a published source system in {iso3}."}})
+    source_error = reference_source_admission_error(source, iso3)
+    if source_error:
+        return _clean_json({"ok": False, "from_system": source, "input": value,
+                            "to_system": target, "results": [], "error": source_error})
     resolved = resolve_reference(
         from_system=from_system,
         value=value,
@@ -3174,6 +3184,13 @@ def convert_references_batch(requests: list[dict[str, Any]]) -> list[dict[str, A
         if direct_record:
             key = (from_system, target, iso3, int(request.get("limit") or 10), selected_id)
             direct_groups.setdefault(key, []).append((index, request))
+            continue
+        source_error = reference_source_admission_error(from_system, iso3)
+        if source_error:
+            results[index] = _clean_json({
+                "ok": False, "from_system": from_system, "input": request.get("value"),
+                "to_system": target, "results": [], "error": source_error,
+            })
             continue
         source_indexes.append(index)
         # Conversion route selectors do not belong to source identity resolution.

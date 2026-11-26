@@ -1024,7 +1024,7 @@ def identify_reference_system(
             "code": "sample_validation_only",
             "message": (
                 "Only the supplied sample was checked to identify the reference system. "
-                "Use convert_reference for bounded conversions in the selected country scope. "
+                "When next_call is supplied, use convert_reference for bounded conversions in the selected country scope. "
                 "Conversion validates each submitted identifier and reports unmatched keys; "
                 "it does not validate rows that were not submitted. Consult get_tool_help "
                 "for the active batch limit. Large conversion jobs are not exposed."
@@ -1133,6 +1133,33 @@ def identify_reference_system(
             }],
         }
 
+    next_call = None
+    if recommended_binding and recommended_binding.get("country_scope") and values:
+        from .reference_exchange import reference_source_admission_error
+
+        admission_error = reference_source_admission_error(
+            recommended_binding["system"], recommended_binding["country_scope"],
+        )
+        if admission_error:
+            warnings.append({
+                "code": "conversion_unavailable",
+                "message": "The reference system was identified, but conversion is not admitted in the selected catalog.",
+            })
+            guidance = {
+                "action": "conversion_unavailable",
+                "message": "Keep the verified identification. No conversion call is recommended until this source system has an admitted execution route.",
+                "reason": admission_error["code"],
+            }
+        else:
+            next_call = {
+                "tool": "convert_reference",
+                "arguments": {
+                    "iso3": recommended_binding["country_scope"],
+                    "from_system": recommended_binding["system"],
+                    "value": values[0],
+                },
+            }
+
     return {
         "ok": status in {"matched", "ambiguous", "partial_match", "mixed_geography"},
         "status": status,
@@ -1152,14 +1179,7 @@ def identify_reference_system(
         "dataset_interpretations": dataset_interpretations,
         "concurring_systems": concurring_systems,
         "recommended_binding": recommended_binding,
-        "next_call": {
-            "tool": "convert_reference",
-            "arguments": {
-                "iso3": recommended_binding["country_scope"],
-                "from_system": recommended_binding["system"],
-                "value": values[0],
-            },
-        } if recommended_binding and recommended_binding.get("country_scope") and values else None,
+        "next_call": next_call,
         "needed_context": ["system", "geo_level", "vintage"] if status == "ambiguous" else [],
         "warnings": warnings,
         "guidance": guidance,

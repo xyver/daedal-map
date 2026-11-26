@@ -1381,10 +1381,26 @@ def indexed_public_alias_candidates(loc_ids: list[str]) -> dict[str, list[dict[s
         return None
     global_root = global_reference_graph_root()
     for country, values in list(by_country.items()):
-        if country not in roots and global_root is not None and _route_paths(
-            global_root, IDENTITY_ROUTE_INDEX, "loc_id", values,
-        ):
-            by_country.pop(country)
+        if country in roots:
+            continue
+        # A selected country with missing controls is unavailable, not absent.
+        selected_country = any(
+            isinstance(profile, dict)
+            and str(profile.get("country_code") or "").upper() == country
+            and profile.get("release_status") in {"approved_for_publication", "published"}
+            for profile in load_geometry_catalog().get("country_profiles") or []
+        )
+        if selected_country:
+            return None
+        if global_root is None:
+            raise ReferenceRouteUnavailable(
+                f"No selected country route for {country}; Global reference graph is unavailable"
+            )
+        # Non-country IDs use the existing Global exact route. A healthy index
+        # can answer an empty lookup; there is no country alias index to require.
+        # Strict mode preserves unavailable/malformed indexes as route failures.
+        _route_paths(global_root, IDENTITY_ROUTE_INDEX, "loc_id", values, strict=True)
+        by_country.pop(country)
     if any(country not in roots or not _country_discovery_index_current(
         country, is_cloud_mode(), str(roots[country]),
     ) for country in by_country):

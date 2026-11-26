@@ -1991,6 +1991,48 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
             {"SRB", "MNE"},
         )
 
+    def test_identified_brazil_system_without_conversion_route_has_no_next_call(self) -> None:
+        payload = _tool_call(self.client, "identify_reference_system", {
+            "country_scope": "BRA", "identifiers": ["1200013", "1200054"],
+            "expected": {"system": "bra.ibge.mmd.2023.admin2"},
+        })
+        self.assertEqual(payload["status"], "matched")
+        self.assertEqual(payload["recommended_binding"]["system"], "bra.ibge.mmd.2023.admin2")
+        self.assertIsNone(payload["next_call"])
+        self.assertEqual(payload["guidance"]["action"], "conversion_unavailable")
+        for arguments in (
+            {"value": "1200013"},
+            {"items": [{"value": "1200013"}, {"value": "1200054"}]},
+        ):
+            result = _tool_call(self.client, "convert_reference", {
+                "iso3": "BRA", "from_system": "bra.ibge.mmd.2023.admin2", **arguments,
+            })
+            rows = result.get("results") if "items" in arguments else [result]
+            for row in rows:
+                self.assertFalse(row["ok"])
+                self.assertEqual(row["error"]["code"], "unsupported_source_system")
+
+    def test_identification_next_call_executes_on_admitted_system(self) -> None:
+        payload = _tool_call(self.client, "identify_reference_system", {
+            "country_scope": "USA", "identifiers": ["06037"],
+            "expected": {"system": "us_census_geoid", "geo_level": "admin_2"},
+        })
+        call = payload["next_call"]
+        self.assertEqual(call["tool"], "convert_reference")
+        converted = _tool_call(self.client, call["tool"], call["arguments"])
+        self.assertTrue(converted["ok"])
+        self.assertEqual(converted["results"][0]["value"], "USA-CA-037")
+
+    def test_unknown_identity_does_not_claim_missing_country_alias_index(self) -> None:
+        result = _tool_call(self.client, "get_loc_id_info", {
+            "loc_ids": ["CAN-BC", "NOT-A-LOC-ID"],
+        })
+        self.assertEqual(result["results"][0]["loc_id"], "CAN-BC")
+        self.assertNotIn("error", result["results"][0])
+        error = result["results"][1]["error"]
+        self.assertIn(error["code"], {"not_found", "reference_route_unavailable"})
+        self.assertNotIn("alias index", error["message"])
+
     def test_german_name_batch_preserves_valid_rows(self) -> None:
         for names in (["Koeln", "Bonn"], ["Koeln", "Bonn", "zzzz-not-a-real-place-927413"]):
             with self.subTest(names=names):
