@@ -1024,9 +1024,10 @@ def identify_reference_system(
             "code": "sample_validation_only",
             "message": (
                 "Only the supplied sample was checked to identify the reference system. "
-                "Use estimate_conversion_job with a representative row sample, then "
-                "create_conversion_job with the complete dataset; conversion validates "
-                "every row and reports structured failures for unmatched keys."
+                "Use convert_reference for bounded conversions in the selected country scope. "
+                "Conversion validates each submitted identifier and reports unmatched keys; "
+                "it does not validate rows that were not submitted. Consult get_tool_help "
+                "for the active batch limit. Large conversion jobs are not exposed."
             ),
         })
     if status == "mixed_geography":
@@ -1152,9 +1153,13 @@ def identify_reference_system(
         "concurring_systems": concurring_systems,
         "recommended_binding": recommended_binding,
         "next_call": {
-            "tool": "estimate_conversion_job",
-            "arguments": {"geography_binding": recommended_binding},
-        } if recommended_binding else None,
+            "tool": "convert_reference",
+            "arguments": {
+                "iso3": recommended_binding["country_scope"],
+                "from_system": recommended_binding["system"],
+                "value": values[0],
+            },
+        } if recommended_binding and recommended_binding.get("country_scope") and values else None,
         "needed_context": ["system", "geo_level", "vintage"] if status == "ambiguous" else [],
         "warnings": warnings,
         "guidance": guidance,

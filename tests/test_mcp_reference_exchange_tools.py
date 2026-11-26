@@ -1416,6 +1416,9 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
                 self.assertFalse(help_payload["input_schema"]["additionalProperties"])
                 self.assertTrue(help_payload["examples"])
         shallow_help = _tool_call(self.client, "get_tool_help", {"tool_name": "resolve_point"})
+        for example in shallow_help["examples"]:
+            self.assertIn("scope_id", example)
+            self.assertIn("family", example)
         self.assertNotIn("target_admin_level", shallow_help["input_schema"]["properties"])
         self.assertNotIn("include_marine_context", shallow_help["input_schema"]["properties"])
         self.assertIn("directly recorded loc_id connections", tools["get_loc_id_info"]["description"])
@@ -1987,6 +1990,30 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
             {row["loc_id"] for row in payload["from"]["lifecycle"]["present_day_descendants"]},
             {"SRB", "MNE"},
         )
+
+    def test_german_name_batch_preserves_valid_rows(self) -> None:
+        for names in (["Koeln", "Bonn"], ["Koeln", "Bonn", "zzzz-not-a-real-place-927413"]):
+            with self.subTest(names=names):
+                payload = _tool_call(self.client, "convert_reference", {
+                    "iso3": "DEU", "from_system": "admin_boundary",
+                    "items": [{"value": name, "country_hint": "DEU"} for name in names],
+                })
+                self.assertEqual(payload["converted_count"], 2)
+                self.assertEqual(payload["item_count"], len(names))
+                self.assertEqual(payload["results"][0]["results"][0]["value"], "DEU-05-3")
+                self.assertTrue(payload["results"][1]["ok"])
+                if len(names) == 3:
+                    self.assertFalse(payload["results"][2]["ok"])
+                    self.assertEqual(payload["results"][2]["error"]["code"], "reference_not_found")
+
+    def test_springfield_conversion_reports_ambiguity(self) -> None:
+        payload = _tool_call(self.client, "convert_reference", {
+            "iso3": "USA", "from_system": "admin_boundary", "value": "Springfield",
+            "country_hint": "USA",
+        })
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["error"]["code"], "reference_ambiguous")
+        self.assertGreater(len(payload["from"]["candidates"]), 1)
 
     def test_convert_reference_accepts_item_batch_with_default_target(self) -> None:
         payload = _tool_call(

@@ -58,7 +58,7 @@ def shallow_scope(shallow_loc_id: str) -> tuple[str, str | None, dict[str, str] 
     if "-" not in requested or len(country) != 3 or not country.isalpha():
         return "", None, {
             "code": "invalid_shallow_loc_id",
-            "message": "shallow_loc_id must be a canonical administrative loc_id returned by resolve_point.",
+            "message": "shallow_loc_id must be a country administrative ID. Repeat resolve_point or resolve_bbox with scope_id set to the published ISO3 country (and family=administrative for points), then pass its deep_scope_loc_id. Global baseline IDs are not country deep-scope IDs.",
         }
     if not layout_available(country):
         return "", None, {
@@ -69,7 +69,7 @@ def shallow_scope(shallow_loc_id: str) -> tuple[str, str | None, dict[str, str] 
     if len(rows) != 1:
         return "", None, {
             "code": "invalid_shallow_loc_id",
-            "message": "shallow_loc_id must be a canonical administrative loc_id returned by resolve_point.",
+            "message": "shallow_loc_id must be a country administrative ID. Repeat resolve_point or resolve_bbox with scope_id set to the published ISO3 country (and family=administrative for points), then pass its deep_scope_loc_id. Global baseline IDs are not country deep-scope IDs.",
         }
     try:
         level = int(rows.iloc[0]["admin_level"])

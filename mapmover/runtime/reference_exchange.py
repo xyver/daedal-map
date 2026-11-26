@@ -2944,6 +2944,17 @@ def loc_id_references(
     ))
 
 
+def _source_conversion_error(resolved: dict[str, Any]) -> dict[str, Any]:
+    """Preserve typed source failures and distinguish ambiguous names from misses."""
+    error = resolved.get("error")
+    if isinstance(error, dict):
+        return dict(error)
+    return {
+        "code": "reference_ambiguous" if resolved.get("candidates") else "reference_not_found",
+        "message": str(error or "source reference did not resolve to loc_id"),
+    }
+
+
 def convert_reference(
     *,
     from_system: str,
@@ -2991,7 +3002,7 @@ def convert_reference(
         )
         loc_id = resolved.get("resolved_loc_id")
         if not loc_id:
-            return _clean_json({"ok": False, "from": resolved, "to_system": target, "error": "source reference did not resolve to loc_id"})
+            return _clean_json({"ok": False, "from": resolved, "to_system": target, "error": _source_conversion_error(resolved)})
         return _clean_json({"ok": True, "from": resolved, "to_system": target, "results": [{"system": target, "value": loc_id}]})
     target_adapter = get_external_adapter(target)
     if source in {LOC_ID_SYSTEM, "admin_local", "admin_geometry"} and target_adapter:
@@ -3097,7 +3108,7 @@ def convert_reference(
     )
     loc_id = resolved.get("resolved_loc_id")
     if not loc_id:
-        return _clean_json({"ok": False, "from": resolved, "to_system": target, "error": "source reference did not resolve to loc_id"})
+        return _clean_json({"ok": False, "from": resolved, "to_system": target, "error": _source_conversion_error(resolved)})
     if target in {LOC_ID_SYSTEM, "admin_local", "admin_geometry"}:
         return _clean_json({"ok": True, "from": resolved, "to_system": target, "results": [{"system": target, "value": loc_id}]})
     references = loc_id_references(
@@ -3165,7 +3176,9 @@ def convert_references_batch(requests: list[dict[str, Any]]) -> list[dict[str, A
             direct_groups.setdefault(key, []).append((index, request))
             continue
         source_indexes.append(index)
-        source_requests.append({key: value for key, value in request.items() if key != "to_system"})
+        # Conversion route selectors do not belong to source identity resolution.
+        source_requests.append({key: value for key, value in request.items()
+                                if key not in {"to_system", "crosswalk_id"}})
 
     for (from_system, target, iso3, limit, selected_id), members in direct_groups.items():
         direct = _direct_crosswalk_matches_batch(
@@ -3213,7 +3226,7 @@ def convert_references_batch(requests: list[dict[str, Any]]) -> list[dict[str, A
                 "ok": False,
                 "from": resolved,
                 "to_system": target,
-                "error": "source reference did not resolve to loc_id",
+                "error": _source_conversion_error(resolved),
             })
             continue
         if target in {LOC_ID_SYSTEM, "admin_local", "admin_geometry"}:

@@ -71,6 +71,9 @@ class GlobalAdminBBoxTests(unittest.TestCase):
         self.assertEqual((country, owner), ("", None))
         self.assertEqual(error["code"], "invalid_shallow_loc_id")
         self.assertEqual(route.call_count, 1)
+        self.assertIn("scope_id", error["message"])
+        self.assertIn("deep_scope_loc_id", error["message"])
+        self.assertIn("Global baseline IDs", error["message"])
 
     def test_rectangle_rejects_diagonal_and_wrapped_inputs(self):
         with self.assertRaisesRegex(ValueError, "four"):

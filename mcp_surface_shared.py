@@ -138,7 +138,7 @@ def build_mcp_instructions(*, safety_notice: str | None = None) -> str:
         "JSON; execution tools do not parse prose. Start with get_catalog, then "
         "get_pack before querying a new pack. Call get_tool_help before an "
         "unfamiliar tool. When the only place input is coordinates, call "
-        "resolve_point; omitted scope_id and family select GLOBAL administrative "
+        "resolve_point with explicit scope_id and family (GLOBAL and administrative for Global coverage) "
         "and return its Admin 0-2 chain. Use an explicit published ISO3 scope "
         "for that country's Admin 0-3 identities; get_tool_help lists the scopes "
         "for both resolve_point and resolve_bbox. Use MARINE with one "
@@ -282,7 +282,7 @@ def build_tool_definitions(*, include_paused: bool = False) -> list[dict]:
         {
             "name": "resolve_point",
             "title": "Resolve Point(s) in One Scope",
-            "description": "Resolve WGS84 coordinates in one scope and family. Omitted scope_id and family select GLOBAL GeoBoundaries administrative, returning its Admin 0-2 chain. Supply a published ISO3 country to read that country's own Admin 0-3 geometry and loc_ids. MARINE requires one specific jurisdiction family (for example exclusive_economic_zone or high_seas), or water_body with water_kind=named or zone. The broad marine_jurisdiction category has no point route. No call crosses scopes or opens another family's bank. get_tool_help lists country scopes.",
+            "description": "Resolve WGS84 coordinates in one scope and family. Pass scope_id and family explicitly for connector compatibility. Omitted scope_id and family select GLOBAL GeoBoundaries administrative, returning its Admin 0-2 chain. Supply a published ISO3 country to read that country's own Admin 0-3 geometry and loc_ids. MARINE requires one specific jurisdiction family (for example exclusive_economic_zone or high_seas), or water_body with water_kind=named or zone. The broad marine_jurisdiction category has no point route. No call crosses scopes or opens another family's bank. get_tool_help lists country scopes.",
             "inputSchema": {
                 "type": "object",
                 "properties": {

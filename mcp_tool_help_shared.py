@@ -65,21 +65,21 @@ TOOL_GUIDANCE: dict[str, dict[str, Any]] = {
         ["get_pack", "get_data"], ["source metadata", "release/freshness fields"]
     ),
     "get_geography": _g(
-        ["You know one geometry family ID or scope ID and need its published coverage and known edition years."],
+        ["Supply exactly one of family_id or scope_id, never both, to inspect published coverage and known edition years. An optional year selects an edition."],
         ["Fetching shapes", "Treating a vintage label as proven effective coverage"],
         [{"scope_id": "CAN"}, {"family_id": "administrative", "year": 2014}],
         ["family_id", "scope_id", "coverage", "admin_spine", "edition_years", "selected_year", "double_check"],
         ["get_loc_id_info", "resolve_point", "get_shape"]
     ),
     "resolve_point": _g(
-        ["You have one WGS84 coordinate or a bounded point array. The default GLOBAL administrative route reads only Global Admin 0-2; an explicit country scope reads only that country's shallow layout, which may reach Admin 3."],
-        ["Resolving names or outside codes", "Returning polygons", "Resolving Admin 4-6", "Selecting a family, country, Admin level, or Marine context"],
-        {"lat": 49.2827, "lon": -123.1207},
+        ["You have one WGS84 coordinate or a bounded point array. Pass scope_id and family explicitly: GLOBAL with administrative reads Global Admin 0-2; a published ISO3 with administrative reads its country layout, which may reach Admin 3. MARINE requires a specific supported Marine family."],
+        ["Resolving names or outside codes", "Returning polygons", "Resolving Admin 4-6", "Selecting an Admin level or adding implicit Marine context"],
+        {"scope_id": "CAN", "family": "administrative", "lat": 49.2827, "lon": -123.1207},
         ["deepest_resolved_loc_id", "deep_scope_loc_id", "stack", "resolution_mode", "available_deeper_admin_levels"],
         ["resolve_deep_point", "get_loc_id_info", "get_shape"]
     ),
     "resolve_bbox": _g(
-        ["You have the four corners of one rectangular map view and want the closest Global Admin 0-2 loc_id with measured boundary overlap."],
+        ["You have four rectangle corners and want measured boundary overlap. Pass scope_id=GLOBAL for Global Admin 0-2, or a published ISO3 for country Admin 0-3. For deep refinement, repeat in the country scope first and use its deep_scope_loc_id; Global IDs cannot be passed directly to resolve_deep_bbox."],
         ["Resolving one point", "Inferring a polygon from a screenshot without coordinates", "Crossing the antimeridian", "Deep country subdivisions"],
         {"corners": [{"lat": 0, "lon": 0}, {"lat": 0, "lon": 1},
                      {"lat": 1, "lon": 0}, {"lat": 1, "lon": 1}]},
@@ -88,7 +88,7 @@ TOOL_GUIDANCE: dict[str, dict[str, Any]] = {
         ["published Global Admin 0-2 geometry release", "equal-area intersection method"],
     ),
     "resolve_deep_bbox": _g(
-        ["A shallow rectangle lookup returned an Admin 1-3 loc_id and you want deeper overlap within that country."],
+        ["A country-scoped rectangle lookup returned deep_scope_loc_id and you want deeper overlap within that country. Pass that value as shallow_loc_id. Global baseline IDs are not valid deep scopes."],
         ["First-pass country discovery", "Multiple Admin 1 partitions", "Non-rectangular screenshots", "Returning full polygons"],
         {"corners": [{"lat": 0, "lon": 0}, {"lat": 0, "lon": 1},
                      {"lat": 1, "lon": 0}, {"lat": 1, "lon": 1}], "shallow_loc_id": "USA-TX"},
@@ -290,15 +290,15 @@ def geometry_topic_help_payload(
         "request_rules": [
             {
                 "request": "one exploratory point",
-                "rule": "Call resolve_point with coordinates alone. The default GLOBAL administrative route returns Admin 0-2 without opening country or Marine banks.",
+                "rule": "Call resolve_point with coordinates, scope_id=GLOBAL and family=administrative explicitly. This returns Global Admin 0-2 without opening country or Marine banks.",
             },
             {
                 "request": "multiple administrative points",
-                "rule": "Use resolve_point with points=[...] for a cross-country batch; the default GLOBAL route reads the Global Admin 0-2 pack only. Select one ISO3 scope explicitly to read its country layout.",
+                "rule": "Use resolve_point with points=[...], scope_id=GLOBAL and family=administrative for a cross-country batch. Select one published ISO3 scope for country identities.",
             },
             {
                 "request": "points at a partitioned deep level",
-                "rule": "First call resolve_point with points=[...], group by returned deep_scope_loc_id, then pass that value as shallow_loc_id to resolve_deep_point once per scope and family.",
+                "rule": "First call resolve_point with points=[...], one published ISO3 scope_id and family=administrative, group by returned deep_scope_loc_id, then pass that value as shallow_loc_id to resolve_deep_point once per scope and family.",
             },
             {
                 "request": "geometry for known loc_ids",
@@ -331,6 +331,7 @@ def geometry_topic_help_payload(
                 "example": {
                     "tool": "resolve_point",
                     "arguments": {
+                        "scope_id": "USA", "family": "administrative",
                         "points": [{"lat": 45.039641, "lon": -103.313618}],
                     },
                 },
@@ -534,7 +535,7 @@ def tool_help_payload(
         }
         access["bulk_shape"] = {
             "threshold": limits.get("free_item_limit"),
-            "shallow_tool": "resolve_point: omitted scope selects the Global Admin0-2 pack; an explicit ISO3 scope selects only that country layout",
+            "shallow_tool": "resolve_point: pass scope_id=GLOBAL and family=administrative explicitly for Global Admin0-2; a published ISO3 scope selects only that country layout",
             "deep_tool": "resolve_deep_point: one point or point array plus one shallow_loc_id and one family; family defaults to administrative",
         }
     elif name == "resolve_deep_point" and not local_installed:

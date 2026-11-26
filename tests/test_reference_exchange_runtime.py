@@ -26,6 +26,41 @@ from mapmover.runtime.external_reference_adapters import ExternalReferenceEdge
 
 
 class ReferenceExchangeRuntimeTests(unittest.TestCase):
+    def test_admin_name_conversion_batch_accepts_transport_crosswalk_selector(self) -> None:
+        requests = [
+            {"from_system": "admin_boundary", "value": name, "iso3": "DEU",
+             "country_hint": "DEU", "crosswalk_id": None}
+            for name in ("Koeln", "Bonn", "not-a-place")
+        ]
+        def resolve_name(value, **kwargs):
+            loc_id = {"Koeln": "DEU-05-3", "Bonn": "DEU-05-314"}.get(value)
+            return {"ok": bool(loc_id), "resolved_loc_id": loc_id,
+                    "error": None if loc_id else {"code": "reference_not_found", "message": "No name match"}}
+        with (
+            mock.patch.object(reference_exchange, "_catalog_crosswalks", return_value=[]),
+            mock.patch.object(reference_exchange, "_first_crosswalk_artifact", return_value=None),
+            mock.patch.object(reference_exchange, "_admin_text_result", side_effect=resolve_name),
+        ):
+            results = reference_exchange.convert_references_batch(requests)
+        self.assertEqual([row["ok"] for row in results], [True, True, False])
+        self.assertEqual([row["results"][0]["value"] for row in results[:2]], ["DEU-05-3", "DEU-05-314"])
+        self.assertEqual(results[2]["error"]["code"], "reference_not_found")
+
+    def test_conversion_preserves_source_ambiguity_for_single_and_batch(self) -> None:
+        source = {"ok": False, "error": {"code": "ambiguous_name", "message": "Choose a state"},
+                  "candidates": [{"loc_id": "USA-IL-167"}, {"loc_id": "USA-MA-013"}]}
+        request = {"from_system": "admin_boundary", "value": "Springfield", "iso3": "USA"}
+        with (
+            mock.patch.object(reference_exchange, "_catalog_crosswalks", return_value=[]),
+            mock.patch.object(reference_exchange, "_first_crosswalk_artifact", return_value=None),
+            mock.patch.object(reference_exchange, "_admin_text_result", return_value=source),
+        ):
+            results = [convert_reference(**request), reference_exchange.convert_references_batch([request])[0]]
+        for result in results:
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["error"], source["error"])
+            self.assertEqual(result["from"]["candidates"], source["candidates"])
+
     def test_fips_alias_resolves_through_census_geoid(self) -> None:
         payload = resolve_reference(from_system="fips", value="51059", iso3="USA")
 
@@ -595,8 +630,13 @@ class ReferenceExchangeRuntimeTests(unittest.TestCase):
         )
 
         warning = next(item for item in payload["warnings"] if item["code"] == "sample_validation_only")
-        self.assertIn("create_conversion_job", warning["message"])
-        self.assertIn("validates every row", warning["message"])
+        self.assertIn("convert_reference", warning["message"])
+        self.assertNotIn("create_conversion_job", warning["message"])
+        self.assertEqual(payload["next_call"]["tool"], "convert_reference")
+        self.assertEqual(payload["next_call"]["arguments"], {
+            "iso3": "USA", "from_system": "us_census_geoid", "value": "06073000100",
+        })
+        self.assertIn("does not validate rows that were not submitted", warning["message"])
         self.assertNotIn("all_distinct_identifiers", warning["message"])
 
     def test_identify_five_digit_codes_reports_census_zcta_ambiguity(self) -> None:
