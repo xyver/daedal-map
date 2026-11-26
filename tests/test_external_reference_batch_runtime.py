@@ -48,7 +48,7 @@ def test_external_edge_batch_uses_one_partition_query() -> None:
 
 def test_reverse_external_edge_batch_uses_one_partition_query() -> None:
     first = "CAN-AB"
-    second = "CAN-BC"
+    second = "CAN-XX"  # No published country-to-global alias; one scan suffices.
     edge = ExternalReferenceEdge(
         external_id="11111111-1111-1111-1111-111111111111",
         loc_id=first,

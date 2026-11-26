@@ -561,6 +561,27 @@ def lookup_external_edges_batch(
     return grouped
 
 
+def _country_geometry_alias(loc_id: str) -> str | None:
+    """Use only an explicit, one-to-one published country geometry mapping."""
+    country = loc_id.split("-", 1)[0]
+    if len(country) != 3 or not country.isalpha():
+        return None
+    from ..foundation_helpers import load_country_crosswalk
+
+    crosswalk = load_country_crosswalk(country)
+    if not isinstance(crosswalk, dict):
+        return None
+    mappings = crosswalk.get("mappings") or {}
+    if not isinstance(mappings, dict):
+        return None
+    alias = mappings.get(loc_id)
+    if not isinstance(alias, str) or not alias.startswith(country + "-G"):
+        return None
+    if sum(value == alias for value in mappings.values()) != 1:
+        return None
+    return alias
+
+
 def lookup_loc_id_edges(
     system: str, loc_id: str, *, source_release: str | None = None,
     internal_release: str | None = None, country_scope: str | None = None,
@@ -572,11 +593,20 @@ def lookup_loc_id_edges(
         return []
     assert bridge is not None
     partitions = _selected_partitions(bridge, source_release=source_release, internal_release=internal_release, country_scope=country_scope)
+    requested = str(loc_id).strip()
     edges = _query_edges(
-        bridge, partitions, reverse=True, values=[str(loc_id).strip()],
+        bridge, partitions, reverse=True, values=[requested],
         source_release=source_release, internal_release=internal_release,
         country_scope=country_scope,
     )
+    if not edges:
+        alias = _country_geometry_alias(requested)
+        if alias:
+            edges = _query_edges(
+                bridge, partitions, reverse=True, values=[alias],
+                source_release=source_release, internal_release=internal_release,
+                country_scope=country_scope,
+            )
     edges.sort(key=lambda edge: (not edge.is_equivalence, -(edge.geometry_confidence or 0.0), edge.external_id))
     return edges if limit is None else edges[:max(0, int(limit))]
 
@@ -612,6 +642,19 @@ def lookup_loc_id_edges_batch(
         country_scope=country_scope,
     ):
         grouped.setdefault(edge.loc_id, []).append(edge)
+    missing_aliases = {value: alias for value in requested if not grouped[value]
+                       if (alias := _country_geometry_alias(value))}
+    if missing_aliases:
+        alias_rows = _query_edges(
+            bridge, partitions, reverse=True, values=list(set(missing_aliases.values())),
+            source_release=source_release, internal_release=internal_release,
+            country_scope=country_scope,
+        )
+        by_alias: dict[str, list[ExternalReferenceEdge]] = {}
+        for edge in alias_rows:
+            by_alias.setdefault(edge.loc_id, []).append(edge)
+        for requested_id, alias in missing_aliases.items():
+            grouped[requested_id] = list(by_alias.get(alias, []))
     maximum = None if limit is None else max(0, int(limit))
     for loc_id, edges in grouped.items():
         edges.sort(key=lambda edge: (not edge.is_equivalence, -(edge.geometry_confidence or 0.0), edge.external_id))

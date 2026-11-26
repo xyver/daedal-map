@@ -107,6 +107,8 @@ def _summary(adapter: Any) -> dict[str, Any]:
         "geometry_confidence_meaning": "Minimum of source and target polygon area shares, rounded to four decimals. Zero may mean negligible rounded overlap or boundary contact; it does not prove positive-area overlap.",
         "edge_provenance_status": "not_in_compact_artifact",
         "edge_provenance_note": "This release exposes source and internal releases plus the runtime artifact SHA-256, but the compact file omits per-edge IDs and generation hashes.",
+        "country_loc_id_alias_source": "published_country_geometry_crosswalk",
+        "country_loc_id_alias_note": "Explicit one-to-one country-to-global geometry mappings can resolve a country loc_id against the stored bridge ID; both IDs remain visible in query results.",
     }
 
 
@@ -119,6 +121,23 @@ def get_bridge(system: str) -> dict[str, Any]:
     if adapter is None or admitted_bridge(adapter) is None:
         return _error("bridge_not_admitted", "No admitted bridge matches this external system")
     return {"ok": True, "bridge": _summary(adapter)}
+
+
+def _country_aliases_for_bridge_ids(country: str, bridge_ids: list[str]) -> dict[str, str]:
+    """Return only unambiguous aliases from the published country crosswalk."""
+    from ..foundation_helpers import load_country_crosswalk
+
+    crosswalk = load_country_crosswalk(country)
+    mappings = crosswalk.get("mappings") if isinstance(crosswalk, dict) else None
+    if not isinstance(mappings, dict):
+        return {}
+    reverse: dict[str, list[str]] = {}
+    for local_id, geometry_id in mappings.items():
+        if (isinstance(local_id, str) and isinstance(geometry_id, str)
+                and local_id.startswith(country + "-") and geometry_id.startswith(country + "-G")):
+            reverse.setdefault(geometry_id, []).append(local_id)
+    return {bridge_id: reverse[bridge_id][0] for bridge_id in bridge_ids
+            if len(reverse.get(bridge_id, [])) == 1}
 
 
 def query_bridge(*, system: str, country_scope: str, external_id: str | None = None,
@@ -157,4 +176,19 @@ def query_bridge(*, system: str, country_scope: str, external_id: str | None = N
         value=value, rows=[asdict(edge) for edge in grouped.get(value, [])], limit=limit)
     result["source_release_filter"] = source_release
     result["internal_release_filter"] = internal_release
+    if external_id:
+        aliases = _country_aliases_for_bridge_ids(scope, result["identity_bindings"])
+        if aliases:
+            result["country_loc_id_bindings"] = aliases
+            result["country_loc_id_translation_source"] = "published_country_geometry_crosswalk"
+    if loc_id:
+        stored_ids = sorted({str(edge["loc_id"]) for edge in result["edges"]
+                             if edge.get("loc_id") and edge["loc_id"] != value})
+        if stored_ids:
+            result["identity_translation"] = {
+                "requested_loc_id": value,
+                "bridge_loc_ids": stored_ids,
+                "source": "published_country_geometry_crosswalk",
+                "note": "The bridge edge retains its stored global geometry ID; the requested country loc_id is an explicit lookup alias.",
+            }
     return result

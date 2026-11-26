@@ -213,7 +213,7 @@ def build_tool_definitions(*, include_paused: bool = False) -> list[dict]:
         },
         {
             "name": "query_bridge", "title": "Query Typed Bridge Relationships",
-            "description": "Look up one external identifier or loc_id in one ISO3 country through an admitted bridge. Returns typed edges; only equivalent_identity is an identity binding. Query failure is distinct from an unmatched identifier.",
+            "description": "Look up one external identifier or loc_id in one ISO3 country through an admitted bridge. Returns typed edges; only equivalent_identity is an identity binding. Where a published country crosswalk explicitly maps a country loc_id to the bridge's stored global geometry ID, the query uses or reports that alias while retaining the stored ID. Query failure is distinct from an unmatched identifier.",
             "inputSchema": {"type": "object", "properties": {
                 "system": {"type": "string", "minLength": 1, "description": "External system ID from list_bridges."},
                 "country_scope": {"type": "string", "pattern": "^[A-Za-z]{3}$", "description": "One ISO3 country scope. Split multi-country work into separate calls."},
