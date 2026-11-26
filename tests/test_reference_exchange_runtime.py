@@ -185,6 +185,72 @@ class ReferenceExchangeRuntimeTests(unittest.TestCase):
         ])
         self.assertEqual(batched[0]["results"][0]["value"], "USA-VA-059-492000-POSTAL-22030")
 
+    def test_gers_round_trip_uses_unique_country_alias_and_keeps_bridge_id(self) -> None:
+        gers = "24bc6352-7e6d-4841-8b92-7611ff5000ce"
+        bridge_id = "CAN-G182249235B24619009834807"
+        edge = ExternalReferenceEdge(
+            external_id=gers, loc_id=bridge_id, relationship_type="equivalent_identity",
+            is_primary=True, source_release="2026-07-22.0", internal_release="geoboundaries_global_bank",
+            country="CAN", source_level=1, external_subtype="region",
+            identity_confidence="high", geometry_confidence=0.99,
+            external_name="British Columbia", loc_name="British Columbia",
+        )
+        request = {"from_system": "gers", "value": gers, "to_system": "loc_id", "iso3": "CAN"}
+        with (
+            mock.patch.object(reference_exchange, "_catalog_crosswalks", return_value=[]),
+            mock.patch.object(reference_exchange, "adapter_available", return_value=True),
+            mock.patch.object(reference_exchange, "lookup_external_edges", return_value=[edge]),
+            mock.patch.object(reference_exchange, "lookup_external_edges_batch", return_value={gers: [edge]}),
+            mock.patch("mapmover.foundation_helpers.load_country_crosswalk",
+                       return_value={"mappings": {"CAN-BC": bridge_id}}),
+        ):
+            single = convert_reference(**request)
+            batch = reference_exchange.convert_references_batch([request])[0]
+        for result in (single, batch):
+            self.assertEqual(result["results"][0]["value"], "CAN-BC")
+            self.assertEqual(result["from"]["bridge_loc_id"], bridge_id)
+            self.assertEqual(result["from"]["identity_translation"]["source"],
+                             "published_country_geometry_crosswalk")
+        with (
+            mock.patch.object(reference_exchange, "_catalog_crosswalks", return_value=[]),
+            mock.patch.object(reference_exchange, "adapter_available", return_value=True),
+            mock.patch.object(reference_exchange, "lookup_external_edges", return_value=[edge]),
+            mock.patch("mapmover.foundation_helpers.load_country_crosswalk",
+                       return_value={"mappings": {"CAN-BC": bridge_id, "CAN-XX": bridge_id}}),
+        ):
+            ambiguous = convert_reference(**request)
+        self.assertEqual(ambiguous["results"][0]["value"], bridge_id)
+        self.assertNotIn("identity_translation", ambiguous["from"])
+
+    def test_forward_bridge_relationship_exposes_overlap_classification(self) -> None:
+        gers = "506017c0-8932-44b5-b82c-92f9dcffdcf1"
+        edges = [
+            ExternalReferenceEdge(
+                external_id=gers, loc_id="USA-UT", relationship_type="equivalent_identity",
+                is_primary=True, source_release="2026-07-22.0", internal_release="us-v1",
+                country="USA", source_level=1, external_subtype="region",
+                identity_confidence="high", geometry_confidence=0.9999,
+                external_name="Utah", loc_name="Utah",
+            ),
+            ExternalReferenceEdge(
+                external_id=gers, loc_id="USA-AZ", relationship_type="overlaps",
+                is_primary=False, source_release="2026-07-22.0", internal_release="us-v1",
+                country="USA", source_level=1, external_subtype="region",
+                identity_confidence="none", geometry_confidence=0.0,
+                external_name="Utah", loc_name="Arizona",
+                our_area_share=0.0, their_area_share=0.0,
+            ),
+        ]
+        with (
+            mock.patch.object(reference_exchange, "_catalog_crosswalks", return_value=[]),
+            mock.patch.object(reference_exchange, "adapter_available", return_value=True),
+            mock.patch.object(reference_exchange, "lookup_external_edges", return_value=edges),
+        ):
+            result = convert_reference(from_system="gers", value=gers, to_system="loc_id", iso3="USA")
+        self.assertEqual(result["from"]["relationships"][0]["area_overlap_status"],
+                         "indeterminate_rounded_zero_or_boundary_contact")
+        self.assertEqual(result["from"]["relationships"][0]["loc_area_share"], 0.0)
+
     def test_external_reference_batch_queries_shared_partition_once(self) -> None:
         first = "11111111-1111-1111-1111-111111111111"
         second = "22222222-2222-2222-2222-222222222222"

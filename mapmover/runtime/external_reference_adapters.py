@@ -592,6 +592,23 @@ def _country_geometry_alias(loc_id: str) -> str | None:
     return alias
 
 
+def country_loc_id_aliases(country: str, bridge_ids: list[str]) -> dict[str, str]:
+    """Return only unique country IDs for stored global bridge IDs."""
+    from ..foundation_helpers import load_country_crosswalk
+
+    crosswalk = load_country_crosswalk(country)
+    mappings = crosswalk.get("mappings") if isinstance(crosswalk, dict) else None
+    if not isinstance(mappings, dict):
+        return {}
+    reverse: dict[str, list[str]] = {}
+    for local_id, geometry_id in mappings.items():
+        if (isinstance(local_id, str) and isinstance(geometry_id, str)
+                and local_id.startswith(country + "-") and geometry_id.startswith(country + "-G")):
+            reverse.setdefault(geometry_id, []).append(local_id)
+    return {bridge_id: reverse[bridge_id][0] for bridge_id in bridge_ids
+            if len(reverse.get(bridge_id, [])) == 1}
+
+
 def lookup_loc_id_edges(
     system: str, loc_id: str, *, source_release: str | None = None,
     internal_release: str | None = None, country_scope: str | None = None,

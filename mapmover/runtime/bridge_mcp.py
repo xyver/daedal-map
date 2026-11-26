@@ -6,7 +6,7 @@ from typing import Any
 from bridge_tools_shared import bridge_query_result
 from .external_reference_adapters import (
     ExternalReferenceUnavailable, adapter_available, admitted_bridge, admitted_external_adapters,
-    get_external_adapter, identifier_matches, lookup_external_edges_batch, lookup_loc_id_edges_batch,
+    country_loc_id_aliases, get_external_adapter, identifier_matches, lookup_external_edges_batch, lookup_loc_id_edges_batch,
     _release_fingerprint,
 )
 from .geometry_catalog import load_geometry_catalog
@@ -127,19 +127,7 @@ def get_bridge(system: str) -> dict[str, Any]:
 
 def _country_aliases_for_bridge_ids(country: str, bridge_ids: list[str]) -> dict[str, str]:
     """Return only unambiguous aliases from the published country crosswalk."""
-    from ..foundation_helpers import load_country_crosswalk
-
-    crosswalk = load_country_crosswalk(country)
-    mappings = crosswalk.get("mappings") if isinstance(crosswalk, dict) else None
-    if not isinstance(mappings, dict):
-        return {}
-    reverse: dict[str, list[str]] = {}
-    for local_id, geometry_id in mappings.items():
-        if (isinstance(local_id, str) and isinstance(geometry_id, str)
-                and local_id.startswith(country + "-") and geometry_id.startswith(country + "-G")):
-            reverse.setdefault(geometry_id, []).append(local_id)
-    return {bridge_id: reverse[bridge_id][0] for bridge_id in bridge_ids
-            if len(reverse.get(bridge_id, [])) == 1}
+    return country_loc_id_aliases(country, bridge_ids)
 
 
 def query_bridge(*, system: str, country_scope: str, external_id: str | None = None,

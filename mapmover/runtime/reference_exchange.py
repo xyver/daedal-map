@@ -39,6 +39,7 @@ from .external_reference_adapters import (
     adapter_available,
     adapter_public_entry,
     admitted_external_adapters,
+    country_loc_id_aliases,
     edge_dict,
     external_primary_loc_ids,
     external_system_aliases,
@@ -257,7 +258,16 @@ def _external_reference_payload(
     relationships.sort(key=lambda edge: (-(edge.geometry_confidence or 0.0), edge.loc_id))
     if limit is not None:
         relationships = relationships[: max(0, int(limit) - (1 if equivalences else 0))]
-    relationship_rows = [edge_dict(edge) for edge in relationships]
+    from bridge_tools_shared import bridge_edge
+
+    relationship_rows = []
+    for edge in relationships:
+        row = edge_dict(edge)
+        evidence = bridge_edge(row, system=adapter.system)
+        row.update({key: evidence[key] for key in (
+            "loc_area_share", "external_area_share", "area_overlap_status",
+        )})
+        relationship_rows.append(row)
     if not equivalences:
         return _clean_json({
             "ok": False,
@@ -291,12 +301,17 @@ def _external_reference_payload(
         })
     equivalences.sort(key=lambda edge: (edge.partition_id or "", edge.edge_id or ""))
     primary = equivalences[0]
-    return _clean_json({
+    stored_loc_id = primary.loc_id
+    country = primary.country or stored_loc_id.split("-", 1)[0]
+    country_alias = (country_loc_id_aliases(country, [stored_loc_id]).get(stored_loc_id)
+                     if stored_loc_id.startswith(country + "-G") else None)
+    resolved_loc_id = country_alias or stored_loc_id
+    payload = {
         "ok": True,
         "from_system": adapter.system,
         "input": original_value,
-        "resolved_loc_id": primary.loc_id,
-        "resolved_family": _reference_family(primary.loc_id),
+        "resolved_loc_id": resolved_loc_id,
+        "resolved_family": _reference_family(resolved_loc_id),
         "match_type": "exact_identifier_equivalence",
         "relationship_type": primary.relationship_type,
         "identity_confidence": primary.identity_confidence,
@@ -312,7 +327,15 @@ def _external_reference_payload(
         "internal_release": primary.internal_release,
         "relationships": relationship_rows,
         "relationship_count": len(relationships),
-    })
+    }
+    if country_alias:
+        payload["bridge_loc_id"] = stored_loc_id
+        payload["identity_translation"] = {
+            "bridge_loc_id": stored_loc_id,
+            "country_loc_id": country_alias,
+            "source": "published_country_geometry_crosswalk",
+        }
+    return _clean_json(payload)
 
 
 def resolve_gers_division(value: str, *, limit: int | None = 10) -> dict[str, Any]:
