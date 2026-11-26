@@ -267,6 +267,9 @@ def _resolve_api_filter_field_alias(
     field = str(field_name or "").strip()
     if not field:
         return field
+    metric = spec.metrics.get(field)
+    if metric is not None and metric.column in available_columns:
+        return metric.column
     if field in spec.filterable_fields:
         return field
     if field not in EXACT_ID_ALIAS_FIELDS:
@@ -277,6 +280,13 @@ def _resolve_api_filter_field_alias(
         metadata={},
         event_type=str(spec.pack_id or spec.source_id or ""),
     )
+
+
+def _available_api_filter_fields(spec) -> list[str]:
+    """Show both native filter columns and their public metric aliases."""
+    aliases = {metric_id for metric_id, metric in spec.metrics.items()
+               if metric.column in spec.filterable_fields}
+    return sorted(spec.filterable_fields | aliases)
 
 
 async def execute_query_dataset_payload(req: Request, payload: dict[str, Any]) -> Response:
@@ -780,7 +790,7 @@ async def execute_query_dataset_payload(req: Request, payload: dict[str, Any]) -
                 available_columns=available_columns,
             )
             if resolved_field_name not in spec.filterable_fields:
-                available = sorted(spec.filterable_fields)
+                available = _available_api_filter_fields(spec)
                 return error_response(
                     request_id,
                     "field_not_filterable",
@@ -840,7 +850,7 @@ async def execute_query_dataset_payload(req: Request, payload: dict[str, Any]) -
                 available_columns=available_columns,
             )
             if resolved_field_name not in spec.filterable_fields:
-                available = sorted(spec.filterable_fields)
+                available = _available_api_filter_fields(spec)
                 return error_response(
                     request_id,
                     "field_not_filterable",

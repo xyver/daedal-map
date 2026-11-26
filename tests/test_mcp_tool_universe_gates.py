@@ -963,6 +963,21 @@ class BlindCallerHelpTests(unittest.TestCase):
         self.assertIn("metric_ids", multi_source["error"]["retry_hint"])
         self.assertNotIn("source_id", multi_source["error"]["retry_hint"])
 
+    def test_resource_metric_id_resolves_to_existing_filter_column(self) -> None:
+        from types import SimpleNamespace
+        from mapmover.routes.api_query import _resolve_api_filter_field_alias
+
+        spec = SimpleNamespace(
+            metrics={"msha_mines_status": SimpleNamespace(column="CURRENT_MINE_STATUS")},
+            filterable_fields={"CURRENT_MINE_STATUS"},
+        )
+        self.assertEqual(_resolve_api_filter_field_alias(
+            spec, "msha_mines_status", available_columns={"CURRENT_MINE_STATUS"},
+        ), "CURRENT_MINE_STATUS")
+        self.assertEqual(_resolve_api_filter_field_alias(
+            spec, "msha_mines_status", available_columns=set(),
+        ), "msha_mines_status")
+
     def test_geometry_get_info_advertises_cold_start_sequence(self) -> None:
         response = self.client.get("/mcp/geography")
 

@@ -604,7 +604,10 @@ def _source_summary(entry: dict[str, Any], pack_id: str) -> dict[str, Any]:
         summary["metric_ids_truncated"] = True
     filterable = metadata.get("filterable_fields") or source.get("filterable_fields") or []
     if isinstance(filterable, list):
-        summary["filterable_fields"] = [str(field) for field in filterable if str(field).strip()]
+        physical = {str(field) for field in filterable if str(field).strip()}
+        public_aliases = {metric_id for metric_id, record in entry["metrics"].items()
+                          if isinstance(record, dict) and record.get("column") in physical}
+        summary["filterable_fields"] = sorted(physical | public_aliases)
     return summary
 
 

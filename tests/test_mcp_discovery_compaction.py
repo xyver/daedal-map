@@ -238,6 +238,18 @@ class MCPDiscoveryCompactionTests(unittest.TestCase):
         self.assertEqual(social["filterable_fields"], ["loc_id", "year"])
         self.assertNotIn("source_id", result["narrowing"])
 
+    def test_pack_sources_advertise_public_filter_aliases(self) -> None:
+        pack = {"pack_id": "global_resources", "sources": [{
+            "source_id": "msha_mines", "metrics": {
+                "msha_mines_status": {"column": "CURRENT_MINE_STATUS"},
+            },
+        }]}
+        result = mcp_full_pack_detail(pack, catalog="data", source_metadata=lambda _: {
+            "filterable_fields": ["CURRENT_MINE_STATUS"],
+        })
+        self.assertEqual(result["sources"][0]["filterable_fields"],
+                         ["CURRENT_MINE_STATUS", "msha_mines_status"])
+
     def test_pack_source_view_merges_metadata_and_query_contract(self) -> None:
         pack, loader = self._narrowing_pack()
         result = mcp_pack_source_detail(pack, source_id="wb_social", source_metadata=loader)
