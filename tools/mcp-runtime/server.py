@@ -168,14 +168,14 @@ def create_app(
             async def geometry_info():
                 return await mcp_endpoint_info("geography")
 
-            async def geometry_endpoint(request: Request):
-                return await mcp_endpoint(request, "geography")
+            async def geometry_endpoint(request: Request, facade: str = "geography"):
+                return await mcp_endpoint(request, facade)
         else:
             from downloaded_geometry_backend import tool_definitions
             async def geometry_info():
                 return JSONResponse({"serverInfo": {"name": "daedalmap/downloaded-geometry", "version": "0.1.0"}, "transport": "streamable-http", "scoped": True, "catalog": downloaded_backend.catalog()})
 
-            async def geometry_endpoint(request: Request):
+            async def geometry_endpoint(request: Request, facade: str = "geography"):
                 body = await request.json()
                 if not isinstance(body, dict) or body.get("jsonrpc") != "2.0":
                     return JSONResponse({"jsonrpc": "2.0", "id": None, "error": {"code": -32600, "message": "Invalid JSON-RPC request"}})
@@ -183,12 +183,28 @@ def create_app(
                 request_id = body.get("id")
                 if method == "notifications/initialized": return JSONResponse({}, status_code=202)
                 if method == "initialize": result = {"protocolVersion": "2025-06-18", "capabilities": {"tools": {"listChanged": False}}, "serverInfo": {"name": "daedalmap/downloaded-geometry", "version": "0.1.0"}}
-                elif method == "tools/list": result = {"tools": tool_definitions()}
+                elif method == "tools/list":
+                    definitions = tool_definitions()
+                    if facade == "bridges":
+                        definitions = [item for item in definitions if item["name"] in
+                                       {"get_tool_help", "list_bridges", "get_bridge", "query_bridge"}]
+                    result = {"tools": definitions}
                 elif method == "tools/call":
                     params = body.get("params") or {}
                     try:
                         if not isinstance(params, dict): raise ValueError("Invalid tool parameters")
-                        output = downloaded_backend.call(str(params.get("name")), params.get("arguments", {}))
+                        name = str(params.get("name"))
+                        if facade == "bridges" and name not in {"get_tool_help", "list_bridges", "get_bridge", "query_bridge"}:
+                            raise ValueError("Tool is unavailable on the Bridge MCP facade")
+                        arguments = params.get("arguments", {})
+                        if (facade == "bridges" and name == "get_tool_help" and
+                                isinstance(arguments, dict) and arguments.get("tool_name") and
+                                arguments["tool_name"] not in {"get_tool_help", "list_bridges", "get_bridge", "query_bridge"}):
+                            raise ValueError("Tool is unavailable on the Bridge MCP facade")
+                        output = downloaded_backend.call(name, arguments)
+                        if facade == "bridges" and name == "get_tool_help" and "available_tools" in output:
+                            output["available_tools"] = [tool for tool in output["available_tools"] if tool in
+                                {"get_tool_help", "list_bridges", "get_bridge", "query_bridge"}]
                         result = {"content": [{"type": "text", "text": json.dumps(output)}], "structuredContent": output}
                         if output.get("ok") is False or output.get("error"):
                             result["isError"] = True
@@ -197,6 +213,18 @@ def create_app(
                 elif method == "ping": result = {}
                 else: return JSONResponse({"jsonrpc": "2.0", "id": request_id, "error": {"code": -32601, "message": "Method not found"}})
                 return JSONResponse({"jsonrpc": "2.0", "id": request_id, "result": result})
+
+        @app.get("/mcp/bridges")
+        async def _bridge_info_route():
+            if downloaded_backend is None:
+                return await mcp_endpoint_info("bridges")
+            return JSONResponse({"serverInfo": {"name": "com.daedalmap/bridges", "version": "1.0.0"},
+                                 "transport": "streamable-http", "scoped": True,
+                                 "bridges": downloaded_backend.call("list_bridges", {})["bridges"]})
+
+        @app.post("/mcp/bridges")
+        async def _bridge_endpoint_route(request: Request):
+            return await geometry_endpoint(request, "bridges")
 
         @app.get("/mcp/geometry")
         @app.get("/mcp/geography")

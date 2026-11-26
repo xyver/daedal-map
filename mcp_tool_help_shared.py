@@ -43,6 +43,17 @@ TOOL_GUIDANCE: dict[str, dict[str, Any]] = {
         {"tool_name": "resolve_point"},
         ["purpose", "input_schema", "interaction_contract", "examples", "access", "recommended_next_calls", "available_on_facades"],
     ),
+    "list_bridges": _g(["Discover admitted external systems and releases before lookup."],
+        ["Assuming admission proves hosted artifact availability"], {},
+        ["bridges", "row_count", "execution_status"], ["get_bridge", "query_bridge"]),
+    "get_bridge": _g(["Inspect one external system's admission and relationship contract."],
+        ["Converting an identifier"], {"system": "overture_gers"},
+        ["source_release", "row_count", "countries", "relationship_types", "execution_status"], ["query_bridge"]),
+    "query_bridge": _g(["Read typed relationships for one known external ID or loc_id in one country."],
+        ["Treating an overlap as identity", "Batching multiple countries"],
+        {"system": "overture_gers", "country_scope": "CAN", "external_id": "d5654a87-5adf-42b3-9ff7-c656797a1776"},
+        ["edges", "identity_bindings", "identity_status", "has_more"], ["get_bridge"],
+        ["source_release", "internal_release", "relationship_type", "edge_id when published"]),
     "get_catalog": _g(
         ["You need the published data pack IDs or geometry family and scope IDs."],
         ["Querying rows", "Inspecting one selected family or scope"],
@@ -133,6 +144,8 @@ TOOL_GUIDANCE: dict[str, dict[str, Any]] = {
     "convert_reference": _g(
         [
             "You need an outside reference expressed as loc_id, or one reference system expressed in another through loc_id; declare one iso3 country, GLOBAL, or MARINE for the whole call.",
+            "Identification preserves the source identity. An overlay_zcta conversion to loc_id uses the admitted administrative crosswalk and can return a county. Check from.match_type and from.resolved_loc_id before interpreting the result.",
+            "Postal-to-weather-zone conversion can use a county intermediate. For these measured administrative-to-family results, match_share is the intersection area divided by the intermediate administrative area's area; it is not a direct postal-to-zone overlap or an end-to-end probability.",
             "You have an admin or city name: use from_system admin_boundary with a country_hint. Send the parent with the name ('Springfield, Illinois') or a subdivision hint (USA-IL); the shallowest matching level wins, and equal matches return candidates.",
         ],
         ["Resolving coordinates", "Discarding one-to-many weights", "Guessing among multiple published crosswalk IDs"],
@@ -249,7 +262,7 @@ def geometry_topic_help_payload(
     available_tool_names: list[str] | tuple[str, ...] = (),
 ) -> dict[str, Any]:
     capabilities = dict(catalog_capabilities or {})
-    return {
+    payload = {
         "ok": True,
         "tool_name": "get_tool_help",
         "help_topic": "geometry",
@@ -391,6 +404,21 @@ def geometry_topic_help_payload(
         ],
         "input_question": str(question or "").strip() or None,
     }
+    available = set(available_tool_names)
+    if available and "resolve_deep_point" not in available:
+        payload["request_rules"] = [rule for rule in payload["request_rules"]
+                                    if rule["request"] != "points at a partitioned deep level"]
+        payload["workflows"] = [workflow for workflow in payload["workflows"]
+                                if workflow["name"] != "partitioned_deep_points_across_multiple_regions"]
+        payload["notes"].append("This facade exposes the point depths supported by resolve_point. Consult its help for coverage; deeper point resolution is not exposed here.")
+    if available and "get_shape" not in available:
+        payload["workflows"] = [workflow for workflow in payload["workflows"]
+                                if workflow["name"] != "known_loc_ids_to_shapes"]
+        for workflow in payload["workflows"]:
+            workflow["steps"] = [step for step in workflow["steps"] if not step.startswith("get_shape ")]
+    return payload
+
+
 TOPIC_TOOLS: dict[str, tuple[str, ...]] = {
     "overview": ("get_catalog", "get_pack", "get_geography", "get_data", "convert_reference", "resolve_point", "get_shape"),
     "data": ("get_catalog", "get_pack", "get_data"),
@@ -446,7 +474,12 @@ def topic_help_payload(
                 "tool": "identify_dataset_geography",
                 "arguments": {"columns": [{"name": "<column name>", "values": ["<bounded string sample>"]}]},
             },
-            {"stage": "inspect", "tool": "get_tool_help", "arguments": {"tool_name": "<selected builder tool>"}},
+            {"stage": "inspect", "tool": "get_tool_help", "arguments": {"tool_name": "identify_reference_system"}},
+            {"stage": "verify", "tool": "identify_reference_system",
+             "arguments": {"country_scope": "<one ISO3 country>", "identifiers": ["<selected column sample>"]},
+             "purpose": "Verify sampled identifiers; resolve any requested clarification before conversion."},
+            {"stage": "convert", "tool": "convert_reference",
+             "purpose": "Follow next_call only when supplied by identification. Use bounded batches within the confirmed country and system; preserve per-row failures. Identification-only systems have no executable conversion handoff."},
         ]
         workflow = {"goal": TOPIC_SUMMARIES[selected], "steps": start_here}
         next_step = start_here[0]

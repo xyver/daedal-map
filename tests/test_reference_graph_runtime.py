@@ -802,6 +802,23 @@ class ReferenceGraphRuntimeTests(unittest.TestCase):
 
         self.assertEqual(batched, singles)
 
+    def test_offered_canonical_system_selects_hyphenated_stored_alias(self) -> None:
+        index = self.root / "geometry/countries/TST/reference_discovery/identifier_index.parquet"
+        index.parent.mkdir(parents=True, exist_ok=True)
+        pd.DataFrame([
+            {"external_id": "001", "reference_system": "provider.native-code.2025", "loc_id": "TST-A", "country_scope": "TST"},
+            {"external_id": "001", "reference_system": "another.code", "loc_id": "TST-B", "country_scope": "TST"},
+        ]).to_parquet(index, index=False)
+        with (
+            mock.patch.object(reference_graph, "DATA_ROOT", self.root),
+            mock.patch.object(reference_graph, "reference_graph_roots", return_value={"TST": self.root}),
+            mock.patch.object(reference_graph, "_country_discovery_index_current", return_value=True),
+            mock.patch.object(reference_graph, "reference_graph_available", return_value=True),
+        ):
+            for system in ("provider.native_code.2025", "Provider.Native-Code.2025"):
+                rows = identify_aliases(["001"], iso3="TST", reference_system=system)
+                self.assertEqual([row["loc_id"] for row in rows], ["TST-A"])
+
     def test_indexed_public_alias_candidates_uses_exact_current_country_rows(self) -> None:
         index = self.root / "geometry" / "countries" / "TST" / "reference_discovery" / "identifier_index.parquet"
         index.parent.mkdir(parents=True, exist_ok=True)

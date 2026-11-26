@@ -82,6 +82,36 @@ def _write_contract(root: Path, specs: list[tuple[str, str, str, str]], *, admit
 
 
 class ExternalReferenceRegistryTests(unittest.TestCase):
+    def test_catalog_pointer_accepts_canonical_layout_but_rejects_other_paths(self) -> None:
+        record = {"external_system": "example_ids", "adapter": {
+            "identifier_pattern": "EX-[0-9]+", "columns": {
+                "external_id_column": "external_id", "internal_id_column": "loc_id",
+                "source_release_column": "source_release", "internal_release_column": "internal_release",
+                "country_column": "iso3"}}}
+        for path in ["geometry/bridges/example_ids/index.json", "geometry/external_references/example_ids/current.json"]:
+            record["adapter"]["pointer_path"] = path
+            self.assertEqual(adapters._adapter_from_catalog_record(record).pointer_path, path)
+        for path in ["../outside.json", "geometry/external_references/other/current.json", "geometry/external_references/example_ids/candidate.json"]:
+            record["adapter"]["pointer_path"] = path
+            self.assertIsNone(adapters._adapter_from_catalog_record(record))
+
+    def test_compact_row_does_not_inherit_an_unrelated_partition(self) -> None:
+        adapter = adapters.get_external_adapter("gers")
+        partition = adapters.ExternalReferencePartition(
+            partition_id="wrong-partition", forward_path="forward.parquet", forward_sha256="a" * 64,
+            reverse_path="reverse.parquet", reverse_sha256="b" * 64,
+            source_release="gers-2026-07", internal_release="can-v1", country="CAN")
+        bridge = adapters.AdmittedExternalBridge(
+            adapter=adapter, release_fingerprint="c" * 64, source_release="gers-2026-07",
+            partitions=(partition,), source_license={}, runtime_path="compact.parquet", runtime_sha256="d" * 64)
+        frame = _frame(EQUIVALENCE.external_id, EQUIVALENCE.loc_id, "CAN", "can-v1")
+        frame["filename"] = "compact.parquet"
+        for row_partition in [None, "row-owned-partition"]:
+            frame["partition_id"] = row_partition
+            with mock.patch.object(adapters, "is_cloud_mode", return_value=True), mock.patch.object(adapters, "path_to_uri", return_value="compact.parquet"), mock.patch.object(adapters, "run_df", return_value=frame):
+                edges = adapters._query_edges(bridge, (partition,), reverse=False, values=[EQUIVALENCE.external_id])
+            self.assertEqual(edges[0].partition_id, row_partition)
+
     def test_second_provider_adapter_is_loaded_from_the_admitted_catalog(self) -> None:
         record = {
             "external_system": "example_ids",
@@ -217,6 +247,83 @@ class ExternalReferenceRegistryTests(unittest.TestCase):
 
 
 class ExternalReferenceRuntimeTests(unittest.TestCase):
+    def test_unreadable_bridge_is_not_an_identifier_miss(self) -> None:
+        failure = adapters.ExternalReferenceUnavailable("fixture read failure")
+        request = {"iso3": "CAN", "from_system": "gers", "value": EQUIVALENCE.external_id}
+        reverse = {"iso3": "CAN", "from_system": "loc_id", "value": "CAN-BC", "to_system": "gers"}
+        with (
+            mock.patch.object(reference_exchange, "adapter_available", return_value=True),
+            mock.patch.object(reference_exchange, "lookup_external_edges", side_effect=failure),
+            mock.patch.object(reference_exchange, "lookup_external_edges_batch", side_effect=failure) as forward_batch,
+            mock.patch.object(reference_exchange, "lookup_loc_id_edges", side_effect=failure),
+            mock.patch.object(reference_exchange, "lookup_loc_id_edges_batch", side_effect=failure) as reverse_batch,
+        ):
+            forward = reference_exchange.convert_reference(**request)
+            batch = reference_exchange.convert_references_batch([request, request])
+            backwards = reference_exchange.convert_reference(**reverse)
+            with mock.patch.object(reference_exchange, "resolve_references_batch", return_value=[{"ok": True, "resolved_loc_id": "CAN-BC"}] * 2):
+                backwards_batch = reference_exchange.convert_references_batch([reverse, reverse])
+        for result in [forward, backwards, *batch, *backwards_batch]:
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["error"]["code"], "external_system_unavailable")
+        self.assertEqual(forward_batch.call_count, 1)
+        self.assertEqual(reverse_batch.call_count, 1)
+
+    def test_indirect_conversion_preserves_external_route_failure(self) -> None:
+        with (
+            mock.patch.object(reference_exchange, "resolve_reference", return_value={"ok": True, "resolved_loc_id": "CAN-BC"}),
+            mock.patch.object(reference_exchange, "loc_id_references", return_value={"ok": False, "error": {"code": "external_system_unavailable", "message": "fixture"}}),
+        ):
+            result = reference_exchange.convert_reference(from_system="admin.native_id", value="59", iso3="CAN", to_system="gers")
+        self.assertEqual(result["error"]["code"], "external_system_unavailable")
+
+    def test_identification_read_failure_does_not_claim_no_match(self) -> None:
+        from mapmover.runtime import reference_identification as identification
+        adapter = adapters.get_external_adapter("gers")
+        with (
+            mock.patch.object(identification, "admitted_external_adapters", return_value=[adapter]),
+            mock.patch.object(identification, "external_equivalence_matches", side_effect=adapters.ExternalReferenceUnavailable("fixture")),
+            mock.patch.object(reference_exchange, "list_reference_systems", return_value={"ok": True, "systems": []}),
+        ):
+            result = identification.identify_reference_system([EQUIVALENCE.external_id], country_scope="CAN", expected={"system":"gers"})
+        self.assertEqual(result["status"], "route_unavailable")
+        self.assertEqual(result["error"]["code"], "external_system_unavailable")
+
+    def test_same_reverse_miss_has_same_single_and_batch_error(self) -> None:
+        loc_id = "CAN-BC"
+        resolved = {"ok": True, "resolved_loc_id": loc_id}
+        with (
+            mock.patch.object(reference_exchange, "lookup_loc_id_edges", return_value=[]),
+            mock.patch.object(reference_exchange, "lookup_loc_id_edges_batch", return_value={loc_id: []}),
+            mock.patch.object(reference_exchange, "resolve_references_batch", return_value=[resolved]),
+        ):
+            args = {"from_system": "loc_id", "value": loc_id, "iso3": "CAN", "to_system": "gers"}
+            single = reference_exchange.convert_reference(**args)
+            batch = reference_exchange.convert_references_batch([args])[0]
+        self.assertEqual(single["error"], batch["error"])
+        self.assertEqual(single["error"]["code"], "external_reference_not_found")
+
+    def test_known_external_system_miss_is_not_unknown_system(self) -> None:
+        from mapmover.runtime import reference_identification as identification
+        with (
+            mock.patch.object(identification, "_reference_graph_candidates", return_value=[]),
+            mock.patch.object(identification, "admitted_external_adapters", return_value=[]),
+            mock.patch.object(reference_exchange, "list_reference_systems", return_value={"ok": True, "systems": []}),
+        ):
+            result = identification.identify_reference_system(["00000000-0000-0000-0000-000000000000"], country_scope="CAN", expected={"system": "gers"})
+        self.assertEqual(result["status"], "unmatched")
+        self.assertEqual(result["warnings"][-1]["code"], "no_reference_system_match")
+        self.assertIsNone(result["recommended_binding"])
+
+    def test_gers_header_selects_column_without_asserting_uuid_coverage(self) -> None:
+        from mapmover.runtime.dataset_column_selection import identify_dataset_geography
+        result = identify_dataset_geography([{"name": "gers_id", "values": ["not-even-a-uuid"]}], country_scope="CAN")
+        self.assertEqual(result["status"], "matched")
+        self.assertEqual(result["candidates"][0]["catalog"]["status"], "not_checked")
+        self.assertIsNone(result["candidates"][0]["catalog"]["recommended_binding"])
+        unknown = identify_dataset_geography([{"name": "transaction_id", "values": [EQUIVALENCE.external_id]}])
+        self.assertEqual(unknown["status"], "unmatched")
+
     def test_relationship_only_edge_never_resolves_as_identity(self) -> None:
         with mock.patch.object(reference_exchange, "adapter_available", return_value=True), mock.patch.object(reference_exchange, "lookup_external_edges", return_value=[PART_OF]):
             payload = reference_exchange.resolve_external_reference("gers", PART_OF.external_id)

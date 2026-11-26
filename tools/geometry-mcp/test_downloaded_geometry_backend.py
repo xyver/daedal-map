@@ -430,5 +430,30 @@ class InstalledSideFamilyTest(unittest.TestCase):
             self.assertEqual(related["matches"][0]["relationship_type"], "overlaps")
 
 
+    def test_bridge_mcp_tools_preserve_typed_relationships(self):
+        external_id = "d5654a87-5adf-42b3-9ff7-c656797a1776"
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            _package(root, "gers", "downloadable_external_reference_bridge", "BRIDGES", {
+                "reference/overture_gers_loc_id_bridge.parquet": ("reference", [
+                    {"loc_id": "CAN", "gers_division_id": external_id, "iso3": "CAN",
+                     "relationship_type": "equivalent_identity"},
+                    {"loc_id": "CAN-BC", "gers_division_id": external_id, "iso3": "CAN",
+                     "relationship_type": "overlaps"},
+                ]),
+            })
+            backend = DownloadedGeometryBackend(root)
+            self.assertEqual(backend.call("list_bridges", {})["bridges"][0]["system"], "overture_gers")
+            self.assertEqual(backend.call("get_bridge", {"system": "overture_gers"})["bridge"]["system"], "overture_gers")
+            result = backend.call("query_bridge", {"system": "overture_gers", "country_scope": "CAN",
+                                                   "external_id": external_id})
+            self.assertEqual(result["identity_bindings"], ["CAN"])
+            self.assertEqual(result["edge_count"], 2)
+            self.assertFalse(result["edges"][1]["identity_binding"])
+            reverse = backend.call("query_bridge", {"system": "overture_gers", "country_scope": "CAN",
+                                                    "loc_id": "CAN"})
+            self.assertEqual(reverse["identity_bindings"], [external_id])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1,0 +1,83 @@
+"""Focused contract checks for the dedicated Bridge MCP facade."""
+from __future__ import annotations
+
+import unittest
+from unittest import mock
+from jsonschema import Draft202012Validator
+from mcp_surface_shared import build_tool_definitions
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+from mapmover.routes.mcp import router
+from bridge_tools_shared import bridge_query_result
+
+
+class BridgeMcpToolsTests(unittest.TestCase):
+    def setUp(self):
+        app = FastAPI()
+        app.include_router(router)
+        self.client = TestClient(app)
+
+    def call(self, method, params=None):
+        response = self.client.post('/mcp/bridges', json={
+            'jsonrpc': '2.0', 'id': 1, 'method': method, 'params': params or {},
+        })
+        self.assertEqual(response.status_code, 200, response.text)
+        return response.json()
+
+    def test_facade_lists_only_bridge_workflow(self):
+        names = {item['name'] for item in self.call('tools/list')['result']['tools']}
+        self.assertEqual(names, {'get_tool_help', 'list_bridges', 'get_bridge', 'query_bridge'})
+        help_result = self.call('tools/call', {'name': 'get_tool_help',
+            'arguments': {'tool_name': 'query_bridge'}})['result']['structuredContent']
+        self.assertTrue(help_result['ok'])
+        self.assertIn('equivalent_identity', help_result['purpose'])
+
+    def test_dispatch_and_unavailable_error(self):
+        with mock.patch('mapmover.runtime.bridge_mcp.list_bridges', return_value={
+            'ok': True, 'bridges': [{'system': 'overture_gers'}]}):
+            result = self.call('tools/call', {'name': 'list_bridges', 'arguments': {}})
+        self.assertEqual(result['result']['structuredContent']['bridges'][0]['system'], 'overture_gers')
+        with mock.patch('mapmover.runtime.bridge_mcp.query_bridge', return_value={
+            'ok': False, 'error': {'code': 'bridge_artifact_unavailable', 'message': 'not readable'}}):
+            result = self.call('tools/call', {'name': 'query_bridge', 'arguments': {
+                'system': 'overture_gers', 'country_scope': 'CAN',
+                'external_id': 'd5654a87-5adf-42b3-9ff7-c656797a1776'}})
+        self.assertEqual(result['result']['structuredContent']['error']['code'], 'bridge_artifact_unavailable')
+
+    def test_published_bridge_output_contracts(self):
+        definitions = {item['name']: item for item in build_tool_definitions()}
+        samples = {
+            'list_bridges': {'ok': True, 'bridges': [{'system': 'overture_gers', 'execution_status': 'not_yet_verified'}]},
+            'get_bridge': {'ok': True, 'bridge': {'system': 'overture_gers', 'execution_status': 'artifact_verified'}},
+            'query_bridge': bridge_query_result(system='overture_gers', country_scope='CAN',
+                direction='external_to_loc_id', value='sample',
+                rows=[{'external_id': 'sample', 'loc_id': 'CAN', 'relationship_type': 'equivalent_identity'}],
+                limit=25),
+        }
+        for name, payload in samples.items():
+            schema = definitions[name]['outputSchema']
+            Draft202012Validator.check_schema(schema)
+            Draft202012Validator(schema).validate(payload)
+            Draft202012Validator(schema).validate({'ok': False,
+                'error': {'code': 'bridge_artifact_unavailable', 'message': 'missing'}})
+
+    def test_relationship_does_not_bind_identity(self):
+        result = bridge_query_result(system='overture_gers', country_scope='CAN',
+            direction='external_to_loc_id', value='example', rows=[
+                {'external_id': 'example', 'loc_id': 'CAN', 'relationship_type': 'equivalent_identity'},
+                {'external_id': 'example', 'loc_id': 'CAN-BC', 'relationship_type': 'overlaps'},
+            ], limit=25)
+        self.assertEqual(result['identity_bindings'], ['CAN'])
+        self.assertEqual(result['identity_status'], 'unique')
+        self.assertFalse(result['edges'][1]['identity_binding'])
+        limited = bridge_query_result(system='overture_gers', country_scope='CAN',
+            direction='external_to_loc_id', value='example', rows=[
+                {'external_id': 'example', 'loc_id': 'CAN', 'relationship_type': 'equivalent_identity'},
+                {'external_id': 'example', 'loc_id': 'CAN-BC', 'relationship_type': 'equivalent_identity'},
+            ], limit=1)
+        self.assertEqual(limited['identity_status'], 'ambiguous')
+        self.assertTrue(limited['has_more'])
+
+
+if __name__ == '__main__':
+    unittest.main()

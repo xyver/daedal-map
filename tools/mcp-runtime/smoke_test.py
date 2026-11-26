@@ -194,12 +194,20 @@ def main() -> int:
                 "convert_reference": {"iso3": "TST", "from_system": "loc_id", "value": "TST"},
                 "compare_geographies": {"left_loc_id": "TST", "right_loc_id": "TST"},
                 "get_shape": {"loc_id": "TST"},
+                "list_bridges": {},
+                "get_bridge": {"system": "overture_gers"},
+                "query_bridge": {"system": "overture_gers", "country_scope": "TST",
+                                 "external_id": "d5654a87-5adf-42b3-9ff7-c656797a1776"},
             }
             if {tool["name"] for tool in listed} != set(downloaded_arguments):
                 raise RuntimeError("Downloaded Geometry tool roster differs from the current contract")
             for name, arguments in downloaded_arguments.items():
                 _call(client, "geometry", name, arguments)
                 downloaded_calls += 1
+            bridge_names = {item["name"] for item in _post(client, "/mcp/bridges", "tools/list")["result"]["tools"]}
+            if bridge_names != {"get_tool_help", "list_bridges", "get_bridge", "query_bridge"}:
+                raise RuntimeError(f"Downloaded Bridge MCP tool roster differs: {sorted(bridge_names)}")
+            _post(client, "/mcp/bridges", "tools/call", {"name": "list_bridges", "arguments": {}})
 
     print(json.dumps({
         "status": "PASS",

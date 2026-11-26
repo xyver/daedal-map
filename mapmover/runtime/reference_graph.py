@@ -1522,7 +1522,12 @@ def identify_aliases(
     placeholders = ", ".join("?" for _ in requested)
     connection = _connection()
     try:
-        system_filter = " AND lower(reference_system) = lower(?)" if reference_system else ""
+        # Identification returns canonical names with hyphens/spaces normalized.
+        # Apply that same spelling rule when a caller selects an offered system.
+        system_filter = (
+            " AND replace(replace(lower(reference_system), '-', '_'), ' ', '_') = ?"
+            if reference_system else ""
+        )
         maximum = max(1, int(limit))
         rows: list[dict[str, Any]] = []
         for selected_country in selected_countries:
@@ -1532,7 +1537,7 @@ def identify_aliases(
             parameters = [path_to_uri(path), *requested]
             parameters.append(selected_country)
             if reference_system:
-                parameters.append(str(reference_system))
+                parameters.append(str(reference_system).strip().lower().replace("-", "_").replace(" ", "_"))
             parameters.append(maximum)
             cursor = connection.execute(
                 f"""SELECT * FROM read_parquet(?)

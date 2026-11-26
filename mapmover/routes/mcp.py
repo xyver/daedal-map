@@ -108,11 +108,11 @@ from tool_access_shared import (
 
 router = APIRouter()
 
-MCP_PACK_READ_TOOLS = {"get_tool_help", "get_catalog", "get_pack", "get_geography"}
+MCP_PACK_READ_TOOLS = {"get_tool_help", "get_catalog", "get_pack", "get_geography", "list_bridges", "get_bridge"}
 MCP_GEOMETRY_READ_TOOLS = {
     "resolve_point", "resolve_bbox", "resolve_deep_bbox", "resolve_deep_point",
     "get_loc_id_info", "identify_dataset_geography", "identify_reference_system",
-    "convert_reference", "compare_geographies", "get_shape",
+    "convert_reference", "compare_geographies", "get_shape", "query_bridge",
     "resolve_loc_id_scope", "estimate_geometry_package", "estimate_conversion_job",
     "get_job_status",
 }
@@ -532,7 +532,7 @@ SERVER_INFO = {
 # with county-map-private/build/mcp_registry_publish/generate_geometry_server_json.py,
 # and publish that manifest.
 MAIN_REGISTRY_LISTING = {
-    "version": "1.0.3",
+    "version": "1.0.4",
     "description": "Geocode points, map place codes to loc_id, compare boundaries, query hazard and economic data.",
 }
 AGENT_SAFETY_NOTICE = (
@@ -556,6 +556,16 @@ PRODUCT_FACADE_PROFILES = {
             "highlights": ["Free catalog discovery", "Bounded reference conversion through loc_id", "Rows from free data packs"],
         },
     },
+    "bridges": {
+        "name": "com.daedalmap/bridges",
+        "title": "DaedalMap External Bridges",
+        "version": "1.0.0",
+        "description": "Discover admitted external reference systems and query typed relationships between external IDs and DaedalMap loc_ids within one country.",
+        "registry_meta": {
+            "categories": ["geospatial", "interoperability"],
+            "highlights": ["Admitted bridge discovery", "Typed bidirectional relationship lookup", "Identity-safe bridge evidence"],
+        },
+    },
     "data": {
         "name": "com.daedalmap/data",
         "title": "DaedalMap Data Access",
@@ -574,11 +584,12 @@ PRODUCT_FACADE_TOOL_NAMES = {
         "convert_reference", "compare_geographies", "get_data",
     }),
     "data": frozenset({"get_tool_help", "get_catalog", "get_pack", "get_data", "get_event"}),
+    "bridges": frozenset({"get_tool_help", "list_bridges", "get_bridge", "query_bridge"}),
 }
 FREE_FACADE_PROMPT_NAMES = frozenset({
     "convert_census_code", "place_from_coordinates", "find_geography_columns", "country_indicator_history",
 })
-PRODUCT_FACADE_PROMPT_NAMES = {"free": FREE_FACADE_PROMPT_NAMES, "data": frozenset()}
+PRODUCT_FACADE_PROMPT_NAMES = {"free": FREE_FACADE_PROMPT_NAMES, "data": frozenset(), "bridges": frozenset()}
 
 PACK_TOOL_ALLOWLIST: dict[str, set[str]] = pack_tool_allowlists()
 
@@ -602,6 +613,7 @@ DATA_HELPER_CAPABILITIES: dict[str, str] = {
     for name in (
         "get_tool_help",
         "get_catalog",
+        "list_bridges", "get_bridge", "query_bridge",
         "get_pack",
         "get_geography",
         "get_event",
@@ -2082,6 +2094,12 @@ def get_server_description(pack_id: str | None = None) -> str:
             "then get_loc_id_info or convert_reference again for a destination system. "
             f"Use get_data only for free packs shown by the catalog, up to {free_facade_data_row_limit()} rows per call. "
             "This endpoint rejects paid material and above-free batches even when an account key is supplied."
+        )
+    if normalized == "bridges":
+        return (
+            f"{PRODUCT_FACADE_PROFILES['bridges']['description']} Safety: {AGENT_SAFETY_NOTICE} "
+            "Start with list_bridges, inspect one system with get_bridge, then use query_bridge with exactly one ISO3 country and one external_id or loc_id. "
+            "Only equivalent_identity edges bind identities. A catalogued bridge may still fail execution if its runtime artifact is unavailable."
         )
     if normalized == "data":
         return (
@@ -6809,6 +6827,27 @@ async def _mcp_endpoint_impl(request: Request, pack_id: str | None = None):
             payload=payload,
             rpc_request_id=request_id,
         )
+
+    if tool_name in {"list_bridges", "get_bridge", "query_bridge"}:
+        from mapmover.runtime import bridge_mcp
+        if tool_name == "list_bridges":
+            if arguments:
+                return _jsonrpc_error(request_id, -32602, "list_bridges accepts no arguments")
+            payload = bridge_mcp.list_bridges()
+        elif tool_name == "get_bridge":
+            if set(arguments) != {"system"} or not isinstance(arguments.get("system"), str) or not arguments["system"].strip():
+                return _jsonrpc_error(request_id, -32602, "get_bridge requires one nonempty system")
+            payload = bridge_mcp.get_bridge(arguments["system"])
+        else:
+            allowed = {"system", "country_scope", "external_id", "loc_id", "source_release", "internal_release", "limit"}
+            if (set(arguments) - allowed or not isinstance(arguments.get("system"), str)
+                    or not isinstance(arguments.get("country_scope"), str)
+                    or ("external_id" in arguments) == ("loc_id" in arguments)):
+                return _jsonrpc_error(request_id, -32602, "query_bridge requires system, country_scope, and exactly one of external_id or loc_id")
+            payload = bridge_mcp.query_bridge(**arguments)
+        return _finish_data_helper(request, tool_name=tool_name, started_at=helper_started_at,
+            payload=payload, rpc_request_id=request_id, row_count=_payload_row_count(payload),
+            is_error=not payload.get("ok"), error_code=(payload.get("error") or {}).get("code"))
 
     if tool_name == "get_catalog":
         if set(arguments) != {"catalog"} or arguments.get("catalog") not in {"data", "geometry"}:

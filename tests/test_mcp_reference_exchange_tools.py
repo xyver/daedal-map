@@ -3207,3 +3207,15 @@ class McpReferenceExchangeToolsTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_geometry_help_uses_only_available_point_and_shape_workflows():
+    import mcp_tool_help_shared as help_module
+    exposed = ["get_tool_help", "get_catalog", "get_geography", "resolve_point", "get_loc_id_info", "convert_reference", "identify_reference_system", "compare_geographies"]
+    free = help_module.geometry_topic_help_payload(available_tool_names=exposed)
+    serialized = json.dumps(free)
+    assert "resolve_deep_point" not in serialized
+    assert "get_shape" not in serialized
+    full = help_module.geometry_topic_help_payload(available_tool_names=exposed + ["resolve_deep_point", "get_shape"])
+    assert "partitioned_deep_points_across_multiple_regions" in json.dumps(full)
+    assert "known_loc_ids_to_shapes" in json.dumps(full)

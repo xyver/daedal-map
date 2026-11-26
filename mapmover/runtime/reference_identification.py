@@ -14,10 +14,12 @@ from typing import Any, Callable
 
 from .external_reference_adapters import (
     GERS_SYSTEM,
+    ExternalReferenceUnavailable,
     admitted_external_adapters,
     external_equivalence_matches,
     external_system_aliases,
     identifier_matches,
+    get_external_adapter,
 )
 from .family_admin_crosswalk import admin_level_name
 
@@ -84,6 +86,13 @@ def census_geoid_level(value: Any) -> str | None:
     if not text.isdigit() or text[:2] not in US_STATE_FIPS_TO_ABBR:
         return None
     return {2: "admin_1", 5: "admin_2", 11: "admin_3", 12: "admin_4", 15: "admin_5"}.get(len(text))
+
+
+def invalid_census_geoid_message(value: Any) -> str:
+    text = str(value or "").strip()
+    if text.isdigit() and len(text) in {2, 5, 11, 12, 15} and text[:2] not in US_STATE_FIPS_TO_ABBR:
+        return f"unrecognized US state or territory FIPS prefix: {text[:2]}"
+    return "expected a 2, 5, 11, 12, or 15 digit US Census GEOID"
 
 
 def census_geoid_to_loc_id(value: Any) -> str | None:
@@ -339,10 +348,11 @@ def _reference_graph_candidates(
             for values in matches.values()
             for loc_id in values
         })
-    elif expected_level:
+    elif expected_level or "admin.native_id" in grouped:
         try:
+            level_matches = grouped.values() if expected_level else [grouped["admin.native_id"]]
             loc_ids = list(dict.fromkeys(
-                loc_id for matches in grouped.values() for values in matches.values() for loc_id in values
+                loc_id for matches in level_matches for values in matches.values() for loc_id in values
                 if loc_id not in identity_levels
             ))
             for row in _identity_metadata_for_loc_ids(loc_ids).values():
@@ -761,13 +771,18 @@ def identify_reference_system(
         # equivalence edge is the evidence; containment and overlap edges
         # deliberately cannot produce a recommended loc_id binding.
         shaped = [value for value in values if identifier_matches(adapter, value)]
-        evidence = external_equivalence_matches(
-            adapter.system,
-            shaped,
-            country_scope=country or None,
-            source_release=expected_source_release,
-            internal_release=expected_internal_release,
-        ) if shaped else {"matches": {}}
+        try:
+            evidence = external_equivalence_matches(
+                adapter.system,
+                shaped,
+                country_scope=country or None,
+                source_release=expected_source_release,
+                internal_release=expected_internal_release,
+            ) if shaped else {"matches": {}}
+        except ExternalReferenceUnavailable:
+            return {"ok": False, "status": "route_unavailable",
+                    "error": {"code": "external_system_unavailable",
+                              "message": "The selected external-reference bridge could not be read. No identifier match or absence was established."}}
         matches = evidence.get("matches") or {}
         if matches:
             candidate = _candidate(
@@ -986,7 +1001,7 @@ def identify_reference_system(
         selected_scopes = selected.get("country_scopes") or []
         if len(selected_scopes) != 1:
             mixed_binding_reason = "more than one country scope"
-        elif len(selected_levels) != 1:
+        elif len(selected_levels) > 1:
             mixed_binding_reason = "more than one administrative level"
         if mixed_binding_reason:
             selected = None
@@ -1103,10 +1118,15 @@ def identify_reference_system(
         guidance = {"action": "ask_user_then_retry", "message": message,
                     "recommended_tool": "identify_reference_system"}
     elif status == "unmatched":
-        code = "unknown_expected_system" if expected_system else "no_reference_system_match"
+        known_systems = {normalize_identifier_system(item.get("system"))
+                         for item in listing.get("systems") or []}
+        known_systems.update(_SYSTEM_ALIASES.values())
+        unknown_system = bool(expected_system and expected_system not in known_systems
+                              and get_external_adapter(expected_system) is None)
+        code = "unknown_expected_system" if unknown_system else "no_reference_system_match"
         warnings.append({
             "code": code,
-            "message": "The expected.system value is not a supported canonical name or alias." if expected_system else "No maintained exact identifier system matched the supplied values.",
+            "message": "The expected.system value is not a supported canonical name or alias." if unknown_system else "No maintained exact identifier system matched the supplied values.",
         })
         guidance = {
             "action": "ask_user_then_retry",

@@ -12,6 +12,7 @@ from typing import Any, Callable
 
 
 _IDENTIFIER_HEADERS = {
+    "gers_id", "gers_division_id", "overture_gers",
     "loc_id", "locid", "daedalmap_loc_id", "geoid", "geoid10", "geoid20",
     "fips", "state_fips", "county_fips", "zip", "zip_code", "zipcode",
     "zcta", "zcta5", "postal_code", "postcode", "country_code", "iso3",

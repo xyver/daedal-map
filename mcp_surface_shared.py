@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from mcp_data_contract_shared import decorate_data_tool_definition, decorate_shared_help_definition
+from mcp_bridge_contract_shared import decorate_bridge_tool_definition
 from mcp_discovery_shared import data_access_workflow
 from mcp_geometry_contract_shared import decorate_geometry_tool_definition
 
@@ -194,6 +195,36 @@ def build_tool_definitions(*, include_paused: bool = False) -> list[dict]:
                 ],
                 "additionalProperties": False,
             },
+            "annotations": {"readOnlyHint": True},
+        },
+        {
+            "name": "list_bridges", "title": "List Admitted External Bridges",
+            "description": "Discover admitted external reference bridges, exact system IDs, releases, row counts, and execution status. Admission is distinct from successful runtime lookup.",
+            "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
+            "annotations": {"readOnlyHint": True},
+        },
+        {
+            "name": "get_bridge", "title": "Inspect One External Bridge",
+            "description": "Inspect one admitted bridge's source release, country coverage when catalogued, relationship semantics, provenance, license, and runtime availability.",
+            "inputSchema": {"type": "object", "properties": {
+                "system": {"type": "string", "minLength": 1, "description": "Exact external system ID from list_bridges, such as overture_gers."},
+            }, "required": ["system"], "additionalProperties": False},
+            "annotations": {"readOnlyHint": True},
+        },
+        {
+            "name": "query_bridge", "title": "Query Typed Bridge Relationships",
+            "description": "Look up one external identifier or loc_id in one ISO3 country through an admitted bridge. Returns typed edges; only equivalent_identity is an identity binding. Query failure is distinct from an unmatched identifier.",
+            "inputSchema": {"type": "object", "properties": {
+                "system": {"type": "string", "minLength": 1, "description": "External system ID from list_bridges."},
+                "country_scope": {"type": "string", "pattern": "^[A-Za-z]{3}$", "description": "One ISO3 country scope. Split multi-country work into separate calls."},
+                "external_id": {"type": "string", "minLength": 1, "description": "External identifier for forward lookup; supply exactly one selector."},
+                "loc_id": {"type": "string", "minLength": 1, "description": "DaedalMap loc_id for reverse lookup; supply exactly one selector."},
+                "source_release": {"type": "string", "minLength": 1, "description": "Optional exact external release."},
+                "internal_release": {"type": "string", "minLength": 1, "description": "Optional exact internal spine release."},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 25, "description": "Maximum typed edges returned."},
+            }, "required": ["system", "country_scope"],
+               "oneOf": [{"required": ["external_id"]}, {"required": ["loc_id"]}],
+               "additionalProperties": False},
             "annotations": {"readOnlyHint": True},
         },
         {
@@ -927,7 +958,9 @@ def build_tool_definitions(*, include_paused: bool = False) -> list[dict]:
         if not include_paused and str(definition.get("name") or "") in PAUSED_PUBLIC_TOOL_NAMES:
             continue
         decorated = decorate_shared_help_definition(
-            decorate_geometry_tool_definition(decorate_data_tool_definition(definition))
+            decorate_bridge_tool_definition(
+                decorate_geometry_tool_definition(decorate_data_tool_definition(definition))
+            )
         )
         # Claude's directory reads the human-readable title from the MCP
         # annotations object, while other clients can use the top-level title.

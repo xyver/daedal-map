@@ -26,6 +26,34 @@ from mapmover.runtime.external_reference_adapters import ExternalReferenceEdge
 
 
 class ReferenceExchangeRuntimeTests(unittest.TestCase):
+    def test_native_identification_reads_levels_without_caller_hint(self) -> None:
+        from mapmover.runtime import reference_identification as identification
+        aliases = [{"reference_system": "admin.native_id", "external_id": value, "loc_id": loc}
+                   for value, loc in [("AA01", "TST-A"), ("AA02", "TST-B")]]
+        for levels, expected_status in [([2, 2], "matched"), ([1, 2], "mixed_geography"), ([None, None], "matched")]:
+            with (
+                self.subTest(levels=levels),
+                mock.patch("mapmover.runtime.reference_graph.identify_aliases", return_value=aliases),
+                mock.patch.object(identification, "_identity_metadata_for_loc_ids", return_value={
+                    loc: {"loc_id": loc, "admin_level": level} for loc, level in zip(["TST-A", "TST-B"], levels)}),
+                mock.patch.object(reference_exchange, "list_reference_systems", return_value={"ok": True, "systems": []}),
+                mock.patch.object(identification, "admitted_external_adapters", return_value=[]),
+            ):
+                result = identify_reference_system(["AA01", "AA02"], country_scope="TST", expected={"system": "admin.native_id"})
+            self.assertEqual(result["status"], expected_status)
+            if levels == [2, 2]:
+                self.assertEqual(result["recommended_binding"]["geo_level"], "admin_2")
+            elif levels == [None, None]:
+                self.assertIsNone(result["recommended_binding"]["geo_level"])
+
+    def test_census_rejection_distinguishes_state_prefix_from_format(self) -> None:
+        for value, message in [("99999", "FIPS prefix: 99"), ("0603", "digit US Census GEOID"), ("06abc", "digit US Census GEOID")]:
+            single = resolve_reference(from_system="us_census_geoid", value=value, iso3="USA")
+            batch = resolve_references_batch([{"from_system": "us_census_geoid", "value": value, "iso3": "USA"}])[0]
+            self.assertEqual(single["error"], batch["error"])
+            self.assertEqual(single["error"]["code"], "invalid_census_geoid")
+            self.assertIn(message, single["error"]["message"])
+
     def test_admin_name_conversion_batch_accepts_transport_crosswalk_selector(self) -> None:
         requests = [
             {"from_system": "admin_boundary", "value": name, "iso3": "DEU",

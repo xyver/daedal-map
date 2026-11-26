@@ -354,6 +354,9 @@ TOOL_ACCESS_REGISTRY: dict[str, dict] = {
     },
     # ---- discovery helpers: always free. Gating these would make the catalog
     # undiscoverable and break the funnel. ----
+    "list_bridges": {"family": FAMILY_DISCOVERY, "capability_id": "bridge_catalog_discovery", "pricing": PRICING_FREE},
+    "get_bridge": {"family": FAMILY_DISCOVERY, "capability_id": "bridge_detail_discovery", "pricing": PRICING_FREE},
+    "query_bridge": {"family": FAMILY_GEOGRAPHY, "capability_id": "bridge_typed_lookup", "pricing": PRICING_FREE},
     "get_catalog": {
         "family": FAMILY_DISCOVERY,
         "capability_id": "catalog_discovery",

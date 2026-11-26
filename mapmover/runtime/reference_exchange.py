@@ -35,6 +35,7 @@ from .geometry_catalog import (
 )
 from .external_reference_adapters import (
     GERS_SYSTEM,
+    ExternalReferenceUnavailable,
     adapter_available,
     adapter_public_entry,
     admitted_external_adapters,
@@ -193,6 +194,11 @@ def verify_loc_ids(values: Any) -> set[str]:
     return verified
 
 
+def _external_route_error(system: str) -> dict[str, str]:
+    return {"code": "external_system_unavailable",
+            "message": f"The selected {system} bridge could not be read or verified. This is not evidence that the identifier is absent."}
+
+
 def resolve_external_reference(
     system: str,
     value: str,
@@ -220,13 +226,17 @@ def resolve_external_reference(
     if not adapter_available(adapter):
         return {"ok": False, "from_system": adapter.system, "input": value,
                 "error": {"code": "external_system_unavailable", "message": "external reference system has no admitted, verified crosswalk"}}
-    edges = lookup_external_edges(
-        adapter.system,
-        text,
-        source_release=source_release,
-        internal_release=internal_release,
-        country_scope=country_scope,
-    )
+    try:
+        edges = lookup_external_edges(
+            adapter.system,
+            text,
+            source_release=source_release,
+            internal_release=internal_release,
+            country_scope=country_scope,
+        )
+    except ExternalReferenceUnavailable:
+        return {"ok": False, "from_system": adapter.system, "input": value,
+                "error": _external_route_error(adapter.system)}
     return _external_reference_payload(adapter, value, text, edges, limit=limit)
 
 
@@ -2236,7 +2246,7 @@ def resolve_reference(
             "resolved_family": classify_loc_id_family(loc_ids[0]),
             "match_type": "country_exact_alias_index"})
     if system == "us_census_geoid":
-        from .reference_identification import census_geoid_level, census_geoid_to_loc_id
+        from .reference_identification import census_geoid_level, census_geoid_to_loc_id, invalid_census_geoid_message
 
         loc_id = census_geoid_to_loc_id(text)
         level = census_geoid_level(text)
@@ -2247,7 +2257,7 @@ def resolve_reference(
                 "input": value,
                 "error": {
                     "code": "invalid_census_geoid",
-                    "message": "expected a maintained 2, 5, 11, 12, or 15 digit US Census GEOID",
+                    "message": invalid_census_geoid_message(text),
                 },
             }
         availability = get_geometry_availability([loc_id])
@@ -2454,7 +2464,7 @@ def resolve_references_batch(requests: list[dict[str, Any]]) -> list[dict[str, A
             continue
         system = _normalize_system(request.get("from_system"))
         if system == "us_census_geoid":
-            from .reference_identification import census_geoid_level, census_geoid_to_loc_id
+            from .reference_identification import census_geoid_level, census_geoid_to_loc_id, invalid_census_geoid_message
 
             value = str(request.get("value") or "").strip()
             loc_id = census_geoid_to_loc_id(value)
@@ -2520,13 +2530,19 @@ def resolve_references_batch(requests: list[dict[str, Any]]) -> list[dict[str, A
         for (system, country, source_release, internal_release, limit), members in external_groups.items():
             adapter = get_external_adapter(system)
             requested = list(dict.fromkeys(text for _index, _request, text in members if text))
-            by_value = lookup_external_edges_batch(
-                system,
-                requested,
-                source_release=source_release or None,
-                internal_release=internal_release or None,
-                country_scope=country or None,
-            )
+            try:
+                by_value = lookup_external_edges_batch(
+                    system,
+                    requested,
+                    source_release=source_release or None,
+                    internal_release=internal_release or None,
+                    country_scope=country or None,
+                )
+            except ExternalReferenceUnavailable:
+                for index, request, _text in members:
+                    results[index] = {"ok": False, "from_system": system, "input": request.get("value"),
+                                      "error": _external_route_error(system)}
+                continue
             if adapter is None or by_value is None:
                 for index, request, _text in members:
                     results[index] = resolve_reference(**request)
@@ -2591,7 +2607,7 @@ def resolve_references_batch(requests: list[dict[str, Any]]) -> list[dict[str, A
                     "normalized_input": value,
                     "error": {
                         "code": "admin_spine_match_not_found" if loc_id else "invalid_census_geoid",
-                        "message": "identifier did not match the selected country admin spine" if loc_id else "expected a 2, 5, 11, 12, or 15 digit US Census GEOID",
+                        "message": "identifier did not match the selected country admin spine" if loc_id else invalid_census_geoid_message(value),
                     },
                 }
 
@@ -2843,14 +2859,19 @@ def loc_id_references(
     for adapter in admitted_external_adapters():
         if requested and adapter.system not in requested:
             continue
-        for edge in lookup_loc_id_edges(
-            adapter.system,
-            canonical,
-            country_scope=country or None,
-            source_release=source_release,
-            internal_release=internal_release,
-            limit=limit_per_system,
-        ):
+        try:
+            edges = lookup_loc_id_edges(
+                adapter.system,
+                canonical,
+                country_scope=country or None,
+                source_release=source_release,
+                internal_release=internal_release,
+                limit=limit_per_system,
+            )
+        except ExternalReferenceUnavailable:
+            return {"ok": False, "loc_id": canonical, "references": references,
+                    "error": _external_route_error(adapter.system)}
+        for edge in edges:
             references.append(_external_edge_reference(adapter.system, edge))
     selected_crosswalk = False
     if family in {"admin_0", "admin_local", "admin_geometry"} or inferred_level is not None:
@@ -3033,14 +3054,21 @@ def convert_reference(
         # turn a millisecond Parquet predicate into a hosted timeout.
         canonical = canonicalize_loc_id(value)
         loc_country = canonical.split("-", 1)[0] if "-" in canonical else ""
-        edges = lookup_loc_id_edges(
-            target_adapter.system,
-            canonical,
-            country_scope=loc_country or None,
-            source_release=source_release,
-            internal_release=internal_release,
-            limit=limit,
-        )
+        try:
+            if not adapter_available(target_adapter):
+                raise ExternalReferenceUnavailable("bridge unavailable")
+            edges = lookup_loc_id_edges(
+                target_adapter.system,
+                canonical,
+                country_scope=loc_country or None,
+                source_release=source_release,
+                internal_release=internal_release,
+                limit=limit,
+            )
+        except ExternalReferenceUnavailable:
+            return {"ok": False, "from_system": source, "input": value,
+                    "to_system": target_adapter.system, "loc_id": canonical, "results": [],
+                    "error": _external_route_error(target_adapter.system)}
         results = [_external_edge_reference(target_adapter.system, edge) for edge in edges]
         if results:
             return _clean_json({
@@ -3131,6 +3159,9 @@ def convert_reference(
         source_release=source_release,
         internal_release=internal_release,
     )
+    if references.get("error"):
+        return {"ok": False, "from": resolved, "to_system": target, "loc_id": loc_id,
+                "results": [], "error": references["error"]}
     results = [ref for ref in references.get("references") or [] if ref.get("system") == target]
     if not results:
         return _clean_json({
@@ -3298,14 +3329,20 @@ def convert_references_batch(requests: list[dict[str, Any]]) -> list[dict[str, A
         reverse_groups.setdefault(key, []).append((index, request, resolved, loc_id))
 
     for (target, country, source_release, internal_release, limit), members in external_reverse_groups.items():
-        by_loc_id = lookup_loc_id_edges_batch(
-            target,
-            [loc_id for _index, _request, _resolved, loc_id in members],
-            country_scope=country or None,
-            source_release=source_release or None,
-            internal_release=internal_release or None,
-            limit=limit,
-        )
+        try:
+            by_loc_id = lookup_loc_id_edges_batch(
+                target,
+                [loc_id for _index, _request, _resolved, loc_id in members],
+                country_scope=country or None,
+                source_release=source_release or None,
+                internal_release=internal_release or None,
+                limit=limit,
+            )
+        except ExternalReferenceUnavailable:
+            for index, _request, resolved, loc_id in members:
+                results[index] = {"ok": False, "from": resolved, "to_system": target,
+                                  "loc_id": loc_id, "results": [], "error": _external_route_error(target)}
+            continue
         if by_loc_id is None:
             for index, request, _resolved, _loc_id in members:
                 results[index] = convert_reference(**request)
@@ -3358,8 +3395,9 @@ def _conversion_result_from_references(
             "results": [],
             "loc_id": loc_id,
             "error": {
-                "code": "unsupported_target_system",
-                "message": f"no references found from loc_id to {target}",
+                "code": "external_reference_not_found" if get_external_adapter(target) else "unsupported_target_system",
+                "message": (f"no {target} reference is published for that loc_id"
+                            if get_external_adapter(target) else f"no references found from loc_id to {target}"),
             },
         })
     return _clean_json({

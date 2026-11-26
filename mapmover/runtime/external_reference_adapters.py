@@ -18,6 +18,10 @@ from typing import Any
 from ..duckdb_helpers import is_cloud_mode, path_to_uri, quote_ident, run_df
 from ..paths import DATA_ROOT
 
+class ExternalReferenceUnavailable(RuntimeError):
+    """The selected bridge could not be read; this is not an identifier miss."""
+
+
 ADMITTED_STATES = frozenset({"admitted", "published", "active"})
 GERS_SYSTEM = "overture_gers"
 
@@ -139,8 +143,9 @@ def _adapter_from_catalog_record(record: dict[str, Any]) -> ExternalReferenceAda
         return None
     if len(pattern) > 512 or any(not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", str(value)) for value in columns.values()):
         return None
-    pointer_path = "geometry/bridges/GERS/index.json" if system == GERS_SYSTEM else f"geometry/bridges/{system}/index.json"
-    if spec.get("pointer_path", pointer_path) != pointer_path:
+    legacy_pointer = "geometry/bridges/GERS/index.json" if system == GERS_SYSTEM else f"geometry/bridges/{system}/index.json"
+    pointer_path = spec.get("pointer_path", legacy_pointer)
+    if pointer_path not in {legacy_pointer, f"geometry/external_references/{system}/current.json"}:
         return None
     aliases = spec.get("aliases") or []
     if not isinstance(aliases, list):
@@ -467,7 +472,10 @@ def _query_edges(
         _artifact_verified(path, digest) for path, digest in zip(paths, hashes)
     ):
         return []
-    uris = [path_to_uri(DATA_ROOT / path) for path in paths]
+    try:
+        uris = [path_to_uri(DATA_ROOT / path) for path in paths]
+    except Exception as exc:
+        raise ExternalReferenceUnavailable("selected external-reference artifact could not be opened") from exc
     column = adapter.internal_id_column if reverse else adapter.external_id_column
     clauses = [f"{quote_ident(column)} IN ({', '.join('?' for _ in values)})"]
     parameters: list[Any] = [uris, *values]
@@ -485,9 +493,13 @@ def _query_edges(
     )
     try:
         frame = run_df(sql, parameters)
-    except Exception:
-        return []
-    by_uri = {str(uri): partition for uri, partition in zip(uris, partitions)}
+    except Exception as exc:
+        raise ExternalReferenceUnavailable("selected external-reference artifact could not be queried") from exc
+    # A compact file contains many logical partitions. Its filename cannot
+    # identify one of them; retain only provenance actually present on the row.
+    by_uri = {} if bridge.runtime_path else {
+        str(uri): partition for uri, partition in zip(uris, partitions)
+    }
     return [
         _edge(adapter, row, by_uri.get(str(row.get("filename") or "")))
         for row in ([] if frame is None else frame.to_dict("records"))

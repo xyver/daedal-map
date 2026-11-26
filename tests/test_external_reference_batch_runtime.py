@@ -86,3 +86,14 @@ def test_reverse_external_edge_batch_uses_one_partition_query() -> None:
         country_scope="CAN",
     )
     assert result == {first: [edge], second: []}
+
+
+def test_compact_query_read_error_is_not_an_empty_result():
+    import pytest
+    bridge = adapters.AdmittedExternalBridge(
+        adapter=adapters.get_external_adapter("gers"), release_fingerprint="a" * 64,
+        source_release="fixture", partitions=(), source_license={},
+        runtime_path="compact.parquet", runtime_sha256="b" * 64)
+    with mock.patch.object(adapters, "is_cloud_mode", return_value=True), mock.patch.object(adapters, "path_to_uri", return_value="compact.parquet"), mock.patch.object(adapters, "run_df", side_effect=OSError("fixture 404")):
+        with pytest.raises(adapters.ExternalReferenceUnavailable):
+            adapters._query_edges(bridge, (), reverse=False, values=["fixture"])

@@ -23,6 +23,7 @@ for _runtime_root in (_PACKAGE_ROOT, _PACKAGE_ROOT / "runtime"):
         sys.path.insert(0, str(_runtime_root))
 from mcp_surface_shared import (MARINE_JURISDICTION_FAMILIES, MARINE_POINT_FAMILIES,
                                 build_tool_definitions, public_geometry_family_id)
+from bridge_tools_shared import bridge_query_result
 from mapmover.runtime.bbox_geometry import (
     MAX_BBOX_CANDIDATES, overlap_percentages, projected_viewport, rectangle_bounds,
 )
@@ -40,6 +41,7 @@ TOOLS = {
     "resolve_point", "resolve_deep_point", "resolve_bbox", "resolve_deep_bbox", "get_loc_id_info",
     "identify_dataset_geography", "identify_reference_system",
     "convert_reference", "compare_geographies", "get_shape",
+    "list_bridges", "get_bridge", "query_bridge",
 }
 MAX_INLINE_GEOMETRY_BYTES = 16 * 1024 * 1024
 MAX_BBOX_CACHE_BYTES = 64 * 1024 * 1024
@@ -196,6 +198,68 @@ class DownloadedGeometryBackend:
                 rows.extend(pq.read_table(file["local_path"], filters=filters).to_pylist())
         return rows
 
+    def _bridge_package(self, system: str):
+        return next((package for package in self.bridges
+                     if package["metadata"].get("external_system") == system), None)
+
+    def _call_list_bridges(self, args: dict[str, Any]) -> dict[str, Any]:
+        return {"ok": True, "bridges": [self._bridge_summary(package) for package in self.bridges]}
+
+    @staticmethod
+    def _bridge_summary(package: dict[str, Any]) -> dict[str, Any]:
+        meta = package["metadata"]
+        return {"bridge_id": meta.get("bridge_id") or meta.get("package_id"),
+                "system": meta.get("external_system"), "label": meta.get("package_id"),
+                "source_release": meta.get("external_release"),
+                "release_fingerprint": meta.get("release_fingerprint"),
+                "row_count": meta.get("row_count"),
+                "countries": meta.get("countries") or [],
+                "country_coverage_status": "catalogued" if meta.get("countries") else "not_in_package_sidecar",
+                "bidirectional": True, "source_license": meta.get("source_licenses"),
+                "relationship_types": ["equivalent_identity", "overlaps", "contained_by"],
+                "identity_rule": "Only equivalent_identity edges bind external IDs to loc_ids.",
+                "execution_status": "installed_hash_checked_on_lookup",
+                "has_shapes": False}
+
+    def _call_get_bridge(self, args: dict[str, Any]) -> dict[str, Any]:
+        package = self._bridge_package(args["system"])
+        if package is None:
+            return _error("bridge_not_installed", "No installed bridge matches this external system")
+        return {"ok": True, "bridge": self._bridge_summary(package)}
+
+    def _call_query_bridge(self, args: dict[str, Any]) -> dict[str, Any]:
+        system = args["system"]
+        if self._bridge_package(system) is None:
+            return _error("bridge_not_installed", "No installed bridge matches this external system")
+        if system != "overture_gers":
+            return _error("bridge_reader_unavailable", "This installed bridge has no registered lookup adapter")
+        scope = str(args["country_scope"]).strip().upper()
+        if len(scope) != 3 or not scope.isalpha():
+            return _error("invalid_country_scope", "country_scope must be one ISO3 country")
+        if ("external_id" in args) == ("loc_id" in args):
+            return _error("invalid_bridge_selector", "Supply exactly one of external_id or loc_id")
+        limit = args.get("limit", 25)
+        if type(limit) is not int or not 1 <= limit <= 100:
+            return _error("invalid_limit", "limit must be an integer from 1 to 100")
+        external = "external_id" in args
+        value = str(args["external_id"] if external else args["loc_id"]).strip()
+        if not value:
+            return _error("invalid_identifier", "The selected identifier must be nonempty")
+        if external and not re.fullmatch(r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}", value):
+            return _error("invalid_external_identifier", "The external identifier does not match this system's format")
+        if not external and not (value == scope or value.startswith(scope + "-")):
+            return _error("scope_value_mismatch", "loc_id does not belong to country_scope")
+        rows = self._bridge_rows(scope=scope, column="gers_division_id" if external else "loc_id", value=value)
+        for key, column in (("source_release", "overture_release"), ("internal_release", "spine_vintage")):
+            if args.get(key):
+                rows = [row for row in rows if row.get(column) == args[key]]
+        result = bridge_query_result(system=system, country_scope=scope,
+            direction="external_to_loc_id" if external else "loc_id_to_external",
+            value=value, rows=rows, limit=limit)
+        result["source_release_filter"] = args.get("source_release")
+        result["internal_release_filter"] = args.get("internal_release")
+        return result
+
     def _load(self, *, geometry: bool = False, loc_ids=None, country=None, admin_level=None, point=None,
               selected_path: Path | None = None, reference_only: bool = False,
               strict_country: bool = False, selected_package=None):
@@ -313,10 +377,17 @@ class DownloadedGeometryBackend:
             definition = TOOL_DEFINITIONS.get(str(args["tool_name"]))
             if definition is None:
                 return _error("unknown_tool", "The requested tool is not in tools/list")
+            guidance = {"data_scope": "installed local packages"}
+            if definition["name"] in {"list_bridges", "get_bridge", "query_bridge"}:
+                guidance.update({
+                    "workflow": ["list_bridges", "get_bridge", "query_bridge"],
+                    "identity_rule": "Only equivalent_identity edges bind identities; overlap and containment are relationship evidence.",
+                    "availability_rule": "An installed package is checked against its pinned member hash when queried.",
+                })
             return {"ok": True, "tool_name": definition["name"], "title": definition.get("title"),
                     "purpose": definition["description"], "input_schema": definition["inputSchema"],
                     "output_schema": definition.get("outputSchema"),
-                    "guidance": {"data_scope": "installed local packages"}}
+                    "guidance": guidance}
         return {"ok": True, "topic": args["topic"], "available_tools": list(TOOL_DEFINITIONS),
                 "guidance": {"data_scope": "installed local packages"}}
 
