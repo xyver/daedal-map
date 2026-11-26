@@ -104,9 +104,12 @@ TOOL_GUIDANCE: dict[str, dict[str, Any]] = {
         ["get_loc_id_info", "get_shape"]
     ),
     "get_loc_id_info": _g(
-        ["You have a known loc_id and want its directly recorded connections to other loc_ids in the selected reference graph."],
-        ["Country-wide family discovery", "External identifier conversion", "Returning polygons", "Expanding all descendants"],
-        {"loc_id": "CAN-BC"},
+        [
+            "You have known loc_ids and want their directly recorded connections in the selected reference graph. Use one country or reference scope per call.",
+            "For international datasets, group identifiers by their owning country or reference scope and submit separate calls of up to 10 loc_ids. Mixed-scope batches can be slow or time out.",
+        ],
+        ["Country-wide family discovery", "External identifier conversion", "Returning polygons", "Expanding all descendants", "Combining unrelated country or reference scopes into one identity batch"],
+        [{"loc_id": "CAN-BC"}, {"loc_ids": ["CAN", "CAN-BC"]}],
         ["loc_id", "family", "connections", "connection_count", "has_more"],
         ["get_geography", "convert_reference", "get_shape"],
         ["relationship type", "relationship vintage", "authority"]
@@ -143,7 +146,10 @@ TOOL_GUIDANCE: dict[str, dict[str, Any]] = {
         ["source and target systems", "bridge vintage", "relationship method", "artifact id"]
     ),
     "compare_geographies": _g(
-        ["You have two known loc_ids and need recorded relationship or temporal-validity evidence."],
+        [
+            "You have two known loc_ids and need recorded relationship or temporal-validity evidence. A pair may span countries or reference scopes where supported by the selected graph; missing evidence remains unknown.",
+            "For batches, group pairs by the same country or the same pair of reference scopes and submit separate calls. Keep both sides of a cross-country comparison together; do not split an individual pair.",
+        ],
         ["Resolving names", "Computing polygon intersections", "Treating a missing graph edge as no_overlap"],
         {"left_loc_id": "CAN-BC", "right_loc_id": "CAN"},
         ["spatial_relation", "temporal_relation", "relationship_basis", "graph_evidence", "common_ancestor_loc_id"],

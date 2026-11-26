@@ -404,12 +404,12 @@ def build_tool_definitions(*, include_paused: bool = False) -> list[dict]:
         {
             "name": "get_loc_id_info",
             "title": "Inspect Direct loc_id Connections",
-            "description": "Look up one known loc_id or a small batch in the selected reference graph. Return its identity and directly recorded loc_id connections, with family, direction, and relationship evidence. Each ID returns at most 50 connections and an explicit has_more flag. This tool does not expand descendants, infer containment, read shapes, search catalogs, or consult external adapters. No payment required.",
+            "description": "Look up one known loc_id or up to 10 loc_ids within the same country or reference scope in the selected reference graph. For international datasets, group identifiers by their owning country or reference scope and submit separate calls. Mixed-scope batches can be slow or time out. Return its identity and directly recorded loc_id connections, with family, direction, and relationship evidence. Each ID returns at most 50 connections and an explicit has_more flag. This tool does not expand descendants, infer containment, read shapes, search catalogs, or consult external adapters. No payment required.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "loc_id": {"type": "string", "description": "DaedalMap loc_id, e.g. 'USA-CA'."},
-                    "loc_ids": {"type": "array", "minItems": 1, "maxItems": 10, "items": {"type": "string"}, "description": "Up to 10 known loc_ids, including a resolve_point stack."},
+                    "loc_ids": {"type": "array", "minItems": 1, "maxItems": 10, "items": {"type": "string"}, "description": "Up to 10 known loc_ids within the same country or reference scope, including a stack from one scoped resolve_point call. Group international identifiers by country or reference scope and submit separate calls; mixed-scope batches can be slow or time out."},
                     "batch_id": {"type": "string", "description": "Optional caller-supplied batch id for tracing."},
                     "request_id": {"type": "string", "description": "Optional caller-supplied request id for tracing."},
                 },
@@ -570,7 +570,7 @@ def build_tool_definitions(*, include_paused: bool = False) -> list[dict]:
         {
             "name": "compare_geographies",
             "title": "Compare Geographic Identities",
-            "description": "Compare two known loc_ids using selected reference-graph identity and direct relationship evidence. Verified Admin ancestry can prove containment; a typed graph edge can prove only the relation it declares. An explicit negative edge returns no_overlap; a missing edge returns unknown. This tool never reads polygons or computes shape intersections. Use an external identifier bridge before this call when the input is not a loc_id. No payment required.",
+            "description": "Compare two known loc_ids using selected reference-graph identity and direct relationship evidence. A pair may span countries or reference scopes where the selected graph supports the comparison. For batches, group pairs by the same country or the same pair of reference scopes and submit separate calls; keep both sides of each comparison together. Verified Admin ancestry can prove containment; a typed graph edge can prove only the relation it declares. An explicit negative edge returns no_overlap; a missing edge returns unknown. This tool never reads polygons or computes shape intersections. Use an external identifier bridge before this call when the input is not a loc_id. No payment required.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -598,7 +598,7 @@ def build_tool_definitions(*, include_paused: bool = False) -> list[dict]:
                             "required": ["left_loc_id", "right_loc_id"],
                             "additionalProperties": False,
                         },
-                        "description": "Bounded geography pairs to compare in one call.",
+                        "description": "Bounded geography pairs involving the same country or the same pair of reference scopes. Group unrelated countries or scope pairs into separate calls. Keep a supported cross-country comparison together as one pair.",
                     },
                     "batch_id": {"type": "string", "description": "Optional caller-supplied batch id for tracing."},
                     "request_id": {"type": "string", "description": "Optional caller-supplied request id for tracing."},
